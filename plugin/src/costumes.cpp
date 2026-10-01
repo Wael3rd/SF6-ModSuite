@@ -13,6 +13,7 @@
 //     native method the engine calls internally, its hook only saw our own calls (30/09).
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
 #include "slots.hpp"
+#include "slots_ui.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -459,18 +460,17 @@ void insert_colors() {
         for (int c = 0; c < 10; ++c) {
             int id = 9000 + static_cast<int>(i) * 10 + c;
             bool ok = false;
-            if (call_bool(dict, "ContainsKey", { arg_i32(id) }, &ok) && ok) ++present;
+            if (ui::dict_contains(dict, id, &ok) && ok) ++present;
             else if (auto mi = models.find(c); mi != models.end()) {
-                Obj* rec = call_obj(mi->second, "MemberwiseClone");
-                Obj* holder = rec ? call_obj(sample, "MemberwiseClone") : nullptr;
+                Obj* rec = ui::clone(mi->second);
+                Obj* holder = rec ? ui::clone(sample) : nullptr;
                 if (rec && holder) {
-                    rec->add_ref(); holder->add_ref();
-                    set_i32(rec, "id", id); set_i32(rec, "ManageId", id);
-                    set_i32(rec, "fighterCostumeId", g_slots[i].record_id);
-                    set_bool(rec, "isDefault", true); set_i32(rec, "colorNo", c); set_bool(rec, "isBundleCostume", false);
-                    set_i32(holder, "RefCount", 1);
-                    set_obj(holder, "RecordData", rec);
-                    call(dict, "Add", { arg_i32(id), arg_obj(holder) });
+                    ui::set_i64(rec, "id", id); ui::set_i64(rec, "ManageId", id);
+                    ui::set_i64(rec, "fighterCostumeId", g_slots[i].record_id);
+                    ui::set_i64(rec, "isDefault", 1); ui::set_i64(rec, "colorNo", c); ui::set_i64(rec, "isBundleCostume", 0);
+                    ui::set_i64(holder, "RefCount", 1);
+                    ui::set_ref(holder, "RecordData", rec);
+                    ui::dict_add(dict, id, holder);
                     ++added;
                 }
             }
@@ -487,37 +487,28 @@ void insert_colors() {
     logf("costumes: colour records added %d, present %d, owned %d", added, present, owned);
 }
 
-// A colour of the select screen data, via.Color (R in the low byte), written in place
-bool write_color(Obj* o, const char* field, uint32_t rgba) {
-    void* p = field_ptr(o, field);
-    if (!p) return false;
-    memcpy(p, &rgba, sizeof rgba);
-    return true;
-}
-
 // The loader's colour squares, on a list of the clone's own (GetRange copies the list, every colour
-// entry is cloned): the original outfit's squares stay as they are
+// entry is cloned): the original outfit's squares stay as they are.
+// Ported to slots::ui (SL-08): clone, set_color, list_set, set_ref.
 int apply_swatches(Obj* clone, const Slot& s) {
     Obj* cds = get_obj(clone, "ColorDatas");
     int n = list_count(cds);
     if (!cds || n <= 0) return 0;
-    Obj* copy = call_obj(cds, "GetRange", { arg_i32(0), arg_i32(n) });
+    Obj* copy = ui::list_range(cds, 0, n);
     if (!copy) return 0;
-    copy->add_ref();
     int done = 0;
     for (int i = 0; i < n; ++i) {
         Obj* e = list_item(copy, i);
         int32_t idx = -1;
         if (!e || !get_i32(e, "ColorIndex", idx) || idx < 0 || idx > 9 || !s.sw_ok[idx]) continue;
-        Obj* ne = call_obj(e, "MemberwiseClone");
+        Obj* ne = ui::clone(e);
         if (!ne) continue;
-        ne->add_ref();
-        if (write_color(ne, "Color00", s.sw[idx][0]) && write_color(ne, "Color01", s.sw[idx][1])) {
-            call(copy, "set_Item", { arg_i32(i), arg_obj(ne) });
+        if (ui::set_color(ne, "Color00", s.sw[idx][0]) && ui::set_color(ne, "Color01", s.sw[idx][1])) {
+            ui::list_set(copy, i, ne);
             ++done;
         }
     }
-    set_obj(clone, "ColorDatas", copy);
+    ui::set_ref(clone, "ColorDatas", copy);
     return done;
 }
 
@@ -537,12 +528,11 @@ void insert_select_ui() {
         if (!cd || !base) continue;
         for (auto& [cos, idx] : g_slot_of[fid]) {
             if (call_obj(mgr, "GetData_Costume", { arg_i32(fid), arg_i32(cos) })) continue;
-            Obj* clone = call_obj(base, "MemberwiseClone");
-            if (!clone) continue;
-            clone->add_ref();
-            set_i32(clone, "CostumeId", cos);
-            if (g_slots[idx].has_sw) colored += apply_swatches(clone, g_slots[idx]);
-            call(cd, "Add", { arg_obj(clone) });
+            Obj* cl = ui::clone(base);
+            if (!cl) continue;
+            ui::set_i64(cl, "CostumeId", cos);
+            if (g_slots[idx].has_sw) colored += apply_swatches(cl, g_slots[idx]);
+            ui::list_add(cd, cl);
             ++n;
         }
     }

@@ -3,6 +3,7 @@
 // One LateUpdateBehavior callback (REFramework offers no way to remove it). With no event pending
 // and no work in progress it returns at once, having read nothing but this plugin's own memory.
 #include "slots.hpp"
+#include "slots_ui.hpp"
 
 namespace slots {
 namespace {
@@ -17,6 +18,7 @@ void on_late_update() {
     try {
         if (!g_hooks) {
             g_hooks = true;
+            ui::log_path();
             costumes::install_hooks();
             stages::install_hooks();
         }
@@ -50,6 +52,7 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     try { reframework::API::initialize(param); } catch (...) { return false; }
     slots::log_open();
     slots::logf("SF6 Slots native plugin loaded");
+    slots::ui::init();
     // The Lua scripts this plugin replaces, left by an update made by hand: both would handle the
     // same menus. Renamed, not deleted.
     for (const char* name : { "SF6_CostumeSlots.lua", "SF6_StageSlots.lua" }) {

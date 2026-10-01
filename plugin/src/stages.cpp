@@ -8,6 +8,7 @@
 // Events: the stage select screen shown / hidden, focus changed or name and preview rewritten by the
 // game, UP / DOWN on it, the VS screen shown or rewritten. Without stage mods: no hook at all.
 #include "slots.hpp"
+#include "slots_ui.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -123,44 +124,31 @@ void set_selected(uint32_t stage, int idx) {
 // GUI
 // ---------------------------------------------------------------------------------------------
 
+// Ported to slots::ui (SL-13): compare-before-write handled by the core / legacy.
 void set_text(Obj* text_obj, const std::string& s) {
-    if (!text_obj) return;
-    if (str(call_obj(text_obj, "get_Message")) == s) return;     // an identical set_Message crashes
-    Obj* ms = new_string(s);
-    if (!ms) return;
-    ms->add_ref();
-    call(text_obj, "set_Message", { arg_obj(ms) });
-    ms->release();
+    slots::ui::set_text(text_obj, s.c_str());
 }
 
-// A TextureResourceHolder keeps its native resource at +0x10; getTexture returns a new holder
-// every call, so textures are compared by resource
-uint64_t resource_of(Obj* holder) { return holder ? *reinterpret_cast<const uint64_t*>(reinterpret_cast<const uint8_t*>(holder) + 0x10) : 0; }
-
+// Ported to slots::ui (SL-14): compare-before-write handled by the core / legacy.
 void set_texture(Obj* tex_obj, Obj* holder) {
     if (!tex_obj || !holder) return;
-    Obj* cur = call_obj(tex_obj, "getTexture");
-    if (cur && resource_of(cur) == resource_of(holder)) return;
-    call(tex_obj, "setTexture", { arg_obj(holder) });
+    slots::ui::set_tex(tex_obj, holder);
 }
 
-// Created once and kept for the session; used kLoadFrames after its creation
+// Created once and kept for the session; ported to slots::ui (SL-14).
+// The core handles the 60-frame load wait via ui_texture_ready; the legacy
+// path tracks it internally.  g_preview_wait is still set for the busy() signal.
 Obj* preview_holder(const std::string& path) {
     if (path.empty()) return nullptr;
     auto& p = g_previews[path];
     if (!p.holder && !p.failed) {
         p.failed = true;
-        auto* rm = api().resource_manager();
-        auto* res = rm ? rm->create_resource("via.render.TextureResource", path) : nullptr;
-        if (res) {
-            res->add_ref();
-            auto fn = api().sdk()->resource->create_holder;
-            Obj* h = fn ? reinterpret_cast<Obj*>(fn(reinterpret_cast<REFrameworkResourceHandle>(res), "via.render.TextureResourceHolder")) : nullptr;
-            if (h) { h->add_ref(); p.holder = h; p.frame = g_frame; p.failed = false; g_preview_wait = std::max(g_preview_wait, g_frame + kLoadFrames); }
-        }
+        Obj* h = slots::ui::tex_load(path.c_str());
+        if (h) { p.holder = h; p.frame = g_frame; p.failed = false; g_preview_wait = std::max(g_preview_wait, g_frame + kLoadFrames); }
         if (p.failed) logf("stages: preview %s not created", path.c_str());
     }
-    if (!p.holder || g_frame - p.frame < kLoadFrames) return nullptr;
+    if (!p.holder) return nullptr;
+    if (!slots::ui::tex_ready(p.holder)) return nullptr;
     return p.holder;
 }
 
