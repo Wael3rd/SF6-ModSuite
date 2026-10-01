@@ -165,12 +165,12 @@ typedef struct SF6CoreArg {
  * there (see SF6_MenuRowsNative history). */
 typedef struct SF6CoreRowCloneDesc {
     uint32_t    struct_size;
-    void*       template_ctrl;    /* via.gui control of the row to duplicate */
-    void*       parent_ctrl;      /* via.gui control the clone is attached to (addChild) */
-    void*       parts_owner;      /* UIParts list owner whose _Children receives the part */
+    void*       template_ctrl;    /* via.gui control of the row to duplicate (the template part's <Control>) */
+    void*       parent_ctrl;      /* via.gui control the clone is attached to (template_ctrl.get_Parent()) */
+    void*       template_part;    /* the template row's UIParts item: its get_Manager() creates the new part,
+                                     its get_Layout() is copied, Manager.<OwnerParts>._Children receives it */
     const char* new_name;         /* GameObject/control name of the clone, e.g. "p_Spin_drvimpact" */
-    int32_t     index;            /* set_Index value */
-    float       pos_y;            /* local Y position of the clone */
+    float       pos_x, pos_y, pos_z; /* local position of the clone (via.vec3) */
     int32_t     visible;          /* initial set_Visible */
     int32_t     disabled;         /* initial set_IsDisable */
     const char* title_text;       /* UTF-8 text written to the clone's e_text_title, NULL = none */
@@ -284,7 +284,7 @@ typedef struct SF6CoreAPI {
     SF6CoreStatus (SF6CORE_CALL *ui_set_text)(SF6CoreClient* client, void* text, const char* utf8);
     SF6CoreStatus (SF6CORE_CALL *ui_set_message_id)(SF6CoreClient* client, void* text, const uint8_t guid16[16]);
     SF6CoreStatus (SF6CORE_CALL *ui_get_message_id)(void* text, uint8_t out_guid16[16]);
-    SF6CoreStatus (SF6CORE_CALL *ui_set_font_size)(SF6CoreClient* client, void* text, float size);
+    SF6CoreStatus (SF6CORE_CALL *ui_set_font_size)(SF6CoreClient* client, void* text, float w, float h); /* via.gui.Text.set_FontSize takes a via.Size */
     SF6CoreStatus (SF6CORE_CALL *ui_set_region_size)(SF6CoreClient* client, void* text, float w, float h);
 
     /* P3 colour / texture */
