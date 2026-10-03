@@ -2936,6 +2936,79 @@ static int report_outside(Ctx& c, const SlotInfo& slot) {
     return n;
 }
 
+// Cloth simulation of a slot, reported only. Two ways a mod's cloth went wrong in the game
+// (04/10): made for an outfit with no cloth simulation (the sleeves stayed frozen), and simulated
+// by another character's cloth file (it only moved once that character had been shown).
+// (A body exported again by a mesh editor under the game's own cloth file stopped the game once,
+// but nearly every mod is one: no report can be made of it.)
+static void sim_bones(const std::vector<uint8_t>& mesh, std::set<std::string>& out) {
+    static const char kSim[] = "BoneSim";
+    for (auto it = mesh.begin(); (it = std::search(it, mesh.end(), kSim, kSim + 7)) != mesh.end(); it += 7) {
+        auto b = it, e = it;
+        while (b != mesh.begin() && *(b - 1) >= 0x20 && *(b - 1) < 0x7f) --b;
+        while (e != mesh.end() && *e >= 0x20 && *e < 0x7f) ++e;
+        // bones made for the cloth simulation are named sim_..._BoneSim (Mai's sleeves: sim_Top_low_BoneSim16);
+        // the other BoneSim bones (Ryu's Mantle_Folds_low_BoneSim000) come along with a donor body and move nothing seen
+        if (str_lower(std::string(b, it)).find("sim") != std::string::npos) out.insert(std::string(b, e));
+    }
+}
+static int report_cloth(Ctx& c, const SlotInfo& slot) {
+    auto* mc = slot.mod_costume;
+    if (!mc) return 0;
+    const std::string& fd = slot.fighter_dir;
+    const std::string slot_dir = "/" + fd + "/" + slot.new_folder + "/", old_dir = "/" + fd + "/" + slot.original_folder + "/";
+    const std::string slot_stem = fd + "_" + slot.new_folder + "_", old_stem = fd + "_" + slot.original_folder + "_";
+    const std::string scene_p = "natives/stm/product/charparam/esf/" + fd + "/" + slot.scene_name + ".scn.20";
+    std::set<std::string> havoks, meshes;
+    for (auto& s : utf16_strings(c.gf.load(scene_p))) {
+        std::string r = resource_path(s, *c.suffixes);
+        if (r.empty()) continue;
+        if (r.find("_havok.user.") != std::string::npos) havoks.insert(r);
+        else if (r.find(".mesh.") != std::string::npos && r.find(slot_dir) != std::string::npos) meshes.insert(r);
+    }
+    std::string mod_cloth, mod_chain;             // a cloth file, a chain file the mod ships
+    for (auto& [path, mf] : mc->files_in_folder) {
+        std::string low = str_lower(path);
+        if (low.find(".havokcloth") != std::string::npos || low.find("_havok.user.") != std::string::npos) { if (mod_cloth.empty()) mod_cloth = path; }
+        else if (low.find(".chain.") != std::string::npos) mod_chain = path;
+    }
+    int n = 0;
+    if (havoks.empty()) {
+        // simulated bones the original outfit's mesh does not have, with no chain of the mod to move them
+        std::string what = mod_cloth;
+        if (what.empty() && mod_chain.empty()) {
+            for (auto& m : meshes) {
+                std::string orig = m;
+                orig.replace(orig.find(slot_dir), slot_dir.size(), old_dir);
+                if (auto q = orig.rfind(slot_stem); q != std::string::npos) orig.replace(q, slot_stem.size(), old_stem);
+                std::set<std::string> mine, theirs;
+                sim_bones(c.gf.load(m), mine);
+                if (mine.empty()) continue;
+                sim_bones(c.gf.load(orig), theirs);
+                for (auto& bn : mine) if (!theirs.count(bn)) { what = m + ", bone " + bn; break; }
+                if (!what.empty()) break;
+            }
+        }
+        if (!what.empty()) {
+            printf("      WARN: the mod has simulated cloth (%s) but the outfit this slot is made from has no cloth simulation: "
+                   "it stays frozen. The mod needs an outfit that has one\n", what.c_str());
+            n++;
+        }
+    }
+    for (auto& h : havoks) {
+        for (auto& s : utf16_strings(c.gf.load(h))) {
+            std::string low = str_lower(s);
+            if (low.find(".havokcloth") == std::string::npos) continue;
+            auto at = low.find("/model/esf/esf");
+            if (at == std::string::npos || low.compare(at + 11, fd.size(), fd) == 0) continue;
+            printf("      WARN: the cloth simulation of %s uses %s, a file of another character: it only works once the "
+                   "game has loaded that character\n", h.c_str(), s.c_str());
+            n++;
+        }
+    }
+    return n;
+}
+
 }  // namespace slotcheck
 
 // ============================================================================
@@ -4507,7 +4580,8 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         for (auto& sl : slots) {
             std::string why = slotcheck::check_slot(ctx, sl);
             if (why.empty()) {
-                if (slotcheck::report_outside(ctx, sl))
+                const int outside = slotcheck::report_outside(ctx, sl), cloth = slotcheck::report_cloth(ctx, sl);
+                if (outside || cloth)
                     printf("      ^ slot %s/v%02d (%s, from %s)\n", sl.fighter_dir.c_str(), sl.new_costume_no,
                            sl.outfit_name.c_str(), mod_label(sl.mod_id).c_str());
                 kept.push_back(sl); continue;
