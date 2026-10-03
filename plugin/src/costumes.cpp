@@ -8,7 +8,8 @@
 //     screen that lists outfits opens;
 //   - online alias: Battle Settings keeps DriveTech in the save, which is what other players see,
 //     and the slot chosen there as an intent; when the game mounts DriveTech's folder for a match,
-//     the slot's folder is mounted too and its visual manifest copied over DriveTech's. A mount is
+//     the slot's folder is mounted too and its visual manifest copied over DriveTech's, for the
+//     player's own fighter only (the battle description says which one). A mount is
 //     seen through the manifest's constructor (FighterVisualHolder..ctor): via.Folder.activate is a
 //     native method the engine calls internally, its hook only saw our own calls (30/09).
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
@@ -711,6 +712,49 @@ bool any_intent() {
     return false;
 }
 
+// The characters the player controls in the match being loaded, from its battle description
+// (bFlowManager -> flow map -> m_desc): online, the fighter of our session member; offline, a
+// fighter on a pad (the training dummy and the CPU have PadId -1). Kept only if it wears DriveTech:
+// an opponent in DriveTech is not ours to dress (03/10). false when no player can be told apart
+// (no description yet, a replay): then every intent applies, as before.
+std::string g_own_sig;
+bool own_fighters(std::set<int>& out) {
+    out.clear();
+    auto* fm = api().get_managed_singleton("app.bFlowManager");
+    auto* fw = fm ? get_obj(fm, "m_flow_work") : nullptr;
+    auto* map = fw ? get_obj(fw, "_FlowMap") : nullptr;
+    auto* desc = map ? get_obj(map, "m_desc") : nullptr;
+    if (!alive(desc)) return false;
+    bool net = false; int32_t self = -1;
+    get_bool(desc, "IsNetwork", net);
+    get_i32(desc, "SelfSessionMemberindex", self);
+    bool found = false;
+    auto* teams = get_obj(desc, "Teams");
+    int nt = list_count(teams);
+    for (int t = 0; t < nt; ++t) {
+        auto* team = list_item(teams, t);
+        auto* fs = team ? get_obj(team, "Fighters") : nullptr;
+        int nf = list_count(fs);
+        for (int i = 0; i < nf; ++i) {
+            auto* f = list_item(fs, i);
+            int32_t fid = 0, cos = -1, pad = -1, member = -1;
+            if (!f || !get_i32(f, "FighterId", fid)) continue;
+            get_i32(f, "Costume", cos); get_i32(f, "PadId", pad); get_i32(f, "SessionMemberIndex", member);
+            if (net ? (self < 0 || member != self) : pad < 0) continue;
+            found = true;
+            if (cos == BASE_COS) out.insert(fid);
+        }
+    }
+    std::string sig = !found ? "none" : out.empty() ? "-" : "";
+    for (int fid : out) sig += "F" + std::to_string(fid) + " ";
+    if (sig != g_own_sig) {
+        if (!found) logf("costumes: alias for every intent (no player in the battle description)");
+        else logf("costumes: alias for the player's fighters in DriveTech: %s (%s)", sig.c_str(), net ? "online" : "offline");
+        g_own_sig = sig;
+    }
+    return found;
+}
+
 // ---- hook: an outfit's visual manifest created (the game mounted its folder) ----
 // May run on a loading thread: it only records the event.
 int pre_holder_ctor(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
@@ -815,6 +859,7 @@ void tick(uint32_t ev) {
             if (!g_mount_until) {
                 logf("costumes: outfit mounted, alias check");
                 for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; fr.last_sig.clear(); }
+                g_own_sig.clear();
             }
             g_mount_until = g_frame + 60 * 2;
         }
@@ -824,7 +869,9 @@ void tick(uint32_t ev) {
         else if (g_frame % 3 == 0) {
             if (select_screen_active()) { g_mount_until = 0; logf("costumes: alias check stopped (select screen)"); return; }
             auto hs = read_holders();
-            for (auto& [fid, in] : g_intent) if (in.slot) mount_pass(fid, hs);
+            std::set<int> own;
+            bool known = own_fighters(own);
+            for (auto& [fid, in] : g_intent) if (in.slot && (!known || own.count(fid))) mount_pass(fid, hs);
         }
     }
 }

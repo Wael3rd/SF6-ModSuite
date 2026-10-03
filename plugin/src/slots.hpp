@@ -76,6 +76,7 @@ void* field_ptr(Obj* o, const char* name);                   // address of the f
 Obj* get_obj(Obj* o, const char* name);
 bool get_i32(Obj* o, const char* name, int32_t& out);
 bool get_u32(Obj* o, const char* name, uint32_t& out);
+bool get_bool(Obj* o, const char* name, bool& out);
 bool set_i32(Obj* o, const char* name, int32_t v);
 bool set_u32(Obj* o, const char* name, uint32_t v);
 bool set_bool(Obj* o, const char* name, bool v);
