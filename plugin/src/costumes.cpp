@@ -851,7 +851,9 @@ void tick(uint32_t ev) {
     // mounted by the check, is one): the manifests present are read every 3 frames until it ends,
     // during the loading screen. A check that finds the select screen open stops.
     if ((ev & (EV_SELECT_START | EV_MENU_OPEN)) && !g_mount_until) restore_all();
-    if ((ev & EV_HOLDER) && any_intent() && g_dst_done) {
+    // Battle Settings shows outfits too, DriveTech among them: nothing is aliased there (a slot was
+    // mounted over the DriveTech it previewed, 03/10).
+    if ((ev & EV_HOLDER) && any_intent() && g_dst_done && !g_menu_open) {
         if (select_screen_active()) {
             if (!g_select_logged) { logf("costumes: outfit mounted by the select screen, left alone"); g_select_logged = true; }
         } else {
@@ -867,7 +869,7 @@ void tick(uint32_t ev) {
     if (g_mount_until) {
         if (g_frame >= g_mount_until) { g_mount_until = 0; logf("costumes: alias check done"); }
         else if (g_frame % 3 == 0) {
-            if (select_screen_active()) { g_mount_until = 0; logf("costumes: alias check stopped (select screen)"); return; }
+            if (g_menu_open || select_screen_active()) { g_mount_until = 0; logf("costumes: alias check stopped (%s)", g_menu_open ? "Battle Settings" : "select screen"); return; }
             auto hs = read_holders();
             std::set<int> own;
             bool known = own_fighters(own);
