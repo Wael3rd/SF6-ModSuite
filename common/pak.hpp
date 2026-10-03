@@ -63,9 +63,9 @@ public:
 
     const PakEntry* find(uint64_t hash) const;
 
-    // A pak the game reads over this one (the DLC paks over re_chunk_000.pak): find() looks in
-    // the overlays first, in the order they were added, and read() reads an entry from the pak it
-    // came from. The overlay must outlive this reader.
+    // A pak the game reads under this one (the DLC paks under re_chunk_000.pak): find() looks in
+    // this pak first, then in the added paks in the order they were added, and read() reads an
+    // entry from the pak it came from. The added pak must outlive this reader.
     void add_overlay(PakReader* over) { over_.push_back(over); }
 
     // Returns the raw (possibly compressed) blob.

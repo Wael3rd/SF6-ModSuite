@@ -125,7 +125,7 @@ Stage mods go into `reframework/stage_mods/`, see [stages/README.md](stages/READ
 | Training Room | [NULSPACE](https://www.nexusmods.com/streetfighter6/mods/3564) | Works | Stage select (name, preview, UP / DOWN hints), VS screen, battle |
 | Training Room | [Aokigahara with NPCs](https://www.nexusmods.com/streetfighter6/mods/3566) | Works | Battle |
 | Training Room | [Aokigahara, no NPC](https://www.nexusmods.com/streetfighter6/mods/3566) | Hangs on the VS screen | The mod itself: it hangs the same way installed as a plain Fluffy pak, without the loader |
-| 20 stages | [Stage Lighting Overhaul](https://www.nexusmods.com/streetfighter6/mods/3258) (24 options) | Partly seen | Training Room Red and Yellow in battle, one after the other in the same session. Training Room Blue, Metro City Downtown, Carrier Byron Taylor seen on the stage select only. The 19 other options are built, not seen yet |
+| 20 stages | [Stage Lighting Overhaul](https://www.nexusmods.com/streetfighter6/mods/3258) (24 options) | Partly seen | 1.9.1: the Training Room options' pictures repaired (selecting one hung the game on its way to Fighting Ground). Training Room Red and Yellow in battle, one after the other in the same session. Training Room Blue, Metro City Downtown, Carrier Byron Taylor seen on the stage select only. The 19 other options are built, not seen yet |
 | Genbu Temple | [Genbu Temple Night Time](https://www.nexusmods.com/streetfighter6/mods/2857) | Recognised | A variant of Genbu Temple with its preview; not seen in battle yet |
 
 ## Not supported yet

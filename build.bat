@@ -87,7 +87,7 @@ cl %CF% /Fo%O%\tools\ stages\tools\stagepak.cpp %PAK% /Fe%B%\stagepak.exe %LK%
 if errorlevel 1 goto :failed
 cl %CF% /Fo%O%\tools\ stages\tools\textest.cpp %O%\stage\preview_tex.obj /Fe%B%\textest.exe %LK%
 if errorlevel 1 goto :failed
-cl %CF% /Fo%O%\tools\ stages\tools\stagetest.cpp %PAK% %O%\core\archive.obj %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\preview_tex.obj /Fe%B%\stagetest.exe %LK% %B%\archive_deps.lib %SYSLIBS%
+cl %CF% /Fo%O%\tools\ stages\tools\stagetest.cpp %PAK% %O%\core\archive.obj %O%\core\patch.obj %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\preview_tex.obj /Fe%B%\stagetest.exe %LK% %B%\archive_deps.lib %SYSLIBS%
 if errorlevel 1 goto :failed
 
 echo === SF6_CostumeSlotsNative.dll (REFramework plugin, API 1.5.8: costume and stage slots in game) ===

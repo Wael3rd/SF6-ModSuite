@@ -59,7 +59,9 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
 - **Stage mods installed through Fluffy Mod Manager are not variants yet**: their pak replaces the stage for
   everyone, the loader does not restore the original under it.
 - A mod that hangs the game on its own hangs it here too (seen: *Aokigahara - no NPC* stays on the VS screen,
-  also when installed as a plain Fluffy pak).
+  also when installed as a plain Fluffy pak). One cause is repaired: a texture whose level table declares
+  wrong row sizes, which the game waits for forever (the Training Room pictures of Stage Lighting Overhaul,
+  1.9.1). The log names each texture repaired or left out.
 
 ## How it works
 
@@ -71,8 +73,9 @@ The game imports `amd_ags_x64.dll` from its own folder, before any engine code r
    holding a stage code `essNNNN_NN`, hashed at startup). Each file of a variant is stored in our patch pak
    under `pak_path_hash("natives/stm/_stageslots/<variant>/<vanilla hash>")`, next to its preview texture.
    The stage pak goes right above the mod paks and below the costume pak (marker
-   `natives/stm/sf6_stage_slots.marker`). Nothing changed since last launch: the saved table is reused
-   (a few ms).
+   `natives/stm/sf6_stage_slots.marker`). Every texture of a mod is checked first: a wrong level table is
+   repaired (`texture_mip_check`, shared with the costume loader), a texture that cannot be repaired is left
+   out. Nothing changed since last launch: the saved table is reused (a few ms).
 2. **Costume pass** (`costumes/`). It recognises the stage pak by its marker and leaves it out of its scan
    and of its fingerprint, so adding or removing a stage mod does not rebuild the costume pak; its own pak
    stays above the stage pak (moved, not rebuilt, when the stage pak comes or goes).

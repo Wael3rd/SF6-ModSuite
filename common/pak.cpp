@@ -191,10 +191,11 @@ void PakReader::close() {
 }
 
 const PakEntry* PakReader::find(uint64_t hash) const {
+    auto it = entries_.find(hash);
+    if (it != entries_.end()) return &it->second;
     for (auto* o : over_)
         if (auto* e = o->find(hash)) return e;
-    auto it = entries_.find(hash);
-    return (it != entries_.end()) ? &it->second : nullptr;
+    return nullptr;
 }
 
 PakReader* PakReader::owner_of(const PakEntry& e) {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.9.1 (2026-10-02)
+
+### Fixed
+- **A Training Room variant of Stage Lighting Overhaul no longer hangs the game on its way to Fighting
+  Ground.** Its stage pictures (the preview, 1920x480 with 9 levels) declare a wrong row size for their three
+  smallest levels; the game waits forever for such a texture, and the Fighting Ground menu loads Training
+  Room's pictures. The stage loader now checks every texture of a stage mod and repairs its level table the
+  way the costume loader repairs costume textures; a texture it cannot repair is left out of the variant (the
+  game's own is used). The stage pak is rebuilt once at the first launch.
+
 ## 1.9.0 (2026-09-30)
 
 ### Changed

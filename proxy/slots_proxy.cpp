@@ -82,6 +82,13 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
             if (g_dll_dir[i] == L'\\' || g_dll_dir[i] == L'/') { g_dll_dir[i] = 0; break; }
         }
 
+        // ---- One process at a time builds the paks. A game started again while the first one was
+        // still building (a minute without a window) numbered its paks above the unfinished one:
+        // 003 and 004 with no 001, which the game does not read (03/10). The second waits here,
+        // then finds everything up to date. A lock left by a killed process is taken over. ----
+        HANDLE pak_lock = CreateMutexW(nullptr, FALSE, L"Local\\SF6_SlotsLoader_paks");
+        if (pak_lock) WaitForSingleObject(pak_lock, 10 * 60 * 1000);
+
 #ifndef SLOTS_NO_STAGES
         // ---- Stage slots: stage pak first (it sits below the costume pak) ----
         slog_open(g_dll_dir);
@@ -95,6 +102,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         __except (EXCEPTION_EXECUTE_HANDLER) {
             // Silently swallow: the log file (if opened) holds the diagnostics.
         }
+        if (pak_lock) { ReleaseMutex(pak_lock); CloseHandle(pak_lock); }
 
 #ifndef SLOTS_NO_STAGES
         // ---- Stage slots: watcher thread only, nothing is hooked from DllMain. It must start

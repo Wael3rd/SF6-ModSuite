@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-09-30-dlcpaks";
+static const char* LOADER_BUILD_ID = "2026-10-03-basefirst";
 
 // ============================================================================
 // Utility
@@ -197,6 +197,9 @@ struct VanillaIndex {
     std::unordered_set<uint64_t> all_hashes;
     // folder_to_costume: "esf001\t001" -> index into costumes
     std::unordered_map<std::string, size_t> folder_to_costume;
+    // Every model folder a vanilla file lives in, per fighter. A costume can take parts from a
+    // folder that is no costume's main folder (Dhalsim's DriveTech: 005/01): a slot must not get it.
+    std::unordered_map<int, std::set<int>> vanilla_folders;
 
     bool load(const char* tsv_path) {
         FILE* f = fopen(tsv_path, "r");
@@ -250,6 +253,16 @@ struct VanillaIndex {
                     uint64_t h = strtoull(hash_s, nullptr, 16);
                     hash_to_paths[h].push_back(path);
                     all_hashes.insert(h);
+                    // ".../model/esf/esfNNN/FFF/..." -> folder FFF
+                    std::string low = str_lower(path);
+                    size_t at = low.find("/model/esf/esf");
+                    if (at != std::string::npos) {
+                        size_t fs = low.find('/', at + 11);
+                        if (fs != std::string::npos && fs + 4 < low.size() && low[fs + 4] == '/'
+                            && isdigit((unsigned char)low[fs + 1]) && isdigit((unsigned char)low[fs + 2])
+                            && isdigit((unsigned char)low[fs + 3]))
+                            vanilla_folders[fighter].insert(atoi(low.c_str() + fs + 1));
+                    }
                 }
             }
         }
@@ -275,7 +288,14 @@ struct VanillaIndex {
                 mx = std::max(mx, v);
             }
         }
+        if (auto it = vanilla_folders.find(fighter); it != vanilla_folders.end() && !it->second.empty())
+            mx = std::max(mx, *it->second.rbegin());
         return mx;
+    }
+
+    bool folder_is_vanilla(int fighter, int folder) const {
+        auto it = vanilla_folders.find(fighter);
+        return it != vanilla_folders.end() && it->second.count(folder);
     }
 
     const CostumeInfo* get_costume(int fighter, int cno) const {
@@ -1389,6 +1409,18 @@ static std::vector<SlotInfo> assign_slots(
                 si.new_costume_no = es.new_costume_no;
                 si.new_folder = es.new_folder;
                 si.scene_name = es.scene_name;
+                // A folder given before vanilla folders were all known (until 1.9.1) can be one a
+                // vanilla costume uses: the slot moves to a free one and keeps its number
+                if (inv.folder_is_vanilla(mc.fighter, atoi(es.new_folder.c_str()))) {
+                    int fld_min = inv.max_folder(mc.fighter) + 1;
+                    int fld = smallest_free(taken_folder[mc.fighter], fld_min, fld_min + 200);
+                    if (fld < 0) continue;
+                    taken_folder[mc.fighter].insert(fld);
+                    char buf[32]; sprintf(buf, "%03d", fld);
+                    logf("  slot %s moved from folder %s to %s (a vanilla costume uses %s)\n",
+                         si.scene_name.c_str(), es.new_folder.c_str(), buf, es.new_folder.c_str());
+                    si.new_folder = buf;
+                }
             } else {
                 int cno = smallest_free(taken_cno[mc.fighter],
                                         meta.slot_min, meta.slot_max);
@@ -4051,9 +4083,10 @@ static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
     return fp;
 }
 
-// The DLC paks (dlc\*.pak), which Steam installs only for their owners. The game reads them over
-// re_chunk_000.pak: they hold newer versions of a few outfit files (the colours of JP, Dhalsim,
-// Lily and Guile's Outfit 1), so the slots are built from what the game reads.
+// The DLC paks (dlc\*.pak), which Steam installs only for their owners. They complete
+// re_chunk_000.pak and never replace a file it has: their colour lists of JP, Dhalsim, Lily and
+// Guile's Outfit 1 are older ones the game cannot read (a slot built from one shows 0 colours and
+// comes out white, 03/10), and the game shows these outfits with the lists of re_chunk_000.pak.
 static std::vector<std::string> dlc_pak_paths(const std::string& game_dir) {
     std::vector<std::string> out;
     WIN32_FIND_DATAA fd;
