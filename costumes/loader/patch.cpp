@@ -180,10 +180,17 @@ size_t patch_scene_minimal(std::vector<uint8_t>& data,
                                                 str_start, &str_end);
         std::string low = to_lower(full_str);
 
-        bool is_mesh_mdf2 = ends_with(low, ".mesh") || ends_with(low, ".mdf2");
+        // (.jcns: joint constraints a scene names directly, DriveTech's; followed like a mesh when
+        // the slot has its own)
+        bool is_mesh_mdf2 = ends_with(low, ".mesh") || ends_with(low, ".mdf2") || ends_with(low, ".jcns");
         bool is_ccvd = low.find("ccvd.user") != std::string::npos;
+        // joint constraints, shapes and AO geometry: user data named after the outfit, like the
+        // chain settings (a mod's own were left behind: sleeves held by them stayed in bind pose)
         bool is_chain_user = low.find("chain.user") != std::string::npos
-                          || low.find("havok.user") != std::string::npos;
+                          || low.find("havok.user") != std::string::npos
+                          || low.find("_jcs.user") != std::string::npos
+                          || low.find("_shape.user") != std::string::npos
+                          || low.find("_aogeo.user") != std::string::npos;
         bool is_userdata = is_ccvd || is_chain_user;
         bool is_visual = is_mesh_mdf2 || is_userdata;
 
@@ -221,9 +228,10 @@ size_t patch_scene_minimal(std::vector<uint8_t>& data,
         std::string norm = low;
         while (!norm.empty() && norm.back() == '\0') norm.pop_back();
         seen_count[norm]++;
-        if (is_userdata && seen_count[norm] == 1) {
-            i += dlen; continue; // Skip first CCVD occurrence
-        }
+        // A scene names each user file twice: in its user data table, loaded with the scene, and
+        // in the component that uses it. Both follow the slot. With the table left on the original
+        // file, the slot's own was loaded late: Battle Settings, which does not wait, showed a
+        // slot without its colours and without its cloth simulation (04/10).
 
         // Patch: replace dir segment
         std::memcpy(data.data() + i, new_dir_b.data(), dlen);

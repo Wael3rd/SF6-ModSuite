@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-03-basefirst";
+static const char* LOADER_BUILD_ID = "2026-10-04-usertable";
 
 // ============================================================================
 // Utility
@@ -1689,7 +1689,10 @@ static void add_slot_files(PakWriter& writer,
         bool is_chain_file = (fn_low.find("_chain.chain.") != std::string::npos
                            || fn_low.find("_chain.user.") != std::string::npos
                            || fn_low.find("_havok.") != std::string::npos
-                           || fn_low.find("havokcloth") != std::string::npos);
+                           || fn_low.find("havokcloth") != std::string::npos
+                           || fn_low.find("_jcs.user.") != std::string::npos
+                           || fn_low.find("_shape.user.") != std::string::npos
+                           || fn_low.find("_aogeo.user.") != std::string::npos);
         // Streaming textures: derive relocation from base path
         bool is_streaming = (low.compare(0, strlen(STREAM_PFX), STREAM_PFX) == 0);
         std::string new_path;
@@ -2727,6 +2730,7 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
 
     // 2. Each mesh with the material file that follows it
     std::unordered_map<std::string, std::string> moved_mdf;   // material references moved below
+    std::unordered_set<std::string> extra_reported;
     for (size_t i = 0; i < refs.size(); i++) {
         const std::string& mesh_p = refs[i];
         if (!str_ends_with(mesh_p, (".mesh." + mesh_suf).c_str())) continue;
@@ -2738,7 +2742,19 @@ static std::string check_slot(Ctx& c, const SlotInfo& slot) {
         if (mdf_p.empty() || (!is_slot(mesh_p) && !is_slot(mdf_p))) continue;
         if (g_donated_meshes.count(mesh_p)) continue;
         std::string why = pair_problem(c, c.gf.load(mesh_p), c.gf.load(mdf_p));
-        if (why.empty()) continue;
+        if (why.empty()) {
+            // The other way round: materials of the file the mesh does not have. A mesh exported
+            // again without one of its submeshes came out all black in the game (03/10). Reported.
+            std::vector<std::string> mm, dm;
+            if (is_slot(mesh_p) && mesh_materials(c.gf.load(mesh_p), mm) && mdf2_materials(c.gf.load(mdf_p), dm)) {
+                std::unordered_set<std::string> in_mesh(mm.begin(), mm.end());
+                int extra = 0; std::string first;
+                for (auto& m : dm) if (!in_mesh.count(m)) { if (!extra++) first = m; }
+                if (extra && extra_reported.insert(mdf_p).second) printf("      WARN: %d materials of %s are not in its mesh (%s): the game may show this mesh black\n",
+                                  extra, mdf_p.c_str(), first.c_str());
+            }
+            continue;
+        }
         if (why.compare(0, 16, "texture missing:") == 0) {
             int n = restore_missing_textures(c, c.gf.load(mdf_p), slot);
             std::string again = pair_problem(c, c.gf.load(mesh_p), c.gf.load(mdf_p));
@@ -2903,6 +2919,12 @@ static int report_outside(Ctx& c, const SlotInfo& slot) {
             std::string twin = p;
             twin.replace(twin.find(old_dir), old_dir.size(), slot_dir);
             if (seen.count(twin)) continue;
+            // a colour list the mod ships is the slot's under the slot's own name
+            const std::string old_stem = fd + "_" + slot.original_folder + "_";
+            if (auto q = twin.rfind(old_stem); q != std::string::npos) {
+                twin.replace(q, old_stem.size(), slot_stem);
+                if (seen.count(twin)) continue;
+            }
         }
         const ModFileRef* own = nullptr;
         for (auto* files : {&mc->files_in_folder, &mc->files_shared, &mc->files_other, &mc->files_donor, &mc->files_scene})
@@ -3074,12 +3096,20 @@ struct FolderModInfo {
     std::string abs_path;  // full disk path
 };
 
+// A path for the wide Win32 calls: past MAX_PATH it needs the \\?\ prefix (an archive whose inner
+// folder has a long name, unpacked under a deep game folder, was reported as "no natives folder")
+static std::wstring long_w(std::wstring p) {
+    if (p.size() < 240 || p.compare(0, 4, L"\\\\?\\") == 0 || p.size() < 3 || p[1] != L':') return p;
+    for (auto& c : p) if (c == L'/') c = L'\\';
+    return L"\\\\?\\" + p;
+}
+
 // Find first 'natives' directory within max_depth levels
 static std::wstring find_natives_dir(const std::wstring& folder, int max_depth = 3) {
     if (max_depth <= 0) return {};
     WIN32_FIND_DATAW fd;
     std::wstring pat = folder + L"\\*";
-    HANDLE h = FindFirstFileW(pat.c_str(), &fd);
+    HANDLE h = FindFirstFileW(long_w(pat).c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return {};
     // First pass: look for 'natives' directly
     do {
@@ -3094,7 +3124,7 @@ static std::wstring find_natives_dir(const std::wstring& folder, int max_depth =
     FindClose(h);
     // Second pass: recurse into subdirs
     if (max_depth > 1) {
-        h = FindFirstFileW(pat.c_str(), &fd);
+        h = FindFirstFileW(long_w(pat).c_str(), &fd);
         if (h == INVALID_HANDLE_VALUE) return {};
         do {
             if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
@@ -3114,7 +3144,7 @@ static void walk_dir_w(const std::wstring& dir,
     // files: (full_path, relative_from_dir)
     WIN32_FIND_DATAW fd;
     std::wstring pat = dir + L"\\*";
-    HANDLE h = FindFirstFileW(pat.c_str(), &fd);
+    HANDLE h = FindFirstFileW(long_w(pat).c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     do {
         if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 ||
@@ -3157,7 +3187,7 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
     walk_rec = [&](const std::wstring& dir, const std::string& rel_prefix) {
         WIN32_FIND_DATAW fd;
         std::wstring pat = dir + L"\\*";
-        HANDLE h = FindFirstFileW(pat.c_str(), &fd);
+        HANDLE h = FindFirstFileW(long_w(pat).c_str(), &fd);
         if (h == INVALID_HANDLE_VALUE) return;
         do {
             if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 ||
@@ -3179,7 +3209,7 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
     std::wstring natives_name;
     {
         WIN32_FIND_DATAW fdn;
-        HANDLE hn = FindFirstFileW((mod_dir_w + L"\\*").c_str(), &fdn);
+        HANDLE hn = FindFirstFileW(long_w((mod_dir_w + L"\\*")).c_str(), &fdn);
         if (hn != INVALID_HANDLE_VALUE) {
             do {
                 if (!(fdn.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
@@ -3335,7 +3365,7 @@ static std::wstring a2w_path(const std::string& s) {
 static void delete_tree_w(const std::wstring& dir_in) {
     std::wstring dir = (dir_in.size() > 2 && dir_in[1] == L':') ? L"\\\\?\\" + dir_in : dir_in;
     WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    HANDLE h = FindFirstFileW(long_w((dir + L"\\*")).c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
             if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 ||
