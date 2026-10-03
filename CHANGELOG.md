@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.9.2 (2026-10-04)
+
+### Fixed
+- **A slot shows its colours and its cloth physics in Battle Settings.** Opened from the main menu, Battle
+  Settings showed a slot white and with its cloth frozen: the slot's colour list and cloth settings were
+  loaded too late for that screen. A slot's scene now loads them with the scene, like the game's own outfits.
+- **Slots made from Outfit 1 of JP, Dhalsim, Lily or Guile are no longer white** (since 1.9.0). The DLC paks
+  hold an older colour list for these four outfits, which the game cannot read; the slots were built from it.
+  The DLC paks now only complete the base pak.
+- **Dhalsim's Outfit 4 keeps its own body when Dhalsim has two slots or more.** That outfit takes a part from
+  a model folder the loader believed free; a slot was placed there and replaced it. Every folder the game uses
+  is now taken, and a slot already placed in one moves to a free folder (it keeps its number and its name).
+- **A mod's joint constraints, shapes and AO geometry are used by its slot** (`_jcs.user`, `_shape.user`,
+  `_AOgeo.user`, and the `.jcns` files a scene names): the slot kept the original outfit's.
+- **The online alias dresses your own fighter only.** An opponent playing, in Outfit 4, a character you had
+  chosen a slot for was shown with your slot. Nothing is aliased any more while Battle Settings is open
+  either (previewing Outfit 4 there mounted the slot over it).
+- **Starting the game twice in a row no longer breaks the paks.** The first launch after a change of mods
+  rebuilds the costume pak for about a minute without a window; a second launch during that time numbered
+  the paks 003 and 004 with no 001, which the game does not read (black screen). The second one now waits.
+- **A stage pak that no longer matches its table is rebuilt** instead of being trusted (a selected stage
+  variant never finished loading).
+
+### Changed
+- The slot check no longer warns about a colour list a mod ships itself, and reports a material file that has
+  materials its mesh lacks (`WARN` lines in `SF6_CostumeLoader.log`).
+- Mod archives unpacked under very long paths are found.
+
+The costume pak and the stage pak are rebuilt once at the first launch (about a minute: launch the game once
+and wait).
+
 ## 1.9.1 (2026-10-02)
 
 ### Fixed
