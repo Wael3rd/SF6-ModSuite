@@ -126,7 +126,7 @@ typedef enum SF6CoreWidgetState {
  * flow_ids         : array of flow IDs where the widget may be visible.
  *                    NULL or n_flow_ids == 0 means "visible in all flows".
  * n_flow_ids       : number of entries in flow_ids.
- * initial_x/y      : initial GUI position (EXPERIMENTAL -- see docs).
+ * initial_x/y      : initial GUI position (EXPERIMENTAL — see docs).
  * initially_visible: 1 = visible (subject to flow context), 0 = hidden.
  */
 typedef struct SF6CoreWidgetDesc {
@@ -138,6 +138,38 @@ typedef struct SF6CoreWidgetDesc {
     float          initial_y;
     int32_t        initially_visible;
 } SF6CoreWidgetDesc;
+
+/* ---- Lua bridge native-function types (increment 5, ADR-0002) ----------- */
+
+typedef enum SF6CoreValType {
+    SF6CORE_VAL_NIL    = 0,
+    SF6CORE_VAL_BOOL   = 1,
+    SF6CORE_VAL_INT    = 2,
+    SF6CORE_VAL_DOUBLE = 3,
+    SF6CORE_VAL_STRING = 4
+} SF6CoreValType;
+
+typedef struct SF6CoreValue {
+    int32_t     type;       /* SF6CoreValType */
+    int32_t     b;          /* boolean value (when type == BOOL) */
+    int64_t     i;          /* integer value (when type == INT; managed addrs travel here) */
+    double      d;          /* double  value (when type == DOUBLE) */
+    const char* s;          /* string  value (when type == STRING); see ownership rules */
+} SF6CoreValue;
+
+/* Native function callable from Lua. Returns the number of values placed
+ * in rets[0..max_rets-1], or < 0 on error (the bridge raises a Lua error
+ * with a generic message). Runs on the calling Lua thread; the function
+ * must NOT longjmp. Arg strings are valid only during the call. Returned
+ * strings must stay valid until the function returns (the bridge copies
+ * them into Lua before unwinding); a thread_local buffer is the expected
+ * pattern. Max 16 args / 16 rets. */
+typedef int32_t (SF6CORE_CALL *SF6CoreLuaFn)(
+    void*              user,
+    const SF6CoreValue* args,
+    uint32_t           n_args,
+    SF6CoreValue*      rets,
+    uint32_t           max_rets);
 
 /* ---- Display API types (increment 3, ADR-0011 Proposed) ----------------- */
 
@@ -245,40 +277,98 @@ typedef struct SF6CoreAPI {
 
     /* -- Increment 2: Widgets (Tier 3, ADR-0003) -------------------------- */
 
+    /* Create a widget from a prefab. The widget is queued and instantiated
+     * on the game thread in the commit phase. Returns a handle immediately
+     * (state = PENDING). Returns ERR_INVALID_ARG if desc or out is NULL,
+     * or if prefab_path is empty. */
     SF6CoreStatus (SF6CORE_CALL *create_widget)(
         SF6CoreClient*            client,
         const SF6CoreWidgetDesc*  desc,
         SF6CoreWidget**           out);
 
+    /* Query a widget's current state (PENDING / LIVE / FAILED). */
     SF6CoreWidgetState (SF6CORE_CALL *get_widget_state)(
         SF6CoreWidget* widget);
 
+    /* Set text on a widget element found by name path (slash-separated,
+     * e.g. "c_main/item1/e_text_left"). Compare-before-write (R7).
+     * Queued, applied in the commit phase. */
     SF6CoreStatus (SF6CORE_CALL *widget_set_text)(
         SF6CoreWidget* widget,
         const char*    element_path,
         const char*    utf8_text);
 
+    /* Set client-requested visibility. Effective visibility =
+     * client flag AND (flow_ids empty OR current_flow in flow_ids).
+     * Re-evaluated on every flow change. Uses agent state Show/Hide. */
     SF6CoreStatus (SF6CORE_CALL *widget_set_visible)(
         SF6CoreWidget* widget,
         int32_t        visible);
 
+    /* Set widget position (EXPERIMENTAL). Uses get_Position/set_Position
+     * on the root via.gui control (via.vec3: x, y, z=0). */
     SF6CoreStatus (SF6CORE_CALL *widget_set_position)(
         SF6CoreWidget* widget,
         float          x,
         float          y);
 
+    /* Queue widget destruction. Releases the managed object reference
+     * and calls via.GameObject.destroy. Never calls remove(). */
     SF6CoreStatus (SF6CORE_CALL *destroy_widget)(
         SF6CoreWidget* widget);
 
     /* -- Increment 2: Element visibility (for ZenMode port) --------------- */
 
+    /* Declare desired visibility for a game-owned GUI element.
+     * gui_owner_name: the GUI agent's GameObject name (e.g.
+     *   "BattleHud_AccountInfo"). element_path: slash-separated
+     *   name path from the View root (e.g. "c_main/c_hud/c_RankInfo").
+     *   Supports glob wildcards: '*' matches zero or more characters
+     *   within a segment (e.g. "p_BattleHudAccountInfo_*").
+     *   A segment of just '*' matches any child name.
+     * hidden: 1 = hide (set_ForceInvisible true), 0 = restore original
+     *   visibility. Enforced at draw time via on_pre_gui_draw_element
+     *   (O(1) owner lookup, no per-frame tree scan when no hides).
+     *   Re-resolved on flow changes. Restored when client unregisters
+     *   or is breaker-disabled. */
     SF6CoreStatus (SF6CORE_CALL *set_element_hidden)(
         SF6CoreClient* client,
         const char*    gui_owner_name,
         const char*    element_path,
         int32_t        hidden);
 
-    /* -- Increment 3: Display API (ADR-0011, Proposed) --------------------- */
+    /* -- Increment 3: Display API (ADR-0011, Proposed) ---------------------
+     *
+     * The ONLY way client mods write the game's native UI. Generic: no
+     * function is specific to one mod.
+     *
+     * Immediate mode: each call runs synchronously in the caller's context,
+     * so a mod keeps its own timing (UX unchanged). Element writes (ui_*)
+     * must be called on the game thread (any REFramework frame/update
+     * callback or a game method hook running on it); otherwise they return
+     * SF6CORE_ERR_WRONG_THREAD and write nothing. Data operations (obj_*,
+     * list_*, dict_*) may run in any thread a game hook runs on.
+     *
+     * Every write goes through the same guard chain:
+     *   1. kill switch / client disabled by the breaker -> ERR_DISABLED
+     *   2. proof-of-life: object non-null and of the expected type (type
+     *      definition check; NOT is_managed_object, which rejects clones)
+     *   3. quarantine: an (object, operation) that faulted once is never
+     *      attempted again -> ERR_FAULTED (a REFramework-"caught" fault is a
+     *      crash precursor, 2026-10-01 23:38)
+     *   4. compare-before-write: the current value is read first; an
+     *      identical value is not written (R7) -> SF6CORE_OK
+     *   5. the engine call, under SEH, with managed-exception detection;
+     *      a fault quarantines the (object, operation), counts toward the
+     *      client's breaker (ADR-0008) and returns ERR_FAULTED
+     *   6. managed reference fields are assigned with engine semantics:
+     *      add_ref(new) -> atomic exchange -> release(old) (R34)
+     *
+     * Objects are raw managed-object pointers (void*), as REFramework hands
+     * them out (Lua: obj:get_address()). Objects returned by obj_new,
+     * obj_clone, list_get_range and ui_texture_load carry one reference owned
+     * by the caller (never released by the core).
+     */
 
     /* P2 text */
     SF6CoreStatus (SF6CORE_CALL *ui_set_text)(SF6CoreClient* client, void* text, const char* utf8);
@@ -288,9 +378,9 @@ typedef struct SF6CoreAPI {
     SF6CoreStatus (SF6CORE_CALL *ui_set_region_size)(SF6CoreClient* client, void* text, float w, float h);
 
     /* P3 colour / texture */
-    SF6CoreStatus (SF6CORE_CALL *ui_set_color)(SF6CoreClient* client, void* ctrl, uint32_t rgba);
+    SF6CoreStatus (SF6CORE_CALL *ui_set_color)(SF6CoreClient* client, void* ctrl, uint32_t rgba); /* set_Color + the 4 corner colours; rgba = raw via.Color.rgba value, unchanged */
     SF6CoreStatus (SF6CORE_CALL *ui_texture_load)(SF6CoreClient* client, const char* resource_path, void** out_holder);
-    int32_t       (SF6CORE_CALL *ui_texture_ready)(void* holder);
+    int32_t       (SF6CORE_CALL *ui_texture_ready)(void* holder);   /* 1 once loaded (>= 60 frames after creation) */
     SF6CoreStatus (SF6CORE_CALL *ui_set_texture)(SF6CoreClient* client, void* texture_ctrl, void* holder);
 
     /* P6 visibility / layout / input */
@@ -304,17 +394,21 @@ typedef struct SF6CoreAPI {
     /* P4 clone a row (see SF6CoreRowCloneDesc) */
     SF6CoreStatus (SF6CORE_CALL *ui_clone_row)(SF6CoreClient* client, const SF6CoreRowCloneDesc* desc, void** out_ctrl);
 
+    /* Guarded generic invoke, for the native calls that are part of driving
+     * a screen but have no dedicated primitive (owner repaints such as
+     * SetMessageColor, set_IsDisable, set_MinNum...). method_sig = name or
+     * full signature ("SetColor(System.Int32)"). out may be NULL. */
     SF6CoreStatus (SF6CORE_CALL *obj_invoke)(SF6CoreClient* client, void* obj, const char* method_sig,
                                              const SF6CoreArg* args, uint32_t n_args, SF6CoreArg* out);
 
     /* P1 data injection into native data-driven lists */
     void*         (SF6CORE_CALL *obj_new)(SF6CoreClient* client, const char* type_name);
-    void*         (SF6CORE_CALL *obj_clone)(SF6CoreClient* client, void* obj);
-    SF6CoreStatus (SF6CORE_CALL *obj_set_i64)(SF6CoreClient* client, void* obj, const char* field, int64_t v);
-    SF6CoreStatus (SF6CORE_CALL *obj_set_f64)(SF6CoreClient* client, void* obj, const char* field, double v);
+    void*         (SF6CORE_CALL *obj_clone)(SF6CoreClient* client, void* obj);   /* MemberwiseClone */
+    SF6CoreStatus (SF6CORE_CALL *obj_set_i64)(SF6CoreClient* client, void* obj, const char* field, int64_t v);   /* any integer/enum/bool field width */
+    SF6CoreStatus (SF6CORE_CALL *obj_set_f64)(SF6CoreClient* client, void* obj, const char* field, double v);    /* float or double field */
     SF6CoreStatus (SF6CORE_CALL *obj_set_string)(SF6CoreClient* client, void* obj, const char* field, const char* utf8);
-    SF6CoreStatus (SF6CORE_CALL *obj_set_ref)(SF6CoreClient* client, void* obj, const char* field, void* value);
-    SF6CoreStatus (SF6CORE_CALL *obj_set_color)(SF6CoreClient* client, void* obj, const char* field, uint32_t rgba);
+    SF6CoreStatus (SF6CORE_CALL *obj_set_ref)(SF6CoreClient* client, void* obj, const char* field, void* value); /* managed assignment (R34) */
+    SF6CoreStatus (SF6CORE_CALL *obj_set_color)(SF6CoreClient* client, void* obj, const char* field, uint32_t rgba); /* via.Color (4-byte rgba) value field, raw value */
     SF6CoreStatus (SF6CORE_CALL *list_add)(SF6CoreClient* client, void* list, void* item);
     SF6CoreStatus (SF6CORE_CALL *list_set_item)(SF6CoreClient* client, void* list, int32_t index, void* item);
     void*         (SF6CORE_CALL *list_get_range)(SF6CoreClient* client, void* list, int32_t start, int32_t count);
@@ -327,6 +421,82 @@ typedef struct SF6CoreAPI {
 
     /* Diagnostics */
     SF6CoreStatus (SF6CORE_CALL *get_display_stats)(SF6CoreClient* client, SF6CoreDisplayStats* out);
+
+    /* -- Increment 4: Discovery service (ADR-0012, append-only) ----------- */
+
+    /* Agent registry: all agents whose GameObject has this name, in
+     * _Entries order. Registry rebuilt lazily (only when _version/_size
+     * changes). Each returned pointer is proof-of-life validated. */
+    uint32_t      (SF6CORE_CALL *ui_agents)(const char* gameobject_name, void** out, uint32_t max);
+
+    /* Per-name change counter: increments when the set of agents with that
+     * name changes (appears, disappears, address changes). Returns 0 for
+     * an unknown name. */
+    uint32_t      (SF6CORE_CALL *ui_agents_gen)(const char* gameobject_name);
+
+    /* Global change counter: increments when any name's agent set changes. */
+    uint32_t      (SF6CORE_CALL *ui_registry_gen)(void);
+
+    /* Path-based cached lookup: on first call, walks the tree in find_name
+     * order (the node, its child subtree, then its next siblings, depth
+     * limit 8 on child steps) and records the move sequence (child/next).
+     * On subsequent calls, follows the moves from the live root and checks
+     * the name at the end; full walk only when that fails. Only objects
+     * reached from the live root are touched. Bounded cache (1024 entries,
+     * cleared when full). */
+    void*         (SF6CORE_CALL *ui_find_cached)(void* root, const char* name);
+
+    /* One walk returning the first match of each name in find_name order.
+     * out[i] is NULL if names[i] was not found. Paths are recorded for
+     * later ui_find_cached calls. Returns the number found.
+     * n is capped at 32: only the first 32 names are searched. out[]
+     * must have at least n entries; ALL n entries are zeroed before the
+     * walk so callers never read garbage even for indices beyond 32. */
+    uint32_t      (SF6CORE_CALL *ui_find_many)(void* root, const char* const* names,
+                                                uint32_t n, void** out);
+
+    /* ZenMode-style element hiding: Lua-pattern matching (%d, %d+ plus
+     * literals, unanchored substring), ALL matching children at EVERY
+     * segment level (fan-out), applied per-frame for owners sighted in the
+     * last 2 frames. Compare-before-write makes repeated applies cheap.
+     * Does NOT change the semantics of set_element_hidden.
+     * pattern_segments is an array of n_segments pattern strings.
+     * MUST be called on the game thread (returns ERR_WRONG_THREAD otherwise).
+     * The ZenMode client queues changes from its ImGui panel and applies
+     * them in its frame callback. */
+    SF6CoreStatus (SF6CORE_CALL *set_element_hidden_zen)(
+        SF6CoreClient* client,
+        const char*    gui_owner_name,
+        const char* const* pattern_segments,
+        uint32_t       n_segments,
+        int32_t        hidden);
+
+    /* -- Increment 5: Bridge extensions + rules suspend (append-only) ----- */
+
+    /* Query any client's state by id. Returns SF6CoreClientState, or -1
+     * if no client with that id is registered. Read under the registry
+     * mutex. */
+    int32_t       (SF6CORE_CALL *client_state_by_id)(const char* client_id);
+
+    /* Register a native C function callable from Lua as
+     * SF6Core.clients[client_id].<name>(...). NULL fn unregisters that
+     * name. Max name length 63 chars. See SF6CoreLuaFn doc for rules. */
+    SF6CoreStatus (SF6CORE_CALL *lua_register_fn)(
+        SF6CoreClient* client,
+        const char*    name,
+        SF6CoreLuaFn   fn,
+        void*          user);
+
+    /* Suspend / resume this client's element-hide rules (both
+     * set_element_hidden and set_element_hidden_zen). While suspended,
+     * the commit phase skips all of the client's rules entirely: no
+     * write, no restore. Resuming re-applies on the next frame for
+     * sighted owners. Mirrors ZenMode.lua doing nothing during a
+     * replay.
+     * MUST be called on the game thread (returns ERR_WRONG_THREAD otherwise). */
+    SF6CoreStatus (SF6CORE_CALL *set_element_rules_suspended)(
+        SF6CoreClient* client,
+        int32_t        suspended);
 
 } SF6CoreAPI;
 
