@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.9.3 beta 2 (2026-10-04)
+
+### Fixed
+- **A real Drive Tech picked on a select screen is no longer dressed as your Battle Settings slot.** A slot
+  chosen in Battle Settings is shown in place of Drive Tech wherever the game takes the costume from Battle
+  Settings (online, Battle Hub cabinets). It was also done in Arcade, Training, Versus and Team Battle, where
+  you pick the costume yourself: Sagat's Drive Tech picked in Training showed his slot.
+
+### Added
+- **A mod's own costume scene is used whole when it changes more than paths of the same length**, as long as
+  it is made for the current game version (same layout as the game's scene) and every file it names exists.
+  A mod can now give a mesh to a part the game's scene leaves empty (Sagat's Drive Tech, a body split in two).
+- **A mod scene's joint and chain files are followed too**: a mod that takes a head or a hair from another
+  outfit gets that outfit's joints and hair physics with it.
+
 ## 1.9.3 beta (2026-10-04)
 
 A beta: the changes below are tested on one installation only.
