@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.9.3 beta (2026-10-04)
+
+A beta: the changes below are tested on one installation only.
+
+### Added
+- **Each costume mod installed with Fluffy Mod Manager gets a slot of its own**, even two mods of the same
+  outfit. Fluffy copies the mods it installs into the game, so two mods of one outfit ended up as one; mods
+  installed as loose files (with REFramework's loose file loader on) got no slot at all. The loader now
+  finds Fluffy, reads its list of installed mods and takes each one from its archive in Fluffy's
+  `Games\SF6\Mods` folder. Unticking a mod removes its slot at the next launch. If Fluffy is not found,
+  its folder can be given in `reframework\costume_mods\settings.ini`. The outfit a Fluffy mod replaces
+  still shows that mod. See [docs/FLUFFY.md](docs/FLUFFY.md).
+
+### Fixed
+- **A slot no longer stalls the select screen, or shows white colours, when the game's pak lacks a colour
+  file of its outfit** (seen on an installation whose pak had no Mai Outfit 1 colours 2 to 5, 7, 8 and 10).
+  The loader takes such a file from the game folder when it is there (where Fluffy Mod Manager puts the
+  files it installs), otherwise gives the slot another colour of the outfit.
+- **A mod's texture in the shared body folder keeps its own high-resolution version.** The slot got the
+  mod's texture with the game's high-resolution one, and the game waited for ever when the outfit loaded.
+
+### Changed
+- The slot check reports cloth that cannot move: a mod made for an outfit with cloth simulation on an
+  outfit without, and a cloth simulation that uses another character's file (`WARN` lines in
+  `SF6_CostumeLoader.log`).
+- Mods with exactly the same files and sizes (variants of one design) are told apart in the log.
+- `SF6_CostumeAudit.bat` lists the mods ticked in Fluffy Mod Manager with the slots made from them.
+
 ## 1.9.2 (2026-10-04)
 
 ### Fixed
