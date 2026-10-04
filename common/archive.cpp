@@ -353,6 +353,97 @@ static ArchiveResult extract_rar(const std::wstring& archive, const std::wstring
 
 // ---------------------------------------------------------------------------------------------
 
+static bool list_zip(const std::wstring& archive, std::vector<std::wstring>& names) {
+    FILE* f = _wfopen(archive.c_str(), L"rb");
+    if (!f) return false;
+    mz_zip_archive z;
+    memset(&z, 0, sizeof(z));
+    if (!mz_zip_reader_init_cfile(&z, f, 0, 0)) { fclose(f); return false; }
+    mz_uint n = mz_zip_reader_get_num_files(&z);
+    for (mz_uint i = 0; i < n; ++i) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&z, i, &st) || st.m_is_directory) continue;
+        std::wstring name = decode_zip_name(st.m_filename, (st.m_bit_flag & 0x800) != 0);
+        if (sanitize_entry(name)) names.push_back(name);
+    }
+    mz_zip_reader_end(&z);
+    fclose(f);
+    return true;
+}
+
+static bool list_7z(const std::wstring& archive, std::vector<std::wstring>& names) {
+    const size_t kInputBufSize = size_t(1) << 18;
+    ISzAlloc allocImp = { SzAlloc, SzFree };
+    ISzAlloc allocTempImp = { SzAllocTemp, SzFreeTemp };
+    CFileInStream archiveStream;
+    CLookToRead2 lookStream;
+    CSzArEx db;
+    if (InFile_OpenW(&archiveStream.file, archive.c_str()) != 0) return false;
+    FileInStream_CreateVTable(&archiveStream);
+    archiveStream.wres = 0;
+    LookToRead2_CreateVTable(&lookStream, False);
+    lookStream.buf = static_cast<Byte*>(ISzAlloc_Alloc(&allocImp, kInputBufSize));
+    if (!lookStream.buf) { File_Close(&archiveStream.file); return false; }
+    lookStream.bufSize = kInputBufSize;
+    lookStream.realStream = &archiveStream.vt;
+    LookToRead2_INIT(&lookStream)
+    static bool crc_ready = false;
+    if (!crc_ready) { CrcGenerateTable(); crc_ready = true; }
+    SzArEx_Init(&db);
+    bool ok = SzArEx_Open(&db, &lookStream.vt, &allocImp, &allocTempImp) == SZ_OK;
+    if (ok) {
+        std::vector<UInt16> nameBuf;
+        for (UInt32 i = 0; i < db.NumFiles; ++i) {
+            if (SzArEx_IsDir(&db, i)) continue;
+            size_t len = SzArEx_GetFileNameUtf16(&db, i, nullptr);
+            nameBuf.assign(len + 1, 0);
+            SzArEx_GetFileNameUtf16(&db, i, nameBuf.data());
+            std::wstring name(reinterpret_cast<const wchar_t*>(nameBuf.data()));
+            if (sanitize_entry(name)) names.push_back(name);
+        }
+    }
+    SzArEx_Free(&db, &allocImp);
+    ISzAlloc_Free(&allocImp, lookStream.buf);
+    File_Close(&archiveStream.file);
+    return ok;
+}
+
+static bool list_rar(const std::wstring& archive, std::vector<std::wstring>& names) {
+    std::vector<wchar_t> arcName(archive.begin(), archive.end());
+    arcName.push_back(0);
+    RAROpenArchiveDataEx od;
+    memset(&od, 0, sizeof(od));
+    od.ArcNameW = arcName.data();
+    od.OpenMode = RAR_OM_LIST;                                // headers only, nothing unpacked
+    od.Callback = rar_callback;
+    HANDLE h = RAROpenArchiveEx(&od);
+    if (!h || od.OpenResult != ERAR_SUCCESS) { if (h) RARCloseArchive(h); return false; }
+    if (od.Flags & ROADF_ENCHEADERS) { RARCloseArchive(h); return false; }
+    RARHeaderDataEx* hd = new RARHeaderDataEx;
+    int rc;
+    for (;;) {
+        memset(hd, 0, sizeof(*hd));
+        rc = RARReadHeaderEx(h, hd);
+        if (rc != ERAR_SUCCESS) break;
+        std::wstring name(hd->FileNameW);
+        if (!(hd->Flags & RHDF_DIRECTORY) && sanitize_entry(name)) names.push_back(name);
+        if (RARProcessFileW(h, RAR_SKIP, nullptr, nullptr) != ERAR_SUCCESS) { rc = -1; break; }
+    }
+    delete hd;
+    RARCloseArchive(h);
+    return rc == ERAR_END_ARCHIVE;
+}
+
+bool archive_list(const std::wstring& archive, std::vector<std::wstring>& names) {
+    names.clear();
+    switch (archive_sniff(archive)) {
+        case ArchiveKind::Zip: return list_zip(archive, names);
+        case ArchiveKind::SevenZip: return list_7z(archive, names);
+        case ArchiveKind::Rar: return list_rar(archive, names);
+        default: return false;
+    }
+}
+
 ArchiveResult archive_extract(const std::wstring& archive, const std::wstring& dest_dir,
                               ArchiveFilter keep) {
     ArchiveResult r;

@@ -37,6 +37,26 @@ made for it. Without stage mods, no stage is changed and nothing is hooked. See
 Updating in Fluffy Mod Manager: disable or remove the previous version first. Since 1.9.0 the mod is named
 SF6 Slots Loader.
 
+### Costume mods installed with Fluffy Mod Manager
+
+Each costume mod ticked in Fluffy gets an outfit slot of its own, even when two of them replace the same
+outfit. Fluffy copies the mods it installs into the game (loose files in `natives\` when REFramework's
+loose file loader is on, a pak otherwise), so two mods of one outfit end up as one. The loader reads
+Fluffy's list of installed mods instead and takes each mod from its archive in Fluffy's
+`Games\SF6\Mods` folder. Unticking a mod removes its slot at the next launch.
+
+The loader looks for Fluffy in Documents, Desktop, Downloads, the game folder and the root of each drive.
+If yours is elsewhere, give its folder (the one with `Modmanager.exe`) in
+`reframework\costume_mods\settings.ini`:
+
+```ini
+FluffyModManager=D:\Tools\FluffyModManager
+```
+
+The outfit a Fluffy mod replaces still shows that mod (the last one installed for it): the game reads
+Fluffy's copy over everything else. To keep the original outfit as well, put the mod in
+`reframework\costume_mods\<Character>\` instead of ticking it in Fluffy.
+
 ## Checking what is installed
 
 Double-click `reframework\costume_mods\SF6_CostumeAudit.bat`. It changes nothing: it checks that the loader,
@@ -82,7 +102,8 @@ squares of the original outfit, as before 1.7.
 The game imports `amd_ags_x64.dll` from its own folder, so a proxy with that name is mapped into the process
 before any engine code runs. That is the moment the loader does its work:
 
-1. It scans the installed costume mods, both the Fluffy Mod Manager patch paks and the folders under
+1. It scans the installed costume mods: the mods Fluffy Mod Manager installed (each one from its archive),
+   the patch paks and loose files in the game folder, and the archives and folders under
    `reframework/costume_mods/`.
 2. It rebuilds a patch pak that relocates each modded costume to a free slot, from 5 to 104, which is
    **100 extra slots per character**, and restores the outfit the mod had overwritten from the base pak.

@@ -33,3 +33,8 @@ typedef bool (*ArchiveFilter)(const std::wstring& entry_path);
 // Encrypted entries make the whole extraction fail: the loader has no password to offer.
 ArchiveResult archive_extract(const std::wstring& archive, const std::wstring& dest_dir,
                               ArchiveFilter keep);
+
+// The file entries of `archive` ('/' separators, relative to the archive root), read from its
+// headers without unpacking anything. False when the archive cannot be read.
+#include <vector>
+bool archive_list(const std::wstring& archive, std::vector<std::wstring>& names);
