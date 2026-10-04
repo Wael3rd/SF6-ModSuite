@@ -725,7 +725,8 @@ bool any_intent() {
 // The characters the player controls in the match being loaded, from its battle description
 // (bFlowManager -> flow map -> m_desc): online, the fighter of our session member; offline, a
 // fighter on a pad (the training dummy and the CPU have PadId -1). Kept only if it wears DriveTech:
-// an opponent in DriveTech is not ours to dress (03/10). false when no player can be told apart
+// an opponent in DriveTech is not ours to dress (03/10), and only in a mode that takes the costume
+// from Battle Settings (online, Battle Hub cabinets). false when no player can be told apart
 // (no description yet, a replay): then every intent applies, as before.
 std::string g_own_sig;
 bool own_fighters(std::set<int>& out) {
@@ -735,6 +736,14 @@ bool own_fighters(std::set<int>& out) {
     auto* map = fw ? get_obj(fw, "_FlowMap") : nullptr;
     auto* desc = map ? get_obj(map, "m_desc") : nullptr;
     if (!alive(desc)) return false;
+    // A mode where the player picks the costume on a select screen (Arcade, Training, Versus, Team
+    // Battle): a slot is picked there as itself, so a fighter in DriveTech really wears DriveTech and
+    // is not ours to dress (Sagat's Drive Tech picked in Training wore his slot, 04/10). The rule's
+    // GameMode is app.EGameMode, one byte: 1 Arcade, 2 Training, 3 and 4 Versus, 19 Team Battle.
+    uint8_t mode = 0;
+    if (auto* rule = get_obj(desc, "Rule"))
+        if (auto* p = field_ptr(rule, "GameMode")) mode = *static_cast<uint8_t*>(p);
+    const bool picked = mode == 1 || mode == 2 || mode == 3 || mode == 4 || mode == 19;
     bool net = false; int32_t self = -1;
     get_bool(desc, "IsNetwork", net);
     get_i32(desc, "SelfSessionMemberindex", self);
@@ -752,14 +761,16 @@ bool own_fighters(std::set<int>& out) {
             get_i32(f, "Costume", cos); get_i32(f, "PadId", pad); get_i32(f, "SessionMemberIndex", member);
             if (net ? (self < 0 || member != self) : pad < 0) continue;
             found = true;
-            if (cos == BASE_COS) out.insert(fid);
+            if (cos == BASE_COS && !picked) out.insert(fid);
         }
     }
     std::string sig = !found ? "none" : out.empty() ? "-" : "";
     for (int fid : out) sig += "F" + std::to_string(fid) + " ";
+    if (picked) sig += "(picked)";
     if (sig != g_own_sig) {
         if (!found) logf("costumes: alias for every intent (no player in the battle description)");
-        else logf("costumes: alias for the player's fighters in DriveTech: %s (%s)", sig.c_str(), net ? "online" : "offline");
+        else if (picked) logf("costumes: no alias, game mode %d picks costumes on a select screen (%s)", mode, net ? "online" : "offline");
+        else logf("costumes: alias for the player's fighters in DriveTech: %s (%s, game mode %d)", sig.c_str(), net ? "online" : "offline", mode);
         g_own_sig = sig;
     }
     return found;
