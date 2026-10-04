@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-04-wholemodscene";
+static const char* LOADER_BUILD_ID = "2026-10-04-sceneuserrefs";
 
 // ============================================================================
 // Utility
@@ -961,9 +961,10 @@ static bool is_costume_scene(const std::string& low) {
 }
 
 // Model references (mesh, mdf2) of a scene, in file order, each once, as written ("Product/Model/...");
-// at = byte offset of every occurrence (a scene names each resource twice)
+// at = byte offset of every occurrence (a scene names each resource twice). user_files: the joint and
+// chain files under Product/Model/ instead (jcs, chain, havok .user).
 struct SceneRef { std::string text; std::vector<size_t> at; };
-static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d) {
+static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d, bool user_files = false) {
     std::vector<SceneRef> out;
     std::unordered_map<std::string, size_t> index;
     for (size_t i = 0; i + 1 < d.size(); i += 2) {
@@ -975,7 +976,8 @@ static std::vector<SceneRef> scene_model_refs(const std::vector<uint8_t>& d) {
         if (lead != std::string::npos) {
             std::string t = s.substr(lead), low = str_lower(t);
             if (low.compare(0, 14, "product/model/") == 0
-                && (str_ends_with(low, ".mesh") || str_ends_with(low, ".mdf2"))) {
+                && (user_files ? str_ends_with(low, ".user")
+                               : (str_ends_with(low, ".mesh") || str_ends_with(low, ".mdf2")))) {
                 auto it = index.find(low);
                 if (it == index.end()) { it = index.emplace(low, out.size()).first; out.push_back({t, {}}); }
                 out[it->second].at.push_back(i + 2 * lead);
@@ -1536,8 +1538,11 @@ static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8
         }
         std::set<std::string> game_refs;
         for (auto& r : v) game_refs.insert(str_lower(r.text));
+        for (auto& r : scene_model_refs(vdata, true)) game_refs.insert(str_lower(r.text));
+        auto mod_refs = m;
+        for (auto& r : scene_model_refs(mdata, true)) mod_refs.push_back(r);
         int own = 0;
-        for (auto& r : m) {
+        for (auto& r : mod_refs) {
             if (game_refs.count(str_lower(r.text))) continue;
             std::string target = scene_ref_pak_path(r.text, suffixes);
             if (target.empty() || !exists(target)) {
@@ -1564,24 +1569,37 @@ static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8
             if (r >= 0) return r;
             break;
         }
-    int n = 0;
-    for (size_t k = 0; k < v.size(); k++) {
-        const std::string &vt = v[k].text, &mt = m[k].text;
-        if (str_lower(vt) == str_lower(mt)) continue;
-        std::string target = scene_ref_pak_path(mt, suffixes);
-        if (target.empty() || !exists(target)) {
-            printf("      mod scene: %s -> %s, file not found, not followed\n", vt.c_str(), mt.c_str());
-            continue;
+    auto in_place = [&](const std::vector<SceneRef>& gv, const std::vector<SceneRef>& mv) {
+        int n = 0;
+        for (size_t k = 0; k < gv.size(); k++) {
+            const std::string &vt = gv[k].text, &mt = mv[k].text;
+            if (str_lower(vt) == str_lower(mt)) continue;
+            std::string target = scene_ref_pak_path(mt, suffixes);
+            if (target.empty() || !exists(target)) {
+                printf("      mod scene: %s -> %s, file not found, not followed\n", vt.c_str(), mt.c_str());
+                continue;
+            }
+            if (mt.size() != vt.size()) {
+                printf("      WARN mod scene: %s -> %s changes the path length, not followed\n", vt.c_str(), mt.c_str());
+                continue;
+            }
+            for (size_t at : gv[k].at)
+                for (size_t c = 0; c < mt.size(); c++) { vdata[at + 2 * c] = (uint8_t)mt[c]; vdata[at + 2 * c + 1] = 0; }
+            printf("      mod scene: %s -> %s\n", vt.c_str(), mt.c_str());
+            n++;
         }
-        if (mt.size() != vt.size()) {
-            printf("      WARN mod scene: %s -> %s changes the path length, not followed\n", vt.c_str(), mt.c_str());
-            continue;
-        }
-        for (size_t at : v[k].at)
-            for (size_t c = 0; c < mt.size(); c++) { vdata[at + 2 * c] = (uint8_t)mt[c]; vdata[at + 2 * c + 1] = 0; }
-        printf("      mod scene: %s -> %s\n", vt.c_str(), mt.c_str());
-        n++;
-    }
+        return n;
+    };
+    int n = in_place(v, m);
+    // The joint and chain files the scene names (jcs, chain, havok .user): a mod that takes a head or
+    // a hair from another outfit points them at that outfit's files too (Ken Outfit 2 shirtless on
+    // Drive Tech: the head's jcs and the hair's chain, 04/10). Same rules, counted on their own so that
+    // the model references are followed as before whatever they do.
+    auto vu = scene_model_refs(vdata, true), mu = scene_model_refs(mdata, true);
+    if (vu.size() == mu.size()) n += in_place(vu, mu);
+    else if (!mu.empty())
+        printf("      mod scene: %zu joint and chain references against %zu in the game's scene, not followed\n",
+               mu.size(), vu.size());
     return n;
 }
 
