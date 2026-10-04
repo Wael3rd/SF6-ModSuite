@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-04-usertable";
+static const char* LOADER_BUILD_ID = "2026-10-04-colourfiles";
 
 // ============================================================================
 // Utility
@@ -1133,6 +1133,15 @@ static std::vector<ModCostume> detect_mod_costumes(
     for (auto& [pak_path, mf] : mod_files) {
         std::string fd, folder;
         if (!parse_model_folder(pak_path, fd, folder)) {
+            // The high-resolution twin of a shared (000/) texture goes with the shared files: left
+            // with the others, it was dropped, and the slot got the mod's texture with the game's
+            // twin. The two do not match and the game waits for that texture for ever (Mai,
+            // "Modified Select Screen Outfit C1": body colour mask, 04/10).
+            const size_t sl = strlen(STREAM_PFX);
+            if (str_lower(pak_path).compare(0, sl, STREAM_PFX) == 0
+                && parse_model_folder(std::string(BASE_PFX) + pak_path.substr(sl), fd, folder) && folder == "000") {
+                shared_by_fd[fd][pak_path] = mf; continue;
+            }
             other_files[pak_path] = mf; continue;
         }
         if (folder == "000") {
@@ -1932,6 +1941,7 @@ static void add_slot_files(PakWriter& writer,
             }
         }
         // Fallback: hardcoded set if CCVD parsing found nothing
+        const bool named_by_list = !cmd_names.empty();
         if (cmd_names.empty()) {
             for (int i = 0; i <= 10; i++) {
                 char buf[64]; sprintf(buf, "%s_%s_cmd_%03d.user.2", fd.c_str(), old_f.c_str(), i);
@@ -1965,6 +1975,21 @@ static void add_slot_files(PakWriter& writer,
                     auto raw = base_pak.read_raw(*oe);
                     writer.add_raw(th, std::move(raw), oe->attributes, oe->decompressed_size);
                     written_paths.insert(cmd_target); count++;
+                } else if (named_by_list) {
+                    // The colour list names a colour file this installation does not have. A slot
+                    // must not name a file that exists nowhere (the game waits for it for ever on
+                    // the select screen): it gets the outfit's first colour file under that name.
+                    const std::string first = base_model + fd + "_" + old_f + "_cmd_000.user.2";
+                    std::vector<uint8_t> data;
+                    if (auto f = mc->files_in_folder.find(first); f != mc->files_in_folder.end()) data = f->second.read_data();
+                    else if (auto* fe = base_pak.find(pak_path_hash(std::string_view(first)))) data = base_pak.read(*fe);
+                    if (!data.empty()) {
+                        writer.add_uncompressed(th, std::move(data));
+                        written_paths.insert(cmd_target); count++;
+                    }
+                    printf("      check: colour file %s is not in the game's files: %s\n", cmd_orig.c_str(),
+                           written_paths.count(cmd_target) ? "the outfit's first colour stands in for it"
+                                                           : "nothing to put in its place, the slot may never finish loading");
                 }
             }
         }
