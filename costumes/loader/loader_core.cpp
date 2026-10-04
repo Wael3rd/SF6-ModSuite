@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-04-colourstandin";
+static const char* LOADER_BUILD_ID = "2026-10-04-wholemodscene";
 
 // ============================================================================
 // Utility
@@ -1488,27 +1488,82 @@ static std::vector<SlotInfo> assign_slots(
 // even when another mod's slot relocates that same folder.
 static std::unordered_set<std::string> g_relocated_mod_paths;
 
+// The instance table of a scene's RSZ block (type id and type signature of each instance), empty
+// when the data is not a scene. SCN header: magic, five counts, five table offsets, the last one
+// being the RSZ block.
+static std::vector<uint64_t> scene_instance_table(const std::vector<uint8_t>& b) {
+    std::vector<uint64_t> out;
+    if (b.size() < 64 || memcmp(b.data(), "SCN\0", 4) != 0) return out;
+    uint64_t R = 0, io = 0;
+    uint32_t ic = 0;
+    memcpy(&R, b.data() + 56, 8);
+    if (R + 48 > b.size() || memcmp(b.data() + R, "RSZ\0", 4) != 0) return out;
+    memcpy(&ic, b.data() + R + 12, 4);
+    memcpy(&io, b.data() + R + 24, 8);
+    if (ic == 0 || R + io + 8ull * ic > b.size()) return out;
+    out.resize(ic);
+    memcpy(out.data(), b.data() + R + io, 8ull * ic);
+    return out;
+}
+
 // A mod that ships the scene of the costume it replaces can point a part at other files than the
 // game's scene does: Mummy Dhalsim keeps its head in 001/0L/ instead of 001/00/, so that the game's
 // head file stays as it is. The slot scene is built from the game's scene (a mod's scene may date from
 // an older game version), so only those model references are taken over from the mod's scene, in
-// place, and only when both scenes list the same number of model references, the file exists (in the
-// mod or in the game) and the path keeps its length. The slot relocation then applies as usual.
+// place, when both scenes list the same number of model references, the file exists (in the mod or
+// in the game) and the path keeps its length. The slot relocation then applies as usual.
+// A mod scene that cannot be followed in place (another number of model references, a path of
+// another length: a part the game's scene leaves empty given a mesh, Sagat's Drive Tech hair part,
+// 04/10) is used whole when it is laid out like the game's scene (same instances, same type
+// signatures, so made for this game version) and every file it names exists: the tool that wrote it
+// laid out its strings.
 static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8_t>& mdata,
                             const ModCostume& mc, PakReader& base_pak,
                             const std::unordered_map<std::string, std::string>& suffixes) {
     auto v = scene_model_refs(vdata), m = scene_model_refs(mdata);
     if (m.empty()) return 0;
-    if (v.size() != m.size()) {
-        printf("      mod scene: %zu model references against %zu in the game's scene, not followed\n",
-               m.size(), v.size());
-        return 0;
-    }
     auto exists = [&](const std::string& p) {
         for (auto* files : {&mc.files_in_folder, &mc.files_shared, &mc.files_other})
             if (files->count(p)) return true;
         return base_pak.find(pak_path_hash(std::string_view(p))) != nullptr;
     };
+    auto use_whole = [&](const std::string& why) -> int {
+        auto vt = scene_instance_table(vdata), mt = scene_instance_table(mdata);
+        if (vt.empty() || vt != mt) {
+            printf("      mod scene: %s, and it is not laid out like the game's scene (made for another "
+                   "game version?): not followed\n", why.c_str());
+            return -1;
+        }
+        std::set<std::string> game_refs;
+        for (auto& r : v) game_refs.insert(str_lower(r.text));
+        int own = 0;
+        for (auto& r : m) {
+            if (game_refs.count(str_lower(r.text))) continue;
+            std::string target = scene_ref_pak_path(r.text, suffixes);
+            if (target.empty() || !exists(target)) {
+                printf("      mod scene: %s, and it names %s, a file found nowhere: not followed\n",
+                       why.c_str(), r.text.c_str());
+                return -1;
+            }
+            printf("      mod scene: %s\n", r.text.c_str());
+            own++;
+        }
+        vdata = mdata;
+        printf("      mod scene used whole (%s; laid out like the game's): %d model references of its own\n",
+               why.c_str(), own);
+        return own;
+    };
+    if (v.size() != m.size()) {
+        char why[96];
+        snprintf(why, sizeof(why), "%zu model references against %zu in the game's scene", m.size(), v.size());
+        return std::max(0, use_whole(why));
+    }
+    for (size_t k = 0; k < v.size(); k++)
+        if (str_lower(v[k].text) != str_lower(m[k].text) && v[k].text.size() != m[k].text.size()) {
+            int r = use_whole("a path of another length");
+            if (r >= 0) return r;
+            break;
+        }
     int n = 0;
     for (size_t k = 0; k < v.size(); k++) {
         const std::string &vt = v[k].text, &mt = m[k].text;
