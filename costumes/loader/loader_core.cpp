@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-04-fluffyarchives";
+static const char* LOADER_BUILD_ID = "2026-10-04-colourstandin";
 
 // ============================================================================
 // Utility
@@ -734,6 +734,20 @@ static size_t upgrade_mod_user(std::vector<uint8_t>& data, const std::string& so
 // ============================================================================
 // Mod file reference (pak or disk)
 // ============================================================================
+
+// A file of the game's own natives tree, by pak path (loose files: Fluffy Mod Manager puts the files
+// it installs there), with current type signatures; empty when there is none
+static std::string g_game_dir;
+static std::vector<uint8_t> read_loose_game_file(const std::string& pak_path) {
+    if (g_game_dir.empty()) return {};
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    uint64_t sz = 0, mt = 0;
+    if (!file_stat_long(p, sz, mt)) return {};
+    auto d = read_file_long(p);
+    upgrade_mod_user(d, p);
+    return d;
+}
 
 struct ModFileRef {
     PakReader* pak = nullptr;
@@ -1976,19 +1990,38 @@ static void add_slot_files(PakWriter& writer,
                     writer.add_raw(th, std::move(raw), oe->attributes, oe->decompressed_size);
                     written_paths.insert(cmd_target); count++;
                 } else if (named_by_list) {
-                    // The colour list names a colour file this installation does not have. A slot
-                    // must not name a file that exists nowhere (the game waits for it for ever on
-                    // the select screen): it gets the outfit's first colour file under that name.
-                    const std::string first = base_model + fd + "_" + old_f + "_cmd_000.user.2";
-                    std::vector<uint8_t> data;
-                    if (auto f = mc->files_in_folder.find(first); f != mc->files_in_folder.end()) data = f->second.read_data();
-                    else if (auto* fe = base_pak.find(pak_path_hash(std::string_view(first)))) data = base_pak.read(*fe);
+                    // The colour list names a colour file the game's paks do not have. Fluffy Mod
+                    // Manager, without REFramework's loose file loader, takes the files it installs
+                    // out of re_chunk_000.pak and puts them in the game's natives folder, which the
+                    // game reads instead (04/10, Mai Outfit 1 colours 2-5, 7, 8 and 10). A slot must
+                    // not name a file that exists nowhere (the game waits for it for ever on the
+                    // select screen): without that copy, another colour of the outfit stands in, the
+                    // first numbered one. Not cmd_000: it is laid out differently and a slot given it
+                    // shows white.
+                    std::vector<uint8_t> data = read_loose_game_file(cmd_orig);
+                    std::string how = "taken from the game folder (a loose file, as Fluffy Mod Manager installs them)";
+                    if (data.empty()) {
+                        auto read_colour = [&](const std::string& p) -> std::vector<uint8_t> {
+                            if (auto f = mc->files_in_folder.find(p); f != mc->files_in_folder.end()) return f->second.read_data();
+                            if (from_own_mod(p)) return amf.at(p).read_data();
+                            if (auto* fe = base_pak.find(pak_path_hash(std::string_view(p)))) return base_pak.read(*fe);
+                            return read_loose_game_file(p);
+                        };
+                        std::vector<std::string> order;
+                        for (auto& other : cmd_names)
+                            if (other != cn && other.find("_cmd_000.") == std::string::npos) order.push_back(other);
+                        order.push_back(fd + "_" + old_f + "_cmd_000.user.2");
+                        for (auto& other : order) {
+                            data = read_colour(base_model + other);
+                            if (!data.empty()) { how = other + " stands in for it"; break; }
+                        }
+                    }
                     if (!data.empty()) {
                         writer.add_uncompressed(th, std::move(data));
                         written_paths.insert(cmd_target); count++;
                     }
-                    printf("      check: colour file %s is not in the game's files: %s\n", cmd_orig.c_str(),
-                           written_paths.count(cmd_target) ? "the outfit's first colour stands in for it"
+                    printf("      check: colour file %s is not in the game's paks: %s\n", cmd_orig.c_str(),
+                           written_paths.count(cmd_target) ? how.c_str()
                                                            : "nothing to put in its place, the slot may never finish loading");
                 }
             }
@@ -3954,6 +3987,8 @@ static void finalize_units(ScanOutputs& o) {
                 snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id + "|" + u.u.rel));
                 u.mod_id = idb;
                 g_mod_names[u.mod_id] = u.name.empty() ? rel_tail(u.u.rel) : u.name;
+                printf("  mod_id: %s for %s (same files and sizes as %s)\n", idb, u.u.rel.c_str(),
+                       g_units[v[0]].u.rel.c_str());
             }
         }
     }
@@ -4704,6 +4739,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     std::string game_dir = w2a(game_dir_w);
     if (game_dir.empty()) return 1;
+    g_game_dir = game_dir;
 
     // Derive paths
     std::string data_dir = game_dir + "\\reframework\\data\\SF6_Costumes_Data\\loader";

@@ -125,6 +125,14 @@ foreach ($p in $fluffy) {
     else { Say ('    ' + $p.Name + '  ->  no outfit (not a costume mod, or installed after the last launch)') }
 }
 if ($ourPak) { Say ('    (' + $ourPak + ' is the one the loader builds itself)') }
+Say '  Fluffy Mod Manager (mods ticked in Fluffy, read from their archives):'
+$fl = @()
+if ($list) { $fl = @($list.outfits | Where-Object { ([string]$_.source).StartsWith('Fluffy Mod Manager/') }) }
+if (-not $fl) { Say '    none' }
+foreach ($g in ($fl | Group-Object source)) {
+    Say ('    ' + $g.Name.Substring('Fluffy Mod Manager/'.Length))
+    foreach ($o in $g.Group) { Say ('        -> ' + (Describe $o) + ': ' + $o.label) }
+}
 
 Say '  reframework\costume_mods:'
 $found = 0

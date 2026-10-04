@@ -57,6 +57,8 @@ The outfit a Fluffy mod replaces still shows that mod (the last one installed fo
 Fluffy's copy over everything else. To keep the original outfit as well, put the mod in
 `reframework\costume_mods\<Character>\` instead of ticking it in Fluffy.
 
+More in [docs/FLUFFY.md](docs/FLUFFY.md): checking it worked, log lines, what to send when reporting.
+
 ## Checking what is installed
 
 Double-click `reframework\costume_mods\SF6_CostumeAudit.bat`. It changes nothing: it checks that the loader,
