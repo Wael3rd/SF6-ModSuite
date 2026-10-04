@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-04-loosefiles";
+static const char* LOADER_BUILD_ID = "2026-10-04-fluffyarchives";
 
 // ============================================================================
 // Utility
@@ -3568,6 +3568,7 @@ struct ModUnit {
     std::string dir;   // folder holding the natives tree, or the .pak
     std::string pak;   // .pak file name, empty for a natives tree
     std::string rel;   // path shown in the log
+    bool game_install = false;   // the game's own natives tree (mods Fluffy copied there)
 };
 
 struct ScanOutputs {
@@ -3684,6 +3685,25 @@ static std::string rel_tail(const std::string& rel) {
     return sl == std::string::npos ? rel : rel.substr(sl + 1);
 }
 
+// Mods Fluffy Mod Manager installed (see find_fluffy)
+struct FluffyMod {
+    std::string key, name;               // installed.ini section, ModName
+    std::set<std::string> files;         // as listed there, lower case ("natives/stm/...")
+};
+struct FluffyPick {
+    std::string path, name;              // archive (or folder) in Games\SF6\Mods
+    bool is_dir = false;
+    std::set<std::string> roots;         // its installed options, lower case, '/' separators
+};
+struct FluffyState {
+    std::string ini;                     // Fluffy's installed.ini, empty when Fluffy is not found
+    std::vector<FluffyPick> picks;       // archives holding installed costume mods
+    std::set<std::string> claimed;       // files of the mods found in their archives
+};
+static FluffyState g_fluffy;
+
+static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv);
+
 static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     const VanillaIndex& inv = o.inv;
     UnitFiles uf;
@@ -3711,6 +3731,17 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     } else {
         int ignored = 0, upgraded = 0;
         uf.files = scan_folder_mod(u.dir, inv, ignored, upgraded);
+        if (u.game_install && !g_fluffy.claimed.empty()) {
+            const auto& claimed = fluffy_claimed(inv);
+            size_t before = uf.files.size();
+            for (auto it = uf.files.begin(); it != uf.files.end();)
+                it = claimed.count(it->first) ? uf.files.erase(it) : std::next(it);
+            if (before != uf.files.size()) {
+                printf("    %zu files belong to mods Fluffy Mod Manager installed, read from their archives\n",
+                       before - uf.files.size());
+                if (uf.files.empty()) return false;
+            }
+        }
         if (ignored)
             printf("    %d non-costume files ignored "
                    "(folder mods cannot provide global files)\n", ignored);
@@ -4028,6 +4059,385 @@ static void finalize_units(ScanOutputs& o) {
 }
 
 // The game folder's natives tree holds costume files (a costume folder of a character)
+// ============================================================================
+// Fluffy Mod Manager: each mod it has installed, read from its own archive
+// ============================================================================
+// Fluffy copies the mods it installs into the game (loose files in natives\ when REFramework's
+// loose file loader is on, otherwise one pak), so two mods of the same outfit become one: the last
+// one written. Its list of installed mods (Games\SF6\installed.ini, beside the archives in
+// Games\SF6\Mods) names each mod and the files it wrote: each mod is read from its archive
+// instead and gets a slot of its own, and its copy in the game is left out of the scan.
+
+static std::string fluffy_norm_file(std::string p) {
+    p = str_lower(trim_ws(p));
+    for (auto& c : p) if (c == '\\') c = '/';
+    while (!p.empty() && p[0] == '/') p.erase(0, 1);
+    return p;
+}
+
+static std::string norm_dir(std::string p) {
+    p = str_lower(trim_ws(p));
+    for (auto& c : p) if (c == '/') c = '\\';
+    while (p.size() > 3 && p.back() == '\\') p.pop_back();
+    return p;
+}
+
+static std::string join_dir(const std::string& dir, const std::string& name) {
+    return (!dir.empty() && dir.back() == '\\') ? dir + name : dir + "\\" + name;
+}
+
+static std::string read_text_file(const std::string& path) {
+    std::string txt;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return txt;
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) txt.append(buf, n);
+    fclose(f);
+    if (txt.size() >= 3 && (unsigned char)txt[0] == 0xEF && (unsigned char)txt[1] == 0xBB
+        && (unsigned char)txt[2] == 0xBF) txt.erase(0, 3);
+    return txt;
+}
+
+// installed.ini: GameInstallPath first, then one [section] per installed mod (ModName=, file=)
+static bool read_fluffy_installed(const std::string& ini, std::string& game_path,
+                                  std::vector<FluffyMod>* mods) {
+    if (GetFileAttributesA(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    std::string txt = read_text_file(ini);
+    size_t cur = SIZE_MAX, a = 0;
+    while (a < txt.size()) {
+        size_t b = txt.find('\n', a);
+        if (b == std::string::npos) b = txt.size();
+        std::string l = trim_ws(txt.substr(a, b - a));
+        a = b + 1;
+        if (l.empty() || l[0] == ';') continue;
+        if (l[0] == '[' && l.back() == ']') {
+            if (!mods) break;                            // only the game folder was wanted
+            mods->push_back({ l.substr(1, l.size() - 2), "", {} });
+            cur = mods->size() - 1;
+            continue;
+        }
+        auto eq = l.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = str_lower(trim_ws(l.substr(0, eq))), v = trim_ws(l.substr(eq + 1));
+        if (cur == SIZE_MAX) { if (k == "gameinstallpath") game_path = v; }
+        else if (k == "modname") (*mods)[cur].name = v;
+        else if (k == "file") (*mods)[cur].files.insert(fluffy_norm_file(v));
+    }
+    return true;
+}
+
+// A Fluffy folder that manages this game folder (its installed.ini names it)
+static bool fluffy_serves(const std::string& dir, const std::string& game_dir,
+                          std::string* other_game = nullptr) {
+    std::string gp;
+    if (!read_fluffy_installed(join_dir(dir, "Games\\SF6\\installed.ini"), gp, nullptr)) return false;
+    if (gp.empty() || norm_dir(gp) == norm_dir(game_dir)) return true;
+    if (other_game) *other_game = gp;
+    return false;
+}
+
+static std::string shell_folder(const char* name) {
+    char raw[MAX_PATH * 2] = {}, out[MAX_PATH * 2] = {};
+    DWORD sz = sizeof(raw);
+    if (RegGetValueA(HKEY_CURRENT_USER,
+                     "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+                     name, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, nullptr, raw, &sz)
+        != ERROR_SUCCESS) return {};
+    if (!ExpandEnvironmentStringsA(raw, out, sizeof(out))) return {};
+    return out;
+}
+
+static void sub_dirs(const std::string& dir, std::vector<std::string>& out) {
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(join_dir(dir, "*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    const DWORD hidden_system = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        if (fd.cFileName[0] == '.' || fd.cFileName[0] == '$') continue;
+        if ((fd.dwFileAttributes & hidden_system) == hidden_system) continue;   // old profile links
+        out.push_back(join_dir(dir, fd.cFileName));
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+// Where people keep Fluffy (it is portable, unzipped anywhere): the user's Documents, Desktop and
+// Downloads, the game folder and the one above it, and the root of each local drive. Each place,
+// its folders, and the folders of those whose name suggests tools or mods are tried.
+static std::string search_fluffy(const std::string& game_dir) {
+    std::vector<std::string> roots;
+    auto add = [&](const std::string& p) {
+        if (p.empty()) return;
+        for (auto& r : roots) if (norm_dir(r) == norm_dir(p)) return;
+        DWORD at = GetFileAttributesA(p.c_str());
+        if (at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY)) roots.push_back(p);
+    };
+    for (const char* n : { "Personal", "Desktop", "{374DE290-123F-4565-9164-39C4925E467B}" })
+        add(shell_folder(n));
+    char env[MAX_PATH];
+    for (const char* var : { "USERPROFILE", "OneDrive" }) {
+        DWORD n = GetEnvironmentVariableA(var, env, MAX_PATH);
+        if (!n || n >= MAX_PATH) continue;
+        for (const char* sub : { "\\Documents", "\\Desktop", "\\Downloads", "" }) add(std::string(env) + sub);
+    }
+    add(game_dir);
+    if (auto sl = game_dir.find_last_of('\\'); sl != std::string::npos) add(game_dir.substr(0, sl));
+    DWORD drives = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if (!(drives & (1u << i))) continue;
+        char root[4] = { char('A' + i), ':', '\\', 0 };
+        if (GetDriveTypeA(root) == DRIVE_FIXED) add(root);
+    }
+    static const char* hints[] = { "fluffy", "mod", "game", "tool", "util", "app", "program" };
+    for (auto& r : roots) {
+        if (fluffy_serves(r, game_dir)) return r;
+        std::vector<std::string> d1;
+        sub_dirs(r, d1);
+        for (auto& d : d1) if (fluffy_serves(d, game_dir)) return d;
+        for (auto& d : d1) {
+            std::string low = str_lower(d.substr(d.find_last_of('\\') + 1));
+            if (std::none_of(std::begin(hints), std::end(hints),
+                             [&](const char* hn) { return low.find(hn) != std::string::npos; })) continue;
+            std::vector<std::string> d2;
+            sub_dirs(d, d2);
+            for (auto& e : d2) if (fluffy_serves(e, game_dir)) return e;
+        }
+    }
+    return {};
+}
+
+static const char* kSettingsTemplate =
+    "; SF6-SlotsLoader settings\r\n"
+    ";\r\n"
+    "; FluffyModManager: the folder of Fluffy Mod Manager (the folder that holds Modmanager.exe).\r\n"
+    "; Each costume mod Fluffy has installed gets a slot of its own, read from its archive in\r\n"
+    "; Fluffy's Games\\SF6\\Mods folder. Left empty, the loader looks for Fluffy by itself\r\n"
+    "; (Documents, Desktop, Downloads, the game folder and the root of each drive).\r\n"
+    "; Example: FluffyModManager=D:\\Tools\\FluffyModManager\r\n"
+    "FluffyModManager=\r\n";
+
+static std::string read_setting(const std::string& path, const char* key) {
+    std::string txt = read_text_file(path);
+    size_t a = 0;
+    while (a < txt.size()) {
+        size_t b = txt.find('\n', a);
+        if (b == std::string::npos) b = txt.size();
+        std::string l = trim_ws(txt.substr(a, b - a));
+        a = b + 1;
+        auto eq = l.find('=');
+        if (l.empty() || l[0] == ';' || eq == std::string::npos) continue;
+        if (str_lower(trim_ws(l.substr(0, eq))) != key) continue;
+        std::string v = trim_ws(l.substr(eq + 1));
+        if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
+        return v;
+    }
+    return {};
+}
+
+static std::string archive_stem(const std::string& name) {
+    auto dot = name.find_last_of('.');
+    return dot == std::string::npos ? name : name.substr(0, dot);
+}
+
+// Files of an archive or folder of Fluffy's Mods folder, '/' separators, relative to its root
+static bool list_mod_entries(const std::string& path, bool is_dir, std::vector<std::string>& out) {
+    if (!is_dir) {
+        std::vector<std::wstring> w;
+        if (!archive_list(a2w_path(path), w)) return false;
+        for (auto& x : w) out.push_back(w2a(x.c_str()));
+        return true;
+    }
+    std::function<void(const std::string&, const std::string&, int)> walk =
+        [&](const std::string& dir, const std::string& rel, int depth) {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do {
+            if (fd.cFileName[0] == '.') continue;
+            std::string r = rel.empty() ? fd.cFileName : rel + "/" + fd.cFileName;
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) out.push_back(r);
+            else if (depth < 16) walk(dir + "\\" + fd.cFileName, r, depth + 1);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    };
+    walk(path, "", 0);
+    return true;
+}
+
+// Finds Fluffy, reads its installed mods and matches each one with the option of an archive in
+// its Mods folder that holds the same files (the option's folder name, which Fluffy names the mod
+// after, settles between two archives with the same files).
+static void find_fluffy(const std::string& game_dir, const std::string& costume_mods_dir,
+                        const std::string& registry_dir) {
+    g_fluffy = FluffyState{};
+    std::string settings = costume_mods_dir + "\\settings.ini";
+    if (GetFileAttributesA(settings.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        CreateDirectoryA(costume_mods_dir.c_str(), nullptr);
+        if (FILE* f = fopen(settings.c_str(), "wb")) { fputs(kSettingsTemplate, f); fclose(f); }
+    }
+    const std::string remembered = registry_dir + "\\fluffy_location.txt";
+    std::string dir, how;
+    std::string set = read_setting(settings, "fluffymodmanager");
+    if (!set.empty()) {
+        std::string other;
+        if (fluffy_serves(set, game_dir, &other)) { dir = set; how = "settings.ini"; }
+        else if (!other.empty())
+            logf("  WARN: the Fluffy Mod Manager of settings.ini (%s) manages another game folder: %s\n",
+                 set.c_str(), other.c_str());
+        else
+            logf("  WARN: settings.ini names %s as Fluffy Mod Manager's folder, but it has no "
+                 "Games\\SF6\\installed.ini (not Fluffy's folder, or no mod installed yet)\n", set.c_str());
+    }
+    if (dir.empty()) {
+        std::string rem = trim_ws(read_text_file(remembered));
+        if (!rem.empty() && fluffy_serves(rem, game_dir)) { dir = rem; how = "found before"; }
+    }
+    if (dir.empty()) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        dir = search_fluffy(game_dir);
+        double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t0).count();
+        if (dir.empty()) {
+            logf("  Fluffy Mod Manager: not found (searched in %.0f ms; its folder can be given in "
+                 "reframework\\costume_mods\\settings.ini)\n", ms);
+            DeleteFileA(remembered.c_str());
+            return;
+        }
+        char b[48];
+        snprintf(b, sizeof(b), "found in %.0f ms", ms);
+        how = b;
+        if (FILE* f = fopen(remembered.c_str(), "wb")) { fputs(dir.c_str(), f); fclose(f); }
+    }
+    logf("  Fluffy Mod Manager: %s (%s)\n", dir.c_str(), how.c_str());
+
+    const std::string sf6 = join_dir(dir, "Games\\SF6");
+    g_fluffy.ini = sf6 + "\\installed.ini";
+    std::string gp;
+    std::vector<FluffyMod> mods;
+    read_fluffy_installed(g_fluffy.ini, gp, &mods);
+    if (mods.empty()) { logf("    no mod installed\n"); return; }
+
+    // The options of every archive in Mods: the folders holding a natives tree
+    struct Arc { std::string path, name; bool is_dir; };
+    struct Opt { size_t arc; std::string root; std::set<std::string> files; bool costume = false, taken = false; };
+    std::vector<Arc> arcs;
+    std::vector<Opt> opts;
+    {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((sf6 + "\\Mods\\*").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (fd.cFileName[0] == '.') continue;
+                bool d = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                if (d || is_archive_name(fd.cFileName))
+                    arcs.push_back({ sf6 + "\\Mods\\" + fd.cFileName, fd.cFileName, d });
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+        std::sort(arcs.begin(), arcs.end(), [](auto& x, auto& y) { return x.name < y.name; });
+    }
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < arcs.size(); ++i) {
+        std::vector<std::string> entries;
+        if (!list_mod_entries(arcs[i].path, arcs[i].is_dir, entries)) {
+            logf("    WARN: %s cannot be read\n", arcs[i].name.c_str());
+            continue;
+        }
+        std::map<std::string, size_t> by_root;
+        for (auto& e : entries) {
+            std::string low = fluffy_norm_file(e);
+            size_t at = low.compare(0, 8, "natives/") == 0 ? 0 : low.find("/natives/");
+            if (at == std::string::npos) continue;
+            std::string root = at ? low.substr(0, at) : std::string();
+            if (at) at += 1;
+            auto it = by_root.find(root);
+            if (it == by_root.end()) {
+                opts.push_back({ i, root, {} });
+                it = by_root.emplace(root, opts.size() - 1).first;
+            }
+            Opt& o = opts[it->second];
+            o.files.insert(low.substr(at));
+            if (low.find("/model/esf/esf", at) != std::string::npos) o.costume = true;
+        }
+    }
+    double list_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t0).count();
+
+    std::map<size_t, size_t> pick_of_arc;
+    int matched = 0, costume = 0;
+    for (auto& m : mods) {
+        const std::string shown = m.name.empty() ? m.key : m.name;
+        size_t natives = 0;
+        for (auto& f : m.files) if (f.compare(0, 8, "natives/") == 0) natives++;
+        long long best = -1;
+        size_t bi = 0;
+        for (size_t i = 0; i < opts.size(); ++i) {
+            const Opt& o = opts[i];
+            if (o.taken) continue;
+            size_t inter = 0;
+            for (auto& f : o.files) inter += m.files.count(f);
+            if (!inter) continue;
+            std::string last = o.root.substr(o.root.find_last_of('/') + 1), root_bs = o.root;
+            for (auto& c : root_bs) if (c == '/') c = '\\';
+            bool named = eq_ci(last, m.key) || eq_ci(o.root, m.key) || eq_ci(root_bs, m.key)
+                      || (o.root.empty() && eq_ci(archive_stem(arcs[o.arc].name), m.key));
+            if (!named && inter * 2 < natives) continue;
+            long long score = (named ? (1LL << 40) : 0) + (long long)inter * 1024
+                            - (long long)(o.files.size() - inter);
+            if (score > best) { best = score; bi = i; }
+        }
+        if (best < 0) {
+            logf("    %s: its archive is not in Fluffy's Mods folder, the copy in the game is read instead\n",
+                 shown.c_str());
+            continue;
+        }
+        Opt& o = opts[bi];
+        o.taken = true;
+        matched++;
+        g_fluffy.claimed.insert(m.files.begin(), m.files.end());
+        const Arc& ar = arcs[o.arc];
+        logf("    %s: %s%s%s\n", shown.c_str(), ar.name.c_str(), o.root.empty() ? "" : " / ",
+             o.root.c_str());
+        if (!o.costume) continue;                         // nothing the loader uses
+        costume++;
+        auto it = pick_of_arc.find(o.arc);
+        if (it == pick_of_arc.end()) {
+            FluffyPick pk;
+            pk.path = ar.path; pk.name = ar.name; pk.is_dir = ar.is_dir;
+            g_fluffy.picks.push_back(pk);
+            it = pick_of_arc.emplace(o.arc, g_fluffy.picks.size() - 1).first;
+        }
+        g_fluffy.picks[it->second].roots.insert(o.root);
+    }
+    logf("    %zu mods installed, %d found in their archives (%d with costumes; %zu archives read in %.0f ms)\n",
+         mods.size(), matched, costume, arcs.size(), list_ms);
+}
+
+// The claimed files as the scan names them (old texture versions renamed to the current one)
+static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv) {
+    static std::set<std::string> out;
+    static bool done = false;
+    if (done) return out;
+    done = true;
+    std::string tex_ver;
+    { auto it = inv.suffixes.find("tex"); if (it != inv.suffixes.end()) tex_ver = it->second; }
+    for (std::string p : g_fluffy.claimed) {
+        auto idx = p.find("natives/stm/");
+        if (idx == std::string::npos) continue;
+        p = p.substr(idx);
+        for (int oi = 0; oi < N_OLD_TEX && !tex_ver.empty(); oi++) {
+            std::string old_suf = std::string(".tex.") + OLD_TEX_SUFFIXES[oi];
+            if (str_ends_with(p, old_suf.c_str())) {
+                p = p.substr(0, p.size() - strlen(OLD_TEX_SUFFIXES[oi])) + tex_ver;
+                break;
+            }
+        }
+        out.insert(p);
+    }
+    return out;
+}
+
 static bool has_loose_files(const std::string& game_dir) {
     for (const char* sub : {"\\natives\\stm\\product\\model\\esf"}) {
         DWORD a = GetFileAttributesA((game_dir + sub).c_str());
@@ -4142,12 +4552,29 @@ static void scan_costume_mods(
         }
     }
 
-    // Mods installed by Fluffy Mod Manager as loose files: that is how it installs them when
-    // REFramework's loose file loader is on. They sit in the game's own natives tree, which the
-    // game reads over every pak: the outfit they replace keeps them, and they get a slot too.
+    // Mods Fluffy Mod Manager installed, each read from its own archive (see find_fluffy)
+    for (auto& pk : g_fluffy.picks) {
+        std::string rel = "Fluffy Mod Manager/" + pk.name;
+        printf("\n  Fluffy Mod Manager: %s\n", pk.name.c_str());
+        std::string root_dir = pk.is_dir ? pk.path : ensure_archive_extracted(pk.path);
+        std::vector<ModUnit> all, units;
+        if (!root_dir.empty()) collect_mod_units(root_dir, rel, 0, 2, all);
+        for (auto& u : all) {
+            if (!u.pak.empty()) continue;
+            std::string r = u.dir.size() > root_dir.size() ? str_lower(u.dir.substr(root_dir.size() + 1)) : "";
+            for (auto& c : r) if (c == '\\') c = '/';
+            if (pk.roots.count(r)) units.push_back(u);
+        }
+        process_units(units, rel, o);
+    }
+
+    // Loose files in the game's natives tree: that is how Fluffy installs mods when REFramework's
+    // loose file loader is on (or someone copied them there). The game reads them over every pak:
+    // the outfit they replace keeps them. What is left once the mods read from their archives are
+    // taken out gets a slot too.
     if (has_loose_files(game_dir)) {
         printf("\n  folder: natives (loose files in the game folder, as Fluffy Mod Manager installs them)\n");
-        process_units({ ModUnit{ game_dir, "", "natives (Fluffy Mod Manager)" } }, "natives (Fluffy Mod Manager)", o);
+        process_units({ ModUnit{ game_dir, "", "natives (Fluffy Mod Manager)", true } }, "natives (Fluffy Mod Manager)", o);
     }
 
     finalize_units(o);
@@ -4358,6 +4785,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::string costume_mods_dir = game_dir + "\\reframework\\costume_mods";
     bool has_costume_mods = (GetFileAttributesA(costume_mods_dir.c_str()) != INVALID_FILE_ATTRIBUTES);
     const bool has_loose = has_loose_files(game_dir);   // Fluffy Mod Manager's loose files
+    // Fluffy is looked for only when it has put files in the game (loose files or a mod pak)
+    g_fluffy = FluffyState{};
+    if (has_loose || !mod_paks.empty()) find_fluffy(game_dir, costume_mods_dir, registry_dir);
 
     // 3b. No mod paks AND no costume_mods -> clean up and exit
     if (mod_paks.empty() && !has_costume_mods && !has_loose) {
@@ -4418,6 +4848,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                   [](auto& a, auto& b){ return a.rel_path < b.rel_path; });
     }
     if (has_loose) folder_infos.push_back({ "natives", game_dir + "\\natives\\stm\\product\\model\\esf" });
+    if (!g_fluffy.ini.empty()) {
+        folder_infos.push_back({ "fluffy/installed.ini", g_fluffy.ini });
+        for (auto& pk : g_fluffy.picks) folder_infos.push_back({ "fluffy/" + pk.name, pk.path });
+    }
 
     // 3d. Fingerprint check for early exit
     std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir);
@@ -4494,6 +4928,16 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         scan_mod_pak(*reader, inv, known, unknown, upgraded_tex);
         all_upgraded_tex.insert(upgraded_tex.begin(), upgraded_tex.end());
         printf("    resolved: %zu paths, unattributed: %zu\n", known.size(), unknown.size());
+        if (!g_fluffy.claimed.empty() && !known.empty()) {
+            const auto& claimed = fluffy_claimed(inv);
+            if (std::all_of(known.begin(), known.end(), [&](auto& kv) { return claimed.count(kv.first) > 0; })) {
+                printf("    every costume file of it belongs to mods Fluffy Mod Manager installed, "
+                       "read from their archives instead\n");
+                game_patch_readers.push_back({pi.num, reader.get()});
+                mod_pak_readers.push_back(std::move(reader));
+                continue;
+            }
+        }
 
         auto costumes = detect_mod_costumes(known, inv);
         for (auto& mc : costumes)
@@ -4508,7 +4952,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
 
     // 5b. Scan costume_mods folders (merged after paks, alphabetical order), then natives
-    if (has_costume_mods || has_loose) {
+    if (has_costume_mods || has_loose || !g_fluffy.picks.empty()) {
         scan_costume_mods(game_dir, inv, mods_with_costumes, all_mod_files,
                           mod_pak_readers, folder_infos, all_upgraded_tex);
     }
