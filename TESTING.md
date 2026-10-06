@@ -41,9 +41,12 @@ folder; the loader rewrites it at every launch where something changed.
   three online matches with Lily Kenyan Summer C2 on DriveTech, its clubs and colour 3, the colour put back
   between matches. The plugin's log (`reframework\data\SF6_CostumeSlots_data\native_log.txt`) shows
   `outfit mounted, alias check`, `manifest vN -> v4 = 1`, `alias check done`.
-- **The alias without going online**: set the character and its slot in Battle Settings (R on the Fighting
-  Ground menu), go back to the main menu and press R (Training Mode): training loads that character in
-  DriveTech without the character select screen, as an online match does, and the slot must show.
+- **The alias without going online**: Training, Arcade, Versus and Team Battle pick the costume on a select
+  screen, so they never alias (a DriveTech picked there is DriveTech). Combo Trials does not: set the
+  character and its slot in Battle Settings (R on the Fighting Ground menu), then Practice > Combo Trials,
+  the character in **DriveTech Wear**, any trial. The slot must show; the plugin's log shows
+  `slot vN mounted (the game mounted DriveTech)`, `manifest vN -> v4 = 1`, and `colour C placed under colour 0`
+  when the slot's colour is not one DriveTech has. Checked on 2026-10-06 with Ryu (slot 8) and Lily (slot 13).
 
 - **First launch after updating**: the costumes are rebuilt once (the stage pak no longer counts in their
   fingerprint), then `Up to date` again. Adding or removing a stage mod afterwards must not rebuild the
