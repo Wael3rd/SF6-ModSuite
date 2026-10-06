@@ -593,6 +593,24 @@ typedef struct SF6CoreAPI {
     /* One-line state, for logs. Returns the length written (truncated to cap-1). */
     uint32_t      (SF6CORE_CALL *opt_status)(char* buf, uint32_t cap);
 
+    /* -- Increment 7: effective selection (ADR-0014, append-only) -------- */
+
+    /* A mod that dresses a fighter differently from what the game shows
+     * (SlotsLoader's alias: the game and the network see DriveTech, the
+     * fighter wears a slot) declares what the fighter really wears while it
+     * does: fighter shown in costume `shown_costume` really wears
+     * `real_costume`, colour `real_colour` (-1 = the colour the game shows).
+     * real_costume < 0 clears the declaration. One declaration per
+     * (fighter, shown_costume); the last call wins. */
+    SF6CoreStatus (SF6CORE_CALL *sel_set_effective)(SF6CoreClient* client, int32_t fighter, int32_t shown_costume,
+                                                    int32_t real_costume, int32_t real_colour);
+    /* 1 when the fighter, seen by the caller in `costume` (the shown costume
+     * or the real one), is declared to wear something else: *real_costume /
+     * *real_colour receive it (*real_colour -1 = the colour the game shows).
+     * 0 otherwise (outputs untouched). Any thread. */
+    int32_t       (SF6CORE_CALL *sel_get_effective)(int32_t fighter, int32_t costume,
+                                                    int32_t* real_costume, int32_t* real_colour);
+
 } SF6CoreAPI;
 
 #ifdef __cplusplus

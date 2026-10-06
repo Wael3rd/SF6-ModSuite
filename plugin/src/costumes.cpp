@@ -685,7 +685,11 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
         auto ow = call(d_set, "overwrite", { arg_obj(s_set) });
         logf("[F%d] manifest v%d -> v%d = %d", fid, slot, BASE_COS, ow.exception_thrown ? 0 : 1);
         fr.swapped_addr = addr;
-        if (!ow.exception_thrown) apply_color(fid, d_set);
+        if (!ow.exception_thrown) {
+            apply_color(fid, d_set);
+            // what the fighter really wears, for the other mods reading its costume / colour (through the core)
+            ui::set_effective(fid, BASE_COS, slot, fr.has_csw ? fr.csw_b : -1);
+        }
         return true;
     }
     return false;
@@ -694,7 +698,7 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
 // Between matches (a screen that shows the slot as an outfit of its own): its colours put back
 void restore_all() {
     bool any = false;
-    for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; any |= fr.has_csw; }
+    for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; any |= fr.has_csw; ui::set_effective(fid, BASE_COS, -1, -1); }
     if (!any) return;
     auto hs = read_holders();
     for (auto& [fid, fr] : g_f) {

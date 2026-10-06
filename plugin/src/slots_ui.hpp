@@ -55,6 +55,12 @@ bool tex_ready(Obj* holder);
 // set_tex: setTexture with compare-before-write.
 bool set_tex(Obj* tex_obj, Obj* holder);
 
+// ---- effective selection (core 0.7.0+; nothing to do without the core) ----
+// set_effective: the fighter the game shows in `shown_costume` really wears
+// `real_costume`, colour `real_colour` (-1 = the colour the game shows), for
+// the other mods that read its costume / colour; real_costume < 0 clears.
+void set_effective(int fighter, int shown_costume, int real_costume, int real_colour);
+
 } // namespace slots::ui
 
 // ---- legacy declarations (compiled only with SLOTS_LEGACY_UI_FALLBACK) ----

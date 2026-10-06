@@ -160,6 +160,11 @@ bool list_add(Obj* list, Obj* item) {
 
 // ---- P2 + P3: text and texture ------------------------------------------
 
+void set_effective(int fighter, int shown_costume, int real_costume, int real_colour) {
+    if (core_ok() && SF6CORE_HAS(g_api, sel_set_effective))
+        g_api->sel_set_effective(g_client, fighter, shown_costume, real_costume, real_colour);
+}
+
 bool set_text(Obj* text_obj, const char* utf8) {
     if (core_ok())
         return g_api->ui_set_text(g_client, text_obj, utf8) == SF6CORE_OK;
