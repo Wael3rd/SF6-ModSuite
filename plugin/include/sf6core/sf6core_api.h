@@ -218,6 +218,68 @@ typedef struct SF6CoreDisplayStats {
     uint64_t quarantined;         /* calls refused because the element faulted before */
 } SF6CoreDisplayStats;
 
+/* ---- Option dialog types (increment 6, ADR-0013) ---------------------- */
+
+/* The game's own option window (app.Option units shown by
+ * UIFlowOptionBGDialog) filled with the clients' groups and entries. One
+ * engine for every client: the core builds the tree from all the groups,
+ * drives the dialogs once per frame (before the clients' frame callbacks)
+ * and routes each entry's events to the client that created it. Group and
+ * entry ids are the core's (>= 0), unique across clients. */
+typedef enum SF6CoreOptKind {
+    SF6CORE_OPT_BUTTON = 0,
+    SF6CORE_OPT_SLIDER = 1,
+    SF6CORE_OPT_CHOICE = 2
+} SF6CoreOptKind;
+
+typedef struct SF6CoreOptEntryDesc {
+    uint32_t           struct_size;
+    int32_t            kind;          /* SF6CoreOptKind */
+    const char*        key;           /* the entry's key (NULL = "") */
+    const char*        title;
+    const char*        desc;
+    const char* const* options;       /* choice: the labels */
+    uint32_t           n_options;
+    int64_t            min_val;       /* slider range */
+    int64_t            max_val;
+    int64_t            value;         /* choice: 1-based; slider: raw; button: unused */
+} SF6CoreOptEntryDesc;
+
+/* What a button press asks for, filled by the owner's on_button. */
+typedef struct SF6CoreOptButtonResult {
+    int32_t kind;                     /* 0 nothing, 1 close the window, 2 open the page `key` */
+    int32_t rebuild;                  /* kind 2: rebuild the tree first */
+    int32_t push;                     /* kind 2: the page goes on top of the current one */
+    int32_t pop;                      /* kind 2: back to the parent page */
+    char    key[128];
+} SF6CoreOptButtonResult;
+
+/* Per-client callbacks, called on the game thread from the core's frame
+ * (or its BeginRendering pump), guarded like frame callbacks. A callback
+ * may call the opt_* functions (re-entrant: nothing is locked meanwhile).
+ * Any member may be NULL. */
+typedef struct SF6CoreOptCallbacks {
+    uint32_t struct_size;
+    void*    user;
+    /* one of the client's entries changed in the game (choice 1-based, slider raw) */
+    void (SF6CORE_CALL *on_value)(void* user, int64_t entry, int64_t value);
+    /* one of the client's buttons was pressed; out is zeroed before the call */
+    void (SF6CORE_CALL *on_button)(void* user, int64_t entry, SF6CoreOptButtonResult* out);
+    /* every client: a dialog was created / a page was set up (rows = how many
+     * of this client's entries it shows) / the top page was closed by the
+     * game / the window closed */
+    void (SF6CORE_CALL *on_dialog_created)(void* user, void* param);
+    void (SF6CORE_CALL *on_page_setup)(void* user, void* param, uint32_t rows);
+    void (SF6CORE_CALL *on_page_popped)(void* user, void* param);
+    void (SF6CORE_CALL *on_window_closed)(void* user);
+} SF6CoreOptCallbacks;
+
+/* opt_navigate flags */
+#define SF6CORE_OPT_NAV_REBUILD 1
+#define SF6CORE_OPT_NAV_NOW     2
+#define SF6CORE_OPT_NAV_PUSH    4
+#define SF6CORE_OPT_NAV_POP     8
+
 /*
  * Check whether a function pointer is readable in the API struct.
  * Usage: if (SF6CORE_HAS(api, create_widget)) { api->create_widget(...); }
@@ -497,6 +559,39 @@ typedef struct SF6CoreAPI {
     SF6CoreStatus (SF6CORE_CALL *set_element_rules_suspended)(
         SF6CoreClient* client,
         int32_t        suspended);
+
+    /* -- Increment 6: native option dialogs (ADR-0013, append-only) ------ */
+
+    /* Callbacks of this client's groups and entries (copied). The engine's
+     * hooks are installed on the first call of any client, on the next
+     * frame. ERR when the engine could not be installed. */
+    SF6CoreStatus (SF6CORE_CALL *opt_set_callbacks)(SF6CoreClient* client, const SF6CoreOptCallbacks* cb);
+    /* A group = one page of the window. key NULL/"" = none (the title keys
+     * the page). Returns the group id, -1 on failure. */
+    int64_t       (SF6CORE_CALL *opt_group)(SF6CoreClient* client, const char* key, const char* title, const char* desc);
+    /* New title / description, applied at the next build. */
+    SF6CoreStatus (SF6CORE_CALL *opt_group_def)(SF6CoreClient* client, int64_t group, const char* title, const char* desc);
+    SF6CoreStatus (SF6CORE_CALL *opt_remove_group)(SF6CoreClient* client, int64_t group);
+    /* Returns the entry id, -1 on failure. */
+    int64_t       (SF6CORE_CALL *opt_entry)(SF6CoreClient* client, int64_t group, const SF6CoreOptEntryDesc* desc);
+    SF6CoreStatus (SF6CORE_CALL *opt_rebuild)(SF6CoreClient* client);
+    SF6CoreStatus (SF6CORE_CALL *opt_ensure_built)(SF6CoreClient* client);
+    /* Open the window on the page `title` (training menu style); focus =
+     * the row to focus, -1 = default. Ignored while the window is open. */
+    SF6CoreStatus (SF6CORE_CALL *opt_open_menu)(SF6CoreClient* client, const char* title, int32_t focus);
+    /* Change page while the window is open (SF6CORE_OPT_NAV_* flags). */
+    SF6CoreStatus (SF6CORE_CALL *opt_navigate)(SF6CoreClient* client, const char* key, int32_t flags, int32_t focus);
+    SF6CoreStatus (SF6CORE_CALL *opt_close)(SF6CoreClient* client);
+    /* Queries (game thread). */
+    int32_t       (SF6CORE_CALL *opt_window_open)(void);
+    void*         (SF6CORE_CALL *opt_current_param)(void);
+    void*         (SF6CORE_CALL *opt_parent_param)(void);
+    int64_t       (SF6CORE_CALL *opt_focused_entry)(void);
+    void*         (SF6CORE_CALL *opt_row_control)(int64_t entry, void* param);
+    void*         (SF6CORE_CALL *opt_row_part)(int64_t entry);
+    SF6CoreStatus (SF6CORE_CALL *opt_set_option_text)(SF6CoreClient* client, int64_t entry, int32_t index, const char* text);
+    /* One-line state, for logs. Returns the length written (truncated to cap-1). */
+    uint32_t      (SF6CORE_CALL *opt_status)(char* buf, uint32_t cap);
 
 } SF6CoreAPI;
 
