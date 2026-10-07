@@ -89,6 +89,9 @@ struct Backend {
     void (*ui_set_font_size)(Obj, double w, double h) = nullptr;
     // ---- input, time, random, locale ----
     bool (*key_down)(int vk) = nullptr;
+    // the keyboard key of the game's own previous / next selection (page turning): the symbol the game shows for it
+    // ("<ICON KeyA>" on an AZERTY keyboard, "<ICON KeyQ>" on a QWERTY one) and the key to read; false = unknown
+    bool (*page_key)(bool next, std::string& symbol, int& vk) = nullptr;
     uint32_t (*pad_mask)() = nullptr;
     bool (*mouse)(double& x, double& y, double& display_w, double& display_h) = nullptr;      // false = no imgui mouse
     int64_t (*frame)() = nullptr;                                                             // dbg.frame

@@ -729,10 +729,22 @@ void material_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& /
 }
 using RowsFn = void (*)(const GroupRef&, int, const NodeRef&, const NodeRef&, const Marks&);
 
+// The keyboard keys that turn pages: the game's own, so the layout in use counts (the physical key left of W / Z is
+// A on an AZERTY keyboard, Q on a QWERTY one, where A moves left in the game's menus). Unknown: A / E as before.
+struct PageKey { std::string symbol; int vk; };
+PageKey page_key(bool next) {
+    PageKey k{ next ? "<ICON KeyE>" : "<ICON KeyA>", next ? 0x45 : 0x41 };
+    std::string s;
+    int vk = 0;
+    if (be.page_key && be.page_key(next, s, vk) && !s.empty() && vk > 0) k = { s, vk };
+    return k;
+}
+
 std::string page_title(const std::string& title, int pg, int n) {
     if (n <= 1) return title;
     const bool pad = be.screen_pad && be.screen_pad();
-    return fmt("%s   %s   %d/%d   %s", pad ? "<ICON BtnL1>" : "<ICON KeyA>", title.c_str(), pg, n, pad ? "<ICON BtnR1>" : "<ICON KeyE>");
+    const std::string prev = pad ? "<ICON BtnL1>" : page_key(false).symbol, next = pad ? "<ICON BtnR1>" : page_key(true).symbol;
+    return fmt("%s   %s   %d/%d   %s", prev.c_str(), title.c_str(), pg, n, next.c_str());
 }
 void link_pages(const std::vector<std::string>& keys) {
     const size_t n = keys.size();
@@ -1948,11 +1960,12 @@ void frame() {
     } else {
         edit.cancel_was_down = false;
     }
-    // page turning inside the editor: A / E (L1 / R1), wrapping
+    // page turning inside the editor: the game's previous / next keys (A / E on an AZERTY keyboard, Q / E on a
+    // QWERTY one) or L1 / R1, wrapping
     if (edit.active && window_open()) {
         const uint32_t mask = pad_mask();
-        bool prev_down = key_down(0x41) || (mask & PAD.L1) != 0;
-        bool next_down = key_down(0x45) || (mask & PAD.R1) != 0;
+        bool prev_down = key_down(page_key(false).vk) || (mask & PAD.L1) != 0;
+        bool next_down = key_down(page_key(true).vk) || (mask & PAD.R1) != 0;
         auto lit = edit.has_page ? edit.pages.find(edit.page) : edit.pages.end();
         bool has_link = lit != edit.pages.end();
         std::pair<std::string, std::string> link = has_link ? lit->second : std::pair<std::string, std::string>{};

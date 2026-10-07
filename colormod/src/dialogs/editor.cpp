@@ -179,6 +179,74 @@ void be_ui_set_font_size(core::Obj o, double w, double h) { if (auto* a = cmn::c
 
 // ---- input, time, random, locale ---------------------------------------------------------------------------------
 bool be_key_down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }      // what reframework:is_key_down reads
+
+// The game's tab keys (app.InputAssign.Digital.Id UITabL / UITabR, L1 / R1 on a pad): the editor turns its pages with
+// them. On a keyboard the game names the physical key by the layout in use (A on an AZERTY keyboard, Q on a QWERTY
+// one, where A moves left in the menus), so the symbol comes from the game (InputGuideManager.GetSymbolText,
+// keyboard mode) and the key read is the letter it names (Windows letter keys follow the layout too). A symbol
+// naming no letter or digit, or no answer: the game's default physical keys (scan codes 0x10 / 0x12) in the layout
+// in use. Asked again every 120 frames: the key configuration or the layout can change while the game runs.
+struct PageKeys { int64_t at = INT64_MIN; std::string sym[2]; int vk[2] = {}; std::string sig; };
+PageKeys g_page_keys;
+int key_letter(const std::string& s) {                         // "<ICON KeyQ>" -> 'Q'; 0 = no single letter / digit
+    static const std::string pre = "<ICON Key";
+    const size_t i = s.find(pre);
+    if (i == std::string::npos || i + pre.size() + 1 >= s.size() || s[i + pre.size() + 1] != '>') return 0;
+    const char c = s[i + pre.size()];
+    return ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) ? c : 0;
+}
+void read_page_keys() {
+    static API::Method* m_symbol = nullptr;
+    static int32_t ids[2] = { -1, -1 };
+    static bool resolved = false;
+    auto* tdb = API::get()->tdb();
+    if (!resolved) {
+        resolved = true;
+        auto* id_td = tdb->find_type("app.InputAssign.Digital.Id");
+        const char* names[2] = { "UITabL", "UITabR" };
+        for (int i = 0; i < 2; ++i)
+            if (auto* f = id_td ? id_td->find_field(names[i]) : nullptr) ids[i] = f->get_data<int32_t>(nullptr);
+        if (auto* gm_td = tdb->find_type("app.InputGuideManager"))
+            m_symbol = ll::find_method_full(gm_td, "GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)");
+    }
+    MO* gm = API::get()->get_managed_singleton("app.InputGuideManager");
+    std::string sig;
+    for (int i = 0; i < 2; ++i) {
+        std::string s;
+        if (gm && m_symbol && ids[i] >= 0) {
+            constexpr int32_t kModeKeyboard = 2;                // app.InputGuideMode: 1 GamePad, 2 KeyboardAndMouse
+            auto r = m_symbol->invoke(gm, std::vector<void*>{ ll::arg_i32(ids[i]), ll::arg_i32(kModeKeyboard), ll::arg_i32(0), ll::arg_i32(0) });
+            if (!r.exception_thrown && r.ptr) s = ll::managed_string_to_utf8(reinterpret_cast<MO*>(r.ptr));
+        }
+        int vk = key_letter(s);
+        const char* from = "game";
+        if (!vk) {
+            const UINT pv = MapVirtualKeyW(i ? 0x12 : 0x10, MAPVK_VSC_TO_VK);
+            vk = (int)pv;
+            s = ((pv >= 'A' && pv <= 'Z') || (pv >= '0' && pv <= '9')) ? std::string("<ICON Key") + (char)pv + ">" : std::string();
+            from = "physical default";
+        }
+        g_page_keys.sym[i] = s;
+        g_page_keys.vk[i] = vk;
+        char b[96];
+        std::snprintf(b, sizeof b, "%s%s (vk 0x%02X, %s)", i ? " / " : "", s.c_str(), vk, from);
+        sig += b;
+    }
+    if (sig != g_page_keys.sig) {
+        g_page_keys.sig = sig;
+        cmn::journal("editor page keys: %s", sig.c_str());
+    }
+}
+bool be_page_key(bool next, std::string& symbol, int& vk) {
+    if (g_page_keys.at == INT64_MIN || S.frame - g_page_keys.at >= 120 || S.frame < g_page_keys.at) {
+        g_page_keys.at = S.frame;
+        try { read_page_keys(); } catch (...) { g_page_keys.sym[0].clear(); g_page_keys.sym[1].clear(); }
+    }
+    const int i = next ? 1 : 0;
+    symbol = g_page_keys.sym[i];
+    vk = g_page_keys.vk[i];
+    return !symbol.empty() && vk > 0;
+}
 uint32_t be_pad_mask() { return S.pad_mask; }
 bool be_mouse(double& x, double& y, double& dw, double& dh) { if (!S.has_mouse) return false; x = S.mx; y = S.my; dw = S.dw; dh = S.dh; return true; }
 int64_t be_frame() { return S.frame; }
@@ -518,7 +586,7 @@ bool install() {
     b.ui_scale = be_ui_scale; b.ui_font_size = be_ui_font_size; b.ui_find = be_ui_find; b.ui_set_text = be_ui_set_text; b.ui_set_position = be_ui_set_position;
     b.ui_set_size = be_ui_set_size; b.ui_set_scale = be_ui_set_scale; b.ui_set_visible = be_ui_set_visible; b.ui_set_force_invisible = be_ui_set_force_invisible;
     b.ui_set_font_size = be_ui_set_font_size;
-    b.key_down = be_key_down; b.pad_mask = be_pad_mask; b.mouse = be_mouse; b.frame = be_frame; b.clock = be_clock; b.rand_int = be_rand_int; b.rand_float = be_rand_float;
+    b.key_down = be_key_down; b.page_key = be_page_key; b.pad_mask = be_pad_mask; b.mouse = be_mouse; b.frame = be_frame; b.clock = be_clock; b.rand_int = be_rand_int; b.rand_float = be_rand_float;
     b.L = be_L;
     b.file_read = be_file_read; b.file_write = be_file_write; b.file_delete = be_file_delete;
     b.refresh = be_refresh; b.has_preview = be_has_preview; b.live_tree = be_live_tree; b.slot_union = be_slot_union; b.apply_original = be_apply_original;

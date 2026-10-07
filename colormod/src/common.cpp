@@ -19,7 +19,7 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "0.19.5";
+constexpr const char* kVersion = "0.19.6";
 constexpr const char* kClientId = "SF6_ColorModNative";
 // The game's working directory is the game folder (same convention as SF6_MenuRowsNative / SF6_MemWriterNative).
 constexpr const char* kDataDir = "reframework/data/SF6_ColorModNative_data";
