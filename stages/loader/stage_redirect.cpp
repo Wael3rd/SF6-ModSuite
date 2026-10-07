@@ -356,11 +356,30 @@ bool mtime_of(const wchar_t* path, FILETIME& ft) {
     return true;
 }
 
+// state.json read whole: false while it cannot be opened (the plugin replaces it by a rename, a scanner may hold it
+// a moment) or holds no complete object. Read then, an empty text published "vanilla everywhere" and the file's
+// time, already recorded, kept it from being read again: the battle loaded the original stage (07/10).
+bool read_state(std::string& out) {
+    out.clear();
+    if (!read_text(g_state_path, out)) return false;
+    int depth = 0;
+    bool any = false;
+    for (char c : out) {
+        if (c == '{') { ++depth; any = true; }
+        else if (c == '}') --depth;
+    }
+    return any && depth == 0;
+}
+
+const DWORD STATE_RETRY_MS = 50;
+const int STATE_RETRIES = 40;                          // 2 s, then the previous selection stays
+
 // Sleeps until a file of SF6_StageSlots_Data changes (a change notification, no polling), or
 // until the hook delay ends when a variant is selected and nothing is hooked yet.
 DWORD WINAPI watcher(LPVOID) {
     FILETIME st_last{}, dbg_last{};
     bool st_seen = false, dbg_seen = false, first = true, hooked = false, gave_up = false;
+    int retries = 0;
     wchar_t dir[MAX_PATH];
     wcscpy_s(dir, g_state_path);
     if (wchar_t* sl = wcsrchr(dir, L'\\')) *sl = 0;
@@ -372,19 +391,32 @@ DWORD WINAPI watcher(LPVOID) {
         bool changed = first || st_now != st_seen || dbg_now != dbg_seen ||
                        (st_now && CompareFileTime(&st_ft, &st_last) != 0) ||
                        (dbg_now && CompareFileTime(&dbg_ft, &dbg_last) != 0);
+        bool retry = false;
         if (changed) {
-            first = false;
-            st_seen = st_now; st_last = st_ft;
-            dbg_seen = dbg_now; dbg_last = dbg_ft;
             std::string state;
-            if (st_now) read_text(g_state_path, state);
-            publish(state, read_traces());
+            const bool whole = !st_now || read_state(state);
+            if (!whole && retries < STATE_RETRIES) {
+                ++retries;                             // the time is not recorded: read again shortly
+                retry = true;
+            } else {
+                first = false;
+                st_seen = st_now; st_last = st_ft;
+                dbg_seen = dbg_now; dbg_last = dbg_ft;
+                if (whole) publish(st_now ? state : std::string(), read_traces());
+                else slog("selection: state.json unreadable for %d ms, previous selection kept", retries * (int)STATE_RETRY_MS);
+                if (whole && retries) slog("selection: state.json read after %d retries", retries);
+                retries = 0;
+            }
         }
         DWORD wait = INFINITE;
         if (!hooked && !gave_up && g_active.load() != nullptr) {
             ULONGLONG since = GetTickCount64() - g_start_tick;
             if (since >= HOOK_DELAY_MS) { hooked = install_hook(); gave_up = !hooked; }
             else wait = static_cast<DWORD>(HOOK_DELAY_MS - since);
+        }
+        if (retry) {
+            Sleep(STATE_RETRY_MS < wait ? STATE_RETRY_MS : wait);
+            continue;
         }
         if (change == INVALID_HANDLE_VALUE) { Sleep(wait == INFINITE ? 1000 : (wait < 1000 ? wait : 1000)); continue; }
         WaitForSingleObject(change, wait);

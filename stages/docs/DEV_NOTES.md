@@ -20,6 +20,12 @@ for the GamePad mode), and whether `InputGuideManager._Modes[0]` switches when t
 
 Known bad mod: *Aokigahara - no NPC* hangs on the VS screen, also as a plain Fluffy pak without the
 redirection. It shares its bridge and World Tour props (`wtc0202`) with the NPC version, which loads.
+Cause (2026-10-07): of its 10 files, 9 are byte-identical to the NPC version's; the 10th, the Training Room level
+scene `level/scene/ess/ess0000_00/ess0000_00_level.scn.20` (the game's own is an empty 128-byte scene), places four
+World Tour `om_setter`s (`Product/OM/common_wt/setter/om_setter.pfb`, gimmicks gm_017011, gm_047001 to 003, with
+`WTCityOMSetter`, mission and save-data settings). Without that file the variant loads (tested in Training). Not a
+type layout mismatch: `Om047000SettingParam` in the mod has CRC be5044be, as in the game's `wtc0202_01.scn.20`
+(a REasy RSZ dump of May 2026 gives 2c6d6ebc and fails to parse the scene).
 
 ## Open items
 
@@ -28,11 +34,15 @@ redirection. It shares its bridge and World Tour props (`wtc0202`) with the NPC 
 2. Done 30/09: the costume loader leaves the pak carrying the stage marker out of its scan and fingerprint
    (a change of stage mods no longer rebuilds the costume pak) and moves its own pak when only the stage
    pak's presence changed.
-3. Trace the Aokigahara (no NPC) hang (`debug.txt` in `SF6_StageSlots_Data` with `trace=<text>` logs every
-   hashed path holding the text).
+3. Done 2026-10-07: the Aokigahara (no NPC) hang traced to its level scene (see Known bad mod). Tracing stays
+   available: `debug.txt` in `SF6_StageSlots_Data` with `trace=<text>` logs every hashed path holding the text.
 4. Done 30/09: merged into SF6-SlotsLoader (formerly SF6-CostumeSlotsLoader), under `stages/`, history kept.
 5. Optional: preview framing (a 4:1 band of a 16:9 screenshot looks zoomed next to the game's own key art;
    blurred side fill was proposed, not wanted for now).
+6. Done 2026-10-07: the watcher (`stage_redirect.cpp`) published an empty selection when state.json could not be
+   read (the plugin replaces it by a rename) and never read it again (same file time): a quick UP / DOWN could
+   leave the battle on the original stage. An unreadable or incomplete file is now read again every 50 ms (2 s
+   at most, the previous selection kept meanwhile).
 
 ## Engine facts
 

@@ -59,7 +59,11 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
 - **Stage mods installed through Fluffy Mod Manager are not variants yet**: their pak replaces the stage for
   everyone, the loader does not restore the original under it.
 - A mod that hangs the game on its own hangs it here too (seen: *Aokigahara - no NPC* stays on the VS screen,
-  also when installed as a plain Fluffy pak). One cause is repaired: a texture whose level table declares
+  also when installed as a plain Fluffy pak). Its Training Room level scene
+  (`natives/stm/product/level/scene/ess/ess0000_00/ess0000_00_level.scn.20`) places four World Tour gimmicks
+  (`om_setter`), which wait for World Tour systems a battle does not have. Its nine other files are the same as
+  *Aokigahara with NPCs*, which loads: the mod's files without that scene, as a folder with a `natives` tree in
+  `stage_mods`, load too. One cause is repaired: a texture whose level table declares
   wrong row sizes, which the game waits for forever (the Training Room pictures of Stage Lighting Overhaul,
   1.9.1). The log names each texture repaired or left out.
 
