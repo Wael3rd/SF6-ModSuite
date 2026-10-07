@@ -1,0 +1,9 @@
+REFramework Plugin API Headers
+Origin: https://github.com/praydog/REFramework
+Commit: 76520cac (latest touching include/ as of 2026-10-01)
+License: MIT (see REFramework repository)
+API version: 1.15.0
+
+These files are unmodified copies of:
+  REFramework/include/reframework/API.h
+  REFramework/include/reframework/API.hpp

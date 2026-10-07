@@ -1,0 +1,45 @@
+# Option dialogs (increment 6, core 0.6.0)
+
+Design decision: ADR-0013 (accepted 2026-10-06): the game's option window is a service of the core, for every mod.
+
+The core shows its clients' groups and entries in the game's own option window (`app.Option` units started through
+`UIFlowOptionBGDialog`), with texts given through a hook on `hMsg.GetMessage(System.Guid)`. The engine came from
+SF6_ColorModNative 0.18.5 unchanged.
+
+## Files (`core/src/options/`)
+
+| File | Role |
+|---|---|
+| `options_core.{hpp,cpp}` | The engine's state machine (registry, dialog life cycle, value polling, events), no game header |
+| `options.{hpp,cpp}` | The game side: builds the units, starts / ends the dialogs, the eight hooks, row lookups |
+| `guid_text.{hpp,cpp}`, `guid_table.{hpp,cpp}` | The GUID text provider and its `GetMessage` hook |
+| `ll_common.hpp` | Low-level managed-object helpers (copy of ColorMod's `menurows/ll_common.hpp`) |
+| `opt_common.hpp` | What the moved files used from the mod: journal (core log), warning, API table, client |
+| `options_service.cpp` | The generic driver, the client routing and the `api_opt_*` functions |
+
+## Client model
+
+- `opt_set_callbacks(client, cb)` once. The hooks are installed on the next frame (a core without option clients
+  hooks nothing). `opt_status` starts with `options: failed` when they could not be.
+- `opt_group` (one page), `opt_entry` (button, slider, choice), `opt_group_def` (title / description applied at the
+  next build), `opt_remove_group`. Ids are the core's, unique across clients.
+- Requests: `opt_open_menu(title, focus)`, `opt_navigate(key, flags, focus)` (`SF6CORE_OPT_NAV_REBUILD | NOW | PUSH |
+  POP`), `opt_close`, `opt_rebuild`, `opt_ensure_built`.
+- Callbacks (game thread, SEH-guarded, may call `opt_*`):
+  - `on_value(entry, value)` and `on_button(entry, out)` for the client's own entries; `out` says what the press asks
+    for (close, open a page with rebuild / push / pop);
+  - `on_dialog_created`, `on_page_setup(param, rows)` (rows = the client's entries on that page), `on_page_popped`,
+    `on_window_closed` for every client.
+
+## Frame model
+
+- LateUpdateBehavior: `options_frame()` runs after the flow callbacks and before the clients' frame callbacks
+  (install on demand, then the driver's tick: events, open / build / rebuild, button queue, value pass).
+- BeginRendering: `options_pump()` (the hooks' events since the tick).
+- The engine's display calls are made for the core's own client `sf6core.options`.
+
+## Not yet
+
+- A Lua client API: `NativeOptions.lua` (training suite) still has its own engine / driver; it must not be loaded
+  together with a native option client (two drivers over the same hooks).
+- A client's groups are not removed when it unregisters.
