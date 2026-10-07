@@ -1,14 +1,18 @@
-# SF6 Slots Loader
+# SF6 Mod Suite
 
-Street Fighter 6 mods replace what they change. This project keeps the original and the mods side by side,
-in one `amd_ags_x64.dll`:
+Street Fighter 6 mods by Wael, built and released together. Each release carries three Fluffy Mod Manager
+packages:
 
-| Part | What it does | State |
+| Package | What it does | Needs |
 |---|---|---|
-| **Costume slots** (`costumes/`) | every costume mod becomes an extra outfit slot | released, this page |
-| **Stage slots** (`stages/`) | UP / DOWN on the stage select screen cycles a stage through its mods | experimental, in the releases since 1.9.0: [stages/README.md](stages/README.md) |
+| **SF6 Slots Loader** | costume mods become **extra** outfit slots, the original outfits stay; stage mods become variants of their stage (experimental) | REFramework |
+| **SF6 Color Mod** | extra costume colours, a colour editor, Drive colours per character and per player, all from the game's own menus: [colormod/README.md](colormod/README.md) | REFramework, SF6 Native Core |
+| **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
 
-This repository was named SF6-CostumeSlotsLoader until 30/09/2026; the old links lead here.
+Install what you want: the Slots Loader works on its own; the Color Mod needs the Native Core of the same release.
+
+This repository was named SF6-SlotsLoader until 07/10/2026 and SF6-CostumeSlotsLoader until 30/09/2026; the old
+links lead here. The rest of this page is about the Slots Loader.
 
 ## Costume slots
 
@@ -21,9 +25,10 @@ do, start the game, and the new outfits are there.
 
 ## Install
 
-Grab the archive from [Releases](https://github.com/Wael3rd/SF6-SlotsLoader/releases), install it in
+Grab `SF6_SlotsLoader_v<version>.zip` from [Releases](https://github.com/Wael3rd/SF6-ModSuite/releases), install it in
 Fluffy Mod Manager or copy it over your Street Fighter 6 folder, then install costume mods as usual. You need
-REFramework in `dinput8.dll`, official build 1.5.8 or newer.
+REFramework in `dinput8.dll`, official build 1.5.8 or newer. For the Color Mod, install `SF6_NativeCore_<version>.zip`
+and `SF6_ColorMod_<version>.zip` from the same release.
 
 Costume mods can also go straight into `reframework\costume_mods\<Character>\`, **as downloaded**: the
 `.zip`, `.7z` or `.rar` file itself, or an unpacked folder with a `natives` tree or a `.pak`. Nothing to
@@ -144,7 +149,9 @@ costumes/tools/      generators for the data files, run against your own game in
 costumes/audit/      SF6_CostumeAudit.bat / .ps1, shipped in costume_mods: what is installed, for users
 stages/              stage slots: loader pass, redirection, tools, notes
 plugin/              native REFramework plugin: menus, ownership, colours, online alias, stage select, VS screen
-packaging/           builds the distributable zip
+core/                SF6 Native Core: sf6core_native.dll, its C API (core/include) and docs
+colormod/            SF6 Color Mod: SF6_ColorModNative.dll and its locale table
+packaging/           builds the distributable zips (make_suite_packages.py: the three of a release)
 ```
 
 The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash
@@ -161,6 +168,8 @@ Visual Studio 2022 or Build Tools with the C++ workload, then `build.bat` at the
 build\amd_ags_x64.dll                  costume slots + stage slots (the releases)
 build\costumes_only\amd_ags_x64.dll    costume slots alone, no stage slots
 build\SF6_CostumeSlotsNative.dll       REFramework plugin
+build\core\sf6core_native.dll         SF6 Native Core (core\build.bat)
+build\colormod\SF6_ColorModNative.dll SF6 Color Mod (colormod\build.bat)
 build\costume_loader.exe, paktool.exe, loadtest.exe, stagepak.exe, stagetest.exe, textest.exe
 ```
 
@@ -188,15 +197,18 @@ loader loads nothing else.
 
 ## Requirements
 
-REFramework in `dinput8.dll`, official build 1.5.8 or newer.
+REFramework in `dinput8.dll`, official build 1.5.8 or newer. The Native Core and the Color Mod use REFramework's
+plugin API 1.15 (the headers in `core/third_party/reframework` come from REFramework commit 76520cac).
 
 ## Credits and licence
 
 Written by Wael. Released under the MIT licence, see `LICENSE`.
 
-Third party code is vendored under `common/third_party/`, `plugin/include/` and
-`stages/loader/third_party/`: the zstd decompressor, miniz, bcdec, the LZMA SDK 7z decoder, UnRAR, the
-REFramework plugin API and the stb image libraries. See `THIRD_PARTY.md` for their licences.
+Third party code is vendored under `common/third_party/`, `plugin/include/`, `stages/loader/third_party/`,
+`core/third_party/` and `colormod/third_party/`: the zstd decompressor, miniz, bcdec, the LZMA SDK 7z decoder,
+UnRAR, the REFramework plugin API, the stb image libraries, Lua 5.4.3 and nlohmann/json. The REFramework
+helpers and the native menu row technique used by the core and the Color Mod are LL's work, used with his
+permission. See `THIRD_PARTY.md` for the licences.
 
 This repository ships no game data: the tables the loader needs are generated from your own installation,
 and the release archive carries a prebuilt copy of them. Street Fighter 6 is a trademark of Capcom.

@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.10.0 (2026-10-07) — SF6 Mod Suite
+
+The repository is now **SF6-ModSuite** (it was SF6-SlotsLoader). A release carries three Fluffy Mod Manager
+packages, built and tested together:
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.10.0 | everything of 1.9.3 beta and beta 2 below, plus the two changes of this section |
+| SF6 Color Mod | 0.19.4 | first public release, needs the Native Core |
+| SF6 Native Core | 0.7.1 | first public release |
+
+Install the Slots Loader alone as before, or add the Native Core and the Color Mod. Updating the Slots Loader in
+Fluffy Mod Manager: disable or remove the previous version first.
+
+### Slots Loader
+- **Displays through the SF6 Native Core when it is installed** (character select data, stage select, VS screen):
+  the same screens as before. Without the core it does it itself, as in 1.9.
+- **The slot and colour a fighter really wears under the online alias are declared to the core**, so the Color
+  Mod's Drive colour squares follow the slot instead of Drive Tech's.
+
+### SF6 Color Mod 0.19.4 (new)
+- Extra costume colours in the Color row of the character select and of Fighter Settings.
+- A colour editor in the game's option window: Fighter Settings > Edit Character, **F** or a click on the Color row.
+- Drive Impact, Drive Reversal, Drive Parry and Drive Rush colours per character and per player: **X** on the
+  character select and in the Training character popup, four rows in Fighter Settings.
+- One REFramework plugin, no Lua script. See [colormod/README.md](colormod/README.md).
+
+### SF6 Native Core 0.7.1 (new)
+- The shared native-UI core: display primitives, screen discovery, the game's option window as a service, the
+  effective selection shared between mods, fault isolation per mod. See [core/README.md](core/README.md).
+
+### Known issues
+- FPS drops have been seen with the Native Core and the Color Mod installed; being measured.
+- Color Mod, Battle Settings: after leaving and coming back, a Color Mod colour (`MC 2` for example) shows in the
+  Color row but the model wears the game's colour of the same number, and an online match can load that colour.
+  Selecting another colour and back shows the right one.
+
 ## 1.9.3 beta 2 (2026-10-04)
 
 ### Fixed
