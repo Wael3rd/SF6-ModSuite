@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.10.1 (2026-10-07) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.10.1 | one Stage Slots fix |
+| SF6 Color Mod | 0.19.5 | the Battle Settings known issue of 1.10.0 fixed, colours in Battle Settings matches |
+| SF6 Native Core | 0.7.1 | unchanged |
+
+Updating the Slots Loader in Fluffy Mod Manager: disable or remove the previous version first.
+
+### Slots Loader
+- **Stage Slots: the battle loads the variant selected.** After a quick UP / DOWN on the stage select, the battle
+  could load the original stage: the selection was read while it was being saved, taken for "original everywhere",
+  and not read again until the game restarted.
+
+### SF6 Color Mod 0.19.5
+- **Battle Settings > Character (Edit Character): a Color Mod colour stays on the model.** After leaving and
+  coming back, the Color row showed it (`MC 2` for example) but the model wore the game's colour of the same
+  number.
+- **Matches that take the costume from Battle Settings wear its Color Mod colour** (online, Battle Hub, Combo
+  Trials...): your own fighter wears the colour chosen in Edit Character, on the outfit chosen there, Slots Loader
+  slots included. Only the last fighter edited there is remembered. Other players see the game's colour. Arcade,
+  Training, Versus and Team Battle keep the colour picked on the character select.
+
+### Known issues
+- FPS drops have been seen with the Native Core and the Color Mod installed; being measured.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.10.0 (2026-10-07) — SF6 Mod Suite
 
 The repository is now **SF6-ModSuite** (it was SF6-SlotsLoader). A release carries three Fluffy Mod Manager
