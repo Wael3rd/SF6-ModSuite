@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.10.3 (2026-10-07) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.10.3 | unchanged (same files as 1.10.1) |
+| SF6 Color Mod | 0.19.7 | no more stutters in fights, loads on the public REFramework 1.5.8 |
+| SF6 Native Core | 0.7.1 | unchanged |
+
+### SF6 Color Mod 0.19.7
+- **No more stutters in fights.** Measured in Training (Drive Impact, Rush, Parry, Reversal on both sides): the mod
+  took 7 to 27 ms in one frame every second during a fight, 2 to 5 ms at each Drive effect, and 93 + 178 ms when
+  the fight loaded. Now: 0.05 to 0.13 ms per frame during a fight with no spike, about 30 ms + 8 ms at the load.
+  - The colours are decided in the menus, a fight recomputes nothing: the Drive Parry / Rush colours are written
+    once when the fight loads (the game shares that effect data between both players: your side's colours, or the
+    other side's when yours are left to the game); the Drive Impact / Reversal colours are still painted per player
+    when each effect starts (the game copies them for each effect), now in a fraction of a millisecond; no periodic
+    check runs during the fight. See [colormod/README.md](colormod/README.md), *During a fight*.
+  - The memory checks in front of every Drive colour write ask Windows once per memory region instead of once per
+    address.
+- **Loads on the public REFramework 1.5.8**: the mod asked for a newer REFramework plugin API than it uses and was
+  refused there ("Requires a newer minor version").
+- `perf_on.txt` (in `SF6_ColorModNative_data`) turns on a performance log of the mod, see the README.
+
+### Known issues
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.10.2 (2026-10-07) — SF6 Mod Suite
 
 | Package | Version | |
