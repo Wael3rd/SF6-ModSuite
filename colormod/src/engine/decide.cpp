@@ -328,18 +328,159 @@ Sel side_sel(int side) {
     return g_sel[side - 1];
 }
 
+// ---- Battle Settings in a match (0.19.5) ----------------------------------------------------------------------------
+// A mode that takes the costume and colour from Battle Settings (online, Battle Hub, Combo Trials...: every mode but
+// Arcade, Training, Versus and Team Battle, where a select screen picks them) dresses the player's own fighter with
+// what Fighter Settings remembers (state.fs: one fighter, the last one edited there), as the Edit Character preview
+// shows it, instead of the select screen's choice (state.p1 / p2). Before, such a match wore the game's 02.
+// The player comes from the battle description, read as SF6_SlotsLoader's alias reads it: online the fighter of our
+// session member, offline a fighter on a pad. Its model is the one of that fighter; in a mirror match (the other
+// player on the same fighter), the one on its team's side (team 0 = P1).
+struct BsOwn { int fighter = -1; int team = -1; bool mirror = false; };
+struct Bs { bool on = false; std::vector<BsOwn> own; };
+Bs g_bs;
+MO* g_bs_desc = nullptr;                              // the description read last (compared only, never dereferenced)
+uint64_t g_bs_frame = UINT64_MAX, g_bs_read = 0;
+std::string g_bs_sig;
+constexpr uint64_t kBsRereadEvery = 15;               // the description fills in while the match loads
+
+int list_count(MO* list) { auto r = call(list, "get_Count"); return r.exception_thrown ? 0 : (int)(int32_t)r.dword; }
+MO* list_item(MO* list, int i) { return call_obj(list, "get_Item(System.Int32)", { ll::arg_i32(i) }); }
+
+uint64_t g_bs_quiet_until = 0;                       // after a raise: Battle Settings colours off for a while
+const Bs& bs_read(uint64_t fr);
+
+const Bs& bs_state() {                                // once per frame at most; lock held
+    const uint64_t fr = cmn::frame();
+    if (g_bs_frame == fr) return g_bs;
+    g_bs_frame = fr;
+    if (fr < g_bs_quiet_until) return g_bs;
+    try {
+        return bs_read(fr);
+    } catch (...) {                                   // never a decisions fault: those switch every colour off
+        g_bs = Bs{};
+        g_bs_desc = nullptr;
+        g_bs_quiet_until = fr + 300;
+        g_bs_sig = "off: battle description unreadable";
+        cmn::journal("Battle Settings colours: battle description unreadable, off for 300 frames");
+        return g_bs;
+    }
+}
+
+const Bs& bs_read(uint64_t fr) {
+    MO* bfm = API::get()->get_managed_singleton("app.bFlowManager");
+    MO* work = bfm ? ll::read_field_object(bfm, "m_flow_work") : nullptr;
+    MO* map = work ? ll::read_field_object(work, "_FlowMap") : nullptr;
+    MO* desc = map ? ll::read_field_object(map, "m_desc") : nullptr;
+    if (desc && !is_managed(desc)) desc = nullptr;
+    if (desc == g_bs_desc && fr - g_bs_read < kBsRereadEvery) return g_bs;
+    g_bs_desc = desc;
+    g_bs_read = fr;
+    Bs bs;
+    std::string sig = "off: no battle description";
+    if (desc) {
+        uint8_t mode = 0;                             // app.EGameMode, one byte
+        if (MO* rule = ll::read_field_object(desc, "Rule")) ll::read_field_raw(rule, "GameMode", &mode, 1);
+        const bool picked = mode == 1 || mode == 2 || mode == 3 || mode == 4 || mode == 19;
+        bool net = false;
+        int32_t self = -1;
+        ll::read_field_bool(desc, "IsNetwork", net);
+        ll::read_field_i32(desc, "SelfSessionMemberindex", self);
+        std::vector<int> others;
+        MO* teams = ll::read_field_object(desc, "Teams");
+        const int nt = list_count(teams);
+        for (int t = 0; t < nt; ++t) {
+            MO* team = list_item(teams, t);
+            MO* fighters = team ? ll::read_field_object(team, "Fighters") : nullptr;
+            const int nf = list_count(fighters);
+            for (int i = 0; i < nf; ++i) {
+                MO* f = list_item(fighters, i);
+                int32_t fid = -1, pad = -1, member = -1;
+                if (!f || !ll::read_field_i32(f, "FighterId", fid)) continue;
+                ll::read_field_i32(f, "PadId", pad);
+                ll::read_field_i32(f, "SessionMemberIndex", member);
+                const bool own = net ? (self >= 0 && member == self) : pad >= 0;
+                if (own) bs.own.push_back({ fid, t, false });
+                else others.push_back(fid);
+            }
+        }
+        for (BsOwn& o : bs.own)
+            for (int f : others) if (f == o.fighter) o.mirror = true;
+        bs.on = !picked && !bs.own.empty();
+        char b[64];
+        std::snprintf(b, sizeof b, "%s mode %d %s:", bs.on ? "on" : "off", (int)mode, net ? "online" : "offline");
+        sig = b;
+        for (const BsOwn& o : bs.own) sig += " F" + std::to_string(o.fighter) + "/team " + std::to_string(o.team) + (o.mirror ? " mirror" : "");
+        if (bs.own.empty()) sig += " no player";
+    }
+    if (sig != g_bs_sig) {
+        g_bs_sig = sig;
+        cmn::journal("Battle Settings colours: %s", sig.c_str());
+    }
+    g_bs = std::move(bs);
+    return g_bs;
+}
+
+// whether this side's controller is the player's own fighter in such a mode (the select screens' previews never)
+bool bs_applies(MO* ctrl, int side, int fighter) {
+    if (side != 1 && side != 2) return false;
+    const Bs& bs = bs_state();
+    if (!bs.on || fighter < 0) return false;
+    const std::string name = live::go_name(ctrl);
+    if (name == "FighterVisual_01" || name == "FighterVisual_02") return false;
+    for (const BsOwn& o : bs.own)
+        if (o.fighter == fighter && (!o.mirror || o.team + 1 == side)) return true;
+    return false;
+}
+
 rsz::NodeRef entry_tree(const Entry& e) {             // its override when one exists, else the file itself
     if (!e.okey.empty()) if (auto ov = live::file_tree(kOverridesPrefix + e.okey + ".user.2")) return ov;
     return live::file_tree(kDataPrefix + e.path);
 }
 
-struct Resolved { rsz::NodeRef tree; std::optional<Entry> entry; int k = 0; };   // k > 0 entry, 0 override
+struct Resolved { rsz::NodeRef tree; std::optional<Entry> entry; int k = 0; bool bs = false; };   // k > 0 entry, 0 override
+
+// The player's own fighter in a Battle Settings mode: the Fighter Settings entry when its fighter and costume are the
+// model's and the model wears BASE_COLOR, else a game-colour override of the model's own fighter / costume / colour.
+// Under SF6_SlotsLoader's alias the model is shown as DriveTech: the core says which slot and colour it really wears.
+Resolved resolve_bs(MO* ctrl, int fighter, uint32_t id) {
+    Resolved out;
+    out.bs = true;
+    int costume = path_identity(ctrl).second;
+    uint32_t num = id;
+    const SF6CoreAPI* a = cmn::core();
+    int32_t rc = -1, rn = -1;
+    if (a && SF6CORE_HAS(a, sel_get_effective) && costume >= 0 && a->sel_get_effective(fighter, costume, &rc, &rn) && rc >= 0) {
+        costume = rc;
+        if (rn >= 0) num = (uint32_t)rn;
+    }
+    if (costume < 0) return out;
+    const Sel& fs = g_sel[2];
+    if (num == kBaseColor && fs.rw > 0 && fs.fighter == fighter && fs.costume == costume) {
+        const auto* entries = entries_for(fighter, costume);
+        if (entries && (size_t)fs.rw <= entries->size()) {
+            const Entry& e = (*entries)[(size_t)fs.rw - 1];
+            out.tree = entry_tree(e);
+            out.entry = e;
+            out.k = fs.rw;
+            return out;
+        }
+    }
+    char key[96];
+    std::snprintf(key, sizeof(key), "%d_%d_game_%u", fighter, costume, num);
+    if (auto ov = live::file_tree(std::string(kOverridesPrefix) + key + ".user.2")) { out.tree = ov; out.k = 0; }
+    return out;
+}
 
 // what a controller should wear: an entry of the side's list on BASE_COLOR, else a game-colour override
 Resolved resolve_tree(MO* ctrl, int side) {
     Resolved out;
     const auto id = color_num(ctrl);
     if (!id) return out;
+    if (side == 1 || side == 2) {
+        const int fc = path_identity(ctrl).first;
+        if (bs_applies(ctrl, side, fc)) return resolve_bs(ctrl, fc, *id);
+    }
     const Sel sel = side_sel(side);
     // a side's remembered entry / game-colour override belongs to its remembered fighter only: another fighter on that
     // side (picked on a game colour, a replay, an online opponent) wore its same-name clusters (Ryu got Mai MC 2's
@@ -863,6 +1004,7 @@ void on_setup_pre(void* p) {                          // Lua on_setup_pre after 
             if (MO* cd = color_data_obj(ctrl)) g_side_data[nm == "FighterVisual_01" ? 1 : 2] = (uintptr_t)cd;
         }
         int side = 0, n = INT_MIN;
+        bool bs = false;
         if (live::editor_on() && live::side_from_parents(ctrl) == 3) {   // editor: the working copy, any base colour
             side = 3;
             n = live::editor_patch(ctrl);
@@ -871,13 +1013,15 @@ void on_setup_pre(void* p) {                          // Lua on_setup_pre after 
         } else {
             Resolved r;
             side = should_inject(ctrl, r);
+            bs = r.bs;
             if (!side) g_applied.erase((uintptr_t)ctrl);
             else n = inject(ctrl, side, r);
         }
         auto it = g_applied.find((uintptr_t)ctrl);                     // what it wears: k:<entry> / ov:<colour> / edit
-        cmn::journal("SetupColor %s -> %s%s%s (rw p1=%d p2=%d)", describe(ctrl).c_str(), side ? std::to_string(side).c_str() : "false",
+        cmn::journal("SetupColor %s -> %s%s%s (rw p1=%d p2=%d%s)", describe(ctrl).c_str(), side ? std::to_string(side).c_str() : "false",
                      (it != g_applied.end() && !it->second.empty()) ? (" " + it->second).c_str() : "",
-                     n != INT_MIN ? (" native=" + std::to_string(n)).c_str() : "", g_sel[0].rw, g_sel[1].rw);
+                     n != INT_MIN ? (" native=" + std::to_string(n)).c_str() : "", g_sel[0].rw, g_sel[1].rw,
+                     bs ? (" fs=" + std::to_string(g_sel[2].rw) + " Battle Settings").c_str() : "");
     } catch (...) {
         live::abort_patch();
         fault("SetupColor");
@@ -894,6 +1038,7 @@ void on_frame() {
     if (!active()) return;
     try {
         ++g_tick;
+        bs_state();                                   // journals the Battle Settings colours' state when it changes
         if (g_tick % kTickEvery == 0) p2_poll();
         if (cmn::frame() % kBattlePassEvery == 0) battle_pass();
         for (int side = 1; side <= 2; ++side) {
@@ -992,7 +1137,7 @@ std::string follow_debug(int fighter_id) {
 std::string status() {
     std::lock_guard lk(live::mx());
     char b[640];
-    std::snprintf(b, sizeof(b),
+    int len = std::snprintf(b, sizeof(b),
                   "decisions installed=%d active=%d faults=%d setups=%llu patched=%llu shared=%llu edit=%llu no_data=%llu lists=%llu entries=%llu infos=%llu "
                   "p2_marks=%llu mirror=%llu mirror_left=%llu battle_fixes=%llu confirms=%llu set_colors=%llu refused=%llu squares=%llu "
                   "sel p1=%d/%d/%d p2=%d/%d/%d fs=%d/%d/%d list=%s%u/%u first=%d count=%d ui=%d%d%d live=%d%d",
@@ -1003,7 +1148,8 @@ std::string status() {
                   g_sel[0].rw, g_sel[0].fighter, g_sel[0].costume, g_sel[1].rw, g_sel[1].fighter, g_sel[1].costume, g_sel[2].rw, g_sel[2].fighter, g_sel[2].costume,
                   g_list_known ? "" : "?", g_list_f, g_list_c, g_extra_first, g_extra_count,
                   g_param[0] ? 1 : 0, g_param[1] ? 1 : 0, g_fs_text ? 1 : 0, g_live[0] ? 1 : 0, g_live[1] ? 1 : 0);
-    return b;
+    if (len < 0) len = 0;
+    return std::string(b, (size_t)len < sizeof(b) ? (size_t)len : sizeof(b) - 1) + " bs=" + g_bs_sig;
 }
 
 bool install() {

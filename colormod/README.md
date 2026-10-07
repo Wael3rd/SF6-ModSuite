@@ -7,6 +7,10 @@ Costume and Drive colours for Street Fighter 6, set from the game's own menus. O
 
 - **Extra costume colours**: colour packs (`*_cmd_*.user.2` files) appear after the game's colours in the Color row
   of the character select and of Fighter Settings (labels such as `MC 7`).
+  - A match that takes the costume from Battle Settings (online, Battle Hub, Combo Trials...) dresses your own
+    fighter in the colour chosen in Fighter Settings > Edit Character. Only the last fighter edited there is
+    remembered. Other players see the game's colour. Arcade, Training, Versus and Team Battle use the colour picked
+    on the character select.
 - **Colour editor**: in Fighter Settings > Edit Character, **F** (or a click) on the Color row opens an editor in the
   game's option window: quick edit, colours per cluster, materials, squares, Save, Save As, Reset.
 - **Drive colours** per character and per player: Drive Impact, Drive Reversal, Drive Parry and Drive Rush.

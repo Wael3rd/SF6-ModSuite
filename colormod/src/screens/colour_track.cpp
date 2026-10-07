@@ -511,6 +511,14 @@ int64_t fs_entry() {
     return msg ? label_to_k(g_list_f, g_list_c, *msg) : 0;
 }
 
+// The Fighter Settings entry shown changed (k = what the spin shows now): every RW / MC entry rides on BASE_COLOR, so
+// the game skips SetColor on the preview; re-issue it on every Fighter Settings preview controller wearing that id.
+void fs_shown(int64_t k, const char* why) {
+    fsm.last_k = k;
+    for (MO* c : dd::scene_ctrls())
+        if (engine::live::side_from_parents(c) == 3 && color_num(c) == kBaseColor) set_color(c, kBaseColor, why, true);
+}
+
 void tick_fighter_settings() {
     const auto ags = agents(kAgentFs);
     MO* agent = ags.empty() ? nullptr : ags[0];
@@ -562,11 +570,7 @@ void tick_fighter_settings() {
         lj::set(s, "path", e ? json(e->path) : json());
         save_state();
     }
-    if (k != fsm.last_k) {                                          // the game skips SetColor on the same id: re-issue it
-        fsm.last_k = k;
-        for (MO* c : dd::scene_ctrls())
-            if (engine::live::side_from_parents(c) == 3 && color_num(c) == kBaseColor) set_color(c, kBaseColor, "fighter settings", true);
-    }
+    if (k != fsm.last_k) fs_shown(k, "fighter settings");
     if (k <= 0) return;
     const Entry* entry = entry_k(entries_for(g_list_f, g_list_c), k);
     if (!entry) return;
@@ -1139,7 +1143,14 @@ void fs_restore_step() {
     if (!alive(fsm.spin.get())) { fsm.restore_steps = 0; return; }
     json& s = g_state["fs"];
     track_path(s);
-    if (eq(lj::index(s, "rw"), fs_entry())) { fsm.restore_steps = 0; fsm.last_k = rw_or0(s); return; }
+    if (eq(lj::index(s, "rw"), fs_entry())) {
+        // The spin shows the remembered entry. The preview was dressed when the screen opened, while the spin still
+        // showed the game's colour (02): it wears 02 until a SetColor, and the walk's steps never issue one (Add /
+        // Sub between entries keep BASE_COLOR, the game skips it). Re-issue it here unless the tick already did.
+        fsm.restore_steps = 0;
+        if (fsm.last_k != rw_or0(s)) fs_shown(rw_or0(s), "fighter settings restored");
+        return;
+    }
     fsm.restore_steps -= 1;
     const auto msg = fsm.text ? message(fsm.text.get()) : std::nullopt;
     const char* dir = spin_direction(msg.value_or(""), num(lj::index(s, "fighter")), num(lj::index(s, "costume")), rw_or0(s));
