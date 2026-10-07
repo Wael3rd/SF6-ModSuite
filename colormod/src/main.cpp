@@ -36,7 +36,9 @@
 
 extern "C" __declspec(dllexport) void reframework_plugin_required_version(REFrameworkPluginVersion* v) {
     if (!v) return;
-    v->major = 1; v->minor = 15; v->patch = 0; v->game_name = nullptr;   // same as SF6_MenuRowsNative / MemWriter
+    // 1.10, as the core and the Slots Loader: nothing past it is used (07/10: 1.15, copied from older plugins, kept
+    // the mod from loading on the public REFramework 1.5.8)
+    v->major = 1; v->minor = 10; v->patch = 0; v->game_name = nullptr;
 }
 
 namespace {

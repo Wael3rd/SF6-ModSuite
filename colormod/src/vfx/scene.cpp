@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "../common.hpp"
+#include "memguard.hpp"
 
 namespace vfx::scene {
 namespace {
@@ -26,13 +27,7 @@ std::unordered_map<API::TypeDefinition*, bool> g_is_transform;
 std::unordered_map<API::TypeDefinition*, API::Method*> g_methods[4];   // get_Name, getResourcesCount, getResources, get_ResourcePath
 enum { kGetName, kResCount, kResGet, kResPath };
 
-bool page_readable(uint64_t a, size_t n) {
-    for (uint64_t p = a & ~0xFFFULL; p < a + n; p += 0x1000) {
-        MEMORY_BASIC_INFORMATION mbi{};
-        if (VirtualQuery((LPCVOID)p, &mbi, sizeof mbi) != sizeof mbi || mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) || mbi.Protect == PAGE_NOACCESS) return false;
-    }
-    return true;
-}
+bool page_readable(uint64_t a, size_t n) { return memguard::readable(a, n); }   // one VirtualQuery per region and frame
 
 #pragma warning(push)
 #pragma warning(disable: 4733)

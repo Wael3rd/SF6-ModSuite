@@ -18,6 +18,8 @@
 #include <reframework/API.hpp>
 
 #include "../common.hpp"
+#include "../perf.hpp"
+#include "../engine/decide.hpp"
 #include "body.hpp"
 #include "data.hpp"
 #include "drive.hpp"
@@ -63,6 +65,7 @@ std::string g_handoff_key;
 bool g_handoff_set = false;
 size_t g_handoff_lines = 0;
 std::string g_status = "au repos";
+std::string g_static_key;                                   // light fight: what was written once ("" = to write)
 uint64_t g_relays = 0, g_scans = 0, g_di_applied = 0;
 
 void queue_write(void* ctx, uint64_t addr, uint32_t value) {             // EfxMeshColor.queue: "addr value current"
@@ -261,6 +264,7 @@ void enter_fight() {
 }
 
 void leave_fight() {
+    g_static_key.clear();
     g_spots.clear();
     g_live.clear();
     g_scan_pending = 0;
@@ -322,7 +326,119 @@ void relay_pass() {
     ++g_relays;
 }
 
+// ---- light fight (cmn::light_fight, default since 0.19.7) -----------------------------------------------------------
+// Wael (07/10): the colours are decided in the menus, nothing is recomputed during the fight. Once per fight (and
+// again only when a colour setting changes, or after a new scan) the colours are written into the effect data with
+// the engine's validated queue, the relay is emptied (the requestEffect hooks find no block: no painting per effect)
+// and nothing else runs: no relay pass, no spot revalidation, no providers pass.
+// The game shares the effect data: Parry / Rush between both players, Impact / Reversal too in a mirror match. Each
+// of them gets one colour: the player's own side's, or the other side's when the own side leaves it to the game.
+uint64_t g_statics = 0;
+size_t g_static_writes = 0;
+int g_static_own = 0;
+
+std::string static_key(int own) {
+    std::lock_guard<std::mutex> lk(g_in_mx);
+    char b[96];
+    std::snprintf(b, sizeof b, "#%d/%d/%d#%zu#%llu#", own, scene::side_char(0), scene::side_char(1), g_spots.size(), (unsigned long long)g_scan_seq);
+    return g_dr_text + b + g_di_text;
+}
+
+// the element tints of the shared provider: element 0 = the parry sparks, element 7 = the rush trail
+void static_tints(const drive::ColorPair& parry, const drive::ColorPair& rush, std::string& q) {
+    static const std::regex kPfb("([^/]+)\\.pfb$");
+    for (auto& e : scene::entries()) {
+        std::smatch m;
+        if (!std::regex_search(e.key, m, kPfb) || m[1].str() != kTintProvider || !e.go) continue;
+        scene::each_element(e.go, [&](MO* el, int j) {
+            if (j != 0 && j != 7) return;
+            const drive::ColorPair& c = j == 0 ? parry : rush;
+            queue_write(&q, scene::addr(el) + scene::off_tint(), c.c2 ? *c.c2 : 0xFFFFFFFFu);
+        });
+    }
+}
+
+void static_pass(int own) {
+    const int other = own == 1 ? 2 : 1;
+    validate_spots();
+    const int id1 = scene::side_char(0), id2 = scene::side_char(1);
+    const int fid[3] = { 0, id1, id2 };
+    if (!mech::manager(1) || !mech::manager(2)) mech::discover();   // the body glow resolves its side per call anyway
+    mech::set_di_cont(providers::container(id1), providers::container(id2));
+    std::string q;
+    // Drive Impact / Reversal: each fighter's lines, the own side's last (a mirror match shares them)
+    for (int s : { other, own }) {
+        for (int m = 0; m < 2; ++m) {
+            providers::MechColors mc;
+            { std::lock_guard<std::mutex> lk(g_in_mx); mc = g_di[s][m]; }
+            std::vector<providers::WLine> wl;
+            if (!providers::lines(fid[s], mc, wl)) continue;
+            for (auto& w : wl) queue_write(&q, w.addr, w.val);
+        }
+    }
+    // Drive Parry / Rush: one colour per mechanic, the own side's (the other's when the own side has none)
+    drive::ColorPair parry, rush;
+    {
+        std::lock_guard<std::mutex> lk(g_in_mx);
+        parry = g_dr[own][0].c1 ? g_dr[own][0] : g_dr[other][0];
+        rush = g_dr[own][1].c1 ? g_dr[own][1] : g_dr[other][1];
+    }
+    for (size_t idx : g_live) {
+        drive::Spot& sp = g_spots[idx];
+        const std::string fam = drive::famille(sp.file);
+        if (fam == "special") continue;                                 // the special attacks: dormant
+        const drive::ColorPair& mc = fam == "parry" ? parry : rush;     // "drive" files and the rest (smoke): Rush
+        const uint32_t orig = data::pack(sp.r, sp.g, sp.b);
+        const uint32_t col = mc.c1 ? data::tint_with(*mc.c1, sp.r, sp.g, sp.b) : orig;
+        drive::remember(sp, col);
+        queue_write(&q, sp.addr, col);
+    }
+    static_tints(parry, rush, q);
+    size_t n = 0;
+    for (char c : q) if (c == '\n') ++n;
+    // Drive Impact / Reversal: their colours do not hold when written once (07/10, mirror Mai: the static writes were
+    // lost, the per-effect ones held). The relay keeps their small blocks only (handoff() writes the Parry / Rush
+    // spots only for live spots: none given), painted at each Drive Impact / Reversal as before.
+    drive::HandoffIn in;
+    in.mgr[1] = mech::manager(1);
+    in.mgr[2] = mech::manager(2);
+    for (int s = 1; s <= 2; ++s) {
+        for (int m = 0; m < 2; ++m) {
+            providers::MechColors mc;
+            { std::lock_guard<std::mutex> lk(g_in_mx); mc = g_di[s][m]; }
+            std::vector<providers::WLine> wl;
+            drive::DiBlock& d = in.di[s][m];
+            d.present = providers::lines(fid[s], mc, wl);
+            d.container = providers::container(fid[s]);
+            for (auto& w : wl) d.lines.push_back(w.obj ? drive::w_line(w.addr, w.val, w.orig, w.obj, w.ti) : drive::w_line(w.addr, w.val, w.orig));
+        }
+    }
+    const std::vector<size_t> no_spots;
+    size_t di_lines = 0;
+    engine::relay_native(drive::handoff(in, g_spots, no_spots, di_lines));   // Drive Impact / Reversal blocks only
+    g_handoff_set = false;
+    g_handoff_lines = di_lines;
+    if (!q.empty()) engine::queue(q);
+    g_static_writes = n;
+    g_static_own = own;
+    ++g_statics;
+    char b[160];
+    std::snprintf(b, sizeof b, "combat leger : couleurs ecrites une fois (%zu ecritures, cote P%d)", n, own);
+    g_status = b;
+    cmn::journal("vfx tick: light fight, colours written once: %zu writes (%zu live spots, own side P%d); relay: %zu Drive Impact / Reversal lines", n, g_live.size(), own, di_lines);
+}
+
+void static_tick() {                                                    // every 60 frames in a fight: a string compare
+    if (g_want_scan || g_scan_pending) return;                          // the scan first
+    const int own = ::engine::decide::own_side();
+    const std::string key = static_key(own);
+    if (key == g_static_key) return;
+    g_static_key = key;
+    static_pass(own);
+}
+
 void handle_ui(const std::string& req) {
+    g_static_key.clear();                                               // any request: write again (light fight)
     if (req == "scan") { g_want_scan = true; return; }
     if (req == "rescan") {
         if (!g_spots.empty()) paint(std::nullopt);
@@ -361,7 +477,8 @@ void frame_inner() {
     // SF6_DIRecolor: the providers every 30 frames (at once when a setting changed)
     bool dirty;
     { std::lock_guard<std::mutex> lk(g_in_mx); dirty = g_di_dirty; }
-    if (dirty || g_frame % 30 == 0) {
+    const bool frozen = cmn::light_fight() && g_in_fight && !g_static_key.empty();   // light fight: written, nothing runs
+    if (dirty || (g_frame % 30 == 0 && !frozen)) {
         providers::StaticCfg st[2];
         { std::lock_guard<std::mutex> lk(g_in_mx); st[0] = g_static[0]; st[1] = g_static[1]; g_di_dirty = false; }
         const int chars[2] = { scene::side_char(0), scene::side_char(1) };
@@ -375,7 +492,7 @@ void frame_inner() {
         g_handoff_set = false;
     }
     if (g_scan_pending && g_frame % 5 == 0) poll_scan();
-    if (g_in_fight && g_frame % 60 == 0) relay_pass();
+    if (g_in_fight && g_frame % 60 == 0) { if (cmn::light_fight()) static_tick(); else { g_static_key.clear(); relay_pass(); } }
     std::deque<std::string> reqs;
     { std::lock_guard<std::mutex> lk(g_in_mx); reqs.swap(g_ui); }
     for (auto& r : reqs) handle_ui(r);
@@ -398,12 +515,17 @@ void on_fault() {
 
 #pragma warning(push)
 #pragma warning(disable: 4733)
-void on_update() {
+void on_update_seh() {
     if (!g_own || !g_installed) return;
     __try { frame_guarded(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { on_fault(); }
 }
 #pragma warning(pop)
+void on_update() {                                     // timed from outside the __try function (perf.hpp)
+    const int64_t t0 = perf::begin();
+    on_update_seh();
+    perf::end(perf::VfxTickUpdate, t0);
+}
 
 }  // namespace
 
@@ -492,12 +614,13 @@ void ui(const std::string& req) {
 std::string parts(int fighter) { return providers::parts(fighter); }
 
 std::string status() {
-    char b[384];
+    char b[512];
     std::snprintf(b, sizeof b,
                   "vfx tick own=%d installed=%d faults=%d fight=%d spots=%zu live=%zu scans=%llu pending=%llu relays=%llu lines=%zu di_applied=%llu "
-                  "providers: %s | %s",
+                  "light=%d statics=%llu static_writes=%zu static_own=%d providers: %s | %s",
                   g_own ? 1 : 0, g_installed ? 1 : 0, g_faults, g_in_fight ? 1 : 0, g_spots.size(), g_live.size(), (unsigned long long)g_scans,
                   (unsigned long long)g_scan_pending, (unsigned long long)g_relays, g_handoff_lines, (unsigned long long)g_di_applied,
+                  cmn::light_fight() ? 1 : 0, (unsigned long long)g_statics, g_static_writes, g_static_own,
                   providers::status().c_str(), g_status.c_str());
     return b;
 }

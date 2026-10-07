@@ -25,6 +25,7 @@
 
 #include "ll_common.hpp"
 #include "../common.hpp"
+#include "../perf.hpp"
 
 namespace screens::guide {
 namespace {
@@ -401,16 +402,20 @@ thread_local uint64_t tl_param_addr = 0;
 // NewInputItem PRE: lower all owned templates
 int pre_new_item(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    const int64_t t0 = perf::begin();                  // a plain integer: allowed next to __try (perf.hpp)
     __try { new_item_lower(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("new_item_pre"); }
+    perf::end(perf::HookGuide, t0);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
 // NewInputItem POST: raise all owned templates
 void post_new_item(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on) return;
+    const int64_t t0 = perf::begin();
     __try { new_item_raise(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("new_item_post"); }
+    perf::end(perf::HookGuide, t0);
 }
 
 // OnLateUpdate PRE: save this address
@@ -436,8 +441,10 @@ void post_on_late_update_inner() {
 
 void post_on_late_update(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on) return;
+    const int64_t t0 = perf::begin();
     __try { post_on_late_update_inner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("on_late_update_post"); }
+    perf::end(perf::HookGuide, t0);
 }
 
 // UpdateInputGuide PRE: save this address
@@ -461,8 +468,10 @@ void post_update_guide_inner() {
 
 void post_update_guide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on) return;
+    const int64_t t0 = perf::begin();
     __try { post_update_guide_inner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("update_guide_post"); }
+    perf::end(perf::HookGuide, t0);
 }
 
 #pragma warning(pop)

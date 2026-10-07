@@ -27,6 +27,8 @@
 #include <vector>
 
 #include "../common.hpp"
+#include "../perf.hpp"
+#include "memguard.hpp"
 #include "engine.hpp"
 #include "mech.hpp"
 #include "tick.hpp"
@@ -66,23 +68,9 @@ void map_modules() {
 }
 bool in_module(uint64_t a) { for (auto& m : g_modules) if (a >= m.first && a < m.second) return true; return false; }
 
-// ---- garde de pages (cache par page, vide a chaque passe) ------------------------------------------------------
-std::unordered_map<uint64_t, int> g_page_ok;            // bit 0 lisible, bit 1 inscriptible
+// ---- garde de pages: vfx::memguard (one VirtualQuery per region and frame, 07/10) --------------------------------
 uint64_t g_page_refused = 0;
-int page_state(uint64_t a) {
-    const uint64_t page = a >> 12;
-    auto it = g_page_ok.find(page);
-    if (it != g_page_ok.end()) return it->second;
-    int st = 0;
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (VirtualQuery((LPCVOID)a, &mbi, sizeof mbi) == sizeof mbi && mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD) && mbi.Protect != PAGE_NOACCESS) {
-        st = 1;
-        const DWORD p = mbi.Protect & 0xFF;
-        if (p == PAGE_READWRITE || p == PAGE_WRITECOPY || p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY) st |= 2;
-    }
-    g_page_ok[page] = st;
-    return st;
-}
+int page_state(uint64_t a) { return memguard::state(a); }   // bit 0 lisible, bit 1 inscriptible
 bool range_readable(uint64_t a, size_t len) { for (uint64_t p = a & ~0xFFFULL; p < a + len; p += 0x1000) if (!(page_state(p) & 1)) return false; return true; }
 bool dword_writable(uint64_t a) { return (page_state(a) & 2) && (page_state(a + 3) & 2); }
 uint32_t rd32(uint64_t a) { uint32_t v; std::memcpy(&v, (const void*)a, 4); return v; }
@@ -267,7 +255,6 @@ void reload_relay() {
     // les a resolues sur des objets vivants. Une adresse qui ne le porte plus (ni l origine, ni une valeur a nous)
     // au moment d ecrire est une adresse morte.
     std::unordered_map<uint64_t, uint32_t> sampled;
-    g_page_ok.clear();
     auto sample = [&](const std::vector<Write>& l) {
         for (auto& w : l) {
             uint32_t v;
@@ -300,7 +287,6 @@ void paint_for_manager(uint64_t mgr) {
         auto li = g_by_mgr.find(mgr); if (li != g_by_mgr.end()) list = &li->second;
         if (!list && !vlist) return;
         g_last_mgr = mgr;
-        g_page_ok.clear();
         if (vlist && !vlist->empty()) {
             if (!write_validated(*vlist)) { g_v_by_mgr.erase(mgr); err("validated block %llX dropped: a page is no longer writable", (unsigned long long)mgr); }
             else g_drive_writes += vlist->size();
@@ -315,7 +301,7 @@ bool paint_for_element(uint64_t mgr, int cont, int cat, int el) {
     if (key == g_last_el) return true;
     std::lock_guard<std::mutex> lk(g_mx);
     auto it = g_by_el.find(key); if (it == g_by_el.end()) return false;
-    g_last_el = key; g_page_ok.clear();
+    g_last_el = key;
     if (!write_block(it->second)) { g_by_el.erase(it); err("element block %llX %d/%d/%d dropped: a page is no longer writable", (unsigned long long)mgr, cont, cat, el); return true; }
     g_drive_writes += it->second.size();
     return true;
@@ -325,7 +311,7 @@ bool paint_for_container(uint64_t mgr, int cont) {
     if (key == g_last_cont) return true;
     std::lock_guard<std::mutex> lk(g_mx);
     auto it = g_by_cont.find(key); if (it == g_by_cont.end()) return false;
-    g_last_cont = key; g_page_ok.clear();
+    g_last_cont = key;
     if (!write_block(it->second)) { g_by_cont.erase(it); err("container block %llX %d dropped: a page is no longer writable", (unsigned long long)mgr, cont); return true; }
     g_drive_writes += it->second.size();
     return true;
@@ -352,7 +338,7 @@ static int pre_request_effect_inner(int argc, void** argv) {
     if (!done) paint_for_manager(mgr);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-int pre_request_effect(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+int pre_request_effect_seh(int argc, void** argv) {
     if (!g_active || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const uint64_t mgr = (uint64_t)argv[1];
     __try { return pre_request_effect_inner(argc, argv); }
@@ -364,7 +350,7 @@ int pre_request_effect(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
         return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     }
 }
-int pre_add_material(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+int pre_add_material_seh(int argc, void** argv) {
     if (!g_active || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const uint64_t mgr = (uint64_t)argv[1];
     __try { paint_for_manager(mgr); }
@@ -377,6 +363,19 @@ int pre_add_material(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 #pragma warning(pop)
+// timed from outside the __try functions (perf.hpp)
+int pre_request_effect(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    const int64_t t0 = perf::begin();
+    const int r = pre_request_effect_seh(argc, argv);
+    perf::end(perf::HookRequestEffect, t0);
+    return r;
+}
+int pre_add_material(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    const int64_t t0 = perf::begin();
+    const int r = pre_add_material_seh(argc, argv);
+    perf::end(perf::HookAddMaterial, t0);
+    return r;
+}
 void post_nop(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
 bool install_hooks() {
@@ -516,7 +515,6 @@ void check_scan_request() {
             dumps.emplace_back(hex64(p[1]), std::min(0x400, std::atoi(p[2].c_str())));
         }
     }
-    g_page_ok.clear();
     std::unordered_set<uint64_t> seen;
     std::vector<std::string> out{"R " + seq};
     long long nodes_total = 0; int spots_total = 0;
@@ -565,7 +563,6 @@ void apply_queue() {
         if (g_queue_lines.empty()) return;
         lines.swap(g_queue_lines);                                // (was: _memwrite.txt read then removed)
     }
-    g_page_ok.clear();
     int n = 0, stale = 0;
     for (auto& raw : lines) {
         const auto p = split(raw);
@@ -597,16 +594,23 @@ void apply() { if (!g_active) return; reload_relay(); apply_queue(); }
 bool g_hooked = false; unsigned g_tick = 0, g_retry = 0; bool g_gave_up = false;
 void on_update() {
     if (!g_installed) return;
+    perf::Scope timed(perf::VfxEngineUpdate);
     if (!g_hooked) {
         if (g_gave_up || ++g_tick % 300) return;
         if (++g_retry > 20) { g_gave_up = true; err("hook impossible, abandon"); return; }
         g_hooked = install_hooks();
         if (!g_hooked) return;
     }
-    if (g_active) check_scan_request();
+    if (g_active) { perf::Scope scan(perf::VfxScan); check_scan_request(); }
+    perf::Scope a(perf::VfxApply);
     apply();
 }
-void on_late_update() { if (g_installed) apply(); }
+void on_late_update() {
+    if (!g_installed) return;
+    perf::Scope timed(perf::VfxEngineLate);
+    perf::Scope a(perf::VfxApply);
+    apply();
+}
 
 // Reset Scripts: the Lua empties the relay in re.on_script_reset; done here too, so no address outlives the scripts
 // that validate it even if that callback did not run.

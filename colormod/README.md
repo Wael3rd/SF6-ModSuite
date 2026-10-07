@@ -22,7 +22,7 @@ Costume and Drive colours for Street Fighter 6, set from the game's own menus. O
 
 ## Requirements
 
-- REFramework (`dinput8.dll`), plugin API 1.15 or newer.
+- REFramework (`dinput8.dll`), plugin API 1.10 or newer (the public REFramework 1.5.8 included).
 - The **SF6 Native Core** package (`sf6core_native.dll`) 0.7.0 or newer, from the same release. Without it the mod
   stays inert and says so in REFramework's log: `[ColorModNative] sf6core_native.dll not loaded: inert`.
 
@@ -34,6 +34,26 @@ reframework/data/SF6_NativeLocale_data/locale.json
 reframework/data/SF6_ColorSpinExtra_data/      settings and colour packs (colors/<Name>_esfNNN/<pack>/)
 reframework/data/SF6_DIRecolor_data/, SF6_DriveRecolor_data/, SF6_ColorModNative_data/   Drive settings, caches, log
 ```
+
+## During a fight
+
+The colours are decided in the menus; a fight recomputes nothing (since 0.19.7):
+
+- The Drive Parry / Rush colours are written once into the effect data when the fight loads, again only when a
+  colour setting changes (the Training character popup) or the effects are found again. The game shares that data
+  between both players (and the Drive Impact data in a mirror match): it shows your side's colours, or the other
+  side's when yours are left to the game.
+- The Drive Impact / Reversal colours and the body glow are painted when each effect starts, per player: the game
+  copies those for each effect, a single write does not hold.
+- Nothing is recomputed periodically during a fight (a settings comparison once a second); the costume colours are
+  applied when the game dresses a model, with a check during the first 10 s of the fight only.
+
+The previous way (every Drive effect painted per player when it starts, the effect data checked every second) comes
+back with an empty file `reframework/data/SF6_ColorModNative_data/live_fight.txt` (looked at every 5 s).
+
+To see what the mod costs, create `reframework/data/SF6_ColorModNative_data/perf_on.txt` (looked at every 2 s):
+`perf_live.log` next to it then gets one line per second (frame time, the mod's time per frame and its costliest
+parts) and one `SLOW` line per long frame with everything the mod did in it. Delete the file to stop.
 
 ## Build
 

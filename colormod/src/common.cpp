@@ -15,11 +15,12 @@
 #include <reframework/API.hpp>
 
 #include "nlohmann/json.hpp"
+#include "perf.hpp"
 
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "0.19.6";
+constexpr const char* kVersion = "0.19.7";
 constexpr const char* kClientId = "SF6_ColorModNative";
 // The game's working directory is the game folder (same convention as SF6_MenuRowsNative / SF6_MemWriterNative).
 constexpr const char* kDataDir = "reframework/data/SF6_ColorModNative_data";
@@ -116,18 +117,33 @@ void write_status() {
 
 }  // namespace
 void (*g_screens_frame)() = nullptr;
+bool g_light_fight = true;                              // see light_fight()
+namespace { bool light_fight_flag() { return g_light_fight; } void set_light_fight(bool v) { g_light_fight = v; } }
 namespace {
+void timed(perf::Id id, void (*fn)()) { const int64_t t0 = perf::begin(); fn(); perf::end(id, t0); }
 void SF6CORE_CALL on_frame(uint64_t, void*) {
     ++g_frame;
-    if (g_bridge_decide.frame) g_bridge_decide.frame();
-    if (g_bridge_vfx.feed_frame) g_bridge_vfx.feed_frame();
-    if (g_bridge_dipanel.on_frame) g_bridge_dipanel.on_frame();
-    if (g_bridge_tracker.on_frame) g_bridge_tracker.on_frame();
-    if (g_bridge_guide.on_frame) g_bridge_guide.on_frame();
-    if (g_bridge_locale.on_frame) g_bridge_locale.on_frame();
-    if (g_bridge_camera.on_frame) g_bridge_camera.on_frame();
-    if (g_screens_frame) { try { g_screens_frame(); } catch (...) { journal_line("screens frame: exception"); } }
+    perf::frame();                                     // the game frame that just ended (perf_live.log when on)
+    const int64_t t0 = perf::begin();
+    if (g_bridge_decide.frame) timed(perf::FrameDecide, g_bridge_decide.frame);
+    if (g_bridge_vfx.feed_frame) timed(perf::FrameVfxFeed, g_bridge_vfx.feed_frame);
+    if (g_bridge_dipanel.on_frame) timed(perf::FrameDipanel, g_bridge_dipanel.on_frame);
+    if (g_bridge_tracker.on_frame) timed(perf::FrameTracker, g_bridge_tracker.on_frame);
+    if (g_bridge_guide.on_frame) timed(perf::FrameGuide, g_bridge_guide.on_frame);
+    if (g_bridge_locale.on_frame) timed(perf::FrameLocale, g_bridge_locale.on_frame);
+    if (g_bridge_camera.on_frame) timed(perf::FrameCamera, g_bridge_camera.on_frame);
+    if (g_screens_frame) {
+        const int64_t ts = perf::begin();
+        try { g_screens_frame(); } catch (...) { journal_line("screens frame: exception"); }
+        perf::end(perf::FrameScreens, ts);
+    }
     if (g_frame % kJournalFlushEvery == 0) journal_flush();
+    if (g_frame % 300 == 1) {                          // live_fight.txt: the light fight mode off
+        std::error_code ec;
+        const bool light = !std::filesystem::exists(std::string(kDataDir) + "/live_fight.txt", ec);
+        if (light != light_fight_flag()) { set_light_fight(light); journal_line(light ? "fight mode: light (colours written once per fight)" : "fight mode: live (live_fight.txt: per-effect painting, periodic checks)"); }
+    }
+    perf::end(perf::CoreFrame, t0);
 }
 
 void SF6CORE_CALL on_flow(int32_t old_id, int32_t new_id, void*) {
@@ -356,6 +372,7 @@ const char* feature_name(Feature f) { return kNames[(size_t)f]; }
 bool owns(Feature f) { return g_active && g_owns[(size_t)f]; }
 bool active() { return g_active; }
 uint64_t frame() { return g_frame; }
+bool light_fight() { return g_light_fight; }
 const SF6CoreAPI* core() { return g_api; }
 SF6CoreClient* client() { return g_client; }
 

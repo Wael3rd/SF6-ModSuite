@@ -48,5 +48,8 @@ int rebuild_catalog();           // after the Lua rebuilt its own (SAVE AS, ERAS
 std::optional<std::pair<uint32_t, uint32_t>> squares(int fighter_id, int only_side);   // only_side 0 = any
 std::string follow_debug(int fighter_id);                                  // lines, '\n'-separated
 std::string status();
+// the player's own side (1 / 2) from the battle description: online our session member, offline the first fighter on
+// a pad; 1 when unknown. The light fight mode gives it the effect data both players share.
+int own_side();
 
 }  // namespace engine::decide

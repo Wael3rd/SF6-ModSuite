@@ -13,6 +13,7 @@
 #include "ll_common.hpp"          // LL's helpers: fields, invoke, managed strings
 
 #include "../common.hpp"
+#include "../perf.hpp"
 #include "data.hpp"
 #include "mech.hpp"
 
@@ -134,17 +135,30 @@ void fault(const char* where) {
 
 #pragma warning(push)
 #pragma warning(disable: 4733)
-int pre_add(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+int pre_add_seh(int argc, void** argv) {
     if (!g_on || argc < 4) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return pre_add_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("addMaterialEffect"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
-int pre_req(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+int pre_req_seh(int argc, void** argv) {
     if (!g_on || argc < 4) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return pre_req_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("requestMaterialEffect"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 #pragma warning(pop)
+// timed from outside the __try functions (perf.hpp)
+int pre_add(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    const int64_t t0 = perf::begin();
+    const int r = pre_add_seh(argc, argv);
+    perf::end(perf::HookBodyAddMaterial, t0);
+    return r;
+}
+int pre_req(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    const int64_t t0 = perf::begin();
+    const int r = pre_req_seh(argc, argv);
+    perf::end(perf::HookBodyRequestMaterial, t0);
+    return r;
+}
 void post_nop(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
 }  // namespace

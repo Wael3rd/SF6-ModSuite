@@ -42,6 +42,10 @@ void log_warn(const char* fmt, ...);
 void journal(const char* fmt, ...);
 
 uint64_t frame();                // frames seen by the core's frame callback (0 before the first one)
+// Light fight (default, 0.19.7): in a fight the colours are written once and nothing is recomputed (vfx tick,
+// decisions). Off while reframework/data/SF6_ColorModNative_data/live_fight.txt exists (looked at every 5 s):
+// the per-effect painting and the periodic checks as before.
+bool light_fight();
 const SF6CoreAPI* core();        // nullptr when the core is absent
 SF6CoreClient* client();
 

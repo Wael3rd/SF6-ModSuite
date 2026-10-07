@@ -15,6 +15,7 @@
 #include "nlohmann/json.hpp"
 
 #include "../common.hpp"
+#include "../perf.hpp"
 #include "catalog.hpp"
 #include "chips.hpp"
 #include "live.hpp"
@@ -715,6 +716,7 @@ std::optional<chips::Pair> squares_locked(int fighter_id, int only_side) {
 // ColorInventory.GetColorList(chara, costume): N ColorInfo{ Name = "RW n" / "MC n", No = BASE_COLOR } appended.
 // GetColorNoList / Param.GetEnableColorList derive from this list: hooking them too would append twice.
 int pre_get_color_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    perf::Scope timed(perf::HookGetColorList);
     std::lock_guard lk(live::mx());
     if (argc < 4 || !active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     g_list_f = (uint32_t)(uintptr_t)argv[2];
@@ -723,6 +725,7 @@ int pre_get_color_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_get_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    perf::Scope timed(perf::HookGetColorList);
     std::lock_guard lk(live::mx());
     if (!active() || !ret_val || !g_list_known) return;
     try {
@@ -763,6 +766,7 @@ void post_get_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsign
 
 // SetColor: P2_VIRTUAL_ID -> BASE_COLOR on any model; that model is P2
 int pre_set_color(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    perf::Scope timed(perf::HookSetColor);
     std::lock_guard lk(live::mx());
     if (argc < 3 || !active() || !argv[1]) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try {
@@ -851,18 +855,21 @@ void mirror_fix_post() {
     g_p2_restore = pr;
 }
 int pre_tmp_cos_col(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    perf::Scope timed(perf::HookTempColor);
     std::lock_guard lk(live::mx());
     if (!active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try { mirror_fix(argc, argv, 5, true); } catch (...) { fault("setTempCosColData"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_tmp_col(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    perf::Scope timed(perf::HookTempColor);
     std::lock_guard lk(live::mx());
     if (!active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try { mirror_fix(argc, argv, 4, false); } catch (...) { fault("setTempColor"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_tmp(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    perf::Scope timed(perf::HookTempColor);
     std::lock_guard lk(live::mx());
     if (!active()) return;
     mirror_fix_post();
@@ -933,8 +940,14 @@ void confirm_side(int side) {                        // the confirm re-issue (se
 }
 
 // battle pass: once PBManager knows the players, make sure each side wears what it should; re-issue SetColor if not
+uint64_t g_battle_since = 0;                          // frame the current battle flow was first seen (0 = not in one)
+constexpr uint64_t kLightBattleChecks = 600;          // light fight: the battle pass runs for the first 10 s only
 void battle_pass() {
-    if (!in_battle_flow()) return;
+    if (!in_battle_flow()) { g_battle_since = 0; return; }
+    if (!g_battle_since) g_battle_since = cmn::frame();
+    // Light fight (cmn::light_fight): the models are dressed by the SetupColor hook when the game sets them up; this
+    // safety net only checks the start of the fight, then nothing is recomputed until the next battle flow.
+    if (cmn::light_fight() && cmn::frame() - g_battle_since > kLightBattleChecks) return;
     std::optional<std::vector<MO*>> subs;            // every colour controller of the scene (sub-models share a ColorData)
     for (int side = 1; side <= 2; ++side) {
         MO* ctrl = battle_ctrl(side);
@@ -1038,7 +1051,7 @@ void on_frame() {
     if (!active()) return;
     try {
         ++g_tick;
-        bs_state();                                   // journals the Battle Settings colours' state when it changes
+        if (g_tick % 30 == 0) bs_state();             // journals the Battle Settings colours' state when it changes
         if (g_tick % kTickEvery == 0) p2_poll();
         if (cmn::frame() % kBattlePassEvery == 0) battle_pass();
         for (int side = 1; side <= 2; ++side) {
@@ -1132,6 +1145,15 @@ std::string follow_debug(int fighter_id) {
     if (sq) std::snprintf(b, sizeof(b), "squares(%d) -> %08X / %08X", fighter_id, sq->first, sq->second);
     else std::snprintf(b, sizeof(b), "squares(%d) -> nil / nil", fighter_id);
     return out + b;
+}
+
+int own_side() {
+    std::lock_guard lk(live::mx());
+    try {
+        const Bs& bs = bs_state();
+        for (const BsOwn& o : bs.own) if (o.team == 0 || o.team == 1) return o.team + 1;
+    } catch (...) {}
+    return 1;
 }
 
 std::string status() {

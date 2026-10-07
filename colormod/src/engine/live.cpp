@@ -15,6 +15,7 @@
 #include "ll_common.hpp"          // LL's helpers: fields, invoke, managed strings
 
 #include "../common.hpp"
+#include "../perf.hpp"
 #include "decide.hpp"
 #include "live_internal.hpp"
 #include "rsz.hpp"
@@ -382,6 +383,7 @@ MO* g_diag_ctrl = nullptr;                   // controller of the SetupColor in 
 std::unordered_map<MO*, uint64_t> g_diag_parts;   // SetupPartsColor-without-patch lines, one per controller per 120 frames
 
 int pre_setup_color(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    perf::Scope timed(perf::HookSetupColor);
     std::lock_guard lk(g_mx);
     g_diag_ctrl = nullptr;
     try {
@@ -395,6 +397,7 @@ int pre_setup_color(int argc, void** argv, REFrameworkTypeDefinitionHandle*, uns
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_parts(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    perf::Scope timed(perf::HookSetupParts);
     std::lock_guard lk(g_mx);
     try {
         if (argc >= 2 && !g_pending && decide::active()) {     // outside SetupColor, on a dressed controller: journal only
@@ -410,10 +413,12 @@ int pre_parts(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned 
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_restore(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    perf::Scope timed(perf::HookSetupParts);
     std::lock_guard lk(g_mx);
     try { restore(false); } catch (...) { drop_pending(); fault("SetupColor post"); }
 }
 void post_setup_color(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    perf::Scope timed(perf::HookSetupColor);
     std::lock_guard lk(g_mx);
     try {
         if (g_diag_ctrl && ret_val && ((uintptr_t)*ret_val & 0xFF) == 0)

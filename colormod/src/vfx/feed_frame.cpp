@@ -36,7 +36,9 @@ void mark_di_dirty() { std::lock_guard<std::mutex> lk(g_mx); g_dirty = true; }
 
 void on_frame() {
     ++g_frame;
-    if (g_frame % 6 == 0) {
+    // light fight: the settings do not change during a fight (a Training popup change still lands within a second)
+    const uint64_t every = (cmn::light_fight() && g_in_fight) ? 60 : 6;
+    if (g_frame % every == 0) {
         int fid[2];
         {
             std::lock_guard<std::mutex> lk(g_mx);
