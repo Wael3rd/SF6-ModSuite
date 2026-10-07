@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.10.2 (2026-10-07) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.10.2 | unchanged (same files as 1.10.1) |
+| SF6 Color Mod | 0.19.6 | keyboard layouts in the colour editor |
+| SF6 Native Core | 0.7.1 | unchanged |
+
+### SF6 Color Mod 0.19.6
+- **The colour editor turns its pages with the game's own tab keys.** It showed and read A / E on every keyboard:
+  on a QWERTY keyboard the game's key is Q, and A also moved left in the menu. The editor now shows the keys the
+  game names for its tabs (A / E on an AZERTY keyboard, Q / E on a QWERTY one, a remapped key too) and reads
+  those.
+- On a QWERTY keyboard, W (up) also switches the hints to the keyboard's.
+
+### Known issues
+- FPS drops have been seen with the Native Core and the Color Mod installed; being measured.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.10.1 (2026-10-07) — SF6 Mod Suite
 
 | Package | Version | |
