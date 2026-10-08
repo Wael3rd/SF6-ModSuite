@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.10.4 (2026-10-08) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.10.4 | the plugin stops when the game closes |
+| SF6 Color Mod | 0.19.8 | fixes the crashes of 0.19.7 in fights, stops when the game closes |
+| SF6 Native Core | 0.7.2 | stops when the game closes |
+
+Updating the Slots Loader in Fluffy Mod Manager: disable or remove the previous version first.
+
+### SF6 Color Mod 0.19.8
+- **Fixes crashes of the game in and after fights with 0.19.7.** The Drive colours written once per fight (0.19.7)
+  skipped the check that the memory still holds the effect's colour, used a list of effects made before the fight
+  changed, and could be written again while the fight ended: a colour could land in an effect the game had already
+  freed, and the game crashed later in its own code (online, at the end of a match or when leaving a mode). The
+  check is back (the same one as before 0.19.7), the effects are looked up again before each write, and nothing is
+  written while a fight ends.
+
+### All three: they stop when the game closes
+- From the moment the game window gets the close message (the window's close button, Alt+F4, Windows shutting
+  down), the three plugins stop touching the game: no more per-frame work, their hooks let the game run its own
+  code, the core's display functions do nothing. If the game keeps running 30 s after a close message (a close that
+  did not happen), they resume.
+
+### Known issues
+- The game can stop with a memory error a few seconds after its window was closed ("corrupted thread-free list" in
+  `re2_framework_log.txt`). Not caused by what the plugins do while the game closes (they have stopped by then);
+  being investigated.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.10.3 (2026-10-07) — SF6 Mod Suite
 
 | Package | Version | |
