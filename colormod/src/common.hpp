@@ -29,6 +29,7 @@ enum class Feature : int { Engine = 0, Vfx, Screens, Dialogs, Editor, Decisions,
 const char* feature_name(Feature f);
 bool owns(Feature f);            // true = this DLL runs that feature (Lua stands down)
 bool active();                   // false = kill file present, or the core is missing / refused us
+bool closing();                  // true from the moment the game window gets WM_CLOSE / WM_DESTROY / WM_ENDSESSION
 bool bridge_owns(const std::string& name);   // the Lua's edit.native_bridge(name) ~= nil: owned, and ready
 // phase 5e: the option engine's frame and the colour screens' frame, last in the core's frame callback (where the Lua
 // script called them, after the core's callback); set by main.cpp

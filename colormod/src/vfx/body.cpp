@@ -148,12 +148,14 @@ int pre_req_seh(int argc, void** argv) {
 #pragma warning(pop)
 // timed from outside the __try functions (perf.hpp)
 int pre_add(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int64_t t0 = perf::begin();
     const int r = pre_add_seh(argc, argv);
     perf::end(perf::HookBodyAddMaterial, t0);
     return r;
 }
 int pre_req(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int64_t t0 = perf::begin();
     const int r = pre_req_seh(argc, argv);
     perf::end(perf::HookBodyRequestMaterial, t0);

@@ -77,6 +77,14 @@ void queue_write(void* ctx, uint64_t addr, uint32_t value) {             // EfxM
     *q += b;
 }
 
+// A provider line for the queue with the colour the slot must still hold: its original (or one of ours, the engine's
+// history). queue_write's "what is there now" would let a dead address through: the light fight's writes once (08/10).
+void queue_expect(std::string& q, uint64_t addr, uint32_t value, uint32_t expected) {
+    char b[64];
+    std::snprintf(b, sizeof b, "%llX %08X %08X\n", (unsigned long long)addr, value, expected);
+    q += b;
+}
+
 std::vector<uint32_t> cands_locked() {                                  // validate_hook: the c1 of every (side, mechanic)
     std::vector<uint32_t> c;
     for (int s = 1; s <= 2; ++s) for (int m = 0; m < 3; ++m) if (g_dr[s][m].c1) c.push_back(*g_dr[s][m].c1);
@@ -363,6 +371,9 @@ void static_pass(int own) {
     validate_spots();
     const int id1 = scene::side_char(0), id2 = scene::side_char(1);
     const int fid[3] = { 0, id1, id2 };
+    // The providers pass is frozen once the colours are written: its list may hold effect objects the game has freed
+    // since (08/10: two crashes in the game, a pointer overwritten). Fresh objects for every pass.
+    providers::scan();
     if (!mech::manager(1) || !mech::manager(2)) mech::discover();   // the body glow resolves its side per call anyway
     mech::set_di_cont(providers::container(id1), providers::container(id2));
     std::string q;
@@ -373,7 +384,7 @@ void static_pass(int own) {
             { std::lock_guard<std::mutex> lk(g_in_mx); mc = g_di[s][m]; }
             std::vector<providers::WLine> wl;
             if (!providers::lines(fid[s], mc, wl)) continue;
-            for (auto& w : wl) queue_write(&q, w.addr, w.val);
+            for (auto& w : wl) queue_expect(q, w.addr, w.val, w.orig);     // the original, as the relay checks it
         }
     }
     // Drive Parry / Rush: one colour per mechanic, the own side's (the other's when the own side has none)
@@ -430,6 +441,9 @@ void static_pass(int own) {
 
 void static_tick() {                                                    // every 60 frames in a fight: a string compare
     if (g_want_scan || g_scan_pending) return;                          // the scan first
+    // Once written, never again while the fight is torn down (a fighter gone, the battle description cleared: the key
+    // changes but the effect objects are being freed).
+    if (!g_static_key.empty() && (!scene::battle_char(0) || !scene::battle_char(1))) return;
     const int own = ::engine::decide::own_side();
     const std::string key = static_key(own);
     if (key == g_static_key) return;
@@ -516,7 +530,7 @@ void on_fault() {
 #pragma warning(push)
 #pragma warning(disable: 4733)
 void on_update_seh() {
-    if (!g_own || !g_installed) return;
+    if (cmn::closing() || !g_own || !g_installed) return;
     __try { frame_guarded(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { on_fault(); }
 }

@@ -716,6 +716,7 @@ std::optional<chips::Pair> squares_locked(int fighter_id, int only_side) {
 // ColorInventory.GetColorList(chara, costume): N ColorInfo{ Name = "RW n" / "MC n", No = BASE_COLOR } appended.
 // GetColorNoList / Param.GetEnableColorList derive from this list: hooking them too would append twice.
 int pre_get_color_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     perf::Scope timed(perf::HookGetColorList);
     std::lock_guard lk(live::mx());
     if (argc < 4 || !active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -725,6 +726,7 @@ int pre_get_color_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_get_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (cmn::closing()) return;
     perf::Scope timed(perf::HookGetColorList);
     std::lock_guard lk(live::mx());
     if (!active() || !ret_val || !g_list_known) return;
@@ -766,6 +768,7 @@ void post_get_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsign
 
 // SetColor: P2_VIRTUAL_ID -> BASE_COLOR on any model; that model is P2
 int pre_set_color(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     perf::Scope timed(perf::HookSetColor);
     std::lock_guard lk(live::mx());
     if (argc < 3 || !active() || !argv[1]) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -855,6 +858,7 @@ void mirror_fix_post() {
     g_p2_restore = pr;
 }
 int pre_tmp_cos_col(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     perf::Scope timed(perf::HookTempColor);
     std::lock_guard lk(live::mx());
     if (!active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -862,6 +866,7 @@ int pre_tmp_cos_col(int argc, void** argv, REFrameworkTypeDefinitionHandle*, uns
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_tmp_col(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     perf::Scope timed(perf::HookTempColor);
     std::lock_guard lk(live::mx());
     if (!active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;

@@ -383,6 +383,7 @@ MO* g_diag_ctrl = nullptr;                   // controller of the SetupColor in 
 std::unordered_map<MO*, uint64_t> g_diag_parts;   // SetupPartsColor-without-patch lines, one per controller per 120 frames
 
 int pre_setup_color(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     perf::Scope timed(perf::HookSetupColor);
     std::lock_guard lk(g_mx);
     g_diag_ctrl = nullptr;
@@ -397,6 +398,7 @@ int pre_setup_color(int argc, void** argv, REFrameworkTypeDefinitionHandle*, uns
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_parts(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     perf::Scope timed(perf::HookSetupParts);
     std::lock_guard lk(g_mx);
     try {
@@ -420,6 +422,7 @@ void post_restore(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
 void post_setup_color(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
     perf::Scope timed(perf::HookSetupColor);
     std::lock_guard lk(g_mx);
+    if (cmn::closing()) { try { restore(false); } catch (...) { drop_pending(); } return; }
     try {
         if (g_diag_ctrl && ret_val && ((uintptr_t)*ret_val & 0xFF) == 0)
             cmn::journal("SetupColor %s returned false after its patch: the game sets its colours later", go_name(g_diag_ctrl).c_str());

@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
@@ -20,7 +21,7 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "0.19.7";
+constexpr const char* kVersion = "0.19.8";
 constexpr const char* kClientId = "SF6_ColorModNative";
 // The game's working directory is the game folder (same convention as SF6_MenuRowsNative / SF6_MemWriterNative).
 constexpr const char* kDataDir = "reframework/data/SF6_ColorModNative_data";
@@ -44,6 +45,12 @@ std::mutex g_jmx;                            // journal: written from the frame 
 std::deque<std::string> g_lines;
 bool g_dirty = false;
 uint64_t g_frame = 0;
+
+// Closing guard: the game window got WM_CLOSE / WM_DESTROY / WM_NCDESTROY / WM_ENDSESSION.
+// Once set, every per-frame entry point and every pre-hook returns immediately.
+std::atomic<bool> g_closing{false};
+std::atomic<bool> g_closing_final{false};    // true = WM_DESTROY / WM_NCDESTROY / WM_ENDSESSION (not cancellable)
+std::atomic<int64_t> g_closing_tick{0};      // GetTickCount64 when g_closing was set
 
 std::string vformat(const char* fmt, va_list ap) {
     char buf[1024];
@@ -121,8 +128,38 @@ bool g_light_fight = true;                              // see light_fight()
 namespace { bool light_fight_flag() { return g_light_fight; } void set_light_fight(bool v) { g_light_fight = v; } }
 namespace {
 void timed(perf::Id id, void (*fn)()) { const int64_t t0 = perf::begin(); fn(); perf::end(id, t0); }
+bool on_message_cb(void*, unsigned int msg, unsigned long long wparam, long long) {
+    const char* name = nullptr;
+    bool final_msg = false;
+    if (msg == WM_CLOSE) name = "WM_CLOSE";
+    else if (msg == WM_DESTROY) { name = "WM_DESTROY"; final_msg = true; }
+    else if (msg == WM_NCDESTROY) { name = "WM_NCDESTROY"; final_msg = true; }
+    else if (msg == WM_ENDSESSION && wparam != 0) { name = "WM_ENDSESSION"; final_msg = true; }
+    if (!name) return true;
+    if (!g_closing.load(std::memory_order_acquire)) {
+        g_closing_tick.store((int64_t)GetTickCount64(), std::memory_order_relaxed);
+        g_closing_final.store(final_msg, std::memory_order_relaxed);
+        g_closing.store(true, std::memory_order_release);
+        log_info("[ColorModNative] closing: the game window got %s, the Color Mod stops", name);
+        journal_flush();
+    } else if (final_msg && !g_closing_final.load(std::memory_order_relaxed)) {
+        g_closing_final.store(true, std::memory_order_release);
+    }
+    return true;
+}
 void SF6CORE_CALL on_frame(uint64_t, void*) {
     ++g_frame;
+    if (g_closing.load(std::memory_order_acquire)) {
+        if (!g_closing_final.load(std::memory_order_relaxed)) {
+            const uint64_t elapsed = GetTickCount64() - (uint64_t)g_closing_tick.load(std::memory_order_relaxed);
+            if (elapsed > 30000) {
+                g_closing.store(false, std::memory_order_release);
+                log_info("[ColorModNative] closing: cancelled, the Color Mod resumes");
+            }
+        }
+        journal_flush();
+        return;
+    }
     perf::frame();                                     // the game frame that just ended (perf_live.log when on)
     const int64_t t0 = perf::begin();
     if (g_bridge_decide.frame) timed(perf::FrameDecide, g_bridge_decide.frame);
@@ -371,6 +408,7 @@ bool connect_core() {
 const char* feature_name(Feature f) { return kNames[(size_t)f]; }
 bool owns(Feature f) { return g_active && g_owns[(size_t)f]; }
 bool active() { return g_active; }
+bool closing() { return g_closing.load(std::memory_order_acquire); }
 uint64_t frame() { return g_frame; }
 bool light_fight() { return g_light_fight; }
 const SF6CoreAPI* core() { return g_api; }
@@ -392,6 +430,11 @@ void journal(const char* fmt, ...) {
 }
 
 bool init() {
+    {
+        auto* fns = reframework::API::get()->param()->functions;
+        if (fns->on_message) fns->on_message(on_message_cb);
+        else log_info("[ColorModNative] on_message not available: no closing guard");
+    }
     if (std::filesystem::exists(kOffFile)) {
         log_info("[ColorModNative] %s present: inert (everything stays with Lua)", kOffFile);
         write_status();

@@ -1254,6 +1254,7 @@ bool boot() {                                                      // the main c
 // refreshing a popup being torn down (a caught NullReference in SelectChangeColorChip). Pre-existing, Lua included.
 bool esc_blocked() { return (edit.active && edit.di_simple && window_open()) || screens::dipanel::mode::popup_esc_guard(); }
 int pre_input_cancel(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try {
         if (!esc_blocked()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
         MO* agent = reinterpret_cast<MO*>(argv[1]);
@@ -1264,6 +1265,7 @@ int pre_input_cancel(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigne
     } catch (...) { return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_close_menu(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try { return esc_blocked() ? REFRAMEWORK_HOOK_SKIP_ORIGINAL : REFRAMEWORK_HOOK_CALL_ORIGINAL; } catch (...) { return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 void post_nothing(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}

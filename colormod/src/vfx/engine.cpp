@@ -365,12 +365,14 @@ int pre_add_material_seh(int argc, void** argv) {
 #pragma warning(pop)
 // timed from outside the __try functions (perf.hpp)
 int pre_request_effect(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int64_t t0 = perf::begin();
     const int r = pre_request_effect_seh(argc, argv);
     perf::end(perf::HookRequestEffect, t0);
     return r;
 }
 int pre_add_material(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int64_t t0 = perf::begin();
     const int r = pre_add_material_seh(argc, argv);
     perf::end(perf::HookAddMaterial, t0);
@@ -593,7 +595,7 @@ void apply() { if (!g_active) return; reload_relay(); apply_queue(); }
 // ---- points d entree ---------------------------------------------------------------------------------------------
 bool g_hooked = false; unsigned g_tick = 0, g_retry = 0; bool g_gave_up = false;
 void on_update() {
-    if (!g_installed) return;
+    if (cmn::closing() || !g_installed) return;
     perf::Scope timed(perf::VfxEngineUpdate);
     if (!g_hooked) {
         if (g_gave_up || ++g_tick % 300) return;
@@ -606,7 +608,7 @@ void on_update() {
     apply();
 }
 void on_late_update() {
-    if (!g_installed) return;
+    if (cmn::closing() || !g_installed) return;
     perf::Scope timed(perf::VfxEngineLate);
     perf::Scope a(perf::VfxApply);
     apply();

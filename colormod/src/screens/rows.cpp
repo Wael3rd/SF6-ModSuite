@@ -493,7 +493,7 @@ int update_pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long
 #pragma warning(push)
 #pragma warning(disable: 4733)
 void update_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    if (!g_on) return;
+    if (cmn::closing() || !g_on) return;
     if ((++g_check % 10) != 0) return;            // check every 10 calls, same as SF6_MenuRowsNative
     __try {
         ensure_rows();
@@ -547,7 +547,7 @@ bool debounce_step() {
 #pragma warning(push)
 #pragma warning(disable: 4733)
 int pre_spin_add(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try {
         int w = spin_which(argv);
         if (w >= 0) {
@@ -558,7 +558,7 @@ int pre_spin_add(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsign
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_spin_sub(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try {
         int w = spin_which(argv);
         if (w >= 0) {
@@ -569,7 +569,7 @@ int pre_spin_sub(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsign
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_spin_dir(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try {
         int w = spin_which(argv);
         if (w < 0) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -626,7 +626,7 @@ int agent_ours(void** args) {
 #pragma warning(push)
 #pragma warning(disable: 4733)
 int pre_agent_left(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try {
         int w = agent_ours(argv);
         if (w >= 0) { if (!debounce_step()) record_action(w, -1); return REFRAMEWORK_HOOK_SKIP_ORIGINAL; }
@@ -634,7 +634,7 @@ int pre_agent_left(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsi
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_agent_right(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try {
         int w = agent_ours(argv);
         if (w >= 0) { if (!debounce_step()) record_action(w, 1); return REFRAMEWORK_HOOK_SKIP_ORIGINAL; }
@@ -642,7 +642,7 @@ int pre_agent_right(int argc, void** argv, REFrameworkTypeDefinitionHandle*, uns
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_agent_dir(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try {
         int w = agent_ours(argv);
         if (w < 0) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -653,7 +653,7 @@ int pre_agent_dir(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsig
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_agent_decide(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try {
         int w = agent_ours(argv);
         if (w >= 0) { record_action(w, 0); return REFRAMEWORK_HOOK_SKIP_ORIGINAL; }

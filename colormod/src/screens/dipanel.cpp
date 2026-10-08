@@ -408,37 +408,37 @@ int group_move_inner(void** argv) {
 #pragma warning(disable: 4733)
 
 int pre_spin_add(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return spin_step_inner(argv, 1, false); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("spin_add"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_spin_sub(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return spin_step_inner(argv, -1, false); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("spin_sub"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_spin_input_right(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return spin_step_inner(argv, 1, true); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("spin_input_right"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_spin_input_left(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return spin_step_inner(argv, -1, true); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("spin_input_left"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_spin_dir(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return spin_dir_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("spin_dir"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_param_skip(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return param_skip_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("param_skip"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_param_gate(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) { tl_ret = INT64_MIN; return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    if (cmn::closing() || !g_any) { tl_ret = INT64_MIN; return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
     __try { return param_gate_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { tl_ret = INT64_MIN; fault("param_gate"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
@@ -446,12 +446,12 @@ void post_param_gate(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned l
     if (tl_ret != INT64_MIN) *ret_val = reinterpret_cast<void*>((uintptr_t)tl_ret);
 }
 int pre_param_get_costume(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) { tl_ret = INT64_MIN; return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    if (cmn::closing() || !g_any) { tl_ret = INT64_MIN; return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
     __try { return param_get_ci_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { tl_ret = INT64_MIN; fault("getCostume"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_param_get_color(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) { tl_ret = INT64_MIN; return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    if (cmn::closing() || !g_any) { tl_ret = INT64_MIN; return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
     __try { return param_get_co_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { tl_ret = INT64_MIN; fault("getColor"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
@@ -459,37 +459,37 @@ void post_ret_override(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned
     if (tl_ret != INT64_MIN) *ret_val = reinterpret_cast<void*>((uintptr_t)tl_ret);
 }
 int pre_agent_left(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return agent_lr_inner(argv, -1); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("agent_left"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_agent_right(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return agent_lr_inner(argv, 1); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("agent_right"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_agent_up(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return agent_ud_inner(argv, -1); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("agent_up"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_agent_down(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return agent_ud_inner(argv, 1); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("agent_down"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_agent_dir(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return agent_dir_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("agent_dir"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_agent_exit(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return agent_exit_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("agent_exit"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }
 int pre_group_move(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_any) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return group_move_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("group_move"); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 }

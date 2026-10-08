@@ -401,7 +401,7 @@ thread_local uint64_t tl_param_addr = 0;
 
 // NewInputItem PRE: lower all owned templates
 int pre_new_item(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (cmn::closing() || !g_on) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int64_t t0 = perf::begin();                  // a plain integer: allowed next to __try (perf.hpp)
     __try { new_item_lower(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("new_item_pre"); }
@@ -411,7 +411,7 @@ int pre_new_item(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long lo
 
 // NewInputItem POST: raise all owned templates
 void post_new_item(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    if (!g_on) return;
+    if (cmn::closing() || !g_on) return;
     const int64_t t0 = perf::begin();
     __try { new_item_raise(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("new_item_post"); }
@@ -420,6 +420,7 @@ void post_new_item(void**, REFrameworkTypeDefinitionHandle, unsigned long long) 
 
 // OnLateUpdate PRE: save this address
 int pre_on_late_update(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     tl_part_addr = reinterpret_cast<uint64_t>(argv[1]);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -440,7 +441,7 @@ void post_on_late_update_inner() {
 }
 
 void post_on_late_update(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    if (!g_on) return;
+    if (cmn::closing() || !g_on) return;
     const int64_t t0 = perf::begin();
     __try { post_on_late_update_inner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("on_late_update_post"); }
@@ -449,6 +450,7 @@ void post_on_late_update(void**, REFrameworkTypeDefinitionHandle, unsigned long 
 
 // UpdateInputGuide PRE: save this address
 int pre_update_guide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     tl_param_addr = reinterpret_cast<uint64_t>(argv[1]);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -467,7 +469,7 @@ void post_update_guide_inner() {
 }
 
 void post_update_guide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    if (!g_on) return;
+    if (cmn::closing() || !g_on) return;
     const int64_t t0 = perf::begin();
     __try { post_update_guide_inner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("update_guide_post"); }
