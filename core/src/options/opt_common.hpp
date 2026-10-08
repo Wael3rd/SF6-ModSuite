@@ -10,5 +10,6 @@ void journal(const char* fmt, ...);        // the core's log, INFO
 void log_warn(const char* fmt, ...);       // the core's log, WARN
 const SF6CoreAPI* core();                  // this DLL's own API table
 SF6CoreClient* client();                   // the core's "sf6core.options" client (display calls, breaker)
+bool closing();                            // true while the game window is being closed (0.7.2)
 
 }  // namespace cmn

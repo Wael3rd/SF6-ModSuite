@@ -24,6 +24,7 @@ std::map<std::pair<int32_t, int32_t>, Effective> g_eff;    // (fighter, shown co
 SF6CoreStatus SF6CORE_CALL api_sel_set_effective(SF6CoreClient* client, int32_t fighter, int32_t shown_costume,
                                                  int32_t real_costume, int32_t real_colour) {
     if (!client || fighter < 0 || shown_costume < 0) return SF6CORE_ERR_INVALID_ARG;
+    if (core_closing()) return SF6CORE_ERR_DISABLED;
     std::lock_guard<std::mutex> lk(g_mx);
     const auto key = std::make_pair(fighter, shown_costume);
     auto it = g_eff.find(key);

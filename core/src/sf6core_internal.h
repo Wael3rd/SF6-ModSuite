@@ -59,6 +59,10 @@ struct SF6CoreClient {
 extern const REFrameworkSDKData* s_sdk;
 extern std::atomic<bool>         s_initialized;
 extern uint64_t                  s_frame;
+extern std::atomic<bool>         s_closing;
+
+// True while the game window is being closed (WM_CLOSE / WM_DESTROY / etc.)
+inline bool core_closing() { return s_closing.load(std::memory_order_relaxed); }
 
 // ========================================================================
 // Shared functions (defined in sf6core.cpp)

@@ -49,6 +49,9 @@ void logf(const char* fmt, ...);
 // ---- frame counter (LateUpdateBehavior calls) ----
 extern uint32_t g_frame;
 
+// ---- closing guard: set by the window message callback (WM_CLOSE etc.) ----
+extern std::atomic<bool> g_closing;
+
 // ---- events: set by hooks (any thread), taken on the game thread ----
 enum Event : uint32_t {
     EV_MENU_OPEN     = 1u << 0,   // Battle Settings shown

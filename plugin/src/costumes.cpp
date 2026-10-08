@@ -773,16 +773,17 @@ bool own_fighters(std::set<int>& out) {
 // ---- hook: an outfit's visual manifest created (the game mounted its folder) ----
 // May run on a loading thread: it only records the event.
 int pre_holder_ctor(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     post(EV_HOLDER);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
 // ---- hooks: screens ----
-int pre_menu_open(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)  { post(EV_MENU_OPEN); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_menu_close(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { post(EV_MENU_CLOSE); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_select_start(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { post(EV_SELECT_START); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_select_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)   { post(EV_SELECT_END); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_title_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)    { post(EV_TITLE_END); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_menu_open(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)  { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_MENU_OPEN); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_menu_close(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_MENU_CLOSE); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_select_start(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_SELECT_START); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_select_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_SELECT_END); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_title_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)    { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_TITLE_END); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 
 bool g_menu_open = false;
 

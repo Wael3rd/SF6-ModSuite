@@ -371,8 +371,8 @@ static SF6CoreStatus guard_prefix(SF6CoreClient* client, void* obj,
     auto* st = get_stats(client);
     *out_stats = st;
 
-    // 1. Kill switch / breaker
-    if (kill_switch_active() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) {
+    // 1. Kill switch / breaker / closing
+    if (kill_switch_active() || core_closing() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) {
         st->refused.fetch_add(1, std::memory_order_relaxed);
         rate_log_warn(client->client_id, "display op %s refused: client disabled", op);
         return SF6CORE_ERR_DISABLED;
@@ -729,7 +729,7 @@ SF6CoreStatus SF6CORE_CALL api_ui_texture_load(SF6CoreClient* client, const char
     if (!resource_path || !out_holder) return SF6CORE_ERR_INVALID_ARG;
     if (!client) return SF6CORE_ERR_INVALID_ARG;
     *out_holder = nullptr;
-    if (kill_switch_active() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER)
+    if (kill_switch_active() || core_closing() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER)
         return SF6CORE_ERR_DISABLED;
 
     auto* sdk = s_sdk;
@@ -1262,7 +1262,7 @@ SF6CoreStatus SF6CORE_CALL api_obj_invoke(SF6CoreClient* client, void* obj, cons
 // obj_new: create a managed instance by type name
 void* SF6CORE_CALL api_obj_new(SF6CoreClient* client, const char* type_name) {
     if (!client || !type_name) return nullptr;
-    if (kill_switch_active() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) return nullptr;
+    if (kill_switch_active() || core_closing() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) return nullptr;
     auto* sdk = s_sdk;
     if (!sdk) return nullptr;
 
@@ -1286,7 +1286,7 @@ void* SF6CORE_CALL api_obj_new(SF6CoreClient* client, const char* type_name) {
 // obj_clone: MemberwiseClone
 void* SF6CORE_CALL api_obj_clone(SF6CoreClient* client, void* obj) {
     if (!client || !obj) return nullptr;
-    if (kill_switch_active() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) return nullptr;
+    if (kill_switch_active() || core_closing() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) return nullptr;
     auto* sdk = s_sdk;
     if (!sdk) return nullptr;
     if (!resolve_display_types() || !s_dtc.m_obj_memberwise_clone) return nullptr;
@@ -1533,7 +1533,7 @@ SF6CoreStatus SF6CORE_CALL api_list_set_item(SF6CoreClient* client, void* list, 
 // list_get_range: GetRange(start, count) -> new List (caller-owned ref)
 void* SF6CORE_CALL api_list_get_range(SF6CoreClient* client, void* list, int32_t start, int32_t count) {
     if (!client || !list) return nullptr;
-    if (kill_switch_active() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) return nullptr;
+    if (kill_switch_active() || core_closing() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) return nullptr;
     auto* sdk = s_sdk;
     if (!sdk) return nullptr;
 
@@ -1575,7 +1575,7 @@ SF6CoreStatus SF6CORE_CALL api_dict_add(SF6CoreClient* client, void* dict, int64
 
 // dict_contains: ContainsKey(key) -> bool
 int32_t SF6CORE_CALL api_dict_contains(void* dict, int64_t key) {
-    if (!dict) return 0;
+    if (!dict || core_closing()) return 0;
     auto* sdk = s_sdk;
     if (!sdk) return 0;
 
@@ -1597,7 +1597,7 @@ int32_t SF6CORE_CALL api_dict_contains(void* dict, int64_t key) {
 
 // Recursive child search by name, up to max_depth
 void* SF6CORE_CALL api_ui_find_child(void* root, const char* name, int32_t max_depth) {
-    if (!root || !name || max_depth < 0) return nullptr;
+    if (!root || !name || max_depth < 0 || core_closing()) return nullptr;
     if (!resolve_display_types()) return nullptr;
     auto* sdk = s_sdk;
     if (!sdk) return nullptr;
@@ -1639,6 +1639,7 @@ void* SF6CORE_CALL api_ui_find_child(void* root, const char* name, int32_t max_d
 // Find a UIAgent by its GameObject name.
 // Now uses the agent registry (discovery.cpp) instead of rescanning _Entries.
 void* SF6CORE_CALL api_ui_find_agent(const char* gameobject_name) {
+    if (core_closing()) return nullptr;
     return discovery_find_first_agent(gameobject_name);
 }
 

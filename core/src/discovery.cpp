@@ -473,13 +473,13 @@ static uint32_t reg_lookup_agents(const char* name, void** out, uint32_t max) {
 }
 
 uint32_t SF6CORE_CALL api_ui_agents(const char* name, void** out, uint32_t max) {
-    if (!name || !out || max == 0) return 0;
+    if (!name || !out || max == 0 || core_closing()) return 0;
     reg_ensure_fresh();
     return reg_lookup_agents(name, out, max);
 }
 
 uint32_t SF6CORE_CALL api_ui_agents_gen(const char* name) {
-    if (!name) return 0;
+    if (!name || core_closing()) return 0;
     reg_ensure_fresh();
     reg_shared_lock();
     auto* e = reg_find(&s_reg, name);
@@ -489,6 +489,7 @@ uint32_t SF6CORE_CALL api_ui_agents_gen(const char* name) {
 }
 
 uint32_t SF6CORE_CALL api_ui_registry_gen(void) {
+    if (core_closing()) return 0;
     reg_ensure_fresh();
     reg_shared_lock();
     uint32_t g = s_reg.global_gen;
@@ -719,7 +720,7 @@ static bool resolve_fi_methods() {
 // ========================================================================
 
 void* SF6CORE_CALL api_ui_find_cached(void* root, const char* name) {
-    if (!root || !name) return nullptr;
+    if (!root || !name || core_closing()) return nullptr;
     auto* sdk = s_sdk;
     if (!sdk || !resolve_po_methods()) return nullptr;
     uintptr_t root_addr = (uintptr_t)root;
@@ -836,7 +837,7 @@ static void walk_find_many(const REFrameworkSDKData* sdk, void* ctrl,
 
 uint32_t SF6CORE_CALL api_ui_find_many(void* root, const char* const* names,
                                         uint32_t n, void** out) {
-    if (!root || !names || !out || n == 0) return 0;
+    if (!root || !names || !out || n == 0 || core_closing()) return 0;
     // Zero ALL of out[] (including beyond the 32-name cap) so callers never read garbage
     memset(out, 0, n * sizeof(void*));
     auto* sdk = s_sdk;
@@ -998,6 +999,7 @@ SF6CoreStatus SF6CORE_CALL api_set_element_hidden_zen(
         int32_t hidden) {
     if (!client || !gui_owner || !pattern_segments || n_segments == 0)
         return SF6CORE_ERR_INVALID_ARG;
+    if (core_closing()) return SF6CORE_ERR_DISABLED;
     if (!is_game_thread()) return SF6CORE_ERR_WRONG_THREAD;
     if (gui_owner[0] == '\0') return SF6CORE_ERR_INVALID_ARG;
     if (n_segments > ZEN_SEG_MAX) return SF6CORE_ERR_INVALID_ARG;

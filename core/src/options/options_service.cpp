@@ -44,6 +44,7 @@ void log_warn(const char* fmt, ...) {
 const SF6CoreAPI* core() { return sf6core_api_ptr(); }
 SF6CoreClient* client() { return s_client; }
 void set_client(SF6CoreClient* c) { s_client = c; }
+bool closing() { return core_closing(); }
 }  // namespace cmn
 
 namespace {
@@ -341,7 +342,7 @@ void options_frame() {
     try { tick(); } catch (...) { ++g_faults; }
 }
 void options_pump() {
-    if (!usable()) return;
+    if (!usable() || core_closing()) return;
     try { pump_now(); } catch (...) { ++g_faults; }
 }
 
@@ -398,25 +399,28 @@ int64_t SF6CORE_CALL api_opt_entry(SF6CoreClient* client, int64_t group, const S
 SF6CoreStatus SF6CORE_CALL api_opt_rebuild(SF6CoreClient*) { guard("opt_rebuild", [] { oc::rebuild(); }); return SF6CORE_OK; }
 SF6CoreStatus SF6CORE_CALL api_opt_ensure_built(SF6CoreClient*) { ensure_built(); return SF6CORE_OK; }
 SF6CoreStatus SF6CORE_CALL api_opt_open_menu(SF6CoreClient*, const char* title, int32_t focus) {
+    if (core_closing()) return SF6CORE_ERR_DISABLED;
     open_menu(s(title), focus >= 0 ? focus : -1);
     return SF6CORE_OK;
 }
 SF6CoreStatus SF6CORE_CALL api_opt_navigate(SF6CoreClient*, const char* key, int32_t flags, int32_t focus) {
+    if (core_closing()) return SF6CORE_ERR_DISABLED;
     navigate(s(key), (flags & SF6CORE_OPT_NAV_REBUILD) != 0, focus >= 0 ? focus : -1, (flags & SF6CORE_OPT_NAV_NOW) != 0,
              (flags & SF6CORE_OPT_NAV_PUSH) != 0, (flags & SF6CORE_OPT_NAV_POP) != 0);
     return SF6CORE_OK;
 }
-SF6CoreStatus SF6CORE_CALL api_opt_close(SF6CoreClient*) { guard("opt_close", [] { oc::close(); }); return SF6CORE_OK; }
+SF6CoreStatus SF6CORE_CALL api_opt_close(SF6CoreClient*) { if (core_closing()) return SF6CORE_ERR_DISABLED; guard("opt_close", [] { oc::close(); }); return SF6CORE_OK; }
 int32_t SF6CORE_CALL api_opt_window_open(void) { return oc::window_open() ? 1 : 0; }
 void* SF6CORE_CALL api_opt_current_param(void) { return oc::current_param(); }
 void* SF6CORE_CALL api_opt_parent_param(void) { return oc::parent_param(); }
 int64_t SF6CORE_CALL api_opt_focused_entry(void) { return usable() ? dialogs::options::focused_entry() : -1; }
 void* SF6CORE_CALL api_opt_row_control(int64_t entry, void* param) {
+    if (core_closing()) return nullptr;
     return usable() ? reinterpret_cast<void*>(dialogs::options::row_control(entry, (uint64_t)reinterpret_cast<uintptr_t>(param))) : nullptr;
 }
-void* SF6CORE_CALL api_opt_row_part(int64_t entry) { return usable() ? reinterpret_cast<void*>(dialogs::options::row_part(entry)) : nullptr; }
+void* SF6CORE_CALL api_opt_row_part(int64_t entry) { if (core_closing()) return nullptr; return usable() ? reinterpret_cast<void*>(dialogs::options::row_part(entry)) : nullptr; }
 SF6CoreStatus SF6CORE_CALL api_opt_set_option_text(SF6CoreClient*, int64_t entry, int32_t index, const char* text) {
-    if (!usable()) return SF6CORE_ERR_NOT_READY;
+    if (!usable() || core_closing()) return SF6CORE_ERR_NOT_READY;
     return dialogs::options::set_option_text(entry, index, s(text)) ? SF6CORE_OK : SF6CORE_ERR_FAULTED;
 }
 uint32_t SF6CORE_CALL api_opt_status(char* buf, uint32_t cap) {

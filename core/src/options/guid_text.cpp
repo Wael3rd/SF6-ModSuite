@@ -68,7 +68,7 @@ void post_get_message_inner(void** ret_val) {
 }
 
 int pre_get_message(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on || live() == 0) return REFRAMEWORK_HOOK_CALL_ORIGINAL;   // :89 nothing registered: no lookup (online battle)
+    if (!g_on || live() == 0 || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return pre_get_message_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("get_message_pre"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;

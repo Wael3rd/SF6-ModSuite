@@ -375,12 +375,13 @@ bool vs_work() {
 // ---------------------------------------------------------------------------------------------
 
 int pre_shown(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     if (argc >= 2) g_hook_param.store(reinterpret_cast<uintptr_t>(argv[1]));
     post(EV_STAGE_SHOW);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-int pre_hidden(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { post(EV_STAGE_HIDE); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-void post_dirty(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { post(EV_STAGE_DIRTY); }
+int pre_hidden(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_STAGE_HIDE); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+void post_dirty(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return; post(EV_STAGE_DIRTY); }
 
 constexpr uint32_t kTrigger = 2, kRepeat = 8;
 void direction(void** argv, int step) {
@@ -389,15 +390,16 @@ void direction(void** argv, int step) {
     uint32_t flag = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(argv[2])) & 0xF;
     if (flag & (kTrigger | kRepeat)) { g_pending.fetch_add(step); post(EV_STAGE_INPUT); }
 }
-int pre_up(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (argc >= 3) direction(argv, -1); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_down(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (argc >= 3) direction(argv, 1); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_up(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; if (argc >= 3) direction(argv, -1); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_down(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; if (argc >= 3) direction(argv, 1); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 
 int pre_vs(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     if (argc >= 2) g_vs_comp.store(reinterpret_cast<uintptr_t>(argv[1]));
     post(EV_VS);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-void post_vs(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { post(EV_VS); }
+void post_vs(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return; post(EV_VS); }
 
 } // namespace
 

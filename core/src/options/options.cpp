@@ -512,7 +512,7 @@ int pre_reset_units_inner(void** argv) {
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_reset_units(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return pre_reset_units_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("reset_units_pre"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -522,7 +522,7 @@ void post_reset_units(void**, REFrameworkTypeDefinitionHandle, unsigned long lon
 // GetFocusDecideEventType (:423-442): Invalid for our buttons, so the FSM does nothing (no "Revert settings?")
 thread_local MO* tl_decide_this = nullptr;
 int pre_decide_event(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    tl_decide_this = g_on ? reinterpret_cast<MO*>(argv[1]) : nullptr;
+    tl_decide_this = (g_on && !cmn::closing()) ? reinterpret_cast<MO*>(argv[1]) : nullptr;
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_decide_event_inner(void** ret_val) {
@@ -547,7 +547,7 @@ void pre_created_object_inner(void** argv) {
 }
 int pre_created_object(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_created_param = nullptr;
-    if (!g_on) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { pre_created_object_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("created_object_pre"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -569,7 +569,7 @@ void pre_setup_disp_units_inner(void** argv) {
 }
 int pre_setup_disp_units(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_setup_this = nullptr;
-    if (!g_on) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { pre_setup_disp_units_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("setup_disp_pre"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -602,7 +602,7 @@ void post_setup_disp_units(void**, REFrameworkTypeDefinitionHandle, unsigned lon
 thread_local MO* tl_cs_this = nullptr;
 thread_local int32_t tl_cs_index = 0;
 int pre_check_can_select(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    tl_cs_this = g_on ? reinterpret_cast<MO*>(argv[1]) : nullptr;
+    tl_cs_this = (g_on && !cmn::closing()) ? reinterpret_cast<MO*>(argv[1]) : nullptr;
     tl_cs_index = static_cast<int32_t>(reinterpret_cast<uintptr_t>(argv[2]) & 0xFFFFFFFF);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -634,7 +634,7 @@ int pre_skip_ours_inner(void** argv) {
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_skip_ours(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { return pre_skip_ours_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("skip_ours_pre"); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -643,7 +643,7 @@ void post_skip_ours(void**, REFrameworkTypeDefinitionHandle, unsigned long long)
 
 // TrainingManager.OpenMenu (:666-673): the Esc / Start that closes our dialog also reaches the training pause menu
 int pre_open_menu(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (g_on && core::suppress_open_menu()) return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
+    if (g_on && !cmn::closing() && core::suppress_open_menu()) return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_open_menu(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}

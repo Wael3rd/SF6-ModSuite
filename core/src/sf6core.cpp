@@ -35,7 +35,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.7.1";
+static constexpr const char* CORE_VERSION = "0.7.2";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -176,6 +176,11 @@ std::atomic<bool> s_initialized{false};
 
 // Kill switch: lazily checked, then cached
 static std::atomic<int>  s_kill_switch{0}; // 0=unchecked, 1=ok, 2=disabled
+
+// Closing guard: set by the window message callback on WM_CLOSE / WM_DESTROY / etc.
+std::atomic<bool> s_closing{false};
+static uint64_t   s_close_frame = 0;    // frame at which closing started
+static bool       s_close_final = false; // WM_DESTROY / WM_NCDESTROY / WM_ENDSESSION: not cancellable
 
 // REFramework SDK pointer (set at init)
 // Shared with display.cpp (not static)
@@ -1552,6 +1557,7 @@ static void clear_sightings() {
 // Resolves the owner name, records {owner, view, frame} into sighting
 // table. No GUI writes, no tree walks. Always returns true.
 static bool on_pre_gui_draw_element(void* element, void* /*context*/) {
+    if (s_closing.load(std::memory_order_relaxed)) return true;
     if (s_elem_count_pub.load(std::memory_order_acquire) == 0 &&
         s_zen_rule_count_pub.load(std::memory_order_acquire) == 0) return true;
     if (!s_sdk) return true;
@@ -1967,9 +1973,52 @@ uint32_t      SF6CORE_CALL api_opt_status(char*, uint32_t);
 SF6CoreStatus SF6CORE_CALL api_sel_set_effective(SF6CoreClient*, int32_t, int32_t, int32_t, int32_t);
 int32_t       SF6CORE_CALL api_sel_get_effective(int32_t, int32_t, int32_t*, int32_t*);
 
+// ========================================================================
+// Closing guard: window message callback (0.7.2)
+// ========================================================================
+
+static bool on_message(void* /*hwnd*/, unsigned int msg,
+                       unsigned long long wparam, long long /*lparam*/) {
+    bool final_msg = false;
+    const char* name = nullptr;
+    switch (msg) {
+    case 0x0010: name = "WM_CLOSE";     break;
+    case 0x0002: name = "WM_DESTROY";   final_msg = true; break;
+    case 0x0082: name = "WM_NCDESTROY"; final_msg = true; break;
+    case 0x0016:
+        if (wparam == 0) return true;
+        name = "WM_ENDSESSION"; final_msg = true; break;
+    default: return true;
+    }
+    if (!s_closing.exchange(true, std::memory_order_seq_cst)) {
+        s_close_frame = s_frame;
+        s_close_final = final_msg;
+        core_log(SF6CORE_LOG_INFO, nullptr,
+                 "closing: the game window got %s, the core stops"
+                 " (no client frames, no display)", name);
+    } else if (final_msg && !s_close_final) {
+        s_close_final = true;
+    }
+    return true;
+}
+
 static void on_late_update() {
     s_frame++;
     s_frame_pub.store(s_frame, std::memory_order_relaxed);
+
+    // Closing guard: stop all game work. A WM_CLOSE that was not followed by
+    // WM_DESTROY may be cancelled if frames keep coming for 30 s.
+    if (s_closing.load(std::memory_order_relaxed)) {
+        if (!s_close_final && s_close_frame > 0 &&
+            (s_frame - s_close_frame) > 60u * 30) {
+            s_closing.store(false, std::memory_order_relaxed);
+            s_close_frame = 0;
+            core_log(SF6CORE_LOG_INFO, nullptr,
+                     "closing: cancelled, the core resumes");
+        } else {
+            return;
+        }
+    }
 
     // Record the game thread ID on the first frame
     static bool s_thread_recorded = false;
@@ -2348,6 +2397,7 @@ static SF6CoreStatus SF6CORE_CALL api_set_element_hidden(
         const char* element_path, int32_t hidden) {
     if (!client || !gui_owner_name || !element_path)
         return SF6CORE_ERR_INVALID_ARG;
+    if (core_closing()) return SF6CORE_ERR_DISABLED;
     if (gui_owner_name[0] == '\0' || element_path[0] == '\0')
         return SF6CORE_ERR_INVALID_ARG;
 
@@ -2582,6 +2632,16 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     } else {
         core_log(SF6CORE_LOG_WARN, nullptr,
                  "on_pre_gui_draw_element not available (element hiding disabled)");
+    }
+
+    // Register window message callback (closing guard, 0.7.2)
+    if (param->functions->on_message) {
+        param->functions->on_message(on_message);
+        core_log(SF6CORE_LOG_INFO, nullptr,
+                 "registered on_message (closing guard)");
+    } else {
+        core_log(SF6CORE_LOG_WARN, nullptr,
+                 "on_message not available (closing guard disabled)");
     }
 
     // Initialize Lua bridge (increment 3)
