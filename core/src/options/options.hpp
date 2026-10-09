@@ -20,7 +20,7 @@ namespace dialogs::options {
 bool install();              // Backend + hooks; false on a hard failure
 bool ready();                // Hooks in place and not switched off by faults
 void note_fault(const char* where);   // a bridge call raised: counted like a hook fault
-void set_purge_pause_rows(bool on);   // :267 the next builds remove (or keep) the dynamic rows of the training pause menu
+void set_purge_pause_rows(bool on);   // :267 the next builds purge (or not) the training pause menu's DYNAMIC rows the core no longer owns
 
 // core::add_entry with the kind as the Lua names it ("toggle", "choice", "slider", "button")
 int64_t add_entry(int64_t group_id, const std::string& kind, const std::string& key);
