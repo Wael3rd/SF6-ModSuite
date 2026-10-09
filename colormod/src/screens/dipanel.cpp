@@ -14,6 +14,8 @@
 #include "ll_common.hpp"
 
 #include "../common.hpp"
+#include "../perf.hpp"
+#include "../perf_hook.hpp"
 
 namespace screens::dipanel {
 namespace {
@@ -520,7 +522,7 @@ bool hook_methods(API::TypeDefinition* td, const char* const* names, size_t n,
     for (size_t i = 0; i < n; ++i) {
         auto* m = td->find_method(names[i]);
         if (m && m->get_function_raw()) {
-            if (m->add_hook(pre, post, false)) ++count;
+            if (m->add_hook(pre, post, false)) { ++count; perf::journal_hooked(names[i], m); }
         }
     }
     return true;
@@ -537,16 +539,20 @@ bool install() {
     // UIPartsSpin step hooks
     auto* spin_td = tdb->find_type("app.UIPartsSpin");
     if (spin_td) {
-        const char* add_names[] = { "Add", "AddNum", "MouseAdd" };
-        const char* sub_names[] = { "Sub", "SubNum", "MouseSub" };
+        const char* n_add[] = { "Add" }; const char* n_addnum[] = { "AddNum" }; const char* n_mouseadd[] = { "MouseAdd" };
+        const char* n_sub[] = { "Sub" }; const char* n_subnum[] = { "SubNum" }; const char* n_mousesub[] = { "MouseSub" };
         const char* right_name[] = { "InputRight" };
         const char* left_name[] = { "InputLeft" };
-        hook_methods(spin_td, add_names, 3, pre_spin_add, post_nop, total);
-        hook_methods(spin_td, sub_names, 3, pre_spin_sub, post_nop, total);
-        hook_methods(spin_td, right_name, 1, pre_spin_input_right, post_nop, total);
-        hook_methods(spin_td, left_name, 1, pre_spin_input_left, post_nop, total);
+        hook_methods(spin_td, n_add, 1, perf::timed_pre<perf::HkDiSpinAdd, pre_spin_add>, post_nop, total);
+        hook_methods(spin_td, n_addnum, 1, perf::timed_pre<perf::HkDiSpinAddNum, pre_spin_add>, post_nop, total);
+        hook_methods(spin_td, n_mouseadd, 1, perf::timed_pre<perf::HkDiSpinMouseAdd, pre_spin_add>, post_nop, total);
+        hook_methods(spin_td, n_sub, 1, perf::timed_pre<perf::HkDiSpinSub, pre_spin_sub>, post_nop, total);
+        hook_methods(spin_td, n_subnum, 1, perf::timed_pre<perf::HkDiSpinSubNum, pre_spin_sub>, post_nop, total);
+        hook_methods(spin_td, n_mousesub, 1, perf::timed_pre<perf::HkDiSpinMouseSub, pre_spin_sub>, post_nop, total);
+        hook_methods(spin_td, right_name, 1, perf::timed_pre<perf::HkDiSpinInputRight, pre_spin_input_right>, post_nop, total);
+        hook_methods(spin_td, left_name, 1, perf::timed_pre<perf::HkDiSpinInputLeft, pre_spin_input_left>, post_nop, total);
         auto* sd = spin_td->find_method("InputDirection");
-        if (sd && sd->get_function_raw() && sd->add_hook(pre_spin_dir, post_nop, false)) ++total;
+        if (sd && sd->get_function_raw() && sd->add_hook(perf::timed_pre<perf::HkDiSpinInputDirection, pre_spin_dir>, post_nop, false)) { ++total; perf::journal_hooked("UIPartsSpin.InputDirection", sd); }
     }
 
     // Param skip hooks
@@ -557,13 +563,13 @@ bool install() {
             "SetMessageCostume", "SetMessageColor", "SetMessagePreset", "SetMessageList",
             "setCostume", "setColor", "setCostumeAndColor"
         };
-        hook_methods(param_td, skip_names, 10, pre_param_skip, post_nop, total);
+        hook_methods(param_td, skip_names, 10, perf::timed_pre<perf::HkDiParamSkip, pre_param_skip>, post_nop, total);   // 10 methods, one Id
         const char* gate_names[] = { "IsDecide", "IsCancel", "isSelectOperationType" };
-        hook_methods(param_td, gate_names, 3, pre_param_gate, post_param_gate, total);
+        hook_methods(param_td, gate_names, 3, perf::timed_pre<perf::HkDiParamGate, pre_param_gate>, post_param_gate, total);   // 3 methods, one Id
         auto* gc = param_td->find_method("getCostume");
-        if (gc && gc->get_function_raw() && gc->add_hook(pre_param_get_costume, post_ret_override, false)) ++total;
+        if (gc && gc->get_function_raw() && gc->add_hook(perf::timed_pre<perf::HkDiParamGetCostume, pre_param_get_costume>, post_ret_override, false)) { ++total; perf::journal_hooked("UIFlowUI10505.Param.getCostume", gc); }
         auto* gcl = param_td->find_method("getColor");
-        if (gcl && gcl->get_function_raw() && gcl->add_hook(pre_param_get_color, post_ret_override, false)) ++total;
+        if (gcl && gcl->get_function_raw() && gcl->add_hook(perf::timed_pre<perf::HkDiParamGetColor, pre_param_get_color>, post_ret_override, false)) { ++total; perf::journal_hooked("UIFlowUI10505.Param.getColor", gcl); }
     }
 
     // MFS skip hooks
@@ -575,38 +581,38 @@ bool install() {
             "SetupPresetSpin", "SetupPresetSpinCursor", "SelectionChanged",
             "SelectionChanged_Spin", "ChangeEverything"
         };
-        hook_methods(mfs_td, mfs_skip, 12, pre_param_skip, post_nop, total);
+        hook_methods(mfs_td, mfs_skip, 12, perf::timed_pre<perf::HkDiMfsSkip, pre_param_skip>, post_nop, total);   // 12 methods, one Id
         // GetCostumeId / GetColorId -> return saved values (same as getCostume/getColor)
         auto* gci = mfs_td->find_method("GetCostumeId");
-        if (gci && gci->get_function_raw() && gci->add_hook(pre_param_get_costume, post_ret_override, false)) ++total;
+        if (gci && gci->get_function_raw() && gci->add_hook(perf::timed_pre<perf::HkDiMfsGetCostume, pre_param_get_costume>, post_ret_override, false)) { ++total; perf::journal_hooked("UIPartsMatchingFighterSetting.GetCostumeId", gci); }
         auto* gcol = mfs_td->find_method("GetColorId");
-        if (gcol && gcol->get_function_raw() && gcol->add_hook(pre_param_get_color, post_ret_override, false)) ++total;
+        if (gcol && gcol->get_function_raw() && gcol->add_hook(perf::timed_pre<perf::HkDiMfsGetColor, pre_param_get_color>, post_ret_override, false)) { ++total; perf::journal_hooked("UIPartsMatchingFighterSetting.GetColorId", gcol); }
     }
 
     // UIAgent hooks
     auto* agent_td = tdb->find_type("app.UIAgent");
     if (agent_td) {
         auto* il = agent_td->find_method("InputLeft");
-        if (il && il->get_function_raw() && il->add_hook(pre_agent_left, post_nop, false)) ++total;
+        if (il && il->get_function_raw() && il->add_hook(perf::timed_pre<perf::HkDiAgentInputLeft, pre_agent_left>, post_nop, false)) { ++total; perf::journal_hooked("UIAgent.InputLeft", il); }
         auto* ir = agent_td->find_method("InputRight");
-        if (ir && ir->get_function_raw() && ir->add_hook(pre_agent_right, post_nop, false)) ++total;
+        if (ir && ir->get_function_raw() && ir->add_hook(perf::timed_pre<perf::HkDiAgentInputRight, pre_agent_right>, post_nop, false)) { ++total; perf::journal_hooked("UIAgent.InputRight", ir); }
         auto* iu = agent_td->find_method("InputUp");
-        if (iu && iu->get_function_raw() && iu->add_hook(pre_agent_up, post_nop, false)) ++total;
+        if (iu && iu->get_function_raw() && iu->add_hook(perf::timed_pre<perf::HkDiAgentInputUp, pre_agent_up>, post_nop, false)) { ++total; perf::journal_hooked("UIAgent.InputUp", iu); }
         auto* id = agent_td->find_method("InputDown");
-        if (id && id->get_function_raw() && id->add_hook(pre_agent_down, post_nop, false)) ++total;
+        if (id && id->get_function_raw() && id->add_hook(perf::timed_pre<perf::HkDiAgentInputDown, pre_agent_down>, post_nop, false)) { ++total; perf::journal_hooked("UIAgent.InputDown", id); }
         auto* idir = agent_td->find_method("InputDirection");
-        if (idir && idir->get_function_raw() && idir->add_hook(pre_agent_dir, post_nop, false)) ++total;
+        if (idir && idir->get_function_raw() && idir->add_hook(perf::timed_pre<perf::HkDiAgentInputDirection, pre_agent_dir>, post_nop, false)) { ++total; perf::journal_hooked("UIAgent.InputDirection", idir); }
         auto* idec = agent_td->find_method("InputDecide");
-        if (idec && idec->get_function_raw() && idec->add_hook(pre_agent_exit, post_nop, false)) ++total;
+        if (idec && idec->get_function_raw() && idec->add_hook(perf::timed_pre<perf::HkDiAgentInputDecide, pre_agent_exit>, post_nop, false)) { ++total; perf::journal_hooked("UIAgent.InputDecide", idec); }
         auto* ican = agent_td->find_method("InputCancel");
-        if (ican && ican->get_function_raw() && ican->add_hook(pre_agent_exit, post_nop, false)) ++total;
+        if (ican && ican->get_function_raw() && ican->add_hook(perf::timed_pre<perf::HkDiAgentInputCancel, pre_agent_exit>, post_nop, false)) { ++total; perf::journal_hooked("UIAgent.InputCancel", ican); }
     }
 
     // UIPartsGroup.MoveFocus
     auto* grp_td = tdb->find_type("app.UIPartsGroup");
     if (grp_td) {
         auto* mf = grp_td->find_method("MoveFocus");
-        if (mf && mf->get_function_raw() && mf->add_hook(pre_group_move, post_nop, false)) ++total;
+        if (mf && mf->get_function_raw() && mf->add_hook(perf::timed_pre<perf::HkDiGroupMoveFocus, pre_group_move>, post_nop, false)) { ++total; perf::journal_hooked("UIPartsGroup.MoveFocus", mf); }
     }
 
     g_on = total > 0;
@@ -693,6 +699,7 @@ void pull(int side, int32_t& evt, int32_t& which, int32_t& dir) {
 }
 
 static void tick_all() {                   // separated from on_frame: objects with destructors (lock, string)
+    perf::Scope timed(perf::DipanelTickAll);
     std::lock_guard lk(g_mx);
     for (int s = 1; s <= 2; ++s) tick_side(s);
 }

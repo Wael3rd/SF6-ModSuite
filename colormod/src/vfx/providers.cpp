@@ -3,7 +3,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
-#include <regex>
 #include <unordered_map>
 
 #include "scene.hpp"
@@ -12,6 +11,49 @@ namespace vfx::providers {
 namespace {
 
 using scene::MO;
+
+// plain string helpers (replace std::regex in per-frame loops)
+bool parse_provider_path(const std::string& key, int& fighter_id, std::string& shortk) {
+    // matches: .../esfNNN/EffectProvider/NAME.pfb
+    if (key.size() < 28 || key.compare(key.size() - 4, 4, ".pfb") != 0) return false;
+    const size_t ep = key.rfind("/EffectProvider/");
+    if (ep == std::string::npos || ep < 7) return false;
+    if (key[ep - 7] != '/' || key[ep - 6] != 'e' || key[ep - 5] != 's' || key[ep - 4] != 'f') return false;
+    const char d0 = key[ep - 3], d1 = key[ep - 2], d2 = key[ep - 1];
+    if (d0 < '0' || d0 > '9' || d1 < '0' || d1 > '9' || d2 < '0' || d2 > '9') return false;
+    fighter_id = (d0 - '0') * 100 + (d1 - '0') * 10 + (d2 - '0');
+    shortk.assign(key, ep + 16, key.size() - ep - 20);
+    return true;
+}
+bool is_hit_style(const std::string& s) {
+    return s.size() == 21 && s.compare(0, 8, "epve_esf") == 0 &&
+           s[8] >= '0' && s[8] <= '9' && s[9] >= '0' && s[9] <= '9' && s[10] >= '0' && s[10] <= '9' &&
+           s.compare(11, 10, "_hit_style") == 0;
+}
+bool is_effect_style(const std::string& s) {
+    return s.size() >= 19 && s.compare(0, 8, "epvs_esf") == 0 &&
+           s[8] >= '0' && s[8] <= '9' && s[9] >= '0' && s[9] <= '9' && s[10] >= '0' && s[10] <= '9' &&
+           s.compare(11, 7, "_style_") == 0;
+}
+int parse_style_number(const std::string& s) {
+    const size_t pos = s.rfind("_style_");
+    if (pos == std::string::npos) return -1;
+    const size_t dstart = pos + 7;
+    if (dstart >= s.size()) return -1;
+    int val = 0;
+    for (size_t i = dstart; i < s.size(); ++i) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        val = val * 10 + (s[i] - '0');
+    }
+    return val;
+}
+bool parse_efx_name(const std::string& path, std::string& name) {
+    if (path.size() < 5 || path.compare(path.size() - 4, 4, ".efx") != 0) return false;
+    const size_t slash = path.rfind('/');
+    const size_t start = (slash != std::string::npos) ? slash + 1 : 0;
+    name.assign(path, start, path.size() - start - 4);
+    return true;
+}
 
 constexpr uint32_t kExternColorOff = 0x28;   // EffectCustomExternParameter: the RGBA get_Color returns (DI EXTERN_COLOR_OFF)
 constexpr uint32_t kTypeGpuMesh = 0xFB;      // EfxMeshColor TYPE_GPU_MESH
@@ -233,20 +275,17 @@ bool apply_provider(const Provider& p, const StaticCfg& cfg, bool in_fight, Queu
 
 // ---- scan --------------------------------------------------------------------------------------------------------
 std::map<int, std::vector<Provider>> scan_providers() {
-    static const std::regex kPath("/esf(\\d\\d\\d)/EffectProvider/([^/]+)\\.pfb$");
-    static const std::regex kHit("^epve_esf\\d\\d\\d_hit_style$");
-    static const std::regex kStyle("^epvs_esf\\d\\d\\d_style_");
     std::map<int, std::vector<Provider>> found;
     for (auto& e : scene::entries()) {
-        std::smatch m;
-        if (!std::regex_search(e.key, m, kPath)) continue;
-        const std::string shortk = m[2].str();
+        int fid = 0;
+        std::string shortk;
+        if (!parse_provider_path(e.key, fid, shortk)) continue;
         bool hit;
-        if (std::regex_search(shortk, kHit)) hit = true;
-        else if (std::regex_search(shortk, kStyle)) hit = false;
+        if (is_hit_style(shortk)) hit = true;
+        else if (is_effect_style(shortk)) hit = false;
         else continue;
         if (!e.go) continue;
-        found[std::atoi(m[1].str().c_str())].push_back(Provider{ shortk, e.go, scene::addr(e.go), hit });
+        found[fid].push_back(Provider{ shortk, e.go, scene::addr(e.go), hit });
     }
     return found;
 }
@@ -260,17 +299,16 @@ const std::vector<Provider>* list_of(int fighter) {
 std::string part_key(const Provider& p, int idx) { return p.key + ":" + std::to_string(idx); }
 
 std::string element_efx(const Provider& p, int idx) {    // the efx a part plays (efd_10_drive_001_04 -> drive_001_04)
-    static const std::regex kEfx("([^/]+)\\.efx$");
     std::string name;
     bool done = false;
     scene::each_element(p.go, [&](MO* el, int i) {
         if (i != idx || done) return;
         scene::each_resource(el, [&](MO*, const std::string& path) {
             if (done) return;
-            std::smatch m;
-            if (std::regex_search(path, m, kEfx)) {
-                name = m[1].str();
-                if (name.rfind("efd_10_", 0) == 0) name = name.substr(7);
+            std::string n;
+            if (parse_efx_name(path, n)) {
+                if (n.compare(0, 7, "efd_10_") == 0) n = n.substr(7);
+                name = std::move(n);
                 done = true;
             }
         });
@@ -284,7 +322,6 @@ void collect_parts(int id, const std::vector<Provider>& list) {
     auto seen = g_parts_seen.find(id);
     if (seen != g_parts_seen.end() && seen->second == sig) return;
     g_parts_seen[id] = sig;
-    static const std::regex kStyleN("_style_(\\d+)$");
     std::string out;
     for (auto& p : list) {
         PState& st = provider_state(p);
@@ -297,10 +334,9 @@ void collect_parts(int id, const std::vector<Provider>& list) {
         scene::each_element(p.go, [&](MO* el, int idx) {
             if (!marked(marks, idx)) return;
             if (!(scene::element_has_color(el) || st.originals->tints.count(idx) || has_mesh.count(idx))) return;
-            std::smatch m;
             std::string base;
             if (p.hit) base = "Hit";
-            else base = std::regex_search(p.key, m, kStyleN) ? "Style " + std::to_string(std::atoi(m[1].str().c_str())) : "Style ?";
+            else { const int sn = parse_style_number(p.key); base = sn >= 0 ? "Style " + std::to_string(sn) : "Style ?"; }
             const std::string efx = element_efx(p, idx);
             std::string name = efx.empty() ? base + " - el " + std::to_string(idx) : base.substr(0, base.find(' ')) + " " + efx;
             out += part_key(p, idx) + "\t" + name + "\n";
@@ -439,14 +475,13 @@ bool lines(int fighter, const MechColors& mc, std::vector<WLine>& out) {
 }
 
 int container(int fighter) {
-    static const std::regex kStyleN("_style_(\\d+)$");
     const auto* list = list_of(fighter);
     if (!list) return -1;
     for (auto& p : *list) {
         if (p.hit) continue;
         if (provider_state(p).is_target != 1) continue;
-        std::smatch m;
-        if (std::regex_search(p.key, m, kStyleN)) return std::atoi(m[1].str().c_str());
+        const int sn = parse_style_number(p.key);
+        if (sn >= 0) return sn;
     }
     return -1;
 }

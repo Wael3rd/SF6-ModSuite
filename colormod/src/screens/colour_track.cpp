@@ -18,6 +18,8 @@
 #include "ll_common.hpp"
 
 #include "../common.hpp"
+#include "../perf.hpp"
+#include "../perf_hook.hpp"
 #include "../dialogs/editor.hpp"
 #include "../dialogs/editor_core.hpp"
 #include "../dialogs/locale.hpp"
@@ -1293,15 +1295,15 @@ void frame(uint64_t lua_frame) {
     if (!boot()) return;
     g_F = lua_frame;
     write_readmes();
-    decide_pull();
-    tick();
-    refresh_fn();
-    fs_refresh_step();
-    editor_tick();
-    fs_restore_step();
-    tcs_restore_step();
-    decide_push();
-    dialogs::options::driver::apply();                                // the orders that frame gave (open, navigate, close...)
+    { const int64_t t = perf::begin(); decide_pull(); perf::end(perf::ScreensDecidePull, t); }
+    { const int64_t t = perf::begin(); tick(); perf::end(perf::ScreensTick, t); }
+    { const int64_t t = perf::begin(); refresh_fn(); perf::end(perf::ScreensRefreshFn, t); }
+    { const int64_t t = perf::begin(); fs_refresh_step(); perf::end(perf::ScreensFsRefresh, t); }
+    { const int64_t t = perf::begin(); editor_tick(); perf::end(perf::ScreensEditorTick, t); }
+    { const int64_t t = perf::begin(); fs_restore_step(); perf::end(perf::ScreensFsRestore, t); }
+    { const int64_t t = perf::begin(); tcs_restore_step(); perf::end(perf::ScreensTcsRestore, t); }
+    { const int64_t t = perf::begin(); decide_push(); perf::end(perf::ScreensDecidePush, t); }
+    { const int64_t t = perf::begin(); dialogs::options::driver::apply(); perf::end(perf::ScreensOptApply, t); }
 }
 
 bool acting() { return true; }
@@ -1333,10 +1335,18 @@ bool install() {
     if (!tdb) return false;
     int n = 0;
     if (auto* td = tdb->find_type("app.UIAgent"))
-        if (auto* m = td->find_method("InputCancel"); m && m->get_function_raw() && m->add_hook(pre_input_cancel, post_nothing, false)) ++n;
-    if (auto* td = tdb->find_type("app.training.TrainingManager"))
-        for (const char* sig : { "RequestCloseMenu", "CloseMenu(System.Boolean)", "CloseMenu(System.Boolean, System.Boolean, System.Boolean)" })
-            if (auto* m = td->find_method(sig); m && m->get_function_raw() && m->add_hook(pre_close_menu, post_nothing, false)) ++n;
+        if (auto* m = td->find_method("InputCancel"); m && m->get_function_raw() && m->add_hook(perf::timed_pre<perf::HkTrkAgentInputCancel, pre_input_cancel>, post_nothing, false)) { ++n; perf::journal_hooked("UIAgent.InputCancel (HkTrkAgentInputCancel)", m); }
+    if (auto* td = tdb->find_type("app.training.TrainingManager")) {
+        using PreFn = int (*)(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long);
+        struct CloseHook { const char* sig; PreFn fn; };
+        const CloseHook close_hooks[] = {
+            { "RequestCloseMenu", perf::timed_pre<perf::HkTrkRequestCloseMenu, pre_close_menu> },
+            { "CloseMenu(System.Boolean)", perf::timed_pre<perf::HkTrkCloseMenuBool, pre_close_menu> },
+            { "CloseMenu(System.Boolean, System.Boolean, System.Boolean)", perf::timed_pre<perf::HkTrkCloseMenu3, pre_close_menu> },
+        };
+        for (const auto& ch : close_hooks)
+            if (auto* m = td->find_method(ch.sig); m && m->get_function_raw() && m->add_hook(ch.fn, post_nothing, false)) { ++n; perf::journal_hooked(ch.sig, m); }
+    }
     cmn::journal("colour track: %d / 4 Esc hooks installed", n);
     return true;
 }

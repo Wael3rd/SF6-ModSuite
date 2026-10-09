@@ -26,6 +26,8 @@
 
 #include "ll_common.hpp"
 #include "../common.hpp"
+#include "../perf.hpp"
+#include "../perf_hook.hpp"
 #include "../vfx/drive_cfg.hpp"
 #include "../vfx/feed.hpp"
 #include "dipanel_mode.hpp"
@@ -516,7 +518,8 @@ bool hook_main(const char* type_name) {
     auto* type = API::get()->tdb()->find_type(type_name);
     auto* m = type ? type->find_method("OnUpdate()") : nullptr;
     if (!m) { cmn::journal("[rows] %s.OnUpdate() introuvable", type_name); return false; }
-    if (!m->add_hook(update_pre, update_post, false)) { cmn::journal("[rows] hook %s.OnUpdate() refuse", type_name); return false; }
+    if (!m->add_hook(perf::timed_pre<perf::HkRowsOnUpdate, update_pre>, perf::timed_post<perf::HkRowsOnUpdate, update_post>, false)) { cmn::journal("[rows] hook %s.OnUpdate() refuse", type_name); return false; }
+    perf::journal_hooked(type_name, m);
     return true;
 }
 
@@ -671,17 +674,17 @@ bool install_input_hooks() {
     // and InputDirection -> pre_spin_dir
     struct SpinHook { const char* name; decltype(&pre_spin_add) fn; };
     SpinHook spin_hooks[] = {
-        { "Add",       pre_spin_add }, { "AddNum",    pre_spin_add },
-        { "InputRight", pre_spin_add }, { "MouseAdd",  pre_spin_add },
-        { "Sub",       pre_spin_sub }, { "SubNum",    pre_spin_sub },
-        { "InputLeft", pre_spin_sub }, { "MouseSub",  pre_spin_sub },
+        { "Add",       perf::timed_pre<perf::HkRowsSpinAdd, pre_spin_add> }, { "AddNum",    perf::timed_pre<perf::HkRowsSpinAddNum, pre_spin_add> },
+        { "InputRight", perf::timed_pre<perf::HkRowsSpinInputRight, pre_spin_add> }, { "MouseAdd",  perf::timed_pre<perf::HkRowsSpinMouseAdd, pre_spin_add> },
+        { "Sub",       perf::timed_pre<perf::HkRowsSpinSub, pre_spin_sub> }, { "SubNum",    perf::timed_pre<perf::HkRowsSpinSubNum, pre_spin_sub> },
+        { "InputLeft", perf::timed_pre<perf::HkRowsSpinInputLeft, pre_spin_sub> }, { "MouseSub",  perf::timed_pre<perf::HkRowsSpinMouseSub, pre_spin_sub> },
     };
     for (auto& sh : spin_hooks) {
         auto* m = spin_td->find_method(sh.name);
-        if (m && m->get_function_raw() && m->add_hook(sh.fn, post_nop, false)) ++n_spin;
+        if (m && m->get_function_raw() && m->add_hook(sh.fn, post_nop, false)) { ++n_spin; perf::journal_hooked(sh.name, m); }
     }
     auto* sd = spin_td->find_method("InputDirection");
-    if (sd && sd->get_function_raw() && sd->add_hook(pre_spin_dir, post_nop, false)) ++n_spin;
+    if (sd && sd->get_function_raw() && sd->add_hook(perf::timed_pre<perf::HkRowsSpinInputDirection, pre_spin_dir>, post_nop, false)) { ++n_spin; perf::journal_hooked("UIPartsSpin.InputDirection", sd); }
 
     // UIAgent hooks
     auto* agent_td = API::get()->tdb()->find_type("app.UIAgent");
@@ -689,17 +692,17 @@ bool install_input_hooks() {
     if (agent_td) {
         struct AgentHook { const char* name; decltype(&pre_agent_left) fn; };
         AgentHook agent_hooks[] = {
-            { "InputLeft",      pre_agent_left },
-            { "InputRight",     pre_agent_right },
+            { "InputLeft",      perf::timed_pre<perf::HkRowsAgentInputLeft, pre_agent_left> },
+            { "InputRight",     perf::timed_pre<perf::HkRowsAgentInputRight, pre_agent_right> },
         };
         for (auto& ah : agent_hooks) {
             auto* m = agent_td->find_method(ah.name);
-            if (m && m->get_function_raw() && m->add_hook(ah.fn, post_nop, false)) ++n_agent;
+            if (m && m->get_function_raw() && m->add_hook(ah.fn, post_nop, false)) { ++n_agent; perf::journal_hooked(ah.name, m); }
         }
         auto* md = agent_td->find_method("InputDirection");
-        if (md && md->get_function_raw() && md->add_hook(pre_agent_dir, post_nop, false)) ++n_agent;
+        if (md && md->get_function_raw() && md->add_hook(perf::timed_pre<perf::HkRowsAgentInputDirection, pre_agent_dir>, post_nop, false)) { ++n_agent; perf::journal_hooked("UIAgent.InputDirection", md); }
         auto* decide = agent_td->find_method("InputDecide");
-        if (decide && decide->get_function_raw() && decide->add_hook(pre_agent_decide, post_nop, false)) ++n_agent;
+        if (decide && decide->get_function_raw() && decide->add_hook(perf::timed_pre<perf::HkRowsAgentInputDecide, pre_agent_decide>, post_nop, false)) { ++n_agent; perf::journal_hooked("UIAgent.InputDecide", decide); }
     }
     cmn::journal("[rows] input hooks: spin x%d, agent x%d", n_spin, n_agent);
     return n_spin > 0;

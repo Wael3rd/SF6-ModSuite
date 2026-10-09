@@ -36,6 +36,7 @@ struct Env {
     std::function<std::optional<std::pair<uint32_t, uint32_t>>(int fighter, int side)> squares;
 };
 void set_env(Env env);
+void preload();                                                         // every fighter's files, once at start
 std::optional<std::pair<uint32_t, uint32_t>> squares(int fighter, int side);   // env.squares (nullopt without one)
 
 std::recursive_mutex& lock();

@@ -77,6 +77,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
             env.L = [](const std::string& k) { return dialogs::locale::get(k, {}); };
             env.squares = [](int f, int side) { return engine::decide::squares(f, side); };
             vfx::drive_cfg::set_env(env);
+            vfx::drive_cfg::preload();
             cmn::g_bridge_vfx.feed_frame = vfx::feed::on_frame;
         }
         cmn::g_bridge_dipanel.ready = screens::dipanel::ready;

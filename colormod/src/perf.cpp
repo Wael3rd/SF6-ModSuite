@@ -3,15 +3,15 @@
 #include "perf.hpp"
 
 #include <windows.h>
-#include <share.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
-#include <filesystem>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "common.hpp"
 
 namespace perf {
 namespace {
@@ -22,14 +22,23 @@ constexpr uint64_t kCheckEvery = 120;           // frames between two looks at p
 constexpr double kSlowFrameMs = 20.0;           // a SLOW frame is longer than this and than kSlowFactor x the average
 constexpr double kSlowFactor = 1.5;
 constexpr double kSlowOursMs = 2.0;             // or the DLL alone took this long in it
-constexpr long kMaxLogBytes = 50L * 1024 * 1024;
-
 const char* const kNames[kCount] = {
     "CoreFrame", "VfxEngineUpdate", "VfxEngineLate", "VfxTickUpdate", "HookSetupColor", "HookSetupParts",
     "HookGetColorList", "HookSetColor", "HookTempColor", "HookRequestEffect", "HookAddMaterial", "HookBodyAddMaterial",
-    "HookBodyRequestMaterial", "HookGuide",
+    "HookBodyRequestMaterial", "HkDiSpinAdd", "HkDiSpinAddNum", "HkDiSpinMouseAdd", "HkDiSpinSub", "HkDiSpinSubNum", "HkDiSpinMouseSub", "HkDiSpinInputRight", "HkDiSpinInputLeft", "HkDiSpinInputDirection", "HkDiParamSkip", "HkDiParamGate", "HkDiParamGetCostume", "HkDiParamGetColor", "HkDiMfsSkip", "HkDiMfsGetCostume", "HkDiMfsGetColor", "HkDiAgentInputLeft", "HkDiAgentInputRight", "HkDiAgentInputUp", "HkDiAgentInputDown", "HkDiAgentInputDirection", "HkDiAgentInputDecide", "HkDiAgentInputCancel", "HkDiGroupMoveFocus", "HkRowsOnUpdate", "HkRowsSpinAdd", "HkRowsSpinAddNum", "HkRowsSpinInputRight", "HkRowsSpinMouseAdd", "HkRowsSpinSub", "HkRowsSpinSubNum", "HkRowsSpinInputLeft", "HkRowsSpinMouseSub", "HkRowsSpinInputDirection", "HkRowsAgentInputLeft", "HkRowsAgentInputRight", "HkRowsAgentInputDirection", "HkRowsAgentInputDecide", "HkTrkAgentInputCancel", "HkTrkRequestCloseMenu", "HkTrkCloseMenuBool", "HkTrkCloseMenu3", "HkGuideNewItem", "HkGuideOnLateUpdate", "HkGuideUpdateInputGuide",
     "FrameDecide", "FrameVfxFeed", "FrameDipanel", "FrameTracker", "FrameGuide", "FrameLocale", "FrameCamera",
     "FrameScreens", "VfxScan", "VfxApply",
+    "FeedDiText", "FeedDrColors", "FeedPartsMerge",
+    "EnterLoadSpots", "EnterReadSig", "EnterBases",
+    "ScanParse", "ScanWalk",
+    "StaticValidate", "StaticProviders", "StaticQueue", "StaticDiRelay",
+    "SetupDecide",
+    "HookReqPages", "HookReqWrites",
+    "CoreJournalFlush", "CoreFileCheck",
+    "ScreensDecidePull", "ScreensTick", "ScreensRefreshFn", "ScreensFsRefresh",
+    "ScreensEditorTick", "ScreensFsRestore", "ScreensTcsRestore", "ScreensDecidePush", "ScreensOptApply",
+    "DipanelTickAll",
+    "FeedDiState", "FeedDrCol",
 };
 
 std::atomic<bool> g_on{ false };
@@ -50,7 +59,6 @@ uint64_t g_frames = 0, g_win_frames = 0;
 int64_t g_last = 0, g_win_start = 0;
 double g_win_sum = 0, g_win_worst = 0, g_win_ours = 0, g_win_ours_worst = 0, g_avg = 16.7;
 int g_win_slow = 0;
-FILE* g_log = nullptr;
 
 int64_t now() { LARGE_INTEGER c; QueryPerformanceCounter(&c); return c.QuadPart; }
 
@@ -64,21 +72,7 @@ std::string clock_text(bool ms) {
 }
 
 void write_line(const std::string& line) {
-    if (!g_log) {
-        std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(kLogFile).parent_path(), ec);
-        g_log = _fsopen(kLogFile, "ab", _SH_DENYNO);   // shared: readable while the game writes
-        if (!g_log) return;
-    }
-    if (std::ftell(g_log) > kMaxLogBytes) {
-        std::fclose(g_log);
-        g_log = _fsopen(kLogFile, "wb", _SH_DENYNO);
-        if (!g_log) return;
-        std::fputs("(log restarted: over 50 MB)\n", g_log);
-    }
-    std::fputs(line.c_str(), g_log);
-    std::fputc('\n', g_log);
-    std::fflush(g_log);
+    cmn::bgwriter::append(kLogFile, line + "\n");
 }
 
 void set_on(bool on) {
@@ -96,7 +90,6 @@ void set_on(bool on) {
                    std::to_string((int)kSlowFrameMs) + " ms and 1.5x the average, or the DLL over 2 ms in it");
     } else {
         write_line(clock_text(false) + " perf off");
-        if (g_log) { std::fclose(g_log); g_log = nullptr; }
     }
     g_on.store(on, std::memory_order_relaxed);
 }
@@ -122,8 +115,9 @@ void end(Id id, int64_t t0) {
 void frame() {
     ++g_frames;
     if (g_frames % kCheckEvery == 1) {
-        std::error_code ec;
-        set_on(std::filesystem::exists(kOnFile, ec));
+        // stat check only (no I/O content): small enough to stay on the game thread
+        const DWORD a = GetFileAttributesA(kOnFile);
+        set_on(a != INVALID_FILE_ATTRIBUTES);
     }
     if (!g_on.load(std::memory_order_relaxed)) return;
     const int64_t t = now();

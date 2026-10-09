@@ -16,6 +16,7 @@
 
 #include "../common.hpp"
 #include "../perf.hpp"
+#include "../perf_hook.hpp"
 #include "catalog.hpp"
 #include "chips.hpp"
 #include "live.hpp"
@@ -222,6 +223,7 @@ bool set_color(MO* ctrl, std::optional<uint32_t> num, const std::string& why, bo
     if (!num) num = color_num(ctrl);
     if (!num || !R.set_color) return false;
     if (!why.empty()) cmn::journal("SetColor %s: 0x%llx <- %u", why.c_str(), (unsigned long long)(uintptr_t)ctrl, *num);
+    if (wjournal::active()) wjournal::set_color("decide::SetColor", (uint64_t)(uintptr_t)ctrl, *num);
     ++g_n.set_colors;
     R.set_color->invoke(ctrl, std::vector<void*>{ ll::arg_i32((int32_t)*num) });
     return true;
@@ -1214,6 +1216,10 @@ bool install() {
     R.set_color->add_hook(pre_set_color, post_nop, false);
     R.tmp_cos_col->add_hook(pre_tmp_cos_col, post_tmp, false);
     R.tmp_col->add_hook(pre_tmp_col, post_tmp, false);
+    perf::journal_hooked("ColorInventory.GetColorList (HookGetColorList)", gcl);
+    perf::journal_hooked("PlayerColorController.SetColor (HookSetColor)", R.set_color);
+    perf::journal_hooked("GuiEsportsManager.setTempCosColData (HookTempColor)", R.tmp_cos_col);
+    perf::journal_hooked("GuiEsportsManager.setTempColor (HookTempColor)", R.tmp_col);
     API::get()->param()->functions->on_lua_state_destroyed(on_lua_destroyed);
     g_installed = true;
     cmn::log_info("[ColorModNative] decisions: hooks on GetColorList, SetColor, setTempCosColData, setTempColor; %zu colour lists, state p1=%d p2=%d fs=%d",

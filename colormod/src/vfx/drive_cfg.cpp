@@ -100,9 +100,19 @@ std::optional<std::pair<uint32_t, uint32_t>> squares(int fighter, int side) {
 
 // ---- the tables ----------------------------------------------------------------------------------------------------
 
+constexpr int kPreloadFighters = 40;                                   // fighter ids 1..40 (esf001-esf040)
 json* di_file(int fighter) { std::lock_guard<std::recursive_mutex> lk(g_mx); return file_of(g_di, "di", fighter); }
 json* di_side(int fighter, int side) { std::lock_guard<std::recursive_mutex> lk(g_mx); return side_of(file_of(g_di, "di", fighter), side); }
 json* dr_side(int fighter, int side) { std::lock_guard<std::recursive_mutex> lk(g_mx); return side_of(file_of(g_dr, "dr", fighter), side); }
+
+json& presets();
+// Every fighter's DI / Drive file is read once at start: read on the first fighter change, one stalled a frame
+// for 56 ms (09/10). Loading writes nothing (a missing file gives the defaults, kept in memory).
+void preload() {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    presets();
+    for (int f = 1; f <= kPreloadFighters; ++f) { file_of(g_di, "di", f); file_of(g_dr, "dr", f); }
+}
 
 json& presets() {
     std::lock_guard<std::recursive_mutex> lk(g_mx);

@@ -11,7 +11,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <regex>
 #include <sstream>
 #include <vector>
 
@@ -37,11 +36,37 @@ using scene::MO;
 constexpr const char* kSpotsPath = "reframework/data/SF6_DriveRecolor_data/_spots.json";
 constexpr const char* kSigPath = "reframework/data/SF6_DriveRecolor_data/_spots_sig.txt";
 constexpr const char* kTintProvider = "epvs_cmn_530_00";   // the element tints (parry sparks el 0, rush trail el 7)
+// plain check: does the key end with /TINT_PROVIDER.pfb? (replaces std::regex)
+bool is_tint_pfb(const std::string& key) {
+    static const char kSuf[] = "/epvs_cmn_530_00.pfb";
+    constexpr size_t kLen = sizeof(kSuf) - 1;
+    return key.size() >= kLen && key.compare(key.size() - kLen, kLen, kSuf) == 0;
+}
 constexpr int kScanTimeout = 600;
+constexpr double kBudgetMs = 1.0;                          // per-frame time budget for fight-start work (ms)
 
 bool g_own = false, g_installed = false;
 int g_faults = 0;
 uint64_t g_frame = 0;
+
+// QPC budget helper
+double g_ticks_per_ms = 0;
+void init_budget() {
+    if (g_ticks_per_ms > 0) return;
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    g_ticks_per_ms = (double)f.QuadPart / 1000.0;
+}
+int64_t budget_now() { LARGE_INTEGER c; QueryPerformanceCounter(&c); return c.QuadPart; }
+bool over_budget(int64_t t0) { return (double)(budget_now() - t0) >= kBudgetMs * g_ticks_per_ms; }
+
+// cached spots: kept between fights so the file is not re-read
+std::vector<drive::Spot> g_prev_spots;
+std::string g_prev_sig;                                    // the saved sig string (palette|bases)
+std::vector<drive::Base> g_cached_bases;                   // last enumerate_bases result
+bool g_cached_bases_valid = false;
+bool g_static_work_active = false;                         // incremental static_pass in progress (forward, used by leave_fight)
+bool g_enter_work_active = false;                          // incremental enter_fight in progress
 
 // ---- what the Lua pushes (settings stay Lua-side) ----
 std::mutex g_in_mx;
@@ -122,10 +147,8 @@ std::vector<drive::Base> enumerate_bases() {
 
 std::vector<drive::Tint> tint_addresses() {
     std::vector<drive::Tint> out;
-    static const std::regex kPfb("([^/]+)\\.pfb$");
     for (auto& e : scene::entries()) {
-        std::smatch m;
-        if (!std::regex_search(e.key, m, kPfb) || m[1].str() != kTintProvider || !e.go) continue;
+        if (!is_tint_pfb(e.key) || !e.go) continue;
         scene::each_element(e.go, [&](MO* el, int j) {
             if (j != 0 && j != 7) return;
             const uint64_t a = scene::addr(el);
@@ -140,9 +163,7 @@ std::vector<drive::Tint> tint_addresses() {
 
 void apply_tint(std::optional<uint32_t> col) {                          // the DR panel buttons only
     for (auto& e : scene::entries()) {
-        static const std::regex kPfb("([^/]+)\\.pfb$");
-        std::smatch m;
-        if (!std::regex_search(e.key, m, kPfb) || m[1].str() != kTintProvider || !e.go) continue;
+        if (!is_tint_pfb(e.key) || !e.go) continue;
         scene::each_element(e.go, [&](MO* el, int j) {
             if (j != 0 && j != 7) return;
             scene::wr8(scene::addr(el) + scene::off_enable(), 1);
@@ -162,25 +183,37 @@ void paint(std::optional<uint32_t> setting) {
     if (!q.empty()) engine::queue(q);
 }
 
-std::pair<size_t, size_t> load_spots() {
-    size_t total = 0;
-    auto file = drive::load_spots_file(kSpotsPath, total);
+// validate a spot list against live memory: returns the count that still hold
+size_t validate_spot_list(const std::vector<drive::Spot>& src, std::vector<drive::Spot>& dst) {
     std::vector<uint32_t> cands;
     { std::lock_guard<std::mutex> lk(g_in_mx); cands = cands_locked(); }
-    g_spots.clear();
-    for (auto& sp : file) {
-        if (sp.addr < 0x200000000ULL) continue;
+    dst.clear();
+    for (auto& sp : src) {
+        if (sp.addr < 0x200000000ULL || (sp.addr & 3)) continue;              // unaligned: a false match (dword_writable)
         uint32_t cur = 0;
         const bool ok = scene::rd32(sp.addr, cur);
-        if (drive::spot_ok(ok ? std::optional<uint32_t>(cur) : std::nullopt, sp.r, sp.g, sp.b, sp.written, cands)) g_spots.push_back(sp);
+        if (drive::spot_ok(ok ? std::optional<uint32_t>(cur) : std::nullopt, sp.r, sp.g, sp.b, sp.written, cands)) dst.push_back(sp);
     }
-    return { g_spots.size(), total };
+    return dst.size();
+}
+
+std::pair<size_t, size_t> load_spots() {
+    // try cached spots first (from the previous fight / scan in this session)
+    if (!g_prev_spots.empty()) {
+        const size_t n = validate_spot_list(g_prev_spots, g_spots);
+        return { n, g_prev_spots.size() };
+    }
+    // fall back to the file
+    size_t total = 0;
+    auto file = drive::load_spots_file(kSpotsPath, total);
+    const size_t n = validate_spot_list(file, g_spots);
+    return { n, total };
 }
 
 void save_spots() {
     drive::save_spots_file(kSpotsPath, g_spots);
-    std::ofstream f(kSigPath, std::ios::binary | std::ios::trunc);
-    if (f) f << drive::palette_sig() << "|" << g_last_bases_sig;
+    g_prev_sig = drive::palette_sig() + "|" + g_last_bases_sig;
+    cmn::bgwriter::write(kSigPath, g_prev_sig);
 }
 
 std::string read_sig() {
@@ -205,8 +238,18 @@ std::pair<size_t, size_t> validate_spots() {
     return { g_live.size(), g_spots.size() };
 }
 
+// enumerate_bases with caching: the result is kept until invalidated (fight exit, rescan)
+std::vector<drive::Base>& cached_enumerate_bases() {
+    if (!g_cached_bases_valid) {
+        perf::Scope eb(perf::EnterBases);
+        g_cached_bases = enumerate_bases();
+        g_cached_bases_valid = true;
+    }
+    return g_cached_bases;
+}
+
 bool request_scan() {
-    auto bases = enumerate_bases();
+    auto& bases = cached_enumerate_bases();
     if (bases.empty()) return false;
     ++g_scan_seq;
     engine::scan_request(drive::scan_request(g_scan_seq, bases));
@@ -238,44 +281,157 @@ void poll_scan() {
         if (std::find(sp.written.begin(), sp.written.end(), cur) != sp.written.end()) { seen[sp.addr] = true; found.push_back(sp); }
     }
     g_spots = std::move(found);
-    if (!g_spots.empty()) save_spots();
+    if (!g_spots.empty()) { save_spots(); g_prev_spots = g_spots; }
     char b[128];
     std::snprintf(b, sizeof b, "%zu emplacements reperes (%d noeuds, %d ms)", g_spots.size(), nodes, ms);
     g_status = b;
     g_handoff_set = false;
 }
 
-void enter_fight() {
-    auto [n, total] = load_spots();
-    const std::string saved = read_sig();
-    const auto bar = saved.find('|');
-    const std::string pal_saved = saved.substr(0, bar), bases_saved = bar == std::string::npos ? std::string() : saved.substr(bar + 1);
-    const bool sig_ok = pal_saved == drive::palette_sig();
-    const std::string bsig = drive::bases_sig(enumerate_bases());
-    char b[160];
-    if (sig_ok && n > 0 && bases_saved != bsig) {
-        g_spots.clear(); g_want_scan = true;
-        std::snprintf(b, sizeof b, "ressources rechargees (%s -> %s) : rebalayage", bases_saved.c_str(), bsig.c_str());
-    } else if (!sig_ok && n > 0) {
-        paint(std::nullopt);
-        g_spots.clear(); g_want_scan = true;
-        std::snprintf(b, sizeof b, "palette modifiee (%zu emplacements restaures) : rebalayage", n);
-    } else if (n > 0 && (double)n >= (double)total * 0.6) {
-        g_want_scan = false;
-        std::snprintf(b, sizeof b, "%zu emplacements recuperes", n);
-    } else {
-        g_spots.clear(); g_want_scan = true;
-        std::snprintf(b, sizeof b, "%zu/%zu emplacements encore valides : rebalayage", n, total);
-    }
-    g_status = b;
+// ---- incremental enter_fight state machine ------------------------------------------------------------------
+// Phase 0: validate spots (chunked)
+// Phase 1: enumerate bases (chunked per entry)
+// Phase 2: finalize (decide rescan etc.)
+struct EnterState {
+    int phase = 0;
+    // phase 0
+    std::vector<drive::Spot> src_spots;
+    bool src_loaded = false;
+    size_t spot_idx = 0;
+    size_t spot_total = 0;
+    // phase 1
+    std::vector<scene::Entry> entries;
+    size_t entry_idx = 0;
+    std::vector<drive::Base> bases;
+    std::map<std::string, bool> seen;
+    // phase 2
+    std::string saved_sig;
+    bool sig_loaded = false;
+};
+EnterState g_enter_st;
+
+void enter_fight_start() {
+    g_enter_work_active = true;
+    g_enter_st = EnterState{};
+    g_spots.clear();
+    g_cached_bases_valid = false;
     g_handoff_set = false;
+    g_status = "entree en combat (incremental)";
+}
+
+// Returns true when done, false when more frames are needed
+bool enter_fight_step() {
+    init_budget();
+    const int64_t t0 = budget_now();
+
+    // Phase 0: load and validate spots (chunked at 32 spots)
+    if (g_enter_st.phase == 0) {
+        perf::Scope ls(perf::EnterLoadSpots);
+        if (!g_enter_st.src_loaded) {
+            if (!g_prev_spots.empty()) g_enter_st.src_spots = g_prev_spots;
+            else { g_enter_st.src_spots = drive::load_spots_file(kSpotsPath, g_enter_st.spot_total); }
+            if (g_enter_st.spot_total == 0) g_enter_st.spot_total = g_enter_st.src_spots.size();
+            g_enter_st.src_loaded = true;
+            if (over_budget(t0)) return false;
+        }
+        std::vector<uint32_t> cands;
+        { std::lock_guard<std::mutex> lk(g_in_mx); cands = cands_locked(); }
+        while (g_enter_st.spot_idx < g_enter_st.src_spots.size()) {
+            auto& sp = g_enter_st.src_spots[g_enter_st.spot_idx];
+            if (sp.addr >= 0x200000000ULL) {
+                uint32_t cur = 0;
+                const bool ok = scene::rd32(sp.addr, cur);
+                if (drive::spot_ok(ok ? std::optional<uint32_t>(cur) : std::nullopt, sp.r, sp.g, sp.b, sp.written, cands))
+                    g_spots.push_back(sp);
+            }
+            ++g_enter_st.spot_idx;
+            if ((g_enter_st.spot_idx & 31) == 0 && over_budget(t0)) return false;
+        }
+        g_enter_st.phase = 1;
+        if (over_budget(t0)) return false;
+    }
+
+    // Phase 1: enumerate bases (chunked per entry)
+    if (g_enter_st.phase == 1) {
+        perf::Scope eb(perf::EnterBases);
+        if (g_enter_st.entries.empty() && g_enter_st.entry_idx == 0) {
+            g_enter_st.entries = scene::entries();
+            if (over_budget(t0)) return false;
+        }
+        while (g_enter_st.entry_idx < g_enter_st.entries.size()) {
+            auto& e = g_enter_st.entries[g_enter_st.entry_idx];
+            if (e.go) {
+                scene::each_element(e.go, [&](scene::MO* el, int) {
+                    scene::each_resource(el, [&](scene::MO* h, const std::string& path) {
+                        const std::string sp = last_component(path);
+                        if (!data::drive_colors_find(sp)) return;
+                        uint64_t res = 0, arr = 0;
+                        uint32_t count = 0;
+                        if (!scene::rd64(scene::addr(h) + 0x10, res) || !res) return;
+                        if (!scene::rd32(res + 0xD8, count) || !scene::rd64(res + 0xA0, arr)) return;
+                        char k[48];
+                        std::snprintf(k, sizeof k, "@%llX", (unsigned long long)arr);
+                        const std::string key = sp + k;
+                        if (arr != 0 && count > 0 && count <= 128 && !g_enter_st.seen[key]) {
+                            g_enter_st.seen[key] = true;
+                            g_enter_st.bases.push_back(drive::Base{ sp, arr, count });
+                        }
+                    });
+                });
+            }
+            ++g_enter_st.entry_idx;
+            if (over_budget(t0)) return false;
+        }
+        g_cached_bases = std::move(g_enter_st.bases);
+        g_cached_bases_valid = true;
+        g_enter_st.phase = 2;
+        if (over_budget(t0)) return false;
+    }
+
+    // Phase 2: read sig, decide what to do
+    if (g_enter_st.phase == 2) {
+        perf::Scope rs(perf::EnterReadSig);
+        const std::string saved = g_prev_sig.empty() ? read_sig() : g_prev_sig;
+        const auto bar = saved.find('|');
+        const std::string pal_saved = saved.substr(0, bar);
+        const std::string bases_saved = bar == std::string::npos ? std::string() : saved.substr(bar + 1);
+        const bool sig_ok = pal_saved == drive::palette_sig();
+        const std::string bsig = drive::bases_sig(g_cached_bases);
+        const size_t n = g_spots.size();
+        const size_t total = g_enter_st.spot_total;
+        char b[160];
+        if (sig_ok && n > 0 && bases_saved != bsig) {
+            g_spots.clear(); g_want_scan = true;
+            std::snprintf(b, sizeof b, "ressources rechargees (%s -> %s) : rebalayage", bases_saved.c_str(), bsig.c_str());
+        } else if (!sig_ok && n > 0) {
+            paint(std::nullopt);
+            g_spots.clear(); g_want_scan = true;
+            std::snprintf(b, sizeof b, "palette modifiee (%zu emplacements restaures) : rebalayage", n);
+        } else if (n > 0 && (double)n >= (double)total * 0.6) {
+            g_want_scan = false;
+            std::snprintf(b, sizeof b, "%zu emplacements recuperes", n);
+        } else {
+            g_spots.clear(); g_want_scan = true;
+            std::snprintf(b, sizeof b, "%zu/%zu emplacements encore valides : rebalayage", n, total);
+        }
+        g_status = b;
+        g_handoff_set = false;
+        g_enter_work_active = false;
+        return true;
+    }
+    return false;
 }
 
 void leave_fight() {
+    g_enter_work_active = false;
     g_static_key.clear();
+    // keep spots for the next fight (the file is only for the next game start)
+    if (!g_spots.empty()) g_prev_spots = g_spots;
     g_spots.clear();
     g_live.clear();
     g_scan_pending = 0;
+    g_cached_bases_valid = false;
+    g_static_work_active = false;
     mech::on_combat_exit();
     engine::relay_native("");
     g_handoff_lines = 0;
@@ -345,6 +501,19 @@ uint64_t g_statics = 0;
 size_t g_static_writes = 0;
 int g_static_own = 0;
 
+// ---- incremental static_pass state ----
+// Phases: 0 = validate_spots, 1 = providers + DI queue, 2 = spot queue (chunked), 3 = tints + DI relay + apply
+int g_static_work_phase = 0;
+int g_static_work_own = 0;
+size_t g_validate_idx = 0;                                          // phase 0: how far we are in g_spots
+size_t g_spot_queue_idx = 0;                                        // phase 2: how far we are in g_live
+int g_static_provider_step = 0;                                     // phase 1: 0=scan, 1..4=lines per (side,mech)
+std::string g_static_queue;                                         // phase 1-2: accumulated queue text
+struct CachedDiLines { bool present = false; int container = -1; std::vector<providers::WLine> wl; };
+CachedDiLines g_di_line_cache[3][2];                                // [side][mech], reused by the relay
+drive::ColorPair g_cached_parry, g_cached_rush;                     // computed in phase 2, used in phase 3
+std::vector<uint32_t> g_cached_cands;                               // for phase 2 spot validation
+
 std::string static_key(int own) {
     std::lock_guard<std::mutex> lk(g_in_mx);
     char b[96];
@@ -354,10 +523,8 @@ std::string static_key(int own) {
 
 // the element tints of the shared provider: element 0 = the parry sparks, element 7 = the rush trail
 void static_tints(const drive::ColorPair& parry, const drive::ColorPair& rush, std::string& q) {
-    static const std::regex kPfb("([^/]+)\\.pfb$");
     for (auto& e : scene::entries()) {
-        std::smatch m;
-        if (!std::regex_search(e.key, m, kPfb) || m[1].str() != kTintProvider || !e.go) continue;
+        if (!is_tint_pfb(e.key) || !e.go) continue;
         scene::each_element(e.go, [&](MO* el, int j) {
             if (j != 0 && j != 7) return;
             const drive::ColorPair& c = j == 0 ? parry : rush;
@@ -366,81 +533,163 @@ void static_tints(const drive::ColorPair& parry, const drive::ColorPair& rush, s
     }
 }
 
-void static_pass(int own) {
+// Start the incremental static_pass: sets up the phases
+void static_pass_start(int own) {
+    g_static_work_active = true;
+    g_static_work_phase = 0;
+    g_static_work_own = own;
+    g_validate_idx = 0;
+    g_spot_queue_idx = 0;
+    g_static_provider_step = 0;
+    g_static_queue.clear();
+    g_cached_cands.clear();
+    for (int s = 0; s < 3; ++s) for (int m = 0; m < 2; ++m) g_di_line_cache[s][m] = CachedDiLines{};
+}
+
+// One frame of incremental static_pass work; returns true when done
+bool static_pass_step() {
+    init_budget();
+    const int64_t t0 = budget_now();
+    const int own = g_static_work_own;
     const int other = own == 1 ? 2 : 1;
-    validate_spots();
-    const int id1 = scene::side_char(0), id2 = scene::side_char(1);
-    const int fid[3] = { 0, id1, id2 };
-    // The providers pass is frozen once the colours are written: its list may hold effect objects the game has freed
-    // since (08/10: two crashes in the game, a pointer overwritten). Fresh objects for every pass.
-    providers::scan();
-    if (!mech::manager(1) || !mech::manager(2)) mech::discover();   // the body glow resolves its side per call anyway
-    mech::set_di_cont(providers::container(id1), providers::container(id2));
-    std::string q;
-    // Drive Impact / Reversal: each fighter's lines, the own side's last (a mirror match shares them)
-    for (int s : { other, own }) {
-        for (int m = 0; m < 2; ++m) {
+
+    // phase 0: validate_spots (chunked)
+    if (g_static_work_phase == 0) {
+        perf::Scope sv(perf::StaticValidate);
+        std::vector<uint32_t> cands;
+        { std::lock_guard<std::mutex> lk(g_in_mx); cands = cands_locked(); }
+        while (g_validate_idx < g_spots.size()) {
+            uint32_t cur = 0;
+            const bool ok = scene::rd32(g_spots[g_validate_idx].addr, cur);
+            if (drive::spot_ok(ok ? std::optional<uint32_t>(cur) : std::nullopt, g_spots[g_validate_idx].r, g_spots[g_validate_idx].g, g_spots[g_validate_idx].b,
+                               g_spots[g_validate_idx].written, cands))
+                g_live.push_back(g_validate_idx);
+            ++g_validate_idx;
+            if ((g_validate_idx & 31) == 0 && over_budget(t0)) return false;
+        }
+        g_static_work_phase = 1;
+        if (over_budget(t0)) return false;
+    }
+
+    // phase 1: providers scan + DI queue (incremental: scan first, then one (side,mech) per budget slice)
+    if (g_static_work_phase == 1) {
+        const int id1 = scene::side_char(0), id2 = scene::side_char(1);
+        const int fid[3] = { 0, id1, id2 };
+        perf::Scope sp(perf::StaticProviders);
+        // sub-step 0: scan providers
+        if (g_static_provider_step == 0) {
+            providers::scan();
+            if (!mech::manager(1) || !mech::manager(2)) mech::discover();
+            mech::set_di_cont(providers::container(id1), providers::container(id2));
+            g_static_provider_step = 1;
+            if (over_budget(t0)) return false;
+        }
+        // sub-steps 1..4: providers::lines for (other,0) (other,1) (own,0) (own,1)
+        while (g_static_provider_step <= 4) {
+            const int idx = g_static_provider_step - 1;
+            const int s = (idx < 2) ? other : own;
+            const int m = idx % 2;
             providers::MechColors mc;
             { std::lock_guard<std::mutex> lk(g_in_mx); mc = g_di[s][m]; }
-            std::vector<providers::WLine> wl;
-            if (!providers::lines(fid[s], mc, wl)) continue;
-            for (auto& w : wl) queue_expect(q, w.addr, w.val, w.orig);     // the original, as the relay checks it
+            auto& dc = g_di_line_cache[s][m];
+            dc.present = providers::lines(fid[s], mc, dc.wl);
+            dc.container = providers::container(fid[s]);
+            if (dc.present) for (auto& w : dc.wl) queue_expect(g_static_queue, w.addr, w.val, w.orig);
+            ++g_static_provider_step;
+            if (over_budget(t0)) return false;
         }
-    }
-    // Drive Parry / Rush: one colour per mechanic, the own side's (the other's when the own side has none)
-    drive::ColorPair parry, rush;
-    {
-        std::lock_guard<std::mutex> lk(g_in_mx);
-        parry = g_dr[own][0].c1 ? g_dr[own][0] : g_dr[other][0];
-        rush = g_dr[own][1].c1 ? g_dr[own][1] : g_dr[other][1];
-    }
-    for (size_t idx : g_live) {
-        drive::Spot& sp = g_spots[idx];
-        const std::string fam = drive::famille(sp.file);
-        if (fam == "special") continue;                                 // the special attacks: dormant
-        const drive::ColorPair& mc = fam == "parry" ? parry : rush;     // "drive" files and the rest (smoke): Rush
-        const uint32_t orig = data::pack(sp.r, sp.g, sp.b);
-        const uint32_t col = mc.c1 ? data::tint_with(*mc.c1, sp.r, sp.g, sp.b) : orig;
-        drive::remember(sp, col);
-        queue_write(&q, sp.addr, col);
-    }
-    static_tints(parry, rush, q);
-    size_t n = 0;
-    for (char c : q) if (c == '\n') ++n;
-    // Drive Impact / Reversal: their colours do not hold when written once (07/10, mirror Mai: the static writes were
-    // lost, the per-effect ones held). The relay keeps their small blocks only (handoff() writes the Parry / Rush
-    // spots only for live spots: none given), painted at each Drive Impact / Reversal as before.
-    drive::HandoffIn in;
-    in.mgr[1] = mech::manager(1);
-    in.mgr[2] = mech::manager(2);
-    for (int s = 1; s <= 2; ++s) {
-        for (int m = 0; m < 2; ++m) {
-            providers::MechColors mc;
-            { std::lock_guard<std::mutex> lk(g_in_mx); mc = g_di[s][m]; }
-            std::vector<providers::WLine> wl;
-            drive::DiBlock& d = in.di[s][m];
-            d.present = providers::lines(fid[s], mc, wl);
-            d.container = providers::container(fid[s]);
-            for (auto& w : wl) d.lines.push_back(w.obj ? drive::w_line(w.addr, w.val, w.orig, w.obj, w.ti) : drive::w_line(w.addr, w.val, w.orig));
+        // prepare phase 2 state: colours and cands, computed once
+        {
+            std::lock_guard<std::mutex> lk(g_in_mx);
+            g_cached_parry = g_dr[own][0].c1 ? g_dr[own][0] : g_dr[other][0];
+            g_cached_rush = g_dr[own][1].c1 ? g_dr[own][1] : g_dr[other][1];
+            g_cached_cands = cands_locked();
         }
+        g_spot_queue_idx = 0;
+        g_static_work_phase = 2;
+        if (over_budget(t0)) return false;
     }
-    const std::vector<size_t> no_spots;
-    size_t di_lines = 0;
-    engine::relay_native(drive::handoff(in, g_spots, no_spots, di_lines));   // Drive Impact / Reversal blocks only
-    g_handoff_set = false;
-    g_handoff_lines = di_lines;
-    if (!q.empty()) engine::queue(q);
-    g_static_writes = n;
-    g_static_own = own;
-    ++g_statics;
-    char b[160];
-    std::snprintf(b, sizeof b, "combat leger : couleurs ecrites une fois (%zu ecritures, cote P%d)", n, own);
-    g_status = b;
-    cmn::journal("vfx tick: light fight, colours written once: %zu writes (%zu live spots, own side P%d); relay: %zu Drive Impact / Reversal lines", n, g_live.size(), own, di_lines);
+
+    // phase 2: Parry/Rush spot queue (chunked within the budget)
+    if (g_static_work_phase == 2) {
+        perf::Scope sq(perf::StaticQueue);
+        while (g_spot_queue_idx < g_live.size()) {
+            const size_t idx = g_live[g_spot_queue_idx];
+            drive::Spot& sp = g_spots[idx];
+            const std::string fam = drive::famille(sp.file);
+            if (fam != "special") {
+                uint32_t now = 0;
+                const bool rd = scene::rd32(sp.addr, now);
+                if (drive::spot_ok(rd ? std::optional<uint32_t>(now) : std::nullopt, sp.r, sp.g, sp.b, sp.written, g_cached_cands)) {
+                    const drive::ColorPair& mc = fam == "parry" ? g_cached_parry : g_cached_rush;
+                    const uint32_t orig = data::pack(sp.r, sp.g, sp.b);
+                    const uint32_t col = mc.c1 ? data::tint_with(*mc.c1, sp.r, sp.g, sp.b) : orig;
+                    drive::remember(sp, col);
+                    queue_write(&g_static_queue, sp.addr, col);
+                }
+            }
+            ++g_spot_queue_idx;
+            if ((g_spot_queue_idx & 31) == 0 && over_budget(t0)) return false;
+        }
+        g_static_work_phase = 3;
+        if (over_budget(t0)) return false;
+    }
+
+    // phase 3: tints + DI relay + apply (small, runs in one frame)
+    if (g_static_work_phase == 3) {
+        {
+            perf::Scope sq(perf::StaticQueue);
+            static_tints(g_cached_parry, g_cached_rush, g_static_queue);
+        }
+        {
+            perf::Scope sd(perf::StaticDiRelay);
+            drive::HandoffIn in;
+            in.mgr[1] = mech::manager(1);
+            in.mgr[2] = mech::manager(2);
+            for (int s = 1; s <= 2; ++s) {
+                for (int m = 0; m < 2; ++m) {
+                    drive::DiBlock& d = in.di[s][m];
+                    auto& dc = g_di_line_cache[s][m];
+                    d.present = dc.present;
+                    d.container = dc.container;
+                    for (auto& w : dc.wl) d.lines.push_back(w.obj ? drive::w_line(w.addr, w.val, w.orig, w.obj, w.ti) : drive::w_line(w.addr, w.val, w.orig));
+                }
+            }
+            const std::vector<size_t> no_spots;
+            size_t di_lines = 0;
+            engine::relay_native(drive::handoff(in, g_spots, no_spots, di_lines));
+            g_handoff_set = false;
+            g_handoff_lines = di_lines;
+            size_t n = 0;
+            for (char c : g_static_queue) if (c == '\n') ++n;
+            if (!g_static_queue.empty()) engine::queue(g_static_queue);
+            g_static_writes = n;
+            g_static_own = own;
+            ++g_statics;
+            char b[160];
+            std::snprintf(b, sizeof b, "combat leger : couleurs ecrites une fois (%zu ecritures, cote P%d)", n, own);
+            g_status = b;
+            cmn::journal("vfx tick: light fight, colours written once: %zu writes (%zu live spots, own side P%d); relay: %zu Drive Impact / Reversal lines", n, g_live.size(), own, di_lines);
+        }
+        g_static_queue.clear();
+        g_cached_cands.clear();
+        for (int s = 0; s < 3; ++s) for (int m = 0; m < 2; ++m) g_di_line_cache[s][m] = CachedDiLines{};
+        g_static_work_active = false;
+        return true;
+    }
+    return false;
+}
+
+// legacy entry point: runs the whole static_pass at once (for live_fight.txt mode)
+void static_pass(int own) {
+    static_pass_start(own);
+    while (!static_pass_step()) {}
 }
 
 void static_tick() {                                                    // every 60 frames in a fight: a string compare
+    if (g_enter_work_active) return;                                    // enter_fight still in progress
     if (g_want_scan || g_scan_pending) return;                          // the scan first
+    if (g_static_work_active) return;                                   // the previous static_pass is still in progress
     // Once written, never again while the fight is torn down (a fighter gone, the battle description cleared: the key
     // changes but the effect objects are being freed).
     if (!g_static_key.empty() && (!scene::battle_char(0) || !scene::battle_char(1))) return;
@@ -448,7 +697,8 @@ void static_tick() {                                                    // every
     const std::string key = static_key(own);
     if (key == g_static_key) return;
     g_static_key = key;
-    static_pass(own);
+    g_live.clear();
+    static_pass_start(own);                                             // the work is spread over the next frames
 }
 
 void handle_ui(const std::string& req) {
@@ -457,7 +707,7 @@ void handle_ui(const std::string& req) {
     if (req == "rescan") {
         if (!g_spots.empty()) paint(std::nullopt);
         apply_tint(std::nullopt);
-        g_spots.clear(); g_want_scan = true; g_handoff_set = false;
+        g_spots.clear(); g_want_scan = true; g_handoff_set = false; g_cached_bases_valid = false;
         g_status = "couleurs restaurees, rebalayage en cours";
         return;
     }
@@ -485,9 +735,11 @@ void frame_inner() {
         const bool now = scene::battle_char(0) != 0 || scene::battle_char(1) != 0;
         if (now != g_in_fight) {
             g_in_fight = now;
-            if (now) enter_fight(); else leave_fight();
+            if (now) enter_fight_start(); else leave_fight();
         }
     }
+    // incremental enter_fight: advance each frame while in progress
+    if (g_enter_work_active) enter_fight_step();
     // SF6_DIRecolor: the providers every 30 frames (at once when a setting changed)
     bool dirty;
     { std::lock_guard<std::mutex> lk(g_in_mx); dirty = g_di_dirty; }
@@ -500,13 +752,15 @@ void frame_inner() {
         g_di_applied += providers::tick(st, chars, dirty, g_in_fight, providers::QueueFn{ queue_write, &q });
         if (!q.empty()) engine::queue(q);
     }
-    if (g_want_scan && g_frame % 30 == 15) {
+    if (g_want_scan && !g_enter_work_active && g_frame % 30 == 15) {
         g_want_scan = false;
         if (!request_scan()) g_status = "aucune ressource Drive chargee : pas de balayage";
         g_handoff_set = false;
     }
     if (g_scan_pending && g_frame % 5 == 0) poll_scan();
-    if (g_in_fight && g_frame % 60 == 0) { if (cmn::light_fight()) static_tick(); else { g_static_key.clear(); relay_pass(); } }
+    // incremental static_pass: advance each frame (not only every 60) while work is pending
+    if (g_static_work_active) static_pass_step();
+    if (g_in_fight && !g_enter_work_active && g_frame % 60 == 0) { if (cmn::light_fight()) static_tick(); else { g_static_key.clear(); relay_pass(); } }
     std::deque<std::string> reqs;
     { std::lock_guard<std::mutex> lk(g_in_mx); reqs.swap(g_ui); }
     for (auto& r : reqs) handle_ui(r);
@@ -547,6 +801,8 @@ bool install(bool own) {
     g_own = own;
     g_scan_seq = (uint64_t)(std::time(nullptr) % 100000) * 100;
     if (!scene::init()) { g_own = false; return false; }
+    // the spots and their sig are read once here: read at the first fight entry they stalled a frame (15 + 12 ms, 09/10)
+    { size_t total = 0; g_prev_spots = drive::load_spots_file(kSpotsPath, total); g_prev_sig = read_sig(); }
     auto* fns = API::get()->param()->functions;
     if (!fns->on_pre_application_entry) { g_own = false; return false; }
     fns->on_pre_application_entry("UpdateBehavior", on_update);

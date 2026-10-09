@@ -17,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -28,6 +29,8 @@
 
 #include "../common.hpp"
 #include "../perf.hpp"
+#include "../perf_hook.hpp"
+#include "../write_journal.hpp"
 #include "memguard.hpp"
 #include "engine.hpp"
 #include "mech.hpp"
@@ -46,7 +49,8 @@ bool g_installed = false;
 // what the Lua hands over through the bridge (was: the files), taken by the game-thread passes below
 std::mutex g_io_mx;
 std::string g_relay_text; bool g_relay_new = false;          // _drivecolors.txt
-std::vector<std::string> g_queue_lines;                       // _memwrite.txt
+std::vector<std::string> g_queue_lines;                       // _memwrite.txt (incoming)
+std::deque<std::string> g_pending_queue;                      // lines taken for budgeted processing
 std::string g_scan_req_text;                                  // _drivescan.txt
 std::string g_scan_res_text;                                  // _drivespots.txt
 
@@ -72,7 +76,10 @@ bool in_module(uint64_t a) { for (auto& m : g_modules) if (a >= m.first && a < m
 uint64_t g_page_refused = 0;
 int page_state(uint64_t a) { return memguard::state(a); }   // bit 0 lisible, bit 1 inscriptible
 bool range_readable(uint64_t a, size_t len) { for (uint64_t p = a & ~0xFFFULL; p < a + len; p += 0x1000) if (!(page_state(p) & 1)) return false; return true; }
-bool dword_writable(uint64_t a) { return (page_state(a) & 2) && (page_state(a + 3) & 2); }
+// game data is 4-byte aligned: addr and addr+3 are in the same 4KB page, one query suffices
+// A colour dword sits at a 4-byte boundary: an unaligned address is a false match of the scan (09/10: "200000002D9", in
+// the game allocator's own page data, written each fight -> "corrupted thread-free list"; colour bytes landed in pointers).
+bool dword_writable(uint64_t a) { return (a & 3) == 0 && (page_state(a) & 2) != 0; }
 uint32_t rd32(uint64_t a) { uint32_t v; std::memcpy(&v, (const void*)a, 4); return v; }
 void wr32(uint64_t a, uint32_t v) { std::memcpy((void*)a, &v, 4); }
 
@@ -105,10 +112,15 @@ bool hist_has(uint64_t a, const std::vector<uint32_t>& cur) {
     for (auto& h : it->second) if (h == cur) return true;
     return false;
 }
+// single-dword overload: no heap allocation (the hot path in write_block / slot_accepts)
+bool hist_has_one(uint64_t a, uint32_t cur) {
+    auto it = g_vhist.find(a); if (it == g_vhist.end()) return false;
+    for (auto& h : it->second) if (h.size() == 1 && h[0] == cur) return true;
+    return false;
+}
 void hist_push(uint64_t a, uint32_t v) {
-    std::vector<uint32_t> one{v};
-    if (hist_has(a, one)) return;
-    auto& hl = g_vhist[a]; hl.push_back(std::move(one)); if (hl.size() > 8) hl.erase(hl.begin());
+    if (hist_has_one(a, v)) return;
+    auto& hl = g_vhist[a]; hl.push_back(std::vector<uint32_t>{v}); if (hl.size() > 8) hl.erase(hl.begin());
 }
 float f32(uint32_t u) { float f; std::memcpy(&f, &u, 4); return f; }
 void sat_val(double r, double g, double b, double& s, double& v) {
@@ -141,7 +153,10 @@ bool write_validated(const std::vector<VWrite>& list) {
         if (!read_ok) { err("AV caught reading %llX, dropping block", (unsigned long long)w.addr); return false; }
         if (cur != w.orig && !hist_has(w.addr, cur) && !(n == 3 && same_sat_val(w, cur))) { ++g_v_skipped; continue; }
         if (cur == w.val) continue;
-        for (size_t k = 0; k < n; ++k) { if (!safe_wr32(slot(w, k), w.val[k])) { err("AV caught writing %llX, dropping block", (unsigned long long)slot(w, k)); return false; } }
+        for (size_t k = 0; k < n; ++k) {
+            if (wjournal::active()) wjournal::raw32("vfx::write_validated", slot(w, k), cur[k], w.val[k]);
+            if (!safe_wr32(slot(w, k), w.val[k])) { err("AV caught writing %llX, dropping block", (unsigned long long)slot(w, k)); return false; }
+        }
         ++g_v_written;
         auto& hl = g_vhist[w.addr];
         if (!hist_has(w.addr, w.val)) { hl.push_back(w.val); if (hl.size() > 8) hl.erase(hl.begin()); }
@@ -164,22 +179,32 @@ bool same_sat_val_argb(uint32_t o, uint32_t c) {
 bool slot_accepts(const Write& w, uint32_t cur) {
     if (cur == w.orig || cur == w.val) return true;
     auto s = g_sampled.find(w.addr); if (s != g_sampled.end() && s->second == cur) return true;
-    if (hist_has(w.addr, std::vector<uint32_t>{cur})) return true;
+    if (hist_has_one(w.addr, cur)) return true;
     return same_sat_val_argb(w.orig, cur);
 }
 bool write_block(const std::vector<Write>& list) {
-    for (auto& w : list) if (!dword_writable(w.addr)) return false;
-    for (auto& w : list) {
-        if (w.obj) {                                              // l objet porteur doit avoir garde son type
-            uint64_t ti = 0;
-            if (!range_readable(w.obj, 8) || !safe_memcpy_from(&ti, w.obj, 8) || ti != w.ti) { ++g_w_stale; continue; }
+    // page check: the first unreadable address drops the whole block (addresses share a few regions)
+    {
+        const int64_t t0 = perf::begin();
+        for (auto& w : list) if (!dword_writable(w.addr)) { perf::end(perf::HookReqPages, t0); return false; }
+        perf::end(perf::HookReqPages, t0);
+    }
+    {
+        const int64_t t0 = perf::begin();
+        for (auto& w : list) {
+            if (w.obj) {                                              // l objet porteur doit avoir garde son type
+                uint64_t ti = 0;
+                if (!range_readable(w.obj, 8) || !safe_memcpy_from(&ti, w.obj, 8) || ti != w.ti) { ++g_w_stale; continue; }
+            }
+            uint32_t cur;
+            if (!safe_rd32(w.addr, &cur)) { err("AV caught reading %llX, dropping block", (unsigned long long)w.addr); perf::end(perf::HookReqWrites, t0); return false; }
+            if (cur == w.val) continue;                               // already holds our value: skip both the validation and the write
+            if (!slot_accepts(w, cur)) { ++g_w_stale; continue; }
+            if (wjournal::active()) wjournal::raw32("vfx::write_block", w.addr, cur, w.val, w.obj, w.ti);
+            if (!safe_wr32(w.addr, w.val)) { err("AV caught writing %llX, dropping block", (unsigned long long)w.addr); perf::end(perf::HookReqWrites, t0); return false; }
+            hist_push(w.addr, w.val);
         }
-        uint32_t cur;
-        if (!safe_rd32(w.addr, &cur)) { err("AV caught reading %llX, dropping block", (unsigned long long)w.addr); return false; }
-        if (!slot_accepts(w, cur)) { ++g_w_stale; continue; }
-        if (cur == w.val) continue;
-        if (!safe_wr32(w.addr, w.val)) { err("AV caught writing %llX, dropping block", (unsigned long long)w.addr); return false; }
-        hist_push(w.addr, w.val);
+        perf::end(perf::HookReqWrites, t0);
     }
     return true;
 }
@@ -394,11 +419,11 @@ bool install_hooks() {
             ok = t0->get_full_name().find("VfxID") != std::string::npos;
         }
         if (!ok) continue;
-        if (m->add_hook(pre_request_effect, post_nop, false)) ++n;
+        if (m->add_hook(pre_request_effect, post_nop, false)) { ++n; perf::journal_hooked("VfxActorEffectManager.requestEffect (HookRequestEffect)", m); }
     }
     auto* add = td->find_method("addMaterialEffect");
     bool ok_add = false;
-    if (add && add->get_function_raw()) ok_add = add->add_hook(pre_add_material, post_nop, false) != 0;
+    if (add && add->get_function_raw()) { ok_add = add->add_hook(pre_add_material, post_nop, false) != 0; if (ok_add) perf::journal_hooked("VfxActorEffectManager.addMaterialEffect (HookAddMaterial)", add); }
     info("hooks: requestEffect x%d, addMaterialEffect %s", n, ok_add ? "ok" : "absent");
     return n > 0;
 }
@@ -434,13 +459,52 @@ std::vector<uint8_t> hex_bytes(const std::string& h) {
     return b;
 }
 constexpr int SCAN_NODE_MAX = 40000, SCAN_DEPTH = 3, SCAN_NODE_BYTES = 0x400, SCAN_PAT_BYTES = 0x600;
+constexpr double kScanBudgetMs = 1.0;
 struct Spot { uint64_t addr; uint8_t r, g, b; };
 struct PSpot { uint64_t addr; int idx; std::string cur; };
 std::array<std::vector<uint8_t>, SCAN_DEPTH + 1> g_scan_buf;
 
-void scan_node(uint64_t addr, const Palette& pal, int depth, std::unordered_set<uint64_t>& visited, int& nodes, std::vector<Spot>& spots, std::vector<PSpot>& pspots) {
-    if (nodes > SCAN_NODE_MAX || !visited.insert(addr).second) return;
+// QPC budget helper (cached frequency)
+double g_ticks_per_ms = 0;
+void init_budget() {
+    if (g_ticks_per_ms > 0) return;
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    g_ticks_per_ms = (double)f.QuadPart / 1000.0;
+}
+int64_t budget_now() { LARGE_INTEGER c; QueryPerformanceCounter(&c); return c.QuadPart; }
+bool over_budget(int64_t t0) { return (double)(budget_now() - t0) >= kScanBudgetMs * g_ticks_per_ms; }
+
+// ---- scan cache: remember spots found per base file so a subsequent scan with the same resources skips the walk ----
+struct CachedSpot { uint64_t addr; uint8_t r, g, b; std::string file; };
+struct CachedPSpot { uint64_t addr; int idx; std::string cur; std::string file; };
+std::vector<CachedSpot> g_spot_cache;
+std::vector<CachedPSpot> g_pspot_cache;
+bool g_cache_valid = false;
+
+// ---- incremental scan state ----
+struct IncrScan {
+    bool active = false;
+    std::string seq;
+    std::unordered_map<std::string, Palette> palettes;
+    struct SBase { std::string file; uint64_t arr; int count; };
+    std::vector<SBase> bases;
+    std::vector<std::pair<uint64_t, int>> dumps;
+    size_t next_base = 0;
+    int next_entry = 0;                                               // within the current base
+    std::unordered_set<uint64_t> seen;
+    std::vector<std::string> out;
+    long long nodes_total = 0;
+    int spots_total = 0;
+    std::chrono::steady_clock::time_point t0_wall;                    // start wall time for the final log
+};
+IncrScan g_incr;
+
+// expired: set when the budget runs out, propagated up through all recursion levels so the scan stops immediately
+void scan_node(uint64_t addr, const Palette& pal, int depth, std::unordered_set<uint64_t>& visited, int& nodes, std::vector<Spot>& spots, std::vector<PSpot>& pspots, int64_t budget_t0, bool& expired) {
+    if (expired || nodes > SCAN_NODE_MAX || !visited.insert(addr).second) return;
     ++nodes;
+    if (budget_t0 && over_budget(budget_t0)) { expired = true; return; }
     const int want = pal.pat_count > 0 ? SCAN_PAT_BYTES : SCAN_NODE_BYTES;
     int avail = 0;
     for (uint64_t p = addr & ~0xFFFULL; p < addr + want && (page_state(p) & 1); p += 0x1000) avail = (int)std::min<uint64_t>(want, p + 0x1000 - addr);
@@ -451,7 +515,7 @@ void scan_node(uint64_t addr, const Palette& pal, int depth, std::unordered_set<
     const int avail_col = std::min(avail, SCAN_NODE_BYTES);
     for (int i = 0; i + 3 < avail_col; ++i) {
         if (buf[i + 3] != 255) continue;
-        if (pal.match(buf.data(), i, avail_col)) spots.push_back({addr + i, buf[i], buf[i + 1], buf[i + 2]});
+        if (((addr + i) & 3) == 0 && pal.match(buf.data(), i, avail_col)) spots.push_back({addr + i, buf[i], buf[i + 1], buf[i + 2]});   // aligned only (dword_writable)
     }
     if (pal.pat_count > 0) {
         for (int i = 0; i + 4 <= avail; ++i) {
@@ -460,6 +524,7 @@ void scan_node(uint64_t addr, const Palette& pal, int depth, std::unordered_set<
             auto it = pal.pats.find(k); if (it == pal.pats.end()) continue;
             for (auto& p : it->second) {
                 const int h0 = i + (int)p.pre.size(), s0 = h0 + p.hole;
+                if ((addr + h0) & 3) continue;                                 // aligned only (dword_writable)
                 if (s0 + (int)p.suf.size() > avail) continue;
                 if (std::memcmp(buf.data() + i + 4, p.pre.data() + 4, p.pre.size() - 4) != 0) continue;
                 if (!p.suf.empty() && std::memcmp(buf.data() + s0, p.suf.data(), p.suf.size()) != 0) continue;
@@ -470,103 +535,200 @@ void scan_node(uint64_t addr, const Palette& pal, int depth, std::unordered_set<
         }
     }
     if (depth <= 0) return;
-    for (int off = 0; off <= 0xF8 && off + 8 <= avail; off += 8) {
+    for (int off = 0; off <= 0xF8 && off + 8 <= avail && !expired; off += 8) {
         uint64_t pv; std::memcpy(&pv, buf.data() + off, 8);
         if (pv >= 0x200000000ULL && pv < 0x7FFFFFFFFFFFULL && (pv & 7) == 0 && !visited.count(pv))
-            scan_node(pv, pal, depth - 1, visited, nodes, spots, pspots);
+            scan_node(pv, pal, depth - 1, visited, nodes, spots, pspots, budget_t0, expired);
     }
 }
 
-void check_scan_request() {
-    std::vector<std::string> lines;
-    {
-        std::lock_guard<std::mutex> lk(g_io_mx);
-        if (g_scan_req_text.empty()) return;
-        std::istringstream f(g_scan_req_text); std::string l; while (std::getline(f, l)) lines.push_back(l);
-        g_scan_req_text.clear();                                  // (was: the request file removed)
+// try_scan_cache: if the cache holds spots for every base file and they still validate, skip the walk
+std::string g_cache_bases;                                        // the bases (file, entry array, count) the cache was found in
+std::string bases_key(const IncrScan& sc) {
+    std::string k;
+    char b[64];
+    for (auto& x : sc.bases) { std::snprintf(b, sizeof b, "@%llX#%d|", (unsigned long long)x.arr, x.count); k += x.file + b; }
+    return k;
+}
+// The cache holds only for the very same resources (same entry arrays): spots of resources the game freed may still
+// hold their colours, a colour check alone would let writes into freed memory through.
+bool try_scan_cache(const IncrScan& req) {
+    if (!g_cache_valid || g_spot_cache.empty() || bases_key(req) != g_cache_bases) return false;
+    std::unordered_set<std::string> needed;
+    for (auto& b : req.bases) needed.insert(b.file);
+    // every needed base file must have at least one cached spot, and all cached spots of needed files must validate
+    std::unordered_set<std::string> covered;
+    for (auto& cs : g_spot_cache) {
+        if (!needed.count(cs.file)) continue;
+        covered.insert(cs.file);
+        uint32_t cur;
+        if (!safe_rd32(cs.addr, &cur)) return false;
+        const uint32_t expected = cs.r | (cs.g << 8) | (cs.b << 16) | (0xFFu << 24);
+        if (cur != expected) return false;
     }
-    if (lines.empty()) return;
-    { std::string last = lines.back(); while (!last.empty() && (last.back() == ' ' || last.back() == '\r')) last.pop_back(); if (last != "END") return; }
-    const auto t0 = std::chrono::steady_clock::now();
-    std::string seq = "0";
-    std::unordered_map<std::string, Palette> palettes;
-    struct Base { std::string file; uint64_t arr; int count; };
-    std::vector<Base> bases; std::vector<std::pair<uint64_t, int>> dumps;
-    for (auto& raw : lines) {
-        const auto p = split(raw);
-        if (p.size() < 2) continue;
-        if (p[0] == "R") seq = p[1];
-        else if (p[0] == "P") {
-            auto& pal = palettes[p[1]];
-            for (size_t i = 2; i < p.size(); ++i) {
-                const auto colon = p[i].find(':');
-                const std::string cs = colon == std::string::npos ? p[i] : p[i].substr(0, colon);
-                int r, g, b; if (std::sscanf(cs.c_str(), "%d,%d,%d", &r, &g, &b) != 3) continue;
-                const uint32_t key = (uint32_t)(r | (g << 8) | (b << 16));
-                pal.colours.insert(key);
-                if (colon != std::string::npos && p[i].size() - colon - 1 == 16) {
-                    const auto sg = hex_bytes(p[i].substr(colon + 1));
-                    std::array<uint8_t, 8> a{}; std::memcpy(a.data(), sg.data(), 8); pal.sigs[key].push_back(a);
-                }
-            }
-        } else if (p[0] == "X" && p.size() >= 6) {
-            palettes[p[1]].add_pat(std::atoi(p[2].c_str()), hex_bytes(p[3]), std::atoi(p[4].c_str()), hex_bytes(p[5]));
-        } else if (p[0] == "F" && p.size() >= 4) {
-            bases.push_back({p[1], hex64(p[2]), std::atoi(p[3].c_str())});
-        } else if (p[0] == "D" && p.size() >= 3) {
-            dumps.emplace_back(hex64(p[1]), std::min(0x400, std::atoi(p[2].c_str())));
-        }
-    }
-    std::unordered_set<uint64_t> seen;
-    std::vector<std::string> out{"R " + seq};
-    long long nodes_total = 0; int spots_total = 0;
+    return covered.size() == needed.size();
+}
+
+void finish_scan(IncrScan& sc) {
+    // process dumps
     char line[256];
-    for (auto& b : bases) {
-        auto pi = palettes.find(b.file);
-        if (pi == palettes.end() || b.count <= 0 || b.count > 128 || in_module(b.arr)) continue;
-        std::unordered_set<uint64_t> visited; std::vector<Spot> spots; std::vector<PSpot> pspots; int nodes = 0;
-        for (int x = 0; x < b.count; ++x) scan_node(b.arr + (uint64_t)x * 0x50, pi->second, SCAN_DEPTH, visited, nodes, spots, pspots);
-        nodes_total += nodes;
-        for (auto& s : spots) {
-            if (!seen.insert(s.addr).second) continue;
-            std::snprintf(line, sizeof line, "S %llX %d %d %d %s", (unsigned long long)s.addr, s.r, s.g, s.b, b.file.c_str()); out.emplace_back(line); ++spots_total;
-        }
-        for (auto& t : pspots) {
-            if (!seen.insert(t.addr).second) continue;
-            std::snprintf(line, sizeof line, "T %llX %d %s %s", (unsigned long long)t.addr, t.idx, t.cur.c_str(), b.file.c_str()); out.emplace_back(line); ++spots_total;
-        }
-    }
-    for (auto& d : dumps) {
+    for (auto& d : sc.dumps) {
         std::snprintf(line, sizeof line, "H %llX ", (unsigned long long)d.first);
         std::string l = line;
         if (d.first < 0x10000 || in_module(d.first) || !range_readable(d.first, d.second)) l += "-";
         else { char t[3]; for (int i = 0; i < d.second; ++i) { std::snprintf(t, sizeof t, "%02x", ((const uint8_t*)d.first)[i]); l += t; } }
-        out.push_back(l);
+        sc.out.push_back(l);
     }
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-    std::snprintf(line, sizeof line, "N %d %lld %lld", spots_total, nodes_total, (long long)ms);
-    out.insert(out.begin() + 1, line);
-    out.emplace_back("END");
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sc.t0_wall).count();
+    std::snprintf(line, sizeof line, "N %d %lld %lld", sc.spots_total, sc.nodes_total, (long long)ms);
+    sc.out.insert(sc.out.begin() + 1, line);
+    sc.out.emplace_back("END");
     {
         std::string res;
-        for (auto& l : out) { res += l; res += '\n'; }
+        for (auto& l : sc.out) { res += l; res += '\n'; }
         std::lock_guard<std::mutex> lk(g_io_mx);
-        g_scan_res_text.swap(res);                                // (was: _drivespots.txt written atomically)
+        g_scan_res_text.swap(res);
     }
-    info("drive scan #%s: %d spots in %zu bases, %lld nodes, %lld ms", seq.c_str(), spots_total, bases.size(), nodes_total, (long long)ms);
+    info("drive scan #%s: %d spots in %zu bases, %lld nodes, %lld ms (incremental)", sc.seq.c_str(), sc.spots_total, sc.bases.size(), sc.nodes_total, (long long)ms);
+    sc.active = false;
+}
+
+// scan_step: start a new scan or continue an existing one, within a per-frame time budget
+void scan_step() {
+    init_budget();
+    if (!g_incr.active) {
+        // check for a new request
+        std::vector<std::string> lines;
+        {
+            std::lock_guard<std::mutex> lk(g_io_mx);
+            if (g_scan_req_text.empty()) return;
+            std::istringstream f(g_scan_req_text); std::string l; while (std::getline(f, l)) lines.push_back(l);
+            g_scan_req_text.clear();
+        }
+        if (lines.empty()) return;
+        { std::string last = lines.back(); while (!last.empty() && (last.back() == ' ' || last.back() == '\r')) last.pop_back(); if (last != "END") return; }
+        // parse the request (sub-scope ScanParse)
+        {
+            perf::Scope sp(perf::ScanParse);
+            g_incr = IncrScan{};
+            g_incr.active = true;
+            g_incr.seq = "0";
+            g_incr.t0_wall = std::chrono::steady_clock::now();
+            g_incr.out.push_back("R 0");
+            for (auto& raw : lines) {
+                const auto p = split(raw);
+                if (p.size() < 2) continue;
+                if (p[0] == "R") { g_incr.seq = p[1]; g_incr.out[0] = "R " + p[1]; }
+                else if (p[0] == "P") {
+                    auto& pal = g_incr.palettes[p[1]];
+                    for (size_t i = 2; i < p.size(); ++i) {
+                        const auto colon = p[i].find(':');
+                        const std::string cs = colon == std::string::npos ? p[i] : p[i].substr(0, colon);
+                        int r, g, b; if (std::sscanf(cs.c_str(), "%d,%d,%d", &r, &g, &b) != 3) continue;
+                        const uint32_t key = (uint32_t)(r | (g << 8) | (b << 16));
+                        pal.colours.insert(key);
+                        if (colon != std::string::npos && p[i].size() - colon - 1 == 16) {
+                            const auto sg = hex_bytes(p[i].substr(colon + 1));
+                            std::array<uint8_t, 8> a{}; std::memcpy(a.data(), sg.data(), 8); pal.sigs[key].push_back(a);
+                        }
+                    }
+                } else if (p[0] == "X" && p.size() >= 6) {
+                    g_incr.palettes[p[1]].add_pat(std::atoi(p[2].c_str()), hex_bytes(p[3]), std::atoi(p[4].c_str()), hex_bytes(p[5]));
+                } else if (p[0] == "F" && p.size() >= 4) {
+                    g_incr.bases.push_back({p[1], hex64(p[2]), std::atoi(p[3].c_str())});
+                } else if (p[0] == "D" && p.size() >= 3) {
+                    g_incr.dumps.emplace_back(hex64(p[1]), std::min(0x400, std::atoi(p[2].c_str())));
+                }
+            }
+        }
+        // try the scan cache: if cached spots for every base file still validate, skip the full walk
+        if (try_scan_cache(g_incr)) {
+            for (auto& cs : g_spot_cache) {
+                if (!g_incr.seen.insert(cs.addr).second) continue;
+                char line[256];
+                std::snprintf(line, sizeof line, "S %llX %d %d %d %s", (unsigned long long)cs.addr, cs.r, cs.g, cs.b, cs.file.c_str());
+                g_incr.out.emplace_back(line);
+                ++g_incr.spots_total;
+            }
+            for (auto& cp : g_pspot_cache) {
+                if (!g_incr.seen.insert(cp.addr).second) continue;
+                char line[256];
+                std::snprintf(line, sizeof line, "T %llX %d %s %s", (unsigned long long)cp.addr, cp.idx, cp.cur.c_str(), cp.file.c_str());
+                g_incr.out.emplace_back(line);
+                ++g_incr.spots_total;
+            }
+            info("drive scan #%s: cache hit (%d spots), walk skipped", g_incr.seq.c_str(), g_incr.spots_total);
+            finish_scan(g_incr);
+            return;
+        }
+    }
+    // continue the walk within the time budget (sub-scope ScanWalk)
+    perf::Scope sw(perf::ScanWalk);
+    const int64_t t0 = budget_now();
+    char line[256];
+    // on the first walk step after parsing, clear the cache (a new scan replaces the old cache)
+    if (g_incr.next_base == 0 && g_incr.next_entry == 0) { g_spot_cache.clear(); g_pspot_cache.clear(); g_cache_valid = false; }
+    while (g_incr.next_base < g_incr.bases.size()) {
+        auto& b = g_incr.bases[g_incr.next_base];
+        auto pi = g_incr.palettes.find(b.file);
+        if (pi != g_incr.palettes.end() && b.count > 0 && b.count <= 128 && !in_module(b.arr)) {
+            // walk entries within this base, resuming from next_entry
+            std::unordered_set<uint64_t> visited;
+            std::vector<Spot> spots;
+            std::vector<PSpot> pspots;
+            int nodes = 0;
+            bool expired = false;
+            while (g_incr.next_entry < b.count && !expired) {
+                scan_node(b.arr + (uint64_t)g_incr.next_entry * 0x50, pi->second, SCAN_DEPTH, visited, nodes, spots, pspots, t0, expired);
+                ++g_incr.next_entry;
+                if (!expired && over_budget(t0)) expired = true;
+            }
+            g_incr.nodes_total += nodes;
+            for (auto& s : spots) {
+                if (!g_incr.seen.insert(s.addr).second) continue;
+                std::snprintf(line, sizeof line, "S %llX %d %d %d %s", (unsigned long long)s.addr, s.r, s.g, s.b, b.file.c_str());
+                g_incr.out.emplace_back(line);
+                ++g_incr.spots_total;
+                g_spot_cache.push_back(CachedSpot{ s.addr, s.r, s.g, s.b, b.file });
+            }
+            for (auto& t : pspots) {
+                if (!g_incr.seen.insert(t.addr).second) continue;
+                std::snprintf(line, sizeof line, "T %llX %d %s %s", (unsigned long long)t.addr, t.idx, t.cur.c_str(), b.file.c_str());
+                g_incr.out.emplace_back(line);
+                ++g_incr.spots_total;
+                g_pspot_cache.push_back(CachedPSpot{ t.addr, t.idx, t.cur, b.file });
+            }
+            if (g_incr.next_entry < b.count) return;                  // budget spent mid-base, resume next frame
+        }
+        ++g_incr.next_base;
+        g_incr.next_entry = 0;
+        if (over_budget(t0)) return;                                  // budget spent between bases
+    }
+    // all bases done: the scan cache was populated during the walk, finish
+    g_cache_valid = !g_spot_cache.empty() || !g_pspot_cache.empty();
+    g_cache_bases = bases_key(g_incr);
+    finish_scan(g_incr);
 }
 
 // ---- la file de dwords (_memwrite.txt) ----------------------------------------------------------------------------
 uint64_t g_applied = 0, g_refused = 0;
+constexpr double kQueueBudgetMs = 0.5;            // apply() runs twice per frame (Update + LateUpdate)
 void apply_queue() {
-    std::vector<std::string> lines;
+    // take new lines from the input
     {
         std::lock_guard<std::mutex> lk(g_io_mx);
-        if (g_queue_lines.empty()) return;
-        lines.swap(g_queue_lines);                                // (was: _memwrite.txt read then removed)
+        if (!g_queue_lines.empty()) {
+            for (auto& l : g_queue_lines) g_pending_queue.push_back(std::move(l));
+            g_queue_lines.clear();
+        }
     }
+    if (g_pending_queue.empty()) return;
+    init_budget();
+    const int64_t t0 = budget_now();
     int n = 0, stale = 0;
-    for (auto& raw : lines) {
+    while (!g_pending_queue.empty()) {
+        const std::string raw = std::move(g_pending_queue.front());
+        g_pending_queue.pop_front();
         const auto p = split(raw);
         if (p.size() < 2 || p[0].empty() || p[0][0] == '#') continue;
         auto strip = [](std::string s) { if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) s = s.substr(2); return s; };
@@ -574,18 +736,18 @@ void apply_queue() {
         if (addr < 0x10000) continue;
         if (in_module(addr)) { ++g_refused; err("refused %llX : inside a loaded module", (unsigned long long)addr); continue; }
         if (!dword_writable(addr)) { ++g_refused; ++g_page_refused; continue; }
-        // Meme regle que le relais : le dword doit encore etre ce que le script a lu en posant la ligne (3e champ),
-        // la valeur demandee, ou une valeur deja ecrite par nous. Sans 3e champ, seul un emplacement deja peint passe.
         uint32_t cur;
         if (!safe_rd32(addr, &cur)) { ++g_refused; continue; }
         bool ok = (cur == val) || hist_has(addr, std::vector<uint32_t>{cur});
         if (!ok && p.size() >= 3) ok = (cur == hex32(strip(p[2])));
         if (!ok) { ++g_refused; ++stale; continue; }
         if (cur != val) {
+            if (wjournal::active()) wjournal::raw32("vfx::apply_queue", addr, cur, val);
             if (!safe_wr32(addr, val)) { ++g_refused; err("AV writing queue addr %llX", (unsigned long long)addr); continue; }
             hist_push(addr, val);
         }
         ++n;
+        if ((n & 3) == 0 && (double)(budget_now() - t0) >= kQueueBudgetMs * g_ticks_per_ms) break;
     }
     g_applied += n;
     if (stale) { g_queue_stale += stale; err("queue: %d line(s) refused, the address no longer holds what the script read", stale); }
@@ -603,7 +765,7 @@ void on_update() {
         g_hooked = install_hooks();
         if (!g_hooked) return;
     }
-    if (g_active) { perf::Scope scan(perf::VfxScan); check_scan_request(); }
+    if (g_active) { perf::Scope scan(perf::VfxScan); scan_step(); }
     perf::Scope a(perf::VfxApply);
     apply();
 }

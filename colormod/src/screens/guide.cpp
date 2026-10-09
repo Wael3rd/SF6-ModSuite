@@ -26,6 +26,7 @@
 #include "ll_common.hpp"
 #include "../common.hpp"
 #include "../perf.hpp"
+#include "../perf_hook.hpp"
 
 namespace screens::guide {
 namespace {
@@ -405,7 +406,7 @@ int pre_new_item(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long lo
     const int64_t t0 = perf::begin();                  // a plain integer: allowed next to __try (perf.hpp)
     __try { new_item_lower(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("new_item_pre"); }
-    perf::end(perf::HookGuide, t0);
+    perf::end(perf::HkGuideNewItem, t0);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -415,7 +416,7 @@ void post_new_item(void**, REFrameworkTypeDefinitionHandle, unsigned long long) 
     const int64_t t0 = perf::begin();
     __try { new_item_raise(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("new_item_post"); }
-    perf::end(perf::HookGuide, t0);
+    perf::end(perf::HkGuideNewItem, t0);
 }
 
 // OnLateUpdate PRE: save this address
@@ -445,7 +446,7 @@ void post_on_late_update(void**, REFrameworkTypeDefinitionHandle, unsigned long 
     const int64_t t0 = perf::begin();
     __try { post_on_late_update_inner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("on_late_update_post"); }
-    perf::end(perf::HookGuide, t0);
+    perf::end(perf::HkGuideOnLateUpdate, t0);
 }
 
 // UpdateInputGuide PRE: save this address
@@ -473,7 +474,7 @@ void post_update_guide(void**, REFrameworkTypeDefinitionHandle, unsigned long lo
     const int64_t t0 = perf::begin();
     __try { post_update_guide_inner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("update_guide_post"); }
-    perf::end(perf::HookGuide, t0);
+    perf::end(perf::HkGuideUpdateInputGuide, t0);
 }
 
 #pragma warning(pop)
@@ -500,6 +501,7 @@ bool install() {
             if (std::string_view{m->get_name()} == "NewInputItem") {
                 if (m->get_function_raw() && m->add_hook(pre_new_item, post_new_item, false)) {
                     ++total;
+                    perf::journal_hooked("UIPartsInputGuideBase.NewInputItem", m);
                 }
             }
         }
@@ -511,6 +513,7 @@ bool install() {
         auto* m = guide_list_td->find_method("OnLateUpdate");
         if (m && m->get_function_raw() && m->add_hook(pre_on_late_update, post_on_late_update, false)) {
             ++total;
+            perf::journal_hooked("UIPartsInputGuideList.OnLateUpdate", m);
         }
     }
 
@@ -520,6 +523,7 @@ bool install() {
         auto* m = dialog_param_td->find_method("UpdateInputGuide");
         if (m && m->get_function_raw() && m->add_hook(pre_update_guide, post_update_guide, false)) {
             ++total;
+            perf::journal_hooked("UIFlowOptionBGDialog.Param.UpdateInputGuide", m);
         }
     }
 

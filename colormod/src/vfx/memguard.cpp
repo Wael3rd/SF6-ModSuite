@@ -45,8 +45,17 @@ int query(uint64_t a) {                       // lock held
 int state(uint64_t a) {
     std::lock_guard<std::mutex> lk(g_mx);
     const uint64_t f = cmn::frame();
-    const ULONGLONG now = GetTickCount64();
-    if (f != g_frame || now - g_born > kMaxAgeMs) { g_regions.clear(); g_frame = f; g_born = now; }
+    // fast path: same frame as last check, the cache is valid (skip GetTickCount64)
+    if (f != g_frame) {
+        const ULONGLONG now = GetTickCount64();
+        g_regions.clear(); g_frame = f; g_born = now;
+    } else if (g_queries & 63) {
+        // only check wall time every 64 queries within the same frame (the 50 ms guard is for loading-thread hooks
+        // that run without frame ticks, not for per-frame passes)
+    } else {
+        const ULONGLONG now = GetTickCount64();
+        if (now - g_born > kMaxAgeMs) { g_regions.clear(); g_born = now; }
+    }
     auto it = g_regions.upper_bound(a);
     if (it != g_regions.begin()) {
         --it;

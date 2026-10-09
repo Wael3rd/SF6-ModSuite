@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "../common.hpp"
+#include "../write_journal.hpp"
 #include "memguard.hpp"
 
 namespace vfx::scene {
@@ -174,8 +175,16 @@ std::vector<uint8_t> cstr(uint64_t a, size_t maxn) {
     return t;
 }
 
-bool wr8(uint64_t a, uint8_t v) { return a >= 0x10000 && page_readable(a, 1) && seh_put(a, &v, 1); }
-bool wr32(uint64_t a, uint32_t v) { return a >= 0x10000 && page_readable(a, 4) && seh_put(a, &v, 4); }
+bool wr8(uint64_t a, uint8_t v) {
+    if (a < 0x10000 || !page_readable(a, 1)) return false;
+    if (wjournal::active()) { uint8_t old = 0; seh_copy(&old, a, 1); wjournal::raw8("scene::wr8", a, old, v); }
+    return seh_put(a, &v, 1);
+}
+bool wr32(uint64_t a, uint32_t v) {
+    if (a < 0x10000 || (a & 3) || !page_readable(a, 4)) return false;      // a colour dword is 4-byte aligned
+    if (wjournal::active()) { uint32_t old = 0; seh_copy(&old, a, 4); wjournal::raw32("scene::wr32", a, old, v); }
+    return seh_put(a, &v, 4);
+}
 
 int battle_char(int idx) {
     if (!g_gbattle_player) return 0;

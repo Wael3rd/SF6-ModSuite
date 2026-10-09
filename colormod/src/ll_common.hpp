@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "write_journal.hpp"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -212,6 +214,10 @@ inline bool write_field_raw(API::ManagedObject* obj, const char* name, const voi
     void* raw = field->get_data_raw(obj, false);
     if (raw == nullptr) {
         return false;
+    }
+    if (wjournal::active() && size == 4) {
+        uint32_t ov, nv; std::memcpy(&ov, raw, 4); std::memcpy(&nv, value, 4);
+        wjournal::field("ll::write_field", (uint64_t)(uintptr_t)obj, name, ov, nv);
     }
     std::memcpy(raw, value, size);
     return true;

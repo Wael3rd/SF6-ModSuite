@@ -16,6 +16,8 @@
 
 #include "../common.hpp"
 #include "../perf.hpp"
+#include "../perf_hook.hpp"
+#include "../write_journal.hpp"
 #include "decide.hpp"
 #include "live_internal.hpp"
 #include "rsz.hpp"
@@ -154,8 +156,13 @@ uint32_t read_raw(const uint8_t* addr, bool byte) {
     uint32_t v; std::memcpy(&v, addr, 4); return v;
 }
 void write(MO* obj, uint8_t* addr, bool byte, uint32_t value) {
-    g_saved.push_back({ obj, addr, byte, read_raw(addr, byte) });
+    const uint32_t old = read_raw(addr, byte);
+    g_saved.push_back({ obj, addr, byte, old });
     if (byte) *addr = (uint8_t)value; else std::memcpy(addr, &value, 4);
+    if (wjournal::active()) {
+        if (byte) wjournal::raw8("live::write", (uint64_t)(uintptr_t)addr, (uint8_t)old, (uint8_t)value);
+        else wjournal::raw32("live::write", (uint64_t)(uintptr_t)addr, old, value, (uint64_t)(uintptr_t)obj, 0);
+    }
 }
 
 uint32_t pull_to_white(uint32_t c, double k) {       // Lua: pack_rgba(floor(r + (255 - r) * k), ..., a)
@@ -246,6 +253,11 @@ void restore(bool force) {                                             // Lua: r
     }
     // backwards: an address written twice gets its first saved value (the true original) back last
     for (auto it = g_saved.rbegin(); it != g_saved.rend(); ++it) {
+        if (wjournal::active()) {
+            const uint32_t cur = read_raw(it->addr, it->byte);
+            if (it->byte) wjournal::raw8("live::restore", (uint64_t)(uintptr_t)it->addr, (uint8_t)cur, (uint8_t)it->old);
+            else wjournal::raw32("live::restore", (uint64_t)(uintptr_t)it->addr, cur, it->old, (uint64_t)(uintptr_t)it->obj, 0);
+        }
         if (it->byte) *it->addr = (uint8_t)it->old; else std::memcpy(it->addr, &it->old, 4);
     }
     drop_pending();
@@ -371,8 +383,8 @@ namespace {
 void on_setup_pre(MO* ctrl) {                                          // Lua: on_setup_pre -> should_inject -> inject
     if (g_pending && g_pending_frame != cmn::frame()) restore(true);  // stale patch from another frame: never left behind
     if (!ctrl) return;
-    if (decide::active()) { decide::on_setup_pre(ctrl); return; }      // owner "decisions": the DLL decides every side
-    if (!editor_on()) return;                                          // else only the editor's side 3 (the Lua does the rest)
+    if (decide::active()) { perf::Scope sd(perf::SetupDecide); decide::on_setup_pre(ctrl); return; }
+    if (!editor_on()) return;
     if (side_from_parents(ctrl) != 3) return;
     editor_patch(ctrl);
 }
@@ -458,6 +470,8 @@ bool install() {
     }
     setup->add_hook(pre_setup_color, post_setup_color, false);
     parts->add_hook(pre_parts, post_restore, false);
+    perf::journal_hooked("PlayerColorController.SetupColor (HookSetupColor)", setup);
+    perf::journal_hooked("PlayerColorController.SetupPartsColor (HookSetupParts)", parts);
     API::get()->param()->functions->on_lua_state_destroyed(on_lua_destroyed);
     g_installed = true;
     cmn::log_info("[ColorModNative] colour patch: hooks on PlayerColorController.SetupColor / SetupPartsColor");

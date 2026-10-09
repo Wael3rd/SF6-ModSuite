@@ -51,9 +51,17 @@ The colours are decided in the menus; a fight recomputes nothing (since 0.19.7):
 The previous way (every Drive effect painted per player when it starts, the effect data checked every second) comes
 back with an empty file `reframework/data/SF6_ColorModNative_data/live_fight.txt` (looked at every 5 s).
 
+When a fight starts, the work that finds and writes the Drive colours is spread over the first frames (at most about
+1 ms of work per frame, since 0.19.9); the colours are in place well before anyone can use Drive.
+
 To see what the mod costs, create `reframework/data/SF6_ColorModNative_data/perf_on.txt` (looked at every 2 s):
 `perf_live.log` next to it then gets one line per second (frame time, the mod's time per frame and its costliest
-parts) and one `SLOW` line per long frame with everything the mod did in it. Delete the file to stop.
+parts, each hooked game method counted on its own) and one `SLOW` line per long frame with everything the mod did in
+it. Delete the file to stop. `reframework/data/perf_on.txt` does the same for the Native Core and the Slots Loader
+plugin (their own `perf_live.log` files).
+
+For crash investigations, `reframework/data/write_journal_on.txt` makes the mod (and the Slots Loader plugin) log
+every write it makes into the game's memory to `writes.log`. Leave it off otherwise.
 
 ## Build
 

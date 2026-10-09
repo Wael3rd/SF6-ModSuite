@@ -152,4 +152,12 @@ struct BridgeDialogEditor {
 };
 extern BridgeDialogEditor g_bridge_dialog_editor;
 
+// Background file writer: a single thread that drains queued file writes off the game thread.
+// Only for plain file I/O (journal, status, spots, perf log); never touches game objects.
+namespace bgwriter {
+void start();                                   // call once from cmn::init()
+void write(const char* path, std::string content);   // truncate-write
+void append(const char* path, std::string content);  // append-write
+}  // namespace bgwriter
+
 }  // namespace cmn

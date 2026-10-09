@@ -11,6 +11,7 @@
 #include "tick.hpp"
 
 #include "../common.hpp"
+#include "../perf.hpp"
 
 namespace vfx::feed {
 namespace {
@@ -44,16 +45,28 @@ void on_frame() {
             std::lock_guard<std::mutex> lk(g_mx);
             for (int s = 0; s < 2; ++s) { fid[s] = scene::side_char(s); if (!fid[s]) fid[s] = g_hint[s]; }
         }
-        if (auto t = di_state_text(fid)) {
-            tick::set_di_state(*t);
-            ++g_pushes;
-            if (g_frame % 60 == 0)
-                for (int s = 0; s < 2; ++s) if (fid[s] > 0 && parts_merge(fid[s], tick::parts(fid[s]))) ++g_parts_saved;
-        } else {
-            ++g_raised;                                                 // the Lua's pcall(body_push) failed there
+        {
+            const int64_t t0 = perf::begin();
+            auto t = di_state_text(fid);
+            perf::end(perf::FeedDiState, t0);
+            if (t) {
+                const int64_t t1 = perf::begin();
+                tick::set_di_state(*t);
+                perf::end(perf::FeedDiText, t1);
+                ++g_pushes;
+            } else {
+                ++g_raised;
+            }
         }
-        const int dfid[2] = { scene::side_char(0), scene::side_char(1) };   // SF6_DriveRecolor: no select-screen fallback
-        if (auto c = dr_colors(dfid)) tick::set_dr_colors(c->data());
+        if (g_frame % 60 == 0) {
+            perf::Scope s3(perf::FeedPartsMerge);
+            for (int s = 0; s < 2; ++s) if (fid[s] > 0 && parts_merge(fid[s], tick::parts(fid[s]))) ++g_parts_saved;
+        }
+        const int dfid[2] = { scene::side_char(0), scene::side_char(1) };
+        {
+            perf::Scope s2(perf::FeedDrColors);
+            if (auto c = dr_colors(dfid)) tick::set_dr_colors(c->data());
+        }
     }
     if (g_frame < 6) return;                                            // the scripts learnt they were owned on frame 6
     bool dirty = false;

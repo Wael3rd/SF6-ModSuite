@@ -14,6 +14,7 @@
 
 #include "../common.hpp"
 #include "../perf.hpp"
+#include "../perf_hook.hpp"
 #include "data.hpp"
 #include "mech.hpp"
 
@@ -172,8 +173,8 @@ bool install(bool write) {
     for (auto* m : td->get_methods()) {
         if (!m->get_function_raw()) continue;
         const std::string name = m->get_name();
-        if (name == "addMaterialEffect" && n_add == 0) { if (m->add_hook(pre_add, post_nop, false)) ++n_add; }   // the Lua's get_method: one
-        else if (name == "requestMaterialEffect") { if (m->add_hook(pre_req, post_nop, false)) ++n_req; }
+        if (name == "addMaterialEffect" && n_add == 0) { if (m->add_hook(pre_add, post_nop, false)) { ++n_add; perf::journal_hooked("VfxActorEffectManager.addMaterialEffect (HookBodyAddMaterial)", m); } }   // the Lua's get_method: one
+        else if (name == "requestMaterialEffect") { if (m->add_hook(pre_req, post_nop, false)) { ++n_req; perf::journal_hooked("VfxActorEffectManager.requestMaterialEffect (HookBodyRequestMaterial)", m); } }
     }
     g_write = write;
     g_on = n_add + n_req > 0;

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
@@ -12,16 +13,18 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include <reframework/API.hpp>
 
 #include "nlohmann/json.hpp"
 #include "perf.hpp"
+#include "write_journal.hpp"
 
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "0.19.8";
+constexpr const char* kVersion = "0.19.10";
 constexpr const char* kClientId = "SF6_ColorModNative";
 // The game's working directory is the game folder (same convention as SF6_MenuRowsNative / SF6_MemWriterNative).
 constexpr const char* kDataDir = "reframework/data/SF6_ColorModNative_data";
@@ -73,10 +76,7 @@ void journal_flush() {
         g_dirty = false;
         for (auto& l : g_lines) arr.push_back(l);
     }
-    std::error_code ec;
-    std::filesystem::create_directories(kDataDir, ec);
-    std::ofstream f(std::string(kDataDir) + "/debug_log.json", std::ios::binary | std::ios::trunc);
-    if (f) f << arr.dump(4);
+    bgwriter::write((std::string(kDataDir) + "/debug_log.json").c_str(), arr.dump(4));
 }
 
 std::string now_text() {
@@ -116,10 +116,7 @@ void write_status() {
     nlohmann::json owners;
     for (size_t i = 0; i < kNames.size(); ++i) owners[kNames[i]] = g_owns[i] ? "native" : "lua";
     j["owners"] = owners;
-    std::error_code ec;
-    std::filesystem::create_directories(kDataDir, ec);
-    std::ofstream f(std::string(kDataDir) + "/status.json", std::ios::binary | std::ios::trunc);
-    if (f) f << j.dump(4);
+    bgwriter::write((std::string(kDataDir) + "/status.json").c_str(), j.dump(4));
 }
 
 }  // namespace
@@ -157,6 +154,7 @@ void SF6CORE_CALL on_frame(uint64_t, void*) {
                 log_info("[ColorModNative] closing: cancelled, the Color Mod resumes");
             }
         }
+        wjournal::flush();
         journal_flush();
         return;
     }
@@ -174,11 +172,16 @@ void SF6CORE_CALL on_frame(uint64_t, void*) {
         try { g_screens_frame(); } catch (...) { journal_line("screens frame: exception"); }
         perf::end(perf::FrameScreens, ts);
     }
-    if (g_frame % kJournalFlushEvery == 0) journal_flush();
+    if (g_frame % kJournalFlushEvery == 0) { const int64_t tj = perf::begin(); journal_flush(); perf::end(perf::CoreJournalFlush, tj); }
+    // write journal: sentinel check every 120 frames, flush every 60 frames when on
+    if (g_frame % 120 == 2) { const int64_t tw = perf::begin(); wjournal::check(); perf::end(perf::CoreFileCheck, tw); }
+    if (wjournal::active() && g_frame % 60 == 0) wjournal::flush();
     if (g_frame % 300 == 1) {                          // live_fight.txt: the light fight mode off
-        std::error_code ec;
-        const bool light = !std::filesystem::exists(std::string(kDataDir) + "/live_fight.txt", ec);
+        const int64_t tf = perf::begin();
+        const DWORD attr = GetFileAttributesA((std::string(kDataDir) + "/live_fight.txt").c_str());
+        const bool light = attr == INVALID_FILE_ATTRIBUTES;
         if (light != light_fight_flag()) { set_light_fight(light); journal_line(light ? "fight mode: light (colours written once per fight)" : "fight mode: live (live_fight.txt: per-effect painting, periodic checks)"); }
+        perf::end(perf::CoreFileCheck, tf);
     }
     perf::end(perf::CoreFrame, t0);
 }
@@ -430,6 +433,7 @@ void journal(const char* fmt, ...) {
 }
 
 bool init() {
+    bgwriter::start();
     {
         auto* fns = reframework::API::get()->param()->functions;
         if (fns->on_message) fns->on_message(on_message_cb);
@@ -451,5 +455,47 @@ bool init() {
     journal_flush();
     return true;
 }
+
+// ---- background file writer -----------------------------------------------------------------------------------------
+namespace bgwriter {
+namespace {
+struct Item { std::string path; std::string content; bool is_append; };
+std::mutex g_mx;
+std::condition_variable g_cv;
+std::deque<Item> g_queue;
+std::atomic<bool> g_stop{false};
+
+void worker() {
+    while (!g_stop.load(std::memory_order_relaxed)) {
+        Item item;
+        {
+            std::unique_lock<std::mutex> lk(g_mx);
+            g_cv.wait_for(lk, std::chrono::milliseconds(200), [] { return !g_queue.empty() || g_stop.load(std::memory_order_relaxed); });
+            if (g_queue.empty()) continue;
+            item = std::move(g_queue.front());
+            g_queue.pop_front();
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(item.path).parent_path(), ec);
+        std::ofstream f(item.path, std::ios::binary | (item.is_append ? std::ios::app : std::ios::trunc));
+        if (f) f << item.content;
+    }
+}
+}  // namespace
+
+void start() {
+    std::thread(worker).detach();
+}
+void write(const char* path, std::string content) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    g_queue.push_back(Item{path, std::move(content), false});
+    g_cv.notify_one();
+}
+void append(const char* path, std::string content) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    g_queue.push_back(Item{path, std::move(content), true});
+    g_cv.notify_one();
+}
+}  // namespace bgwriter
 
 }  // namespace cmn
