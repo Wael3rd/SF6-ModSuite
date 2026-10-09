@@ -219,6 +219,7 @@ static std::mutex             s_hide_mutex;
 static std::atomic<int>       s_elem_count_pub{0};    // rule count, for early-out
 static std::atomic<bool>      s_name_cache_flush{false};
 static std::atomic<uint64_t>  s_frame_pub{0};         // s_frame mirror for the render thread
+uint64_t core_frame_pub() { return s_frame_pub.load(std::memory_order_relaxed); }
 static NameCacheSlot s_name_cache[NAME_CACHE_BUCKETS] = {};
 static bool s_elem_draw_registered = false;
 
@@ -1992,6 +1993,16 @@ SF6CoreStatus SF6CORE_CALL api_txt_set(SF6CoreClient*, const uint8_t[16], const 
 SF6CoreStatus SF6CORE_CALL api_txt_release(SF6CoreClient*, const uint8_t[16]);
 SF6CoreStatus SF6CORE_CALL api_obj_set_guid(SF6CoreClient*, void*, const char*, const uint8_t[16]);
 uint32_t      SF6CORE_CALL api_txt_status(char*, uint32_t);
+// Increment 9: training pause menu (defined in pausemenu/pm_service.cpp)
+SF6CoreStatus SF6CORE_CALL api_pm_set_callbacks(SF6CoreClient*, const SF6CorePmCallbacks*);
+int64_t       SF6CORE_CALL api_pm_page(SF6CoreClient*, const SF6CorePmPageDesc*);
+int64_t       SF6CORE_CALL api_pm_row(SF6CoreClient*, int64_t, const SF6CorePmRowDesc*);
+SF6CoreStatus SF6CORE_CALL api_pm_set_texts(SF6CoreClient*, int64_t, const char*, const char*);
+SF6CoreStatus SF6CORE_CALL api_pm_set_options(SF6CoreClient*, int64_t, const char* const*, uint32_t);
+SF6CoreStatus SF6CORE_CALL api_pm_remove(SF6CoreClient*, int64_t);
+int32_t       SF6CORE_CALL api_pm_page_shown(int64_t);
+void*         SF6CORE_CALL api_pm_row_part(int64_t);
+uint32_t      SF6CORE_CALL api_pm_status(char*, uint32_t);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2109,6 +2120,10 @@ static void on_late_update() {
         options_frame();
         perf::end(perf::OptionsFrame, pt_opt);
     }
+
+    // -- 3c. Training pause menu (increment 9): installed on demand, then its
+    //        state (training, pause, menu close) and the install pass --
+    pausemenu_frame();
 
     // -- 4. Frame callbacks --
     {
@@ -2235,6 +2250,9 @@ static void SF6CORE_CALL api_unregister_client(SF6CoreClient* client) {
     // Client texts (increment 8): released once the client is inactive, so a
     // txt_new racing with this call stores nothing after the release
     texts_release_client(client);
+    // Training pause menu (increment 9): its callbacks gone, its pages / rows out of
+    // the menu at the next pass
+    pausemenu_release_client(client);
 
     push_breadcrumb(BC_UNREGISTER, client->client_id, nullptr);
     core_log(SF6CORE_LOG_INFO, client->client_id, "unregistered");
@@ -2598,7 +2616,17 @@ static const SF6CoreAPI s_api = {
     api_txt_set,
     api_txt_release,
     api_obj_set_guid,
-    api_txt_status
+    api_txt_status,
+    // -- Increment 9: training pause menu (ADR-0016) --
+    api_pm_set_callbacks,
+    api_pm_page,
+    api_pm_row,
+    api_pm_set_texts,
+    api_pm_set_options,
+    api_pm_remove,
+    api_pm_page_shown,
+    api_pm_row_part,
+    api_pm_status
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)

@@ -167,4 +167,14 @@ void handle_fault_by_id(const char* client_id, DWORD exc_code, const char* phase
 void texts_frame();                               // start of each core frame: the hook, when texts are wanted
 void texts_release_client(SF6CoreClient* c);      // unregister_client, once the client is inactive
 
+// ========================================================================
+// Increment 9: training pause menu (pausemenu/pm_service.cpp, ADR-0016)
+// ========================================================================
+
+void pausemenu_frame();                            // each core frame, after the option dialogs: install on demand, then the engine
+void pausemenu_release_client(SF6CoreClient* c);  // unregister_client, once the client is inactive
+
+// The core's frame counter, readable from any thread (the hooks run on the game's UI job threads).
+uint64_t core_frame_pub();
+
 #endif // SF6CORE_INTERNAL_H
