@@ -31,11 +31,13 @@
 #include <string>
 #include <vector>
 
+#include "perf.hpp"
+
 // ========================================================================
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.7.2";
+static constexpr const char* CORE_VERSION = "0.7.3";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -1561,6 +1563,7 @@ static bool on_pre_gui_draw_element(void* element, void* /*context*/) {
     if (s_elem_count_pub.load(std::memory_order_acquire) == 0 &&
         s_zen_rule_count_pub.load(std::memory_order_acquire) == 0) return true;
     if (!s_sdk) return true;
+    int64_t pt_draw = perf::begin();
 
     // Name cache is touched only on this thread; the game thread requests a
     // flush through an atomic flag instead of clearing it directly.
@@ -1611,10 +1614,10 @@ static bool on_pre_gui_draw_element(void* element, void* /*context*/) {
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
-    if (!owner_name || !owner_name[0]) return true;
+    if (!owner_name || !owner_name[0]) { perf::end(perf::DrawElement, pt_draw); return true; }
 
     // Check if any rule targets this owner (locked helper, try_lock)
-    if (!render_owner_declared(owner_name)) return true;
+    if (!render_owner_declared(owner_name)) { perf::end(perf::DrawElement, pt_draw); return true; }
 
     // Get the View (read-only: we store the pointer but don't write through it)
     void* view = nullptr;
@@ -1626,10 +1629,11 @@ static bool on_pre_gui_draw_element(void* element, void* /*context*/) {
                 view = ret.ptr;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    if (!view) return true;
+    if (!view) { perf::end(perf::DrawElement, pt_draw); return true; }
 
     // Record sighting (locked helper, try_lock, bounded by SIGHT_SLOTS).
     render_record_sighting(owner_name, view);
+    perf::end(perf::DrawElement, pt_draw);
     return true; // never block drawing
 }
 
@@ -1826,44 +1830,53 @@ static void elem_hides_on_flow_change() {
 
 static void commit_phase() {
     // -- Widget instantiation --
-    for (auto* w : s_widgets) {
-        if (!w->active) continue;
-        if (w->owner->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) {
-            // Hide breaker-disabled widgets
-            if (w->state == SF6CORE_WIDGET_LIVE && w->was_shown) {
-                widget_apply_agent_state(w, false);
+    {
+        int64_t pt_w = perf::begin();
+        for (auto* w : s_widgets) {
+            if (!w->active) continue;
+            if (w->owner->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) {
+                // Hide breaker-disabled widgets
+                if (w->state == SF6CORE_WIDGET_LIVE && w->was_shown) {
+                    widget_apply_agent_state(w, false);
+                }
+                continue;
             }
-            continue;
+            if (w->state == SF6CORE_WIDGET_PENDING)
+                process_pending_widget(w);
+            if (w->state != SF6CORE_WIDGET_LIVE) continue;
+
+            // Apply visibility
+            if (w->vis_dirty) {
+                bool eff = widget_effective_visible(w);
+                if (eff != w->was_shown)
+                    widget_apply_agent_state(w, eff);
+                w->vis_dirty = false;
+            }
+
+            // Apply position
+            widget_apply_position(w);
+
+            // Apply text
+            widget_apply_texts(w);
+
+            // Destroy if requested
+            if (w->pend_destroy) {
+                do_destroy_widget(w);
+            }
         }
-        if (w->state == SF6CORE_WIDGET_PENDING)
-            process_pending_widget(w);
-        if (w->state != SF6CORE_WIDGET_LIVE) continue;
-
-        // Apply visibility
-        if (w->vis_dirty) {
-            bool eff = widget_effective_visible(w);
-            if (eff != w->was_shown)
-                widget_apply_agent_state(w, eff);
-            w->vis_dirty = false;
-        }
-
-        // Apply position
-        widget_apply_position(w);
-
-        // Apply text
-        widget_apply_texts(w);
-
-        // Destroy if requested
-        if (w->pend_destroy) {
-            do_destroy_widget(w);
-        }
+        perf::end(perf::CommitWidgets, pt_w);
     }
 
     // -- Element hiding (all writes here, game thread) --
-    commit_element_hides();
+    {
+        int64_t pt_eh = perf::begin();
+        commit_element_hides();
+        perf::end(perf::CommitElemHides, pt_eh);
+    }
 
     // -- ZenMode element hiding (per-frame, all-segment fan-out) --
     if (s_zen_rule_count_pub.load(std::memory_order_acquire) > 0) {
+        int64_t pt_zh = perf::begin();
         // Pass sighting snapshot to the discovery module
         snapshot_hide_state();
         // Build flat arrays from the sight snapshot for discovery
@@ -1878,6 +1891,7 @@ static void commit_phase() {
         discovery_commit_zen_hides(s_frame,
                                     zen_owners, zen_views, zen_frames,
                                     s_sight_snap_n);
+        perf::end(perf::CommitZenHides, pt_zh);
     }
 }
 
@@ -2005,6 +2019,8 @@ static bool on_message(void* /*hwnd*/, unsigned int msg,
 static void on_late_update() {
     s_frame++;
     s_frame_pub.store(s_frame, std::memory_order_relaxed);
+    perf::frame();
+    int64_t pt_outer = perf::begin();
 
     // Closing guard: stop all game work. A WM_CLOSE that was not followed by
     // WM_DESTROY may be cancelled if frames keep coming for 30 s.
@@ -2016,6 +2032,7 @@ static void on_late_update() {
             core_log(SF6CORE_LOG_INFO, nullptr,
                      "closing: cancelled, the core resumes");
         } else {
+            perf::end(perf::OnLateUpdate, pt_outer);
             return;
         }
     }
@@ -2028,7 +2045,9 @@ static void on_late_update() {
     }
 
     // -- 1. Poll flow --
+    int64_t pt_poll = perf::begin();
     int32_t new_flow = poll_flow_id();
+    perf::end(perf::PollFlow, pt_poll);
 
     // -- 2. Snapshot the client list under the lock --
     {
@@ -2037,10 +2056,13 @@ static void on_late_update() {
     }
     // From here, NO lock held. Safe to call client code.
     const auto& snapshot = s_dispatch;
+    int64_t pt_brk = perf::begin();
     update_breakers(snapshot);
+    perf::end(perf::UpdateBreakers, pt_brk);
 
     // -- 3. Flow-change callbacks --
     if (new_flow != s_flow_id && new_flow != -1) {
+        int64_t pt_flow = perf::begin();
         int32_t old_flow = s_flow_id;
         s_flow_id = new_flow;
 
@@ -2067,29 +2089,47 @@ static void on_late_update() {
                 handle_success(c);
             }
         }
+        perf::end(perf::FlowCallbacks, pt_flow);
     }
 
     // -- 3b. Option dialogs (increment 6): before the clients' frames, as the
     //        mod that owned the engine ran it at the start of its frame --
-    options_frame();
+    {
+        int64_t pt_opt = perf::begin();
+        options_frame();
+        perf::end(perf::OptionsFrame, pt_opt);
+    }
 
     // -- 4. Frame callbacks --
-    for (SF6CoreClient* c : snapshot) {
-        if (!c->active) continue;
-        if (c->state != SF6CORE_CLIENT_ACTIVE) continue;
-        if (!c->frame_cb) continue;
+    {
+        int64_t pt_fc = perf::begin();
+        for (SF6CoreClient* c : snapshot) {
+            if (!c->active) continue;
+            if (c->state != SF6CORE_CLIENT_ACTIVE) continue;
+            if (!c->frame_cb) continue;
 
-        FrameCbArgs args = {c->frame_cb, s_frame, c->frame_user};
-        DWORD exc = 0;
-        if (!invoke_frame_seh(&args, &exc)) {
-            handle_fault(c, exc, "frame_cb");
-        } else {
-            handle_success(c);
+            perf::Id cid = perf::client_id(c->client_id);
+            int64_t pt_c = perf::begin();
+            FrameCbArgs args = {c->frame_cb, s_frame, c->frame_user};
+            DWORD exc = 0;
+            if (!invoke_frame_seh(&args, &exc)) {
+                handle_fault(c, exc, "frame_cb");
+            } else {
+                handle_success(c);
+            }
+            perf::end(cid, pt_c);
         }
+        perf::end(perf::FrameCallbacks, pt_fc);
     }
 
     // -- 5. Commit phase (all GUI writes) --
-    commit_phase();
+    {
+        int64_t pt_cp = perf::begin();
+        commit_phase();
+        perf::end(perf::CommitPhase, pt_cp);
+    }
+
+    perf::end(perf::OnLateUpdate, pt_outer);
 }
 
 // ========================================================================

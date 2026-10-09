@@ -18,6 +18,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include "sf6core_internal.h"
+#include "perf.hpp"
 
 #pragma warning(push, 0)
 #include <reframework/API.hpp>
@@ -364,10 +365,14 @@ static bool is_control_like(void* obj) {
 // Returns SF6CORE_OK if the call should proceed.
 // ========================================================================
 
+// perf: API-call timer started by guard_prefix, ended by on_display_success / on_display_fault
+static thread_local int64_t tl_api_t0 = 0;
+
 static SF6CoreStatus guard_prefix(SF6CoreClient* client, void* obj,
                                    const char* op, bool check_thread,
                                    DisplayStatsInternal** out_stats) {
-    if (!client || !obj) return SF6CORE_ERR_INVALID_ARG;
+    tl_api_t0 = perf::begin();
+    if (!client || !obj) { perf::end(perf::Api, tl_api_t0); tl_api_t0 = 0; return SF6CORE_ERR_INVALID_ARG; }
     auto* st = get_stats(client);
     *out_stats = st;
 
@@ -375,6 +380,7 @@ static SF6CoreStatus guard_prefix(SF6CoreClient* client, void* obj,
     if (kill_switch_active() || core_closing() || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER) {
         st->refused.fetch_add(1, std::memory_order_relaxed);
         rate_log_warn(client->client_id, "display op %s refused: client disabled", op);
+        perf::end(perf::Api, tl_api_t0); tl_api_t0 = 0;
         return SF6CORE_ERR_DISABLED;
     }
 
@@ -389,10 +395,11 @@ static SF6CoreStatus guard_prefix(SF6CoreClient* client, void* obj,
     // 3. Quarantine
     if (is_quarantined(obj, op)) {
         st->quarantined.fetch_add(1, std::memory_order_relaxed);
+        perf::end(perf::Api, tl_api_t0); tl_api_t0 = 0;
         return SF6CORE_ERR_FAULTED;
     }
 
-    return SF6CORE_OK;
+    return SF6CORE_OK;  // timer still running: caller or on_display_success/fault ends it
 }
 
 // ========================================================================
@@ -409,6 +416,7 @@ struct DispatchCtx {
 
 // After a fault: quarantine + breaker accounting
 static void on_display_fault(DispatchCtx* ctx, DWORD exc_code) {
+    perf::end(perf::Api, tl_api_t0); tl_api_t0 = 0;
     add_quarantine(ctx->obj, ctx->op);
     ctx->stats->faults.fetch_add(1, std::memory_order_relaxed);
 
@@ -429,6 +437,7 @@ static void on_display_fault(DispatchCtx* ctx, DWORD exc_code) {
 
 // After a successful write
 static void on_display_success(DispatchCtx* ctx) {
+    perf::end(perf::Api, tl_api_t0); tl_api_t0 = 0;
     ctx->stats->writes.fetch_add(1, std::memory_order_relaxed);
     if (ctx->client->half_open) {
         ctx->client->half_open   = false;

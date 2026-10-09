@@ -13,6 +13,8 @@
 #include <windows.h>
 
 #include <cstring>
+
+#include "../perf.hpp"
 #include <string>
 #include <string_view>
 
@@ -69,15 +71,20 @@ void post_get_message_inner(void** ret_val) {
 
 int pre_get_message(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on || live() == 0 || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    __try { return pre_get_message_inner(argv); }
+    int64_t pt = perf::begin();
+    int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    __try { rc = pre_get_message_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("get_message_pre"); }
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    perf::end(perf::GuidHook, pt);
+    return rc;
 }
 
 void post_get_message(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on || !tl_hit) return;
+    int64_t pt = perf::begin();
     __try { post_get_message_inner(ret_val); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("get_message_post"); }
+    perf::end(perf::GuidHook, pt);
 }
 
 #pragma warning(pop)

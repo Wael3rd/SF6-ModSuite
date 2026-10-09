@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "../perf.hpp"
 #include "ll_common.hpp"
 #include "opt_common.hpp"
 #include "guid_text.hpp"
@@ -513,9 +514,12 @@ int pre_reset_units_inner(void** argv) {
 }
 int pre_reset_units(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    __try { return pre_reset_units_inner(argv); }
+    int64_t pt = perf::begin();
+    int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    __try { rc = pre_reset_units_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("reset_units_pre"); }
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    perf::end(perf::OptHooks, pt);
+    return rc;
 }
 void post_reset_units(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
@@ -532,8 +536,10 @@ void post_decide_event_inner(void** ret_val) {
 }
 void post_decide_event(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on || !tl_decide_this) return;
+    int64_t pt = perf::begin();
     __try { post_decide_event_inner(ret_val); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("decide_event_post"); }
+    perf::end(perf::OptHooks, pt);
 }
 
 // CreatedObject (:451-474): our dialogs skip the screen fade (a fade frozen under the pause = the black screens)
@@ -548,14 +554,18 @@ void pre_created_object_inner(void** argv) {
 int pre_created_object(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_created_param = nullptr;
     if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int64_t pt = perf::begin();
     __try { pre_created_object_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("created_object_pre"); }
+    perf::end(perf::OptHooks, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_created_object(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on || !tl_created_param) return;
+    int64_t pt = perf::begin();
     __try { core::on_created_object(tl_created_param); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("created_object_post"); }
+    perf::end(perf::OptHooks, pt);
     tl_created_param = nullptr;
 }
 
@@ -570,8 +580,10 @@ void pre_setup_disp_units_inner(void** argv) {
 int pre_setup_disp_units(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_setup_this = nullptr;
     if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int64_t pt = perf::begin();
     __try { pre_setup_disp_units_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("setup_disp_pre"); }
+    perf::end(perf::OptHooks, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_setup_disp_units_inner() {
@@ -593,8 +605,10 @@ void post_setup_disp_units_inner() {
 }
 void post_setup_disp_units(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on || !tl_setup_this) return;
+    int64_t pt = perf::begin();
     __try { post_setup_disp_units_inner(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("setup_disp_post"); }
+    perf::end(perf::OptHooks, pt);
     tl_setup_this = nullptr;
 }
 
@@ -623,8 +637,10 @@ void post_check_can_select_inner(void** ret_val) {
 }
 void post_check_can_select(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!g_on || !tl_cs_this || !core::window_open()) return;
+    int64_t pt = perf::begin();
     __try { post_check_can_select_inner(ret_val); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("check_can_select_post"); }
+    perf::end(perf::OptHooks, pt);
 }
 
 // LoadValueEvent + ResetEvent (:574-581): the game must not load / reset our ids from its save data
@@ -635,9 +651,12 @@ int pre_skip_ours_inner(void** argv) {
 }
 int pre_skip_ours(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    __try { return pre_skip_ours_inner(argv); }
+    int64_t pt = perf::begin();
+    int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    __try { rc = pre_skip_ours_inner(argv); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("skip_ours_pre"); }
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    perf::end(perf::OptHooks, pt);
+    return rc;
 }
 void post_skip_ours(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 

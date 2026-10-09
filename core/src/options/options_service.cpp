@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "../sf6core_internal.h"
+#include "../perf.hpp"
 #include "opt_common.hpp"
 #include "guid_text.hpp"
 #include "options.hpp"
@@ -343,7 +344,9 @@ void options_frame() {
 }
 void options_pump() {
     if (!usable() || core_closing()) return;
+    int64_t pt = perf::begin();
     try { pump_now(); } catch (...) { ++g_faults; }
+    perf::end(perf::OptionsPump, pt);
 }
 
 // ---- the API (sf6core_api.h, increment 6) --------------------------------------------------------------------------
