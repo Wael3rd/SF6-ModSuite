@@ -57,13 +57,13 @@ When the core's own `reframework_plugin_initialize` runs:
 
 | Context | Safe calls |
 |---|---|
-| Client's `reframework_plugin_initialize` | `sf6core_get_api`, `register_client`, `set_flow_callback`, `set_frame_callback`, `get_version`, `get_flow_id`, `log`, `get_client_state`, `txt_*` (the hook comes with the first frame) |
+| Client's `reframework_plugin_initialize` | `sf6core_get_api`, `register_client`, `set_flow_callback`, `set_frame_callback`, `get_version`, `get_flow_id`, `log`, `get_client_state`, `txt_*` (the hook comes with the first frame), `pm_*` (the engine comes with the first frame) |
 | Inside a flow/frame callback (game thread) | `get_flow_id`, `log`, `get_client_state`, `set_flow_callback`, `set_frame_callback` |
-| Any thread | `get_version`, `get_flow_id`, `log`, `get_client_state`, `txt_*` |
+| Any thread | `get_version`, `get_flow_id`, `log`, `get_client_state`, `txt_*`, `pm_*` (also from the pause-menu callbacks, which run on the game's UI job threads: see increment 9) |
 
 `register_client` and `unregister_client` acquire an internal mutex. They are safe from any thread, but `unregister_client` must NOT be called from inside a callback (deadlock-free, but the handle is in use by the dispatch loop).
 
-All callbacks run on the **game thread**, inside the core's single `LateUpdateBehavior` callback. No callback ever fires before the core's init is complete.
+All callbacks run on the **game thread**, inside the core's single `LateUpdateBehavior` callback, except the training pause-menu callbacks (increment 9), which run on the game's UI job threads inside the menu's own update. No callback ever fires before the core's init is complete.
 
 ## String ownership
 
@@ -314,6 +314,33 @@ if (SF6CORE_HAS(api, txt_status) && api->txt_new(client, "My row", guid) == SF6C
   the game closes. `txt_release` always works.
 - **Size.** The table grows with the texts the clients keep; `txt_status` shows the count per client and the log warns
   when one client holds 1000, 10000... texts.
+
+## Function list (increment 9 -- Training pause menu, ADR-0016, appended)
+
+The game's training pause menu as a service: see `PAUSE_MENU.md`. The engine's hooks are installed on the first frame
+after any client calls `pm_set_callbacks` (no cost without clients). Pages and rows are built and put into the menu by
+the core on the game thread with the menu closed; `pm_page`, `pm_row` and `pm_remove` record what that pass does.
+Clients probe the increment with `SF6CORE_HAS(api, pm_status)`.
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 82 | `pm_set_callbacks` | `SF6CoreStatus (client, const SF6CorePmCallbacks*)` | Any | Copied; ERR_DISABLED when the engine could not be installed |
+| 83 | `pm_page` | `int64_t (client, const SF6CorePmPageDesc*)` | Any | A sub-page of a primary tab's strip; page id, -1 on failure |
+| 84 | `pm_row` | `int64_t (client, int64_t page, const SF6CorePmRowDesc*)` | Any | Button or spin (capacity 1..64), 13 rows per page; row id, -1 on failure |
+| 85 | `pm_set_texts` | `SF6CoreStatus (client, int64_t page_or_row, const char* title, const char* guide)` | Any | In place; NULL = unchanged |
+| 86 | `pm_set_options` | `SF6CoreStatus (client, int64_t row, const char* const* labels, uint32_t n)` | Any | A spin's labels in place; the count shown follows `n` (at most the capacity) |
+| 87 | `pm_remove` | `SF6CoreStatus (client, int64_t page_or_row)` | Any | Out of the menu at the next pass; texts released after |
+| 88 | `pm_page_shown` | `int32_t (int64_t page)` | Any | 1 while the menu shows the page (live check) |
+| 89 | `pm_row_part` | `void* (int64_t row)` | Any | The row's `app.UIPartsGroup` while its page is shown, NULL otherwise |
+| 90 | `pm_status` | `uint32_t (char* buf, uint32_t cap)` | Any | One-line state; length written (truncated to cap-1) |
+
+### Training pause-menu callbacks
+
+`SF6CorePmCallbacks` (`on_decide`, `spin_value`, `on_spin`, `on_page_shown`, `hints`) run **synchronously on the game's
+UI job threads**, inside the menu's own update, several threads at once: unlike every other callback of this ABI they
+do not run in the core's `LateUpdateBehavior` (only `on_page_shown(page, 0)` at a menu close does). The client must be
+thread-safe and must never call the menu's update methods back (R4); any `pm_*` function may be called from them.
+They are SEH-guarded and a fault counts on the client's breaker; a disabled or unregistered client is skipped.
 
 ## Lua bridge API
 

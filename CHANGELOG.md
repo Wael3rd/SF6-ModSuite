@@ -10,7 +10,20 @@
   own on the game's text lookup. Each text belongs to its mod: the option dialogs never purge it, it stays through a
   circuit-breaker trip, and it is released by the mod or when the mod unregisters. Nothing changes for a core whose
   mods use no texts (the hook is installed on the first text).
+- **Training pause menu** (ABI increment 9, appended): `pm_set_callbacks`, `pm_page`, `pm_row`, `pm_set_texts`,
+  `pm_set_options`, `pm_remove`, `pm_page_shown`, `pm_row_part`, `pm_status`. A mod adds its own pages to the training
+  pause menu (a sub-page next to the game's ones, e.g. in Recording Settings) with buttons and spins; the core builds
+  them as the game's own menu data, answers the game for the mod's rows only (the game's rows are left to the game),
+  renders the spins (up to 64 options, labels changed in place, the arrows set apart and long labels shrunk on request)
+  and adds the mods' key-guide hints to the bar at the bottom. One engine for every mod; nothing is hooked until a mod
+  uses it, and every method is checked first for machine code it shares with other methods of the game: such a method
+  is not hooked (logged), so the service cannot slow the game down the way a shared hook does. See
+  [core/docs/PAUSE_MENU.md](core/docs/PAUSE_MENU.md).
+- **The game's own dynamic rows of the training pause menu are kept**, such as "End Training Session" in the Battle Hub
+  training room: the clean-up at each build of the option window removed every row of that kind; it now removes only
+  rows the core built and no longer uses.
 - `docs/ABI.md` lists the functions of increments 6 (option dialogs) and 7 (effective selection) too.
+- Not run in the game yet: the client texts and the training pause menu (a test page: `pm_page` in the test client).
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 

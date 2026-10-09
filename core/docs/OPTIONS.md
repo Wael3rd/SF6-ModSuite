@@ -51,6 +51,14 @@ SF6_ColorModNative 0.18.5 unchanged.
 - `opt_status` reports the table as `guid_text on=.. faults=.. issued=.. live=.. clients=..` (`clients` = the client
   texts among the live ones); `txt_status` gives the client side (texts per client, lookups, hits).
 
+## The training pause menu
+
+- The option engine refuses `TrainingManager.OpenMenu` while its window is up and 20 ticks after (the Esc that closes
+  a dialog also reaches the pause menu); this hook stays the only `OpenMenu` hook of the core (the pause-menu service
+  of increment 9 does not hook it).
+- At each build it purges the DYNAMIC rows of the pause menu's primary tabs that the core built and no longer owns
+  (since 0.8.0, `pausemenu::dyn_row_removable`): the game's own rows and unknown rows stay. See `PAUSE_MENU.md`.
+
 ## Not yet
 
 - A Lua client API: `NativeOptions.lua` (training suite) still has its own engine / driver; it must not be loaded
