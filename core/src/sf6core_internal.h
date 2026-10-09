@@ -99,6 +99,8 @@ const SF6CoreAPI* sf6core_api_ptr();
 
 void display_set_game_thread(DWORD tid);
 bool is_game_thread();
+// True only on the recorded game thread (false before the first frame records it, unlike is_game_thread).
+bool on_recorded_game_thread();
 void display_log_init();
 void lua_bridge_init(const REFrameworkPluginFunctions* functions);
 
@@ -157,5 +159,12 @@ void query_client_state_and_suspended(const char* client_id,
 
 // Safe handle_fault by client id (re-looks up the client under s_registry_mutex).
 void handle_fault_by_id(const char* client_id, DWORD exc_code, const char* phase);
+
+// ========================================================================
+// Increment 8: client texts (texts.cpp, ADR-0006 amendment 2026-10-09)
+// ========================================================================
+
+void texts_frame();                               // start of each core frame: the hook, when texts are wanted
+void texts_release_client(SF6CoreClient* c);      // unregister_client, once the client is inactive
 
 #endif // SF6CORE_INTERNAL_H

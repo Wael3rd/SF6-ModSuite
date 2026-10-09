@@ -15,8 +15,13 @@
 
 namespace dialogs::guid_text {
 
-bool install();   // Install the GetMessage hook; false on a hard failure
-bool ready();     // Hook in place and not switched off by faults
+// Install the GetMessage hook; false on a failure. Idempotent and serialized: the option service and the client
+// texts (increment 8) both call it, the first caller installs, the others find it in place. A hard failure (type or
+// method not found, add_hook refused) is final.
+bool install();
+bool installed();       // the hook was installed (it may have been switched off by faults since: see ready())
+bool install_failed();  // install() failed for good
+bool ready();           // Hook in place and not switched off by faults
 
 // Write a GuidBytes into a managed object's System.Guid field (16 bytes at the field's offset, :101-104 set_guid).
 bool set_field(void* obj, const char* field_name, const GuidBytes& gb);

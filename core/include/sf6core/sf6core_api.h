@@ -606,6 +606,42 @@ typedef struct SF6CoreAPI {
     int32_t       (SF6CORE_CALL *sel_get_effective)(int32_t fighter, int32_t costume,
                                                     int32_t* real_costume, int32_t* real_colour);
 
+    /* -- Increment 8: client texts (ADR-0006 amendment, append-only) ---------- */
+
+    /* Message GUIDs that the game resolves to the client's own texts through
+     * app.helper.hMsg.GetMessage(System.Guid), at each draw: data-driven UI
+     * that carries a message id (training pause-menu rows, input-guide
+     * entries...). One table and one GetMessage hook in the process, shared
+     * with the option dialogs (increment 6). The hook is installed on the
+     * first txt_new of any client: at once when that call runs on the game
+     * thread after the core's init (a frame or flow callback), otherwise at
+     * the start of the next core frame -- create the texts before putting
+     * their GUIDs into the game's data. Any thread may call txt_*.
+     *
+     * A client's texts are its own: the option engine never purges them;
+     * they survive a breaker trip (the game may still show them) and are
+     * released by txt_release or when the client unregisters. Releasing a
+     * text still shown makes the game show nothing for it: release after
+     * removing the data that carries it. */
+
+    /* A fresh message GUID that the core's hMsg.GetMessage hook resolves to
+     * utf8 (NULL = ""). One GUID per call, never shared by two texts (R6).
+     * ERR_DISABLED: client unregistered, game closing, or the hook could not
+     * be installed / was switched off by faults (nothing stored). */
+    SF6CoreStatus (SF6CORE_CALL *txt_new)(SF6CoreClient* client, const char* utf8, uint8_t out_guid16[16]);
+    /* New text for one of the client's GUIDs, in place (the game resolves it
+     * at each draw). ERR_NOT_FOUND: not one of the client's GUIDs. */
+    SF6CoreStatus (SF6CORE_CALL *txt_set)(SF6CoreClient* client, const uint8_t guid16[16], const char* utf8);
+    /* Forget one of the client's GUIDs; NULL = all of them.
+     * ERR_NOT_FOUND: not one of the client's GUIDs. */
+    SF6CoreStatus (SF6CORE_CALL *txt_release)(SF6CoreClient* client, const uint8_t guid16[16]);
+    /* Write a System.Guid value field of a managed object (guard chain of
+     * obj_set_*; ERR_TYPE when the field is not a System.Guid). */
+    SF6CoreStatus (SF6CORE_CALL *obj_set_guid)(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]);
+    /* One-line state for logs: hook, texts per client, lookups. Returns the
+     * length written (truncated to cap-1). */
+    uint32_t      (SF6CORE_CALL *txt_status)(char* buf, uint32_t cap);
+
 } SF6CoreAPI;
 
 #ifdef __cplusplus

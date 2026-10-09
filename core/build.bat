@@ -62,7 +62,7 @@ echo === Building sf6core_native.dll ===
 cl %CFLAGS% /DSF6CORE_EXPORTS /I third_party\lua /Fe:..\build\core\sf6core_native.dll ^
     src\sf6core.cpp src\display.cpp src\lua_bridge.cpp src\discovery.cpp src\perf.cpp ^
     src\options\options_service.cpp src\options\options.cpp src\options\options_core.cpp ^
-    src\options\guid_text.cpp src\options\guid_table.cpp src\selection.cpp ^
+    src\options\guid_text.cpp src\options\guid_table.cpp src\selection.cpp src\texts.cpp ^
     /link /DLL ..\build\core\lua.lib rpcrt4.lib
 if errorlevel 1 (
     echo ERROR: sf6core_native.dll build failed

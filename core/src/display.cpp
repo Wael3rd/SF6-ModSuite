@@ -48,6 +48,11 @@ bool is_game_thread() {
     return GetCurrentThreadId() == expected;
 }
 
+bool on_recorded_game_thread() {
+    DWORD expected = s_game_thread_id.load(std::memory_order_acquire);
+    return expected != 0 && GetCurrentThreadId() == expected;
+}
+
 // ========================================================================
 // Per-client display stats
 // ========================================================================
@@ -1482,6 +1487,55 @@ SF6CoreStatus SF6CORE_CALL api_obj_set_color(SF6CoreClient* client, void* obj, c
             return SF6CORE_OK;
         }
         memcpy(raw, &c, sizeof(ViaColor));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        exc = GetExceptionCode();
+        DispatchCtx ctx = { client, obj, field, st, false };
+        on_display_fault(&ctx, exc);
+        return SF6CORE_ERR_FAULTED;
+    }
+    DispatchCtx ctx = { client, obj, field, st, false };
+    on_display_success(&ctx);
+    return SF6CORE_OK;
+}
+
+// obj_set_guid (increment 8, ADR-0006 amendment): System.Guid value field (16 bytes), e.g. a client text's GUID
+// (txt_new) into TrainingMenuData._MessageID. Same guard chain as obj_set_*, plus a type check: the field must be a
+// System.Guid, never written past.
+static bool is_guid_field_type(const REFrameworkSDKData* sdk, REFrameworkTypeDefinitionHandle ft) {
+    if (!ft || sdk->type_definition->get_valuetype_size(ft) != 16) return false;
+    if (s_dtc.t_guid && ft == s_dtc.t_guid) return true;
+    const char* ns = sdk->type_definition->get_namespace(ft);
+    const char* nm = sdk->type_definition->get_name(ft);
+    return ns && nm && strcmp(ns, "System") == 0 && strcmp(nm, "Guid") == 0;
+}
+
+SF6CoreStatus SF6CORE_CALL api_obj_set_guid(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]) {
+    if (!field || !guid16) return SF6CORE_ERR_INVALID_ARG;
+    DisplayStatsInternal* st = nullptr;
+    auto rc = guard_prefix(client, obj, field, false, &st);
+    if (rc != SF6CORE_OK) return rc;
+    resolve_display_types();   // System.Guid's handle; the name check covers a failed resolution
+
+    auto* sdk = s_sdk;
+    DWORD exc = 0;
+    __try {
+        auto td = sdk->managed_object->get_type_definition((REFrameworkManagedObjectHandle)obj);
+        REFrameworkFieldHandle fh = nullptr;
+        while (td) {
+            fh = sdk->type_definition->find_field(td, field);
+            if (fh) break;
+            td = sdk->type_definition->get_parent_type(td);
+        }
+        if (!fh) return SF6CORE_ERR_NOT_FOUND;
+        if (!is_guid_field_type(sdk, sdk->field->get_type(fh))) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+        void* raw = sdk->field->get_data_raw(fh, obj, false);
+        if (!raw) return SF6CORE_ERR_FAULTED;
+
+        if (memcmp(raw, guid16, 16) == 0) {
+            st->skipped_identical.fetch_add(1);
+            return SF6CORE_OK;
+        }
+        memcpy(raw, guid16, 16);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         exc = GetExceptionCode();
         DispatchCtx ctx = { client, obj, field, st, false };

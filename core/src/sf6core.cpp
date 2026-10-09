@@ -37,7 +37,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.7.3";
+static constexpr const char* CORE_VERSION = "0.8.0";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -1986,6 +1986,12 @@ uint32_t      SF6CORE_CALL api_opt_status(char*, uint32_t);
 // Increment 7: effective selection (defined in selection.cpp)
 SF6CoreStatus SF6CORE_CALL api_sel_set_effective(SF6CoreClient*, int32_t, int32_t, int32_t, int32_t);
 int32_t       SF6CORE_CALL api_sel_get_effective(int32_t, int32_t, int32_t*, int32_t*);
+// Increment 8: client texts (defined in texts.cpp; obj_set_guid in display.cpp)
+SF6CoreStatus SF6CORE_CALL api_txt_new(SF6CoreClient*, const char*, uint8_t[16]);
+SF6CoreStatus SF6CORE_CALL api_txt_set(SF6CoreClient*, const uint8_t[16], const char*);
+SF6CoreStatus SF6CORE_CALL api_txt_release(SF6CoreClient*, const uint8_t[16]);
+SF6CoreStatus SF6CORE_CALL api_obj_set_guid(SF6CoreClient*, void*, const char*, const uint8_t[16]);
+uint32_t      SF6CORE_CALL api_txt_status(char*, uint32_t);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2059,6 +2065,10 @@ static void on_late_update() {
     int64_t pt_brk = perf::begin();
     update_breakers(snapshot);
     perf::end(perf::UpdateBreakers, pt_brk);
+
+    // -- 2b. Client texts (increment 8): the GetMessage hook, before any
+    //        callback, for texts made off the game thread or before init --
+    texts_frame();
 
     // -- 3. Flow-change callbacks --
     if (new_flow != s_flow_id && new_flow != -1) {
@@ -2222,6 +2232,9 @@ static void SF6CORE_CALL api_unregister_client(SF6CoreClient* client) {
         auto it2 = std::find(s_pending.begin(), s_pending.end(), client);
         if (it2 != s_pending.end()) s_pending.erase(it2);
     }
+    // Client texts (increment 8): released once the client is inactive, so a
+    // txt_new racing with this call stores nothing after the release
+    texts_release_client(client);
 
     push_breadcrumb(BC_UNREGISTER, client->client_id, nullptr);
     core_log(SF6CORE_LOG_INFO, client->client_id, "unregistered");
@@ -2579,7 +2592,13 @@ static const SF6CoreAPI s_api = {
     api_opt_status,
     // -- Increment 7: effective selection (ADR-0014) --
     api_sel_set_effective,
-    api_sel_get_effective
+    api_sel_get_effective,
+    // -- Increment 8: client texts (ADR-0006 amendment 2026-10-09) --
+    api_txt_new,
+    api_txt_set,
+    api_txt_release,
+    api_obj_set_guid,
+    api_txt_status
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)
