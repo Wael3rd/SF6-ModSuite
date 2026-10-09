@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.10.5 (2026-10-09) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.10.5 | ends a slowdown in fights; a mod's shared prop on the select and continue screens |
+| SF6 Color Mod | 0.19.10 | fixes the cause of memory corruption crashes; no more stutter when a fight starts |
+| SF6 Native Core | 0.7.3 | performance log |
+
+Updating the Slots Loader in Fluffy Mod Manager: disable or remove the previous version first.
+
+### SF6 Color Mod 0.19.10
+- **Fixes the cause of crashes of the game** (in a fight, when a fight loads or ends, or when the game closes with
+  "corrupted thread-free list" in `re2_framework_log.txt`). The memory scan that finds the Drive colours could take
+  bytes that only looked like a colour, at addresses that are not 4-byte aligned, for colour slots — one of them
+  inside the game's own memory manager — and kept them in its spots file: each fight then wrote a colour there. A
+  colour is now never written at an unaligned address, the scan keeps aligned slots only, and the bad slots already
+  in the spots file are ignored.
+- **No more stutter when a fight starts.** The fight-start work (finding the Drive effects, the memory scan, writing
+  the colours) took 13 to 50 ms in single frames during the fight intro; it is now spread over the first frames, at
+  most about 1 ms per frame. The Drive settings are read once when the game starts instead of when a fighter loads
+  (one read took 56 ms), and the files the mod writes (journal, status, spots) are written by a background thread.
+- Drive Impact painting at each effect does less work (no repeated page checks or allocations per colour).
+- The performance log counts each hooked game method on its own; a write journal for crash investigations
+  (`write_journal_on.txt`, see [colormod/README.md](colormod/README.md)).
+
+### SF6 Slots Loader 1.10.5
+- **Ends a slowdown in fights.** The plugin hooked a method of the stage select screen whose code the game shares
+  with methods it calls everywhere: about 240,000 calls per second, in fights too, each through REFramework's hook,
+  and a visibility check of the stage select screen ran every frame. That method is no longer hooked; the screen's
+  end is seen by its own end event or a check every 30 frames while it is shown. Measured in ranked matches: seconds
+  below 58 fps in fights went from 10.8 % to 3 % (the rest are the game's own heavy frames, e.g. Critical Arts).
+- **A mod's replacement of a shared prop shows on the character select and continue screens, for that outfit
+  only** (e.g. a mod that replaces Ingrid's monad at `000/30`). Those screens load props through prefabs named by the
+  costume scene: the slot gets its own copies of those prefabs, pointing at its relocated files.
+- Objects are checked again just before the online alias changes them.
+- Performance log (`reframework/data/perf_on.txt`) and write journal (`write_journal_on.txt`), off by default.
+
+### SF6 Native Core 0.7.3
+- Performance log (`reframework/data/perf_on.txt`, off by default): every client's frame callback, the display
+  commit, the option service, element hiding and the API calls timed per frame.
+
+### Known issues
+- The select-screen prop of a slot (Slots Loader 1.10.5) is built and checked in the costume pak; its display on the
+  select screen has not been confirmed in game yet.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.10.4 (2026-10-08) — SF6 Mod Suite
 
 | Package | Version | |
