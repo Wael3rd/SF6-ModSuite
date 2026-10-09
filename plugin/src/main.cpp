@@ -4,6 +4,8 @@
 // and no work in progress it returns at once, having read nothing but this plugin's own memory.
 #include "slots.hpp"
 #include "slots_ui.hpp"
+#include "perf.hpp"
+#include "wjournal.hpp"
 
 namespace slots {
 
@@ -43,6 +45,9 @@ bool on_message(void* /*hwnd*/, unsigned int msg,
 
 void on_late_update() {
     ++g_frame;
+    perf::frame();
+    wjournal::frame();
+    int64_t pt_outer = perf::begin();
 
     // Closing guard: skip all game work. Cancel WM_CLOSE after 30 s of frames.
     if (g_closing.load(std::memory_order_relaxed)) {
@@ -52,12 +57,16 @@ void on_late_update() {
             s_close_frame = 0;
             logf("closing: cancelled, the plugin resumes");
         } else {
+            perf::end(perf::OnLateUpdate, pt_outer);
             return;
         }
     }
 
     uint32_t ev = g_events.exchange(0, std::memory_order_acq_rel);
-    if (!ev && !g_costumes_busy && !g_stages_busy) return;
+    if (!ev && !g_costumes_busy && !g_stages_busy) {
+        perf::end(perf::OnLateUpdate, pt_outer);
+        return;
+    }
     try {
         if (!g_hooks) {
             g_hooks = true;
@@ -66,8 +75,16 @@ void on_late_update() {
             stages::install_hooks();
         }
         if (ev & EV_DIAG) diag_flush();
-        costumes::tick(ev);
-        stages::tick(ev);
+        {
+            int64_t pt = perf::begin();
+            costumes::tick(ev);
+            perf::end(perf::CostumesTick, pt);
+        }
+        {
+            int64_t pt = perf::begin();
+            stages::tick(ev);
+            perf::end(perf::StagesTick, pt);
+        }
         g_costumes_busy = costumes::busy();
         g_stages_busy = stages::busy();
     } catch (const std::exception& e) {
@@ -75,6 +92,8 @@ void on_late_update() {
     } catch (...) {
         logf("EXCEPTION (unknown)");
     }
+
+    perf::end(perf::OnLateUpdate, pt_outer);
 }
 
 } // namespace

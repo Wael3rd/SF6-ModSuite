@@ -296,6 +296,7 @@ int hook_all(TD* td, const char* method, REFPreHookFn pre, REFPostHookFn post) {
             if (!m || !m->get_name() || strcmp(m->get_name(), method) != 0 || done.count(m)) continue;
             done.insert(m);
             m->add_hook(pre ? pre : hook_pass, post ? post : hook_post_pass, false);
+            { auto* dt = m->get_declaring_type(); logf("hook: %s.%s hooked on declaring type %s", td->get_full_name().c_str(), method, dt ? dt->get_full_name().c_str() : "?"); }
             ++n;
         }
         if (n) break;   // the type's own methods (overrides), not the ones they replace

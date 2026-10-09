@@ -9,6 +9,8 @@
 // game, UP / DOWN on it, the VS screen shown or rewritten. Without stage mods: no hook at all.
 #include "slots.hpp"
 #include "slots_ui.hpp"
+#include "perf.hpp"
+#include "wjournal.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -100,7 +102,7 @@ void save_state() {
         first = false;
     }
     o += first ? "}\n}\n" : "\n    }\n}\n";
-    if (!write_file(kState, o)) logf("stages: cannot write state.json");
+    { int64_t pt = perf::begin(); if (!write_file(kState, o)) logf("stages: cannot write state.json"); perf::end(perf::StateWrite, pt); }
 }
 
 // 0 = vanilla, i = variants[i - 1]
@@ -126,12 +128,14 @@ void set_selected(uint32_t stage, int idx) {
 
 // Ported to slots::ui (SL-13): compare-before-write handled by the core / legacy.
 void set_text(Obj* text_obj, const std::string& s) {
+    if (wjournal::on()) wjournal::log("UI_TEXT obj=%p text=%.80s", (void*)text_obj, s.c_str());
     slots::ui::set_text(text_obj, s.c_str());
 }
 
 // Ported to slots::ui (SL-14): compare-before-write handled by the core / legacy.
 void set_texture(Obj* tex_obj, Obj* holder) {
     if (!tex_obj || !holder) return;
+    if (wjournal::on()) wjournal::log("UI_TEX obj=%p holder=%p", (void*)tex_obj, (void*)holder);
     slots::ui::set_tex(tex_obj, holder);
 }
 
@@ -374,14 +378,16 @@ bool vs_work() {
 // Hooks
 // ---------------------------------------------------------------------------------------------
 
-int pre_shown(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+template <perf::Id ID> int pre_shown(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int64_t pt = perf::begin();
     if (argc >= 2) g_hook_param.store(reinterpret_cast<uintptr_t>(argv[1]));
     post(EV_STAGE_SHOW);
+    perf::end(ID, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-int pre_hidden(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_STAGE_HIDE); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-void post_dirty(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return; post(EV_STAGE_DIRTY); }
+template <perf::Id ID> int pre_hidden(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_STAGE_HIDE); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+template <perf::Id ID> void post_dirty(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return; int64_t pt = perf::begin(); post(EV_STAGE_DIRTY); perf::end(ID, pt); }
 
 constexpr uint32_t kTrigger = 2, kRepeat = 8;
 void direction(void** argv, int step) {
@@ -390,16 +396,18 @@ void direction(void** argv, int step) {
     uint32_t flag = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(argv[2])) & 0xF;
     if (flag & (kTrigger | kRepeat)) { g_pending.fetch_add(step); post(EV_STAGE_INPUT); }
 }
-int pre_up(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; if (argc >= 3) direction(argv, -1); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_down(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; if (argc >= 3) direction(argv, 1); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_up(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); if (argc >= 3) direction(argv, -1); perf::end(perf::HkAgentInputUp, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_down(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); if (argc >= 3) direction(argv, 1); perf::end(perf::HkAgentInputDown, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 
 int pre_vs(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int64_t pt = perf::begin();
     if (argc >= 2) g_vs_comp.store(reinterpret_cast<uintptr_t>(argv[1]));
     post(EV_VS);
+    perf::end(perf::HkVsActivate, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-void post_vs(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return; post(EV_VS); }
+template <perf::Id ID> void post_vs(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return; int64_t pt = perf::begin(); post(EV_VS); perf::end(ID, pt); }
 
 } // namespace
 
@@ -417,21 +425,23 @@ void install_hooks() {
     if (!g_variant_count) return;
     auto* tdb = api().tdb();
     auto* prm = tdb->find_type("app.menu.UIFlowStageSelect.Param");
-    hook_all(prm, "GotObject", pre_shown, nullptr);
-    hook_all(prm, "BeforeShowObject", pre_shown, nullptr);
-    hook_all(prm, "ShowedObject", pre_shown, nullptr);
-    hook_all(prm, "BeforeHideObject", pre_hidden, nullptr);
-    hook_all(prm, "OnEnd", pre_hidden, nullptr);
-    hook_all(prm, "SelectionChangedWithArgs_List", nullptr, post_dirty);
-    hook_all(prm, "SetPreview", nullptr, post_dirty);
-    hook_all(prm, "ChangePreview", nullptr, post_dirty);
+    hook_all(prm, "GotObject", pre_shown<perf::HkStgShown_GotObject>, nullptr);
+    hook_all(prm, "BeforeShowObject", pre_shown<perf::HkStgShown_BeforeShowObject>, nullptr);
+    hook_all(prm, "ShowedObject", pre_shown<perf::HkStgShown_ShowedObject>, nullptr);
+    // BeforeHideObject is NOT hooked: its native code is shared with methods the whole game calls (09/10: 236,000
+    // calls per second, in fights too, each through REFramework's hook; the hide event then ran the visibility check
+    // every frame). The screen's end is OnEnd, or the poll below while it is shown.
+    hook_all(prm, "OnEnd", pre_hidden<perf::HkStgHidden_OnEnd>, nullptr);
+    hook_all(prm, "SelectionChangedWithArgs_List", nullptr, post_dirty<perf::HkStgDirty_SelectionChangedWithArgs_List>);
+    hook_all(prm, "SetPreview", nullptr, post_dirty<perf::HkStgDirty_SetPreview>);
+    hook_all(prm, "ChangePreview", nullptr, post_dirty<perf::HkStgDirty_ChangePreview>);
     auto* agent = tdb->find_type("app.UIAgent");
     hook_all(agent, "InputUp", pre_up, nullptr);
     hook_all(agent, "InputDown", pre_down, nullptr);
     auto* vs = tdb->find_type("app.esports.VSInfoOffline");
     hook_all(vs, "Activate", pre_vs, nullptr);
-    hook_all(vs, "SetDispInfo", nullptr, post_vs);
-    hook_all(vs, "SetTexture", nullptr, post_vs);
+    hook_all(vs, "SetDispInfo", nullptr, post_vs<perf::HkVsSetDispInfo>);
+    hook_all(vs, "SetTexture", nullptr, post_vs<perf::HkVsSetTexture>);
 }
 
 bool busy() {
@@ -455,6 +465,8 @@ void tick(uint32_t ev) {
         if (visible && !g_scr.active) { screen_shown(g_scr.agent); g_scr.check_until = 0; }
         else if (!visible && g_scr.active) screen_hidden();
     }
+    // while the screen is shown, its visibility is polled every 30 frames (BeforeHideObject is not hooked)
+    if (g_scr.active && !g_scr.check_until && g_frame % 30 == 0 && !shown(g_scr.agent)) screen_hidden();
     if (g_scr.active) {
         bool input = (ev & EV_STAGE_INPUT) != 0;
         if (ev & EV_STAGE_DIRTY) { g_scr.settle = std::max(g_scr.settle, 1); g_scr.need = true; }

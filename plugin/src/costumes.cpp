@@ -15,6 +15,8 @@
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
 #include "slots.hpp"
 #include "slots_ui.hpp"
+#include "perf.hpp"
+#include "wjournal.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -139,7 +141,7 @@ void save_state() {
         o += b; first = false;
     }
     o += "\n    }\n}\n";
-    if (!write_file(kState, o)) logf("costumes: cannot write state.json");
+    { int64_t pt = perf::begin(); if (!write_file(kState, o)) logf("costumes: cannot write state.json"); perf::end(perf::StateWrite, pt); }
 }
 
 void set_intent_slot(int fid, int slot, const char* why) {
@@ -269,13 +271,17 @@ std::map<int, Obj*> save_entries() {
 int get_cos(Obj* e) { int32_t v = -1; get_i32(e, "MatchingFighterCostume", v); return v; }
 int get_col(Obj* e) { int32_t v = -1; get_i32(e, "MatchingFighterColor", v); return v; }
 void set_cos(Obj* e, int v, int fid, const char* why) {
-    if (get_cos(e) == v) return;
+    int old_v = get_cos(e);
+    if (old_v == v) return;
     set_i32(e, "MatchingFighterCostume", v);
+    if (wjournal::on()) wjournal::log("SAVE obj=%p MatchingFighterCostume old=%d new=%d F%d (%s)", (void*)e, old_v, v, fid, why);
     logf("[F%d] save MatchingFighterCostume -> %d (%s)", fid, v, why);
 }
 void set_col(Obj* e, int v, int fid, const char* why) {
-    if (get_col(e) == v) return;
+    int old_v = get_col(e);
+    if (old_v == v) return;
     set_i32(e, "MatchingFighterColor", v);
+    if (wjournal::on()) wjournal::log("SAVE obj=%p MatchingFighterColor old=%d new=%d F%d (%s)", (void*)e, old_v, v, fid, why);
     logf("[F%d] save MatchingFighterColor -> %d (%s)", fid, v, why);
 }
 
@@ -346,7 +352,11 @@ bool give_ownership() {
         bool has = call_bool(ci, "ExistsSaveData", { arg_i32(s.record_id) }, &ok);
         if (!ok) continue;
         any = true;
-        if (!has) { call(ci, "AddDlcSaveData", { arg_i32(s.record_id) }); ++added; }
+        if (!has) {
+            call(ci, "AddDlcSaveData", { arg_i32(s.record_id) });
+            if (wjournal::on()) wjournal::log("OWN_ADD obj=%p AddDlcSaveData record=%d", (void*)ci, s.record_id);
+            ++added;
+        }
     }
     if (added || !g_owned_once) logf("costumes: ownership given to %d of %zu slots", added, g_slots.size());
     if (any && !g_owned_once) { g_owned_once = true; if (g_revoke_cursor == -1) g_revoke_cursor = kStaticMin; }
@@ -367,6 +377,7 @@ void revoke_slice() {
         bool ok = false;
         if (call_bool(ci, "ExistsSaveData", { arg_i32(id) }, &ok) && ok) {
             call(ci, "DeleteDlcSaveData", { arg_i32(id) });
+            if (wjournal::on()) wjournal::log("OWN_DEL obj=%p DeleteDlcSaveData record=%d", (void*)ci, id);
             ++revoked;
         }
     }
@@ -390,7 +401,11 @@ void color_cleanup_slice() {
         bool ok1 = false, ok2 = false;
         bool has_rec = call_bool(g_color_dict, "ContainsKey", { arg_i32(id) }, &ok1);
         bool owned = call_bool(ci, "ExistsSaveData", { arg_i32(id) }, &ok2);
-        if (ok1 && ok2 && owned && !has_rec) { call(ci, g_color_delete.c_str(), { arg_i32(id) }); ++revoked; }
+        if (ok1 && ok2 && owned && !has_rec) {
+            call(ci, g_color_delete.c_str(), { arg_i32(id) });
+            if (wjournal::on()) wjournal::log("COL_DEL obj=%p %s id=%d", (void*)ci, g_color_delete.c_str(), id);
+            ++revoked;
+        }
     }
     if (revoked) logf("costumes: %d orphan colour ownerships taken back", revoked);
     g_color_cursor = stop >= kColorMax ? -2 : stop + 1;
@@ -472,13 +487,18 @@ void insert_colors() {
                     ui::set_i64(holder, "RefCount", 1);
                     ui::set_ref(holder, "RecordData", rec);
                     ui::dict_add(dict, id, holder);
+                    if (wjournal::on()) wjournal::log("BOOT_COLOR dict_add dict=%p id=%d holder=%p rec=%p costId=%d color=%d",
+                        (void*)dict, id, (void*)holder, (void*)rec, g_slots[i].record_id, c);
                     ++added;
                 }
             }
             if (col_inv) {
                 bool ok2 = false;
                 bool has = call_bool(col_inv, "ExistsSaveData", { arg_i32(id) }, &ok2);
-                if (ok2 && !has && call_bool(col_inv, "AddSaveData", { arg_i32(id) })) ++owned;
+                if (ok2 && !has && call_bool(col_inv, "AddSaveData", { arg_i32(id) })) {
+                    if (wjournal::on()) wjournal::log("BOOT_COL_OWN obj=%p AddSaveData id=%d", (void*)col_inv, id);
+                    ++owned;
+                }
             }
         }
     }
@@ -534,6 +554,7 @@ void insert_select_ui() {
             ui::set_i64(cl, "CostumeId", cos);
             if (g_slots[idx].has_sw) colored += apply_swatches(cl, g_slots[idx]);
             ui::list_add(cd, cl);
+            if (wjournal::on()) wjournal::log("BOOT_UI list_add list=%p clone=%p F%d v%d", (void*)cd, (void*)cl, fid, cos);
             ++n;
         }
     }
@@ -610,6 +631,8 @@ void apply_color(int fid, Obj* d_set) {
     if (ccvd_pair(ccvd, fr.base_min, want, ea, eb)) { da = get_obj(ea, "Data"); db = get_obj(eb, "Data"); }
     if (!da || !db) { logf("[F%d] colour: entries %d/%d not found", fid, fr.base_min, want); return; }
     set_obj(ea, "Data", db); set_obj(eb, "Data", da);
+    if (wjournal::on()) wjournal::log("CCVD_SWAP ccvd=%p ea=%p Data old=%p new=%p eb=%p Data old=%p new=%p F%d a=%d b=%d",
+        (void*)ccvd, (void*)ea, (void*)da, (void*)db, (void*)eb, (void*)db, (void*)da, fid, fr.base_min, want);
     fr.has_csw = true; fr.csw_addr = reinterpret_cast<uintptr_t>(ccvd); fr.csw_a = fr.base_min; fr.csw_b = want;
     fr.csw_da = reinterpret_cast<uintptr_t>(da); fr.csw_db = reinterpret_cast<uintptr_t>(db);
     logf("[F%d] colour %d placed under colour %d", fid, want, fr.base_min);
@@ -625,6 +648,8 @@ void restore_color(int fid, Obj* src_h) {
     if (swap_in_place(fr, ccvd) && ccvd_pair(ccvd, fr.csw_a, fr.csw_b, ea, eb)) {
         auto* da = get_obj(ea, "Data"); auto* db = get_obj(eb, "Data");
         set_obj(ea, "Data", db); set_obj(eb, "Data", da);
+        if (wjournal::on()) wjournal::log("CCVD_RESTORE ccvd=%p ea=%p Data old=%p new=%p eb=%p Data old=%p new=%p F%d",
+            (void*)ccvd, (void*)ea, (void*)da, (void*)db, (void*)eb, (void*)db, (void*)da, fid);
         logf("[F%d] colour put back", fid);
     } else logf("[F%d] colour: the slot's CCVD was loaded again, nothing to put back", fid);
     fr.has_csw = false;
@@ -671,11 +696,13 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
         if (!active && g_frame - fr.last_mount > 120) {
             fr.last_mount = g_frame;
             call(m_f_activate, fr.src_folder);
+            if (wjournal::on()) wjournal::log("MOUNT folder.activate obj=%p F%d v%d", (void*)fr.src_folder, fid, slot);
             logf("[F%d] slot v%d mounted (the game mounted DriveTech)", fid, slot);
         }
         return false;
     }
     if (dst_h && src_h) {
+        if (!alive(dst_h) || !alive(src_h)) return false;   // safety: re-check before use
         uintptr_t addr = reinterpret_cast<uintptr_t>(dst_h);
         if (fr.swapped_addr == addr) return true;
         auto* s_set = get_obj(src_h, "_Setting");
@@ -683,12 +710,14 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
         if (!s_set || !d_set) return false;
         restore_color(fid, src_h);   // a swap left from the previous match, if its CCVD is still there
         auto ow = call(d_set, "overwrite", { arg_obj(s_set) });
+        if (wjournal::on()) wjournal::log("MANIFEST overwrite dst=%p src=%p F%d v%d ok=%d", (void*)d_set, (void*)s_set, fid, slot, ow.exception_thrown ? 0 : 1);
         logf("[F%d] manifest v%d -> v%d = %d", fid, slot, BASE_COS, ow.exception_thrown ? 0 : 1);
         fr.swapped_addr = addr;
         if (!ow.exception_thrown) {
             apply_color(fid, d_set);
             // what the fighter really wears, for the other mods reading its costume / colour (through the core)
             ui::set_effective(fid, BASE_COS, slot, fr.has_csw ? fr.csw_b : -1);
+            if (wjournal::on()) wjournal::log("EFFECTIVE F%d shown=%d real=%d color=%d", fid, BASE_COS, slot, fr.has_csw ? fr.csw_b : -1);
         }
         return true;
     }
@@ -698,7 +727,11 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
 // Between matches (a screen that shows the slot as an outfit of its own): its colours put back
 void restore_all() {
     bool any = false;
-    for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; any |= fr.has_csw; ui::set_effective(fid, BASE_COS, -1, -1); }
+    for (auto& [fid, fr] : g_f) {
+        fr.swapped_addr = 0; any |= fr.has_csw;
+        ui::set_effective(fid, BASE_COS, -1, -1);
+        if (wjournal::on()) wjournal::log("EFFECTIVE_CLR F%d", fid);
+    }
     if (!any) return;
     auto hs = read_holders();
     for (auto& [fid, fr] : g_f) {
@@ -774,16 +807,16 @@ bool own_fighters(std::set<int>& out) {
 // May run on a loading thread: it only records the event.
 int pre_holder_ctor(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    post(EV_HOLDER);
+    int64_t pt = perf::begin(); post(EV_HOLDER); perf::end(perf::HkCosHolderCtor, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
 // ---- hooks: screens ----
-int pre_menu_open(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)  { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_MENU_OPEN); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_menu_close(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_MENU_CLOSE); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_select_start(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_SELECT_START); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_select_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_SELECT_END); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_title_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)    { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; post(EV_TITLE_END); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+template <perf::Id ID> int pre_menu_open(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)  { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_MENU_OPEN); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+template <perf::Id ID> int pre_menu_close(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_MENU_CLOSE); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+template <perf::Id ID> int pre_select_start(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_SELECT_START); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+template <perf::Id ID> int pre_select_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_SELECT_END); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_title_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)    { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_TITLE_END); perf::end(perf::HkCosTitleOnDestroy, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 
 bool g_menu_open = false;
 
@@ -804,18 +837,18 @@ void install_hooks() {
     auto* tdb = api().tdb();
     hook_all(tdb->find_type("app.battle.assets.FighterVisualHolder"), ".ctor", pre_holder_ctor, nullptr);
     auto* ms = tdb->find_type("app.UIFlowMatchingSetting.Param");
-    hook_all(ms, "CreatedObject", pre_menu_open, nullptr);
-    hook_all(ms, "ShowedObject", pre_menu_open, nullptr);
+    hook_all(ms, "CreatedObject", pre_menu_open<perf::HkCosMenuCreatedObject>, nullptr);
+    hook_all(ms, "ShowedObject", pre_menu_open<perf::HkCosMenuShowedObject>, nullptr);
     // closing: OnEnd is not called when the menu is left with Esc (30/09). HidObject is; a sub-menu
     // may hide it too, which the handlers tolerate (ShowedObject puts the slot back)
-    hook_all(ms, "HidObject", pre_menu_close, nullptr);
-    hook_all(ms, "OnEnd", pre_menu_close, nullptr);
+    hook_all(ms, "HidObject", pre_menu_close<perf::HkCosMenuHidObject>, nullptr);
+    hook_all(ms, "OnEnd", pre_menu_close<perf::HkCosMenuOnEnd>, nullptr);
     auto* fs = tdb->find_type("app.battle.bBattleFighterSelectFlow");
-    hook_all(fs, "start", pre_select_start, nullptr);
-    hook_all(fs, "onDestroy", pre_select_end, nullptr);
+    hook_all(fs, "start", pre_select_start<perf::HkCosFlowStart>, nullptr);
+    hook_all(fs, "onDestroy", pre_select_end<perf::HkCosFlowOnDestroy>, nullptr);
     auto* ui = tdb->find_type("app.UIFlowUI10501");
-    hook_all(ui, "Start", pre_select_start, nullptr);
-    hook_all(ui, "End", pre_select_end, nullptr);
+    hook_all(ui, "Start", pre_select_start<perf::HkCosUI10501Start>, nullptr);
+    hook_all(ui, "End", pre_select_end<perf::HkCosUI10501End>, nullptr);
     hook_all(tdb->find_type("app.menu.UIFlowTitle"), "onDestroy", pre_title_end, nullptr);
 }
 
@@ -876,6 +909,7 @@ void tick(uint32_t ev) {
             g_select_logged = false;
             if (!g_mount_until) {
                 logf("costumes: outfit mounted, alias check");
+                if (wjournal::on()) wjournal::log("ALIAS_START frame=%u", g_frame);
                 for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; fr.last_sig.clear(); }
                 g_own_sig.clear();
             }
@@ -883,12 +917,18 @@ void tick(uint32_t ev) {
         }
     }
     if (g_mount_until) {
-        if (g_frame >= g_mount_until) { g_mount_until = 0; logf("costumes: alias check done"); }
+        if (g_frame >= g_mount_until) { g_mount_until = 0; if (wjournal::on()) wjournal::log("ALIAS_END frame=%u", g_frame); logf("costumes: alias check done"); }
         else if (g_frame % 3 == 0) {
-            if (g_menu_open || select_screen_active()) { g_mount_until = 0; logf("costumes: alias check stopped (%s)", g_menu_open ? "Battle Settings" : "select screen"); return; }
+            if (g_menu_open || select_screen_active()) {
+                g_mount_until = 0;
+                if (wjournal::on()) wjournal::log("ALIAS_STOP frame=%u reason=%s", g_frame, g_menu_open ? "menu" : "select");
+                logf("costumes: alias check stopped (%s)", g_menu_open ? "Battle Settings" : "select screen");
+                return;
+            }
             auto hs = read_holders();
             std::set<int> own;
             bool known = own_fighters(own);
+            if (wjournal::on()) wjournal::log("ALIAS_TICK frame=%u holders=%zu known=%d own=%zu", g_frame, hs.size(), known ? 1 : 0, own.size());
             for (auto& [fid, in] : g_intent) if (in.slot && (!known || own.count(fid))) mount_pass(fid, hs);
         }
     }

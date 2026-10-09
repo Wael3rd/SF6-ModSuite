@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-04-sceneuserrefs";
+static const char* LOADER_BUILD_ID = "2026-10-09-selectprefabs";
 
 // ============================================================================
 // Utility
@@ -2451,6 +2451,157 @@ static void add_slot_files(PakWriter& writer,
         }
     }
 
+    // ---- Phase 3c: select/continue screen prefabs ----
+    // The costume scene names option and continue prefabs (esf032_Option_01.pfb,
+    // esf032_Continue_00.pfb...) that reference shared-part meshes and materials.
+    // When the slot relocated 000/ shared files, any prefab naming those files gets
+    // a per-slot copy with repointed paths, and the scene is redirected to it.
+    // Naming: option/prefab/ (6 chars) -> option/pfb<NNN>/ (6 chars), same length.
+    std::unordered_set<std::string> copied_pfb_names; // lowercase filenames of copied prefabs
+    if (!shared_parts.empty()) {
+        auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
+        const PakEntry* se0 = (oc && !oc->scene.empty())
+            ? base_pak.find(pak_path_hash(std::string_view(oc->scene))) : nullptr;
+        if (se0) {
+            auto sd = base_pak.read(*se0);
+            std::string pfb_ver = "17";
+            { auto it = inv.suffixes.find("pfb"); if (it != inv.suffixes.end()) pfb_ver = it->second; }
+
+            // Scan the scene for unique .pfb references under option/prefab/
+            std::vector<std::string> pfb_refs;   // lowercase relative paths (no @)
+            std::unordered_set<std::string> pfb_seen;
+            for (size_t pi = 0; pi + 1 < sd.size(); pi += 2) {
+                size_t pj = pi;
+                std::string ps;
+                while (pj + 1 < sd.size() && sd[pj + 1] == 0 && sd[pj] >= 0x20 && sd[pj] < 0x7f) {
+                    ps += (char)sd[pj]; pj += 2;
+                }
+                if (ps.empty()) continue;
+                size_t lead = ps.find_first_not_of("@ ");
+                if (lead == std::string::npos) { pi = pj; continue; }
+                std::string low = str_lower(ps.substr(lead));
+                if (str_ends_with(low, ".pfb") && low.find("/prefab/") != std::string::npos) {
+                    if (pfb_seen.insert(low).second) pfb_refs.push_back(low);
+                }
+                pi = pj;
+            }
+
+            // Process each prefab: read it, check for references to relocated shared parts,
+            // repoint them, and write a per-slot copy
+            std::string od_s = fd + "/000/";
+            std::string nd_s = fd + "/" + new_f + "/";
+            std::string op_s = fd + "_000_";
+            std::string np_s = fd + "_" + new_f + "_";
+            std::vector<uint8_t> od16, nd16, op16, np16;
+            for (char c : od_s) { od16.push_back((uint8_t)c); od16.push_back(0); }
+            for (char c : nd_s) { nd16.push_back((uint8_t)c); nd16.push_back(0); }
+            for (char c : op_s) { op16.push_back((uint8_t)c); op16.push_back(0); }
+            for (char c : np_s) { np16.push_back((uint8_t)c); np16.push_back(0); }
+
+            for (auto& pfb_rel : pfb_refs) {
+                std::string pfb_pak = "natives/stm/" + pfb_rel + "." + pfb_ver;
+                auto* pe = base_pak.find(pak_path_hash(std::string_view(pfb_pak)));
+                if (!pe) continue;
+                auto praw = base_pak.read(*pe);
+                auto pdata = std::vector<uint8_t>(praw.begin(), praw.end());
+
+                // Scan for fd/000/<part>/ references where <part> is in shared_parts,
+                // and the relocated file exists in written_paths
+                size_t n_refs = 0;
+                for (size_t qi = 0; qi + od16.size() <= pdata.size(); ) {
+                    if (memcmp(pdata.data() + qi, od16.data(), od16.size()) != 0) {
+                        qi += 2; continue;
+                    }
+                    // Read part number after "000/"
+                    size_t qafter = qi + od16.size();
+                    std::string qpart;
+                    while (qafter + 1 < pdata.size() && pdata[qafter + 1] == 0
+                           && pdata[qafter] >= '0' && pdata[qafter] <= '9') {
+                        qpart += (char)pdata[qafter]; qafter += 2;
+                    }
+                    if (qpart.empty() || !shared_parts.count(qpart)
+                        || qafter + 1 >= pdata.size()
+                        || pdata[qafter] != '/' || pdata[qafter + 1] != 0) {
+                        qi += od16.size(); continue;
+                    }
+
+                    // Read the full enclosing UTF-16LE string
+                    size_t qs = qi;
+                    while (qs >= 2 && !(pdata[qs - 2] == 0 && pdata[qs - 1] == 0)) qs -= 2;
+                    size_t qe = qafter;
+                    while (qe + 1 < pdata.size() && !(pdata[qe] == 0 && pdata[qe + 1] == 0))
+                        qe += 2;
+                    std::string qfull;
+                    for (size_t qk = qs; qk + 1 < pdata.size() && qk < qe; qk += 2) {
+                        uint16_t qc = pdata[qk] | (uint16_t(pdata[qk + 1]) << 8);
+                        if (qc == 0) break;
+                        qfull += (char)tolower(qc & 0xFF);
+                    }
+                    // Strip leading @ and spaces
+                    while (!qfull.empty() && (qfull[0] == '@' || qfull[0] == ' '))
+                        qfull.erase(0, 1);
+
+                    // Build the relocated version
+                    std::string qrel = qfull;
+                    { auto p = qrel.find(str_lower(od_s));
+                      if (p != std::string::npos) qrel.replace(p, od_s.size(), nd_s); }
+                    { auto sl = qrel.rfind('/');
+                      size_t from = (sl != std::string::npos) ? sl : 0;
+                      auto fp = qrel.find(str_lower(op_s), from);
+                      if (fp != std::string::npos) qrel.replace(fp, op_s.size(), np_s); }
+
+                    // Check existence as a pak path
+                    auto qdot = qrel.rfind('.');
+                    auto qsit = (qdot == std::string::npos) ? inv.suffixes.end()
+                              : inv.suffixes.find(qrel.substr(qdot + 1));
+                    bool qexists = false;
+                    if (qsit != inv.suffixes.end()) {
+                        std::string qpak = "natives/stm/" + qrel + "." + qsit->second;
+                        qexists = written_paths.count(qpak) > 0;
+                    }
+                    if (!qexists) { qi += od16.size(); continue; }
+
+                    // Do the in-place replacement
+                    memcpy(pdata.data() + qi, nd16.data(), od16.size());
+                    // Filename prefix: search forward for fd_000_
+                    for (size_t qj = qi + od16.size();
+                         qj + op16.size() <= qe + 80 && qj + op16.size() <= pdata.size();
+                         qj += 2) {
+                        if (memcmp(pdata.data() + qj, op16.data(), op16.size()) == 0) {
+                            memcpy(pdata.data() + qj, np16.data(), np16.size());
+                            break;
+                        }
+                    }
+                    n_refs++;
+                    qi += od16.size();
+                }
+
+                if (n_refs == 0) continue;
+
+                // Write per-slot copy: replace "prefab" with "pfb<NNN>" in the path
+                std::string new_pfb_rel = pfb_rel;
+                auto ppos = new_pfb_rel.find("/prefab/");
+                if (ppos == std::string::npos) continue;
+                new_pfb_rel.replace(ppos + 1, 6, "pfb" + new_f);
+                std::string new_pfb_pak = "natives/stm/" + new_pfb_rel + "." + pfb_ver;
+                writer.add_uncompressed(pak_path_hash(std::string_view(new_pfb_pak)),
+                                        std::move(pdata));
+                written_paths.insert(new_pfb_pak);
+                count++; patched++;
+
+                // Track for scene patching
+                auto fsl = pfb_rel.rfind('/');
+                std::string pfb_fn = (fsl != std::string::npos)
+                                   ? pfb_rel.substr(fsl + 1) : pfb_rel;
+                copied_pfb_names.insert(pfb_fn);
+                printf("      select prefab: %s -> %s (%zu references)\n",
+                       pfb_fn.c_str(),
+                       ("pfb" + new_f + "/" + pfb_fn).c_str(),
+                       n_refs);
+            }
+        }
+    }
+
     // Costume scene: targeted patching
     auto* orig_costume = inv.get_costume(slot.fighter, slot.original_costume_no);
     if (orig_costume && !orig_costume->scene.empty()) {
@@ -2539,6 +2690,38 @@ static void add_slot_files(PakWriter& writer,
                     wi += o16.size() - 2;
                 }
                 printf("      model parts: scene redirected (%d of %d references)\n", done, occ);
+            }
+            // Fifth pass: redirect the scene's prefab paths for copied select/continue
+            // prefabs. Each copied prefab lives under option/pfb<NNN>/ instead of
+            // option/prefab/; both are 6 characters, so the string is patched in place.
+            if (!copied_pfb_names.empty()) {
+                std::string pold = "/prefab/";
+                std::string pnew = "/pfb" + new_f + "/";
+                std::vector<uint8_t> po16, pn16;
+                for (char c : pold) { po16.push_back((uint8_t)c); po16.push_back(0); }
+                for (char c : pnew) { pn16.push_back((uint8_t)c); pn16.push_back(0); }
+                int pfb_done = 0;
+                for (size_t wi = 0; wi + po16.size() <= vdata.size(); wi += 2) {
+                    bool eq = true;
+                    for (size_t k = 0; k < po16.size(); k += 2)
+                        if (tolower(vdata[wi + k]) != po16[k] || vdata[wi + k + 1] != 0)
+                            { eq = false; break; }
+                    if (!eq) continue;
+                    // Read filename after "/prefab/"
+                    size_t fa = wi + po16.size();
+                    std::string fn;
+                    while (fa + 1 < vdata.size() && vdata[fa + 1] == 0
+                           && vdata[fa] >= 0x20 && vdata[fa] < 0x7f) {
+                        fn += (char)tolower(vdata[fa]); fa += 2;
+                    }
+                    if (copied_pfb_names.count(fn)) {
+                        memcpy(vdata.data() + wi, pn16.data(), pn16.size());
+                        pfb_done++; patched++;
+                    }
+                    wi += po16.size() - 2;
+                }
+                if (pfb_done)
+                    printf("      select prefabs: scene redirected (%d references)\n", pfb_done);
             }
             std::string new_scene = "natives/stm/product/charparam/esf/"
                                   + fd + "/" + slot.scene_name + ".scn.20";

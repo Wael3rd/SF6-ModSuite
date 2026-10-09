@@ -96,7 +96,7 @@ echo === SF6_CostumeSlotsNative.dll (REFramework plugin, API 1.5.8: costume and 
 if not exist %O%\plugin mkdir %O%\plugin
 rem SLOTS_LEGACY_UI_FALLBACK: compiles the direct implementations so the plugin
 rem works without sf6core_native.dll.  Remove when the core becomes mandatory.
-cl /nologo /std:c++20 /EHa /O2 /W4 /LD /DSLOTS_LEGACY_UI_FALLBACK /I plugin\include /I core\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\costumes.cpp plugin\src\stages.cpp plugin\src\main.cpp plugin\src\slots_ui.cpp plugin\src\slots_ui_legacy.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
+cl /nologo /std:c++20 /EHa /O2 /W4 /LD /DSLOTS_LEGACY_UI_FALLBACK /I plugin\include /I core\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\costumes.cpp plugin\src\stages.cpp plugin\src\main.cpp plugin\src\slots_ui.cpp plugin\src\slots_ui_legacy.cpp plugin\src\perf.cpp plugin\src\wjournal.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
 if errorlevel 1 goto :failed
 
 echo.
