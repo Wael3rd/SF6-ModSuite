@@ -12,7 +12,7 @@ SF6_ColorModNative 0.18.5 unchanged.
 |---|---|
 | `options_core.{hpp,cpp}` | The engine's state machine (registry, dialog life cycle, value polling, events), no game header |
 | `options.{hpp,cpp}` | The game side: builds the units, starts / ends the dialogs, the eight hooks, row lookups |
-| `guid_text.{hpp,cpp}`, `guid_table.{hpp,cpp}` | The GUID text provider and its `GetMessage` hook |
+| `guid_text.{hpp,cpp}`, `guid_table.{hpp,cpp}` | The GUID text provider and its `GetMessage` hook, shared with the client texts (increment 8) |
 | `ll_common.hpp` | Low-level managed-object helpers (copy of ColorMod's `menurows/ll_common.hpp`) |
 | `opt_common.hpp` | What the moved files used from the mod: journal (core log), warning, API table, client |
 | `options_service.cpp` | The generic driver, the client routing and the `api_opt_*` functions |
@@ -37,6 +37,19 @@ SF6_ColorModNative 0.18.5 unchanged.
   (install on demand, then the driver's tick: events, open / build / rebuild, button queue, value pass).
 - BeginRendering: `options_pump()` (the hooks' events since the tick).
 - The engine's display calls are made for the core's own client `sf6core.options`.
+
+## GUID table (shared with the client texts, increment 8)
+
+- One table maps message GUIDs to texts and one hook on `hMsg.GetMessage(System.Guid)` answers from it, for the whole
+  process. The option engine fills it at each build (a fresh GUID per text, R6) and drops the texts of older trees
+  (`purge`); since core 0.8.0 the same table also holds the clients' own texts (`txt_new`, see `ABI.md`, increment 8).
+- Every entry has an owner: none for the option engine's texts, the client for a client text. The engine's `purge` and
+  `retext` only touch the engine's own entries; a client's texts go with `txt_release` or when it unregisters.
+- `guid_text::install()` is idempotent: the option service (first frame after `opt_set_callbacks`) and the client
+  texts (first `txt_new`) both call it, the first one installs the hook, the other finds it in place. A failure is
+  final for both.
+- `opt_status` reports the table as `guid_text on=.. faults=.. issued=.. live=.. clients=..` (`clients` = the client
+  texts among the live ones); `txt_status` gives the client side (texts per client, lookups, hits).
 
 ## Not yet
 

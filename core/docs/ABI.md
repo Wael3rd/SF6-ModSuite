@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | ABI version | 1 |
-| Core version | 0.5.0 |
+| Core version | 0.8.0 |
 | Header | `include/sf6core/sf6core_api.h` |
 
 ## Versioning and the append-only rule
@@ -57,9 +57,9 @@ When the core's own `reframework_plugin_initialize` runs:
 
 | Context | Safe calls |
 |---|---|
-| Client's `reframework_plugin_initialize` | `sf6core_get_api`, `register_client`, `set_flow_callback`, `set_frame_callback`, `get_version`, `get_flow_id`, `log`, `get_client_state` |
+| Client's `reframework_plugin_initialize` | `sf6core_get_api`, `register_client`, `set_flow_callback`, `set_frame_callback`, `get_version`, `get_flow_id`, `log`, `get_client_state`, `txt_*` (the hook comes with the first frame) |
 | Inside a flow/frame callback (game thread) | `get_flow_id`, `log`, `get_client_state`, `set_flow_callback`, `set_frame_callback` |
-| Any thread | `get_version`, `get_flow_id`, `log`, `get_client_state` |
+| Any thread | `get_version`, `get_flow_id`, `log`, `get_client_state`, `txt_*` |
 
 `register_client` and `unregister_client` acquire an internal mutex. They are safe from any thread, but `unregister_client` must NOT be called from inside a callback (deadlock-free, but the handle is in use by the dispatch loop).
 
@@ -76,9 +76,13 @@ The core copies every `const char*` the client passes. The client need not keep 
 | `SF6CORE_OK` (0) | Success |
 | `SF6CORE_ERR_INVALID_ARG` (1) | NULL pointer, empty string, or struct_size mismatch |
 | `SF6CORE_ERR_DUPLICATE_ID` (2) | A client with this client_id is already registered |
-| `SF6CORE_ERR_DISABLED` (3) | Core is disabled (kill switch) |
+| `SF6CORE_ERR_DISABLED` (3) | Core disabled (kill switch), client disabled (breaker, unregistered), game closing, or the service could not start |
 | `SF6CORE_ERR_ABI_MISMATCH` (4) | ABI version not supported |
-| `SF6CORE_ERR_NOT_FOUND` (5) | Client handle not found |
+| `SF6CORE_ERR_NOT_FOUND` (5) | Client handle, field, entry or text not found |
+| `SF6CORE_ERR_WRONG_THREAD` (6) | Element write requested off the game thread (increment 3) |
+| `SF6CORE_ERR_FAULTED` (7) | The engine call faulted (SEH or managed exception), or the element is quarantined after an earlier fault |
+| `SF6CORE_ERR_TYPE` (8) | Object or field not of the expected type, or not alive |
+| `SF6CORE_ERR_NOT_READY` (9) | Resource not loaded yet, or the core not initialized yet |
 
 ## Client states
 
@@ -94,7 +98,7 @@ Every client callback is invoked through an SEH wrapper (`__try/__except`). If a
 1. The exception is caught (the game does not crash).
 2. The client's fault counter is incremented.
 3. A breadcrumb is pushed and written to `breadcrumbs.txt`.
-4. If the fault counter reaches **3**, the circuit breaker trips: the client's state becomes `DISABLED_BY_BREAKER` and its callbacks are never called again.
+4. If the fault counter reaches **5**, the circuit breaker trips: the client's state becomes `DISABLED_BY_BREAKER` and its callbacks are skipped for 300 frames, then retried once (half-open, see Client states).
 
 A successful callback resets the fault counter to 0.
 
@@ -169,7 +173,7 @@ Every write goes through the guard chain: kill switch/breaker (1), proof-of-life
 | 36 | `obj_set_f64` | `SF6CoreStatus (client, void* obj, const char* field, double)` | Any | float or double field |
 | 37 | `obj_set_string` | `SF6CoreStatus (client, void* obj, const char* field, const char* utf8)` | Any | Managed string assignment (R34) |
 | 38 | `obj_set_ref` | `SF6CoreStatus (client, void* obj, const char* field, void*)` | Any | Managed ref assignment (R34) |
-| 39 | `obj_set_color` | `SF6CoreStatus (client, void* obj, const char* field, uint32_t rgba)` | Any | via.Color value field (4 floats) |
+| 39 | `obj_set_color` | `SF6CoreStatus (client, void* obj, const char* field, uint32_t rgba)` | Any | via.Color value field (one 4-byte rgba, raw value) |
 | 40 | `list_add` | `SF6CoreStatus (client, void* list, void* item)` | Any | |
 | 41 | `list_set_item` | `SF6CoreStatus (client, void* list, int32_t index, void* item)` | Any | |
 | 42 | `list_get_range` | `void* (client, void* list, int32_t start, int32_t count)` | Any | Caller-owned ref |
@@ -233,6 +237,83 @@ A C++ client registers functions with `lua_register_fn(client, name, fn, user)`.
 ### Rules suspend (ZenMode replay exception)
 
 `set_element_rules_suspended(client, 1)` causes the commit phase to skip all of the client's hide rules (both `set_element_hidden` and `set_element_hidden_zen`). No writes, no restores. Resuming with `suspended=0` triggers re-apply on the next frame for sighted owners. This mirrors ZenMode.lua doing nothing during a replay (flow 10).
+
+## Function list (increment 6 -- Option dialogs, ADR-0013, appended)
+
+The game's own option window as a service: see `OPTIONS.md`. The engine's hooks (and the shared `GetMessage` hook)
+are installed on the first frame after any client calls `opt_set_callbacks`. The `opt_*` calls are made on the game
+thread: from a frame callback or from the option callbacks (re-entrant, nothing is locked while they run).
+
+| # | Function pointer | Signature | Notes |
+|---|---|---|---|
+| 57 | `opt_set_callbacks` | `SF6CoreStatus (client, const SF6CoreOptCallbacks*)` | Copied; ERR_DISABLED when the engine could not be installed |
+| 58 | `opt_group` | `int64_t (client, const char* key, const char* title, const char* desc)` | One page; group id, -1 on failure |
+| 59 | `opt_group_def` | `SF6CoreStatus (client, int64_t group, const char* title, const char* desc)` | Applied at the next build |
+| 60 | `opt_remove_group` | `SF6CoreStatus (client, int64_t group)` | |
+| 61 | `opt_entry` | `int64_t (client, int64_t group, const SF6CoreOptEntryDesc*)` | Button, slider or choice; entry id, -1 on failure |
+| 62 | `opt_rebuild` | `SF6CoreStatus (client)` | |
+| 63 | `opt_ensure_built` | `SF6CoreStatus (client)` | |
+| 64 | `opt_open_menu` | `SF6CoreStatus (client, const char* title, int32_t focus)` | Ignored while the window is open |
+| 65 | `opt_navigate` | `SF6CoreStatus (client, const char* key, int32_t flags, int32_t focus)` | `SF6CORE_OPT_NAV_*` flags |
+| 66 | `opt_close` | `SF6CoreStatus (client)` | |
+| 67 | `opt_window_open` | `int32_t (void)` | Query |
+| 68 | `opt_current_param` | `void* (void)` | Query |
+| 69 | `opt_parent_param` | `void* (void)` | Query |
+| 70 | `opt_focused_entry` | `int64_t (void)` | Query; -1 when none |
+| 71 | `opt_row_control` | `void* (int64_t entry, void* param)` | Query |
+| 72 | `opt_row_part` | `void* (int64_t entry)` | Query |
+| 73 | `opt_set_option_text` | `SF6CoreStatus (client, int64_t entry, int32_t index, const char* text)` | Retext of a choice label in place |
+| 74 | `opt_status` | `uint32_t (char* buf, uint32_t cap)` | One-line state; length written (truncated to cap-1) |
+
+## Function list (increment 7 -- Effective selection, ADR-0014, appended)
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 75 | `sel_set_effective` | `SF6CoreStatus (client, int32_t fighter, int32_t shown_costume, int32_t real_costume, int32_t real_colour)` | Any | `real_costume < 0` clears; the last call wins per (fighter, shown costume) |
+| 76 | `sel_get_effective` | `int32_t (int32_t fighter, int32_t costume, int32_t* real_costume, int32_t* real_colour)` | Any | 1 when the fighter seen in `costume` (shown or real) is declared to wear something else |
+
+## Function list (increment 8 -- Client texts, ADR-0006 amendment 2026-10-09, appended)
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 77 | `txt_new` | `SF6CoreStatus (client, const char* utf8, uint8_t out_guid16[16])` | Any | A fresh GUID per call (R6), resolved to `utf8` (NULL = "") |
+| 78 | `txt_set` | `SF6CoreStatus (client, const uint8_t guid16[16], const char* utf8)` | Any | New text in place; ERR_NOT_FOUND when not one of the client's GUIDs |
+| 79 | `txt_release` | `SF6CoreStatus (client, const uint8_t guid16[16])` | Any | One of the client's GUIDs; NULL = all of them |
+| 80 | `obj_set_guid` | `SF6CoreStatus (client, void* obj, const char* field, const uint8_t guid16[16])` | Any | System.Guid value field; guard chain of `obj_set_*`; ERR_TYPE when the field is not a System.Guid |
+| 81 | `txt_status` | `uint32_t (char* buf, uint32_t cap)` | Any | One-line state: hook, texts per client, lookups; length written (truncated to cap-1) |
+
+### Client texts
+
+Data-driven game UI carries message GUIDs and the game resolves them through `app.helper.hMsg.GetMessage(System.Guid)`
+at each draw: training pause-menu rows (`TrainingMenuData._MessageID`, `_GuideMessage`), input-guide entries, sub-page
+labels. A client puts its own text there without a hook of its own:
+
+```c
+uint8_t guid[16];
+if (SF6CORE_HAS(api, txt_status) && api->txt_new(client, "My row", guid) == SF6CORE_OK)
+    api->obj_set_guid(client, row_data, "_MessageID", guid);   /* the game now draws "My row" */
+/* later: api->txt_set(client, guid, "My row (on)");  after removing the row: api->txt_release(client, guid); */
+```
+
+- **One table, one hook.** The texts live in the option engine's GUID table (`src/options/guid_table.*`) and are answered
+  by its `GetMessage` hook (`src/options/guid_text.*`); whichever service needs the hook first installs it. A core whose
+  clients use neither options nor texts hooks nothing.
+- **When the hook is installed.** On the first `txt_new` of any client: at once when that call runs on the game thread
+  after the core's init (a frame or flow callback), otherwise at the start of the next core frame. Create the texts
+  before putting their GUIDs into the game's data. `txt_status` says `hook pending` until then.
+- **One GUID per text.** Every `txt_new` returns a new GUID, even for a text already given (R6: one GUID shared by
+  several texts crashed). Change a text with `txt_set`, not with a new GUID, when the data keeps the same GUID.
+- **Ownership.** A client's texts are its own: another client cannot change or release them (ERR_NOT_FOUND), and the
+  option engine's purge never touches them. They survive a breaker trip (the game may still show them) and `txt_*`
+  stays usable while the client's breaker is open. They are released by `txt_release` (one, or NULL = all) and when
+  the client unregisters.
+- **Release after removing.** A released GUID resolves to nothing the game knows: release a text after removing the
+  data that carries it.
+- **Refusals.** `txt_new` returns ERR_DISABLED (nothing stored) for an unregistered client, while the game closes, or
+  when the hook could not be installed or was switched off by its fault counter. `txt_set` returns ERR_DISABLED while
+  the game closes. `txt_release` always works.
+- **Size.** The table grows with the texts the clients keep; `txt_status` shows the count per client and the log warns
+  when one client holds 1000, 10000... texts.
 
 ## Lua bridge API
 

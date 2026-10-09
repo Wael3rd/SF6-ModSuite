@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Native Core 0.8.0
+- **Client texts** (ABI increment 8, appended): `txt_new`, `txt_set`, `txt_release`, `obj_set_guid`, `txt_status`. A
+  mod gets message GUIDs that the game resolves to its own texts wherever the game's UI is built from data (training
+  pause-menu rows, input guides), and writes such a GUID into a `System.Guid` field with the usual guarded writes. The
+  texts are answered by the core's one `GetMessage` hook, the one of the option dialogs: no mod needs a hook of its
+  own on the game's text lookup. Each text belongs to its mod: the option dialogs never purge it, it stays through a
+  circuit-breaker trip, and it is released by the mod or when the mod unregisters. Nothing changes for a core whose
+  mods use no texts (the hook is installed on the first text).
+- `docs/ABI.md` lists the functions of increments 6 (option dialogs) and 7 (effective selection) too.
+
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 
 | Package | Version | |
