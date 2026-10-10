@@ -32,8 +32,14 @@ struct Calls {
     bool (*any_hints)() = nullptr;                                               // a provider exists
 };
 
-// Backend + hooks, after the check of each method's code; false when the engine cannot run (logged).
-bool install(const Calls& calls, SF6CoreClient* engine_client);
+// The check of each hooked method's code (R18), on a thread of its own (the type database is static; its result is
+// cached on disk per game executable). Any thread, once; a no-op before the core's initialize.
+void check_start();
+
+// Game thread, every frame until Done / Failed: types and backend, then (check ended) the verdicts, then one hook per
+// frame. Failed: the engine cannot run (logged). The game thread never waits for the check.
+enum class Install { Pending, Done, Failed };
+Install install(const Calls& calls, SF6CoreClient* engine_client);
 bool ready();                     // installed and not switched off by faults
 
 // Game thread, every core frame: training and pause state, the menu-close edge, the install pass.

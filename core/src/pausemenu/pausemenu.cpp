@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -75,6 +76,13 @@ TD* g_td_param = nullptr;                      // app.training.UIFlowTrainingMen
 TD* g_td_spin = nullptr;                       // app.UIPartsSpin
 TD* g_td_guide = nullptr;                      // app.InputGuideData
 API::Method* g_m_viewupdate = nullptr;         // app.training.TrainingMenuFunc.ViewUpdate
+// TrainingMenuData[] through the game's System.Array.CreateInstance(System.Type, System.Int32), as the reference
+// engine's sdk.create_managed_array does inside REFramework. NOT API::create_managed_array: that member of the plugin
+// function table came with plugin API 1.13 (REFramework, 03/2025); the REFramework of the players (1.5.8 nightly,
+// 12/2024, plugin API 1.10) ends its table before it, so the call read past the table and called whatever followed:
+// the "fault in frame" of every install pass on 10/10.
+API::Method* g_m_array_new = nullptr;
+MO* g_rt_menu = nullptr;                       // typeof(TrainingMenuData) (the VM's runtime type: never freed)
 
 // ---- per-thread state (R29) ----
 thread_local pc::Ctx tl_ctx = pc::Ctx::None;   // the row being laid out on this thread
@@ -83,11 +91,135 @@ thread_local int64_t tl_building = -1;         // our page being built on this t
 
 uint64_t now() { return core_frame_pub(); }
 
-void fault(const char* where) {
+// ======================== diagnostics ========================
+
+// Every thread keeps the engine's step (a short name set before each group of game calls) and the game call under
+// way; the SEH filter copies both, with the exception code and address, before the stack unwinds. A fault line then
+// says where it happened (the first kDetailedFaults of them).
+thread_local const char* tl_step = "-";
+thread_local const char* tl_op = "-";
+inline void step(const char* s) { tl_step = s; tl_op = "-"; }
+inline void op(const char* s) { tl_op = s; }
+
+struct SehInfo {                               // plain data: allowed in a function with a __try
+    DWORD code;
+    const void* addr;                          // where the exception was raised
+    int av;                                    // access violation: 0 read, 1 write, 8 execute; -1 another exception
+    uintptr_t av_addr;                         // the address it touched
+    const char* step;
+    const char* op;
+    DWORD tid;
+};
+int seh_filter(EXCEPTION_POINTERS* ep, SehInfo* si) {
+    const EXCEPTION_RECORD* er = ep ? ep->ExceptionRecord : nullptr;
+    si->code = er ? er->ExceptionCode : 0;
+    si->addr = er ? er->ExceptionAddress : nullptr;
+    si->av = -1;
+    si->av_addr = 0;
+    if (er && er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
+        si->av = (int)er->ExceptionInformation[0];
+        si->av_addr = (uintptr_t)er->ExceptionInformation[1];
+    }
+    si->step = tl_step;
+    si->op = tl_op;
+    si->tid = GetCurrentThreadId();
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// "module+offset" of a code address.
+void where_in_module(const void* a, char* out, size_t n) {
+    HMODULE h = nullptr;
+    char path[MAX_PATH] = {};
+    if (a && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                static_cast<LPCSTR>(a), &h) && h && GetModuleFileNameA(h, path, MAX_PATH)) {
+        const char* base = std::strrchr(path, '\\');
+        std::snprintf(out, n, "%s+0x%llX", base ? base + 1 : path, (unsigned long long)((uintptr_t)a - (uintptr_t)h));
+    } else {
+        std::snprintf(out, n, "0x%llX", (unsigned long long)(uintptr_t)a);
+    }
+}
+
+void describe(const SehInfo& si, char* out, size_t n) {
+    char at[200];
+    where_in_module(si.addr, at, sizeof at);
+    char what[96] = {};
+    if (si.code == EXCEPTION_ACCESS_VIOLATION && si.av >= 0)
+        std::snprintf(what, sizeof what, ", %s of 0x%llX", si.av == 1 ? "write" : (si.av == 8 ? "execute" : "read"),
+                      (unsigned long long)si.av_addr);
+    else if (si.code == 0xE06D7363)
+        std::snprintf(what, sizeof what, " (a C++ exception)");
+    std::snprintf(out, n, "step '%s', call '%s': exception 0x%08lX at %s%s, thread %lu", si.step ? si.step : "?",
+                  si.op ? si.op : "?", (unsigned long)si.code, at, what, (unsigned long)si.tid);
+}
+
+constexpr int kDetailedFaults = 8;
+
+void fault(const char* where, const SehInfo* si) {
     const int n = ++g_faults;
-    core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] fault in %s (%d)", where, n);
+    if (si && n <= kDetailedFaults) {
+        char d[420];
+        describe(*si, d, sizeof d);
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] fault in %s (%d): %s", where, n, d);
+    } else {
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] fault in %s (%d)", where, n);
+    }
     if (n >= kMaxFaults && g_on.exchange(false))
         core_log(SF6CORE_LOG_ERROR, nullptr, "[pausemenu] too many faults: hooks off, the game answers its menu alone");
+}
+
+// A file of the core's data folder (reframework/data/sf6core/<name>).
+void data_path(const char* name, char* out, size_t n) {
+    char exe[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    if (char* sep = std::strrchr(exe, '\\')) *sep = '\0';
+    std::snprintf(out, n, "%s\\reframework\\data\\sf6core\\%s", exe, name);
+}
+
+// ---- trace mode: reframework/data/sf6core/pm_trace.txt ----
+// While the file exists: the code check, the hooks, the next install pass and the next page build are logged step by
+// step (objects found, array sizes, fields read, every write refused), kTraceBudget lines at most. Re-created: another
+// round. Off: nothing is formatted (the TR macro tests first).
+constexpr int kTraceBudget = 500;
+std::atomic<bool> g_trace_armed{false};
+std::atomic<int> g_trace_left{0}, g_trace_passes{0}, g_trace_builds{0};
+thread_local bool tl_tracing = false;
+
+void trace_check() {                           // any thread; one file-system look
+    char p[MAX_PATH];
+    data_path("pm_trace.txt", p, sizeof p);
+    const bool on = GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
+    if (on && !g_trace_armed.exchange(true)) {
+        g_trace_left = kTraceBudget;
+        g_trace_passes = 1;
+        g_trace_builds = 1;
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] trace on (pm_trace.txt): the code check, the hooks, the next "
+                 "install pass and the next page build are logged step by step (%d lines at most)", kTraceBudget);
+    } else if (!on && g_trace_armed.exchange(false)) {
+        g_trace_left = 0;
+        g_trace_passes = 0;
+        g_trace_builds = 0;
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] trace off (pm_trace.txt removed)");
+    }
+}
+bool tracing() { return tl_tracing && g_trace_left.load(std::memory_order_relaxed) > 0; }
+void tr(const char* fmt, ...) {
+    if (!tracing()) return;
+    const int left = --g_trace_left;
+    if (left < 0) return;
+    char buf[440];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] trace: %s", buf);
+    if (left == 0)
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] trace: line budget spent (re-create pm_trace.txt for another round)");
+}
+#define TR(...) do { if (tracing()) tr(__VA_ARGS__); } while (0)
+
+std::string type_name(MO* o) {                 // trace only
+    TD* t = o ? o->get_type_definition() : nullptr;
+    return t ? t->get_full_name() : std::string(o ? "?" : "null");
 }
 
 // ======================== game helpers ========================
@@ -127,6 +259,7 @@ API::Method* meth(TD* td, const char* sig) {
 
 bool call(MO* o, const char* sig, const std::vector<void*>& args, reframework::InvokeRet& out) {
     if (!o) return false;
+    op(sig);
     API::Method* m = meth(o->get_type_definition(), sig);
     if (!m) return false;
     std::vector<void*> a = args;
@@ -159,7 +292,11 @@ bool call_pos(MO* o, float& x, float& y, float& z) {               // via.vec3
     return true;
 }
 
-MO* field_obj(MO* o, const char* name) { return o ? ll::read_field_object(o, name) : nullptr; }
+MO* field_obj(MO* o, const char* name) {
+    if (!o) return nullptr;
+    op(name);
+    return ll::read_field_object(o, name);
+}
 
 int32_t list_count(MO* l) { int32_t n = 0; return (l && call_i32(l, "get_Count", n)) ? n : 0; }
 MO* list_item(MO* l, int32_t i) { return call_obj(l, "get_Item(System.Int32)", { ll::arg_i32(i) }); }
@@ -175,14 +312,21 @@ std::string name_of(MO* ctrl) {
     return s ? ll::managed_string_to_utf8(s) : std::string();
 }
 MO* child(MO* ctrl, const char* name) {      // a direct child by name (read-only, SEH inside the core's query)
-    return ctrl ? reinterpret_cast<MO*>(g_api->ui_find_child(ctrl, name, 0)) : nullptr;
+    if (!ctrl) return nullptr;
+    op(name);
+    return reinterpret_cast<MO*>(g_api->ui_find_child(ctrl, name, 0));
 }
 
-bool is_menu_data(MO* o) { return o && (uintptr_t)o > 0x10000 && o->get_type_definition() == g_td_menu; }
+bool is_menu_data(MO* o) {
+    if (!o || (uintptr_t)o <= 0x10000) return false;
+    op("get_type_definition");
+    return o->get_type_definition() == g_td_menu;
+}
 
 // The identity of a TrainingMenuData: its _MessageID (R5).
 bool menu_key(MO* o, pc::Key& k) {
     if (!is_menu_data(o)) return false;
+    op("_MessageID");
     const void* raw = g_f_msg->get_data_raw(o, false);
     if (!raw) return false;
     std::memcpy(&k.hi, raw, 8);
@@ -191,6 +335,7 @@ bool menu_key(MO* o, pc::Key& k) {
 }
 int32_t menu_ftype(MO* o) {
     if (!is_menu_data(o)) return -1;
+    op("_FuncType");
     const void* raw = g_f_ftype->get_data_raw(o, false);
     int32_t v = -1;
     if (raw) std::memcpy(&v, raw, 4);
@@ -271,23 +416,40 @@ bool page_shown_live(MO* param, int64_t page) {
 }
 
 // ---- display writes (ADR-0011: the core's guarded primitives, for the engine's own client) ----
-void set_i64(MO* o, const char* f, int64_t v) { g_api->obj_set_i64(g_self, o, f, v); }
-bool set_ref(MO* o, const char* f, void* v) { return g_api->obj_set_ref(g_self, o, f, v) == SF6CORE_OK; }
+// (a refused write is traced: the guarded primitives never fault, they answer a status)
+void set_i64(MO* o, const char* f, int64_t v) {
+    op(f);
+    const SF6CoreStatus st = g_api->obj_set_i64(g_self, o, f, v);
+    if (st != SF6CORE_OK) TR("obj_set_i64 %p.%s = %lld: status %d", (void*)o, f, (long long)v, (int)st);
+}
+bool set_ref(MO* o, const char* f, void* v) {
+    op(f);
+    const SF6CoreStatus st = g_api->obj_set_ref(g_self, o, f, v);
+    if (st != SF6CORE_OK) TR("obj_set_ref %p.%s = %p: status %d", (void*)o, f, v, (int)st);
+    return st == SF6CORE_OK;
+}
 void set_guid(MO* o, const char* f, const pc::Key& k) {
     uint8_t g[16];
     std::memcpy(g, &k.hi, 8);
     std::memcpy(g + 8, &k.lo, 8);
-    g_api->obj_set_guid(g_self, o, f, g);
+    op(f);
+    const SF6CoreStatus st = g_api->obj_set_guid(g_self, o, f, g);
+    if (st != SF6CORE_OK) TR("obj_set_guid %p.%s: status %d", (void*)o, f, (int)st);
 }
 void invoke_i(MO* o, const char* sig, int64_t v, int32_t type) {
     SF6CoreArg a{};
     a.type = type;
     a.v.i = v;
-    g_api->obj_invoke(g_self, o, sig, &a, 1, nullptr);
+    op(sig);
+    const SF6CoreStatus st = g_api->obj_invoke(g_self, o, sig, &a, 1, nullptr);
+    if (st != SF6CORE_OK) TR("obj_invoke %p.%s(%lld): status %d", (void*)o, sig, (long long)v, (int)st);
 }
 
 // ---- the game's training data ----
-MO* training_manager() { return API::get()->get_managed_singleton("app.training.TrainingManager"); }
+MO* training_manager() {
+    op("get_managed_singleton TrainingManager");
+    return API::get()->get_managed_singleton("app.training.TrainingManager");
+}
 MO* menu_tabs() {
     MO* ui = field_obj(training_manager(), "_UIData");
     return ui ? call_obj(ui, "get_MenuData") : nullptr;
@@ -388,9 +550,17 @@ void be_text_release(const pc::Key& k) {
     if (g_self) gt::release_owned(g_self, gb);
 }
 
+std::string key_hex(const pc::Key& k) {      // trace only
+    char b[40];
+    std::snprintf(b, sizeof b, "%016llX%016llX", (unsigned long long)k.hi, (unsigned long long)k.lo);
+    return b;
+}
+
 MO* new_menu_data(int32_t item_type) {
+    op("TrainingMenuData create_instance");
     MO* d = g_td_menu->create_instance();
-    if (!d) return nullptr;
+    if (!d) { TR("create_instance(TrainingMenuData) returned null"); return nullptr; }
+    op("add_ref");
     d->add_ref();                                        // held: the game keeps it in its arrays (R28)
     set_i64(d, "_Type", item_type);
     set_i64(d, "_FuncType", pc::kDynamic);
@@ -403,46 +573,75 @@ MO* new_menu_data(int32_t item_type) {
     return d;
 }
 pc::Obj be_new_row_data(int32_t item_type, const pc::Key& title, const pc::Key& guide) {
+    step("new_row_data");
     MO* d = new_menu_data(item_type);
     if (!d) return nullptr;
     set_guid(d, "_MessageID", title);
     set_guid(d, "_GuideMessage", guide);
+    TR("row data %p: _Type %d, _MessageID %s", (void*)d, item_type, key_hex(title).c_str());
     return d;
 }
 pc::Obj be_new_option_data(const pc::Key& text) {
+    step("new_option_data");
     MO* d = new_menu_data(pc::kItemTextOnly);
     if (d) set_guid(d, "_MessageID", text);
     return d;
 }
-pc::Obj be_new_array(const std::vector<pc::Obj>& items) {
-    MO* a = API::get()->create_managed_array(g_td_menu, (uint32_t)items.size());
-    if (!a) return nullptr;
-    a->add_ref();
-    for (size_t i = 0; i < items.size(); ++i)
-        if (!array_set(a, reinterpret_cast<MO*>(items[i]), (int32_t)i)) { a->release(); return nullptr; }
+// An empty TrainingMenuData[n] (see g_m_array_new), or null.
+MO* new_menu_array(uint32_t n) {
+    if (!g_m_array_new || !g_rt_menu) return nullptr;
+    op("System.Array.CreateInstance");
+    const reframework::InvokeRet r = g_m_array_new->invoke(nullptr, std::vector<void*>{ g_rt_menu, ll::arg_i32((int32_t)n) });
+    if (r.exception_thrown || !r.ptr) { TR("System.Array.CreateInstance(TrainingMenuData, %u) failed", n); return nullptr; }
+    MO* a = reinterpret_cast<MO*>(r.ptr);
+    op("is_managed_object");
+    if (!a->is_managed_object()) { TR("System.Array.CreateInstance gave %p: not a managed object", (void*)a); return nullptr; }
     return a;
 }
-bool be_set_children(pc::Obj data, pc::Obj arr) { return set_ref(reinterpret_cast<MO*>(data), "_ChildData", arr); }
+pc::Obj be_new_array(const std::vector<pc::Obj>& items) {
+    step("new_array");
+    MO* a = new_menu_array((uint32_t)items.size());
+    if (!a) return nullptr;
+    op("add_ref");
+    a->add_ref();
+    for (size_t i = 0; i < items.size(); ++i)
+        if (!array_set(a, reinterpret_cast<MO*>(items[i]), (int32_t)i)) {
+            TR("SetValue [%zu] of %p refused", i, (void*)a);
+            a->release();
+            return nullptr;
+        }
+    TR("array %p (%s): %zu item(s), get_Length %d", (void*)a, type_name(a).c_str(), items.size(), array_length(a));
+    return a;
+}
+bool be_set_children(pc::Obj data, pc::Obj arr) {
+    step("set_children");
+    return set_ref(reinterpret_cast<MO*>(data), "_ChildData", arr);
+}
 
 // A value field copied as it is, a reference field assigned (R34).
 void copy_field(MO* dst, MO* src, const char* name) {
+    op(name);
     API::Field* f = ll::find_field_walk(src->get_type_definition(), name);
     TD* ft = f ? f->get_type() : nullptr;
-    if (!ft) return;
+    if (!ft) { TR("copy %s: no such field", name); return; }
     void* s = f->get_data_raw(src, false);
     void* d = f->get_data_raw(dst, false);
     if (!s || !d) return;
     if (ft->is_valuetype()) {
         const uint32_t n = ft->get_valuetype_size();
         if (n && n <= 64) std::memcpy(d, s, n);
+        TR("copy %s (%s): %u byte(s)%s", name, ft->get_full_name().c_str(), n, (n && n <= 64) ? "" : ", NOT copied");
     } else {
         set_ref(dst, name, *static_cast<void**>(s));
+        TR("copy %s (%s): reference %p", name, ft->get_full_name().c_str(), *static_cast<void**>(s));
     }
 }
 pc::Obj be_new_page_data(pc::Obj template_page, const pc::Key& title, const pc::Key& guide, pc::Obj rows) {
+    step("new_page_data");
     MO* tp = reinterpret_cast<MO*>(template_page);
     int32_t type = 0;
-    if (!tp || !ll::read_field_i32(tp, "_Type", type)) return nullptr;
+    op("_Type");
+    if (!tp || !ll::read_field_i32(tp, "_Type", type)) { TR("template page %p: no _Type", (void*)tp); return nullptr; }
     MO* d = new_menu_data(type);                         // typed like the strip's own pages (TAB_ITEM)
     if (!d) return nullptr;
     copy_field(d, tp, "NextButton");
@@ -450,17 +649,24 @@ pc::Obj be_new_page_data(pc::Obj template_page, const pc::Key& title, const pc::
     set_guid(d, "_MessageID", title);
     set_guid(d, "_GuideMessage", guide);
     set_ref(d, "_ChildData", rows);
-    if (MO* empty = call_obj(field_obj(tp, "DynamicChildData"), "GetRange(System.Int32, System.Int32)",
-                             { ll::arg_i32(0), ll::arg_i32(0) })) {   // an empty List<DynamicData> of the right type
+    MO* dyn = field_obj(tp, "DynamicChildData");
+    MO* empty = call_obj(dyn, "GetRange(System.Int32, System.Int32)", { ll::arg_i32(0), ll::arg_i32(0) });
+    if (empty) {                                         // an empty List<DynamicData> of the right type
+        op("add_ref");
         empty->add_ref();
         set_ref(d, "DynamicChildData", empty);
     }
+    TR("page data %p: _Type %d (template %p), rows %p, DynamicChildData %p -> %p (%s)", (void*)d, type, (void*)tp, rows,
+       (void*)dyn, (void*)empty, type_name(empty).c_str());
     return d;
 }
 pc::Obj be_new_hint(int32_t button, const pc::Key& text) {
     if (!g_td_guide) return nullptr;
+    step("new_hint");
+    op("InputGuideData create_instance");
     MO* g = g_td_guide->create_instance();
     if (!g) return nullptr;
+    op("add_ref");
     g->add_ref();
     set_i64(g, "<Type>k__BackingField", 0);              // InputGuideDataType.DigitalConfig: the glyph of the device in use
     set_i64(g, "<DigitalId>k__BackingField", -1);
@@ -468,23 +674,39 @@ pc::Obj be_new_hint(int32_t button, const pc::Key& text) {
     set_guid(g, "<MessageId>k__BackingField", text);
     return g;
 }
-void be_release(pc::Obj o) { if (o) reinterpret_cast<MO*>(o)->release(); }
+void be_release(pc::Obj o) {
+    if (!o) return;
+    op("release");
+    reinterpret_cast<MO*>(o)->release();
+}
 
 bool be_strip_read(int32_t primary_func, pc::Strip& s) {
+    step("strip_read: the menu tabs");
     MO* arr = menu_tabs();
     const int32_t n = array_length(arr);
+    TR("strip_read(%d): TrainingManager %p, _UIData.MenuData %p (%s), %d tab(s)", primary_func, (void*)training_manager(),
+       (void*)arr, type_name(arr).c_str(), n);
     for (int32_t t = 0; t < n; ++t) {
+        step("strip_read: a tab");
         MO* tab = array_get(arr, t);
-        if (menu_ftype(tab) != primary_func) continue;
+        const int32_t ft = menu_ftype(tab);
+        TR("  tab %d: %p, _FuncType %d", t, (void*)tab, ft);
+        if (ft != primary_func) continue;
+        step("strip_read: the strip row");
         MO* kids = field_obj(tab, "_ChildData");
-        MO* row = array_length(kids) > 0 ? array_get(kids, 0) : nullptr;   // the strip is the tab's first row
+        const int32_t nk = array_length(kids);
+        MO* row = nk > 0 ? array_get(kids, 0) : nullptr;   // the strip is the tab's first row
         int32_t type = 0;
-        if (!row || !ll::read_field_i32(row, "_Type", type) || (type != pc::kStripTwo && type != pc::kStripThree)) return false;
+        op("_Type");
+        const bool typed = row && ll::read_field_i32(row, "_Type", type);
+        TR("  tab %d _ChildData %p: %d row(s); row 0 = %p, _Type %d", t, (void*)kids, nk, (void*)row, typed ? type : -1);
+        if (!typed || (type != pc::kStripTwo && type != pc::kStripThree)) return false;
         MO* pages = field_obj(row, "_ChildData");
         if (!pages) return false;
         s.row = row;
         s.type = type;
         s.array = pages;
+        step("strip_read: the pages");
         const int32_t np = array_length(pages);
         for (int32_t i = 0; i < np; ++i) {
             MO* p = array_get(pages, i);
@@ -492,6 +714,11 @@ bool be_strip_read(int32_t primary_func, pc::Strip& s) {
             menu_key(p, k);
             s.pages.push_back(p);
             s.keys.push_back(k);
+            if (tracing()) {
+                int32_t pt = -1;
+                ll::read_field_i32(p, "_Type", pt);
+                tr("  page %d: %p, _FuncType %d, _Type %d, _MessageID %s", i, (void*)p, menu_ftype(p), pt, key_hex(k).c_str());
+            }
         }
         return true;
     }
@@ -500,6 +727,7 @@ bool be_strip_read(int32_t primary_func, pc::Strip& s) {
 std::vector<MO*> g_strip_arrays;                         // the strip arrays we wrote (held for the session)
 bool be_strip_write(const pc::Strip& s, const std::vector<pc::Obj>& pages, int32_t type) {
     MO* arr = reinterpret_cast<MO*>(be_new_array(pages));
+    step("strip_write");
     if (!arr) return false;
     MO* row = reinterpret_cast<MO*>(s.row);
     if (!set_ref(row, "_ChildData", arr)) { arr->release(); return false; }
@@ -508,6 +736,20 @@ bool be_strip_write(const pc::Strip& s, const std::vector<pc::Obj>& pages, int32
     return true;
 }
 void be_log(const char* line) { core_log(SF6CORE_LOG_INFO, nullptr, "%s", line); }
+// diagnostics: the first install pass after the trace file appeared is traced (game thread)
+void be_pass_begin() {
+    step("install pass");
+    if (g_trace_passes.load(std::memory_order_relaxed) > 0 && g_trace_passes.fetch_sub(1) > 0) {
+        tl_tracing = true;
+        TR("install pass begins (frame %llu, game thread %lu)", (unsigned long long)now(), (unsigned long)GetCurrentThreadId());
+    }
+}
+void be_pass_end() {
+    TR("install pass ends");
+    tl_tracing = false;
+}
+bool be_tracing() { return tracing(); }
+void be_trace(const char* line) { tr("%s", line); }
 
 // ======================== R18: one hook per machine code ========================
 
@@ -537,11 +779,13 @@ struct FoldTarget {
     std::vector<uint32_t> sharers;                         // their method indexes (the first 16)
 };
 
-// One pass over every method of the game: who else enters the same code.
-void fold_scan(std::vector<FoldTarget>& ts) {
+// One pass over every method of the game: who else enters the same code. Reads only (the type database, the methods'
+// entries, their first bytes): run on the check's own thread. False when the game closed meanwhile (not finished).
+bool fold_scan(std::vector<FoldTarget>& ts) {
     auto* tdb = API::get()->tdb();
     const uint32_t n = tdb->get_num_methods();
     for (uint32_t i = 0; i < n; ++i) {
+        if ((i & 0xFFFF) == 0 && core_closing()) return false;
         API::Method* m = tdb->get_method(i);
         if (!m) continue;
         const uintptr_t fn = reinterpret_cast<uintptr_t>(m->get_function_raw());
@@ -562,10 +806,6 @@ void fold_scan(std::vector<FoldTarget>& ts) {
             if (t.sharers.size() < 16) t.sharers.push_back(mi);
         }
     }
-}
-bool fold_scan_seh(std::vector<FoldTarget>* ts) {
-    __try { fold_scan(*ts); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     return true;
 }
 
@@ -699,6 +939,7 @@ void notify(const std::vector<pc::Edge>& edges) {
 int32_t arg_i32(void* a) { return static_cast<int32_t>(reinterpret_cast<uintptr_t>(a) & 0xFFFFFFFF); }
 
 void set_ctx(MO* data) {                      // a TrainingMenuData laid out on this thread
+    step("ViewUpdate: row context");
     if (!is_menu_data(data)) return;
     if (menu_ftype(data) != pc::kDynamic) { tl_ctx = pc::Ctx::None; tl_ctx_row = -1; return; }
     const pc::Ident i = ident_of(data);
@@ -711,8 +952,9 @@ void set_ctx(MO* data) {                      // a TrainingMenuData laid out on 
 int pre_view_update(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
+    SehInfo si{};
     __try { set_ctx(reinterpret_cast<MO*>(argv[3])); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("ViewUpdate"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("ViewUpdate", &si); }
     perf::end(perf::PmHooks, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -723,6 +965,7 @@ thread_local int64_t tl_ret[5];
 thread_local bool tl_ret_set[5];
 
 int const_inner(int m, void** argv) {
+    step("TrainingMenuFunc (FuncType-only)");
     const pc::Route r = pc::route(arg_i32(argv[2]), tl_ctx, pc::game_rows());
     if (r == pc::Route::Pass) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     tl_ret[m] = pc::const_answer(static_cast<pc::Method>(m), r, m == pc::kGetOptionIndex ? arg_i32(argv[3]) : 0);
@@ -735,8 +978,9 @@ template <int M> int pre_const(int, void** argv, REFrameworkTypeDefinitionHandle
         return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    SehInfo si{};
     __try { rc = const_inner(M, argv); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("TrainingMenuFunc (FuncType-only)"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("TrainingMenuFunc (FuncType-only)", &si); }
     perf::end(perf::PmHooks, pt);
     return rc;
 }
@@ -751,6 +995,7 @@ thread_local std::string tl_text[2];
 thread_local bool tl_text_set[2];
 
 int text_inner(int which, void** argv) {
+    step("GetOptionText");
     const pc::Route r = pc::route(arg_i32(argv[2]), tl_ctx, pc::game_rows());
     if (r == pc::Route::Pass) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     std::string s;
@@ -762,7 +1007,10 @@ int text_inner(int which, void** argv) {
     return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
 }
 void text_out(int which, void** ret_val) {
+    step("GetOptionText post");
+    op("create_utf8_string");
     MO* s = ll::create_utf8_string(tl_text[which]);       // a fresh string, one extra reference for the game (R6)
+    op("add_ref");
     if (s) s->add_ref();
     *ret_val = s;
 }
@@ -772,16 +1020,18 @@ template <int W> int pre_text(int, void** argv, REFrameworkTypeDefinitionHandle*
         return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    SehInfo si{};
     __try { rc = text_inner(W, argv); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("GetOptionText"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("GetOptionText", &si); }
     perf::end(perf::PmHooks, pt);
     return rc;
 }
 template <int W> void post_text(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!tl_text_set[W]) return;
     tl_text_set[W] = false;
+    SehInfo si{};
     __try { text_out(W, ret_val); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("GetOptionText post"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("GetOptionText post", &si); }
 }
 
 // ---- Function(ftype, BaseParam, ViewData, value) ----
@@ -789,9 +1039,11 @@ struct FnState { bool set; int64_t ret; int64_t page; MO* param; };
 thread_local FnState tl_fn;
 
 int64_t spin_function(const pc::FnPlan& plan, MO* param, MO* vd, int32_t idx) {
+    step("Function: spin");
     pc::RowInfo r;
     if (!pc::row_info(plan.id, r)) return 0;
     int32_t cur = value_of(r);
+    step("Function: spin");                   // (value_of may run a client callback)
     if (!plan.at_build) {                     // after a press the part's _Num is the option the game moved to
         MO* part = spin_part(param, idx);
         int32_t num = 0;
@@ -815,15 +1067,19 @@ int64_t spin_function(const pc::FnPlan& plan, MO* param, MO* vd, int32_t idx) {
         // The ViewData handed to Function at the build is not the list entry the flow renders from: that one too.
         MO* e = view_entry(param, idx);
         pc::Key k;
-        if (e && menu_key(field_obj(e, "Data"), k) && k == r.key) {
+        const bool same = e && menu_key(field_obj(e, "Data"), k) && k == r.key;
+        if (same) {
             set_i64(e, "Index", cur);
             set_i64(e, "SliderValue", cur);
         }
+        TR("spin row %lld at build (list index %d): value %d, option data %p, list entry %p%s", (long long)r.id, idx, cur, o,
+           (void*)e, same ? "" : " (not this row: not written)");
     }
     return 0;
 }
 
 int function_inner(void** argv) {
+    step("Function");
     const int32_t ft = arg_i32(argv[2]);
     MO* param = reinterpret_cast<MO*>(argv[3]);
     MO* vd = reinterpret_cast<MO*>(argv[4]);
@@ -848,6 +1104,8 @@ int function_inner(void** argv) {
     if (in.data.what == pc::What::None && d) in.parent = ident_of(field_obj(vd, "ParentData"));
     if (d && in.data.what == pc::What::None && in.parent.what == pc::What::None) in.game_owned = game_owns(d);
     const pc::FnPlan plan = pc::plan_function(in);
+    TR("Function(345, list index %d): data %p (ours: %d), plan %d, id %lld, at build %d", idx, (void*)d,
+       (int)in.data.what, (int)plan.act, (long long)plan.id, plan.at_build ? 1 : 0);
     switch (plan.act) {
     case pc::FnAct::Pass:
         return REFRAMEWORK_HOOK_CALL_ORIGINAL;          // the game's rows and unknown rows (ADR-0016 point 2)
@@ -863,6 +1121,7 @@ int function_inner(void** argv) {
         tl_ctx = pc::Ctx::Ours; tl_ctx_row = plan.id;
         int64_t ret = 0;
         if (!plan.at_build) {                          // a decide: synchronous, on this thread (ADR-0016 point 4)
+            step("Function: decide (client callback)");
             if (g_calls.decide) g_calls.decide(plan.owner, plan.id);
             ret = plan.keep_open ? 0 : 1;              // 1 = the game closes the menu
         }
@@ -882,8 +1141,12 @@ int pre_function(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lo
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    SehInfo si{};
     __try { rc = function_inner(argv); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("Function"); rc = tl_fn.set ? REFRAMEWORK_HOOK_SKIP_ORIGINAL : REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    __except (seh_filter(GetExceptionInformation(), &si)) {
+        fault("Function", &si);
+        rc = tl_fn.set ? REFRAMEWORK_HOOK_SKIP_ORIGINAL : REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    }
     perf::end(perf::PmHooks, pt);
     return rc;
 }
@@ -893,14 +1156,21 @@ int pre_function(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lo
 void view_update(MO* param, int64_t page) {
     MO* pd = reinterpret_cast<MO*>(pc::page_data(page));
     if (!pd || !g_m_viewupdate || !param) return;
+    step("page build: ViewUpdate(page)");
+    op("TrainingMenuFunc.ViewUpdate");
+    TR("page %lld: ViewUpdate(param %p, page data %p, 0) on thread %lu", (long long)page, (void*)param, (void*)pd,
+       (unsigned long)GetCurrentThreadId());
     tl_building = page;
     const auto r = g_m_viewupdate->invoke(nullptr, std::vector<void*>{ param, pd, ll::arg_i32(0) });
     tl_building = -1;
     if (r.exception_thrown) core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] ViewUpdate of page %lld threw", (long long)page);
+    TR("page %lld: ViewUpdate done%s", (long long)page, r.exception_thrown ? " (threw)" : "");
 }
 void page_build(int64_t page, MO* param) {
+    step("page build: shown state");
     pc::building(page);                        // labels the owner sets from on_page_shown need no rebuild
     notify(pc::set_shown(page));
+    step("page build: option arrays");
     pc::page_built(page, now());
     view_update(param, page);
 }
@@ -911,9 +1181,13 @@ void post_function(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned lon
     *ret_val = reinterpret_cast<void*>(static_cast<uintptr_t>(s.ret));
     if (s.page < 0 || !g_on.load(std::memory_order_relaxed) || core_closing()) return;
     int64_t pt = perf::begin();
+    // the first page build after the trace file appeared is traced (this thread, the game's layout included)
+    if (g_trace_builds.load(std::memory_order_relaxed) > 0 && g_trace_builds.fetch_sub(1) > 0) tl_tracing = true;
+    SehInfo si{};
     __try { page_build(s.page, s.param); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("Function post (page build)"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("Function post (page build)", &si); }
     tl_building = -1;
+    tl_tracing = false;
     perf::end(perf::PmHooks, pt);
 }
 
@@ -923,8 +1197,10 @@ thread_local SbFrame tl_sb[kNest];
 thread_local int tl_sb_n = 0;
 
 void spinbox_pre(int d, MO* param, int32_t idx) {
+    step("UpdateSpinBox");
     tl_sb[d].param = param;
     tl_sb[d].idx = idx;
+    op("get_type_definition");
     if (!pc::any_shown() || !param || param->get_type_definition() != g_td_param) return;
     // the row at that index must be OUR data: the row list is shared by every page of the menu
     const pc::Ident i = row_ident_of_entry(view_entry(param, idx));
@@ -942,21 +1218,28 @@ int pre_spinbox(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lon
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     if (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
+    SehInfo si{};
     __try { spinbox_pre(d, reinterpret_cast<MO*>(argv[1]), arg_i32(argv[2])); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("UpdateSpinBox"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("UpdateSpinBox", &si); }
     perf::end(perf::PmHooks, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void spinbox_post(const SbFrame f, bool outermost) {
+    step("UpdateSpinBox post: restore a game row");
     if (f.row < 0) { restore_group(f.param, f.idx); return; }   // a game row in a group we changed
     if (!outermost) return;                   // nested (our set_SelectedIndex re-enters it, R4): the outer one repairs
+    step("UpdateSpinBox post: spin part");
     pc::RowInfo r;
     MO* part = pc::row_info(f.row, r) ? spin_part(f.param, f.idx) : nullptr;
-    if (!part) return;
+    if (!part) { TR("spin repair row %lld (list index %d): no spin part", (long long)f.row, f.idx); return; }
     const int32_t v = value_of(r);
+    step("UpdateSpinBox post: carousel index");
     enforce_index(part, v, r.labels_n);
+    step("UpdateSpinBox post: option text");
     enforce_text(part, pc::label(r.id, v));
+    step("UpdateSpinBox post: font fit");
     if (r.spread > 0) fit_row(r.id, part, f.idx);
+    TR("spin repair row %lld (list index %d): part %p, value %d of %d", (long long)f.row, f.idx, (void*)part, v, r.labels_n);
 }
 void post_spinbox(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     const int d = --tl_sb_n;
@@ -964,8 +1247,9 @@ void post_spinbox(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (d >= kNest || !tl_sb[d].param || !g_on.load(std::memory_order_relaxed) || core_closing()) return;
     if (tl_sb[d].row < 0 && !g_any_moved.load(std::memory_order_relaxed)) return;
     int64_t pt = perf::begin();
+    SehInfo si{};
     __try { spinbox_post(tl_sb[d], d == 0); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("UpdateSpinBox post"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("UpdateSpinBox post", &si); }
     perf::end(perf::PmHooks, pt);
 }
 
@@ -1006,7 +1290,9 @@ int64_t spin_row_at(int32_t idx, MO* gctrl) {
     return out;
 }
 void num_inner(void** argv, int slot, bool init) {
+    step(init ? "UIPartsSpin.Init" : "UIPartsSpin.set_Num");
     MO* part = reinterpret_cast<MO*>(argv[1]);
+    op("get_type_definition");
     if (!part || part->get_type_definition() != g_td_spin) return;
     int32_t idx = -1;
     MO* gctrl = nullptr;
@@ -1024,8 +1310,9 @@ void num_inner(void** argv, int slot, bool init) {
 template <int Slot, bool Init> int pre_num(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on.load(std::memory_order_relaxed) || core_closing() || !pc::any_shown()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
+    SehInfo si{};
     __try { num_inner(argv, Slot, Init); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault(Init ? "UIPartsSpin.Init" : "UIPartsSpin.set_Num"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault(Init ? "UIPartsSpin.Init" : "UIPartsSpin.set_Num", &si); }
     perf::end(perf::PmHooks, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -1043,12 +1330,16 @@ int pre_guide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long 
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void guide_post(void* focus, void** slot) {
+    step("GetGuideData post: the list");
+    op("the guide list slot");
     MO* list = slot ? reinterpret_cast<MO*>(*slot) : nullptr;
     if (!list) return;
     std::vector<Hint> hints;
+    step("GetGuideData post: hints (client callbacks)");
     g_calls.hints(focus, hints);
+    step("GetGuideData post: add");
     for (const Hint& h : hints)
-        if (pc::Obj o = pc::hint_obj(h.owner, h.button, h.text)) g_api->list_add(g_self, list, o);
+        if (pc::Obj o = pc::hint_obj(h.owner, h.button, h.text)) { op("list_add"); g_api->list_add(g_self, list, o); }
 }
 void post_guide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!tl_guide_slot) return;
@@ -1057,8 +1348,9 @@ void post_guide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     tl_guide_slot = nullptr;
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return;
     int64_t pt = perf::begin();
+    SehInfo si{};
     __try { guide_post(focus, slot); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("GetGuideData post"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("GetGuideData post", &si); }
     perf::end(perf::PmHooks, pt);
 }
 
@@ -1067,16 +1359,19 @@ thread_local uintptr_t tl_scroll[kNest];
 thread_local int tl_scroll_n = 0;
 
 void rebuild(MO* param, int64_t page) {
+    step("UpdateScroll post: rebuild");
     pc::page_built(page, now());              // rows "at build" (no decide, no change), arrays sized to the labels
     view_update(param, page);
 }
 void per_frame(MO* param, int64_t page) {
+    step("UpdateScroll post: retext");
     for (int64_t rid : pc::take_retext(page)) {           // labels changed: the visible text at once
         pc::RowInfo r;
         if (!pc::row_info(rid, r) || r.row_index < 0 || !entry_is(param, r.row_index, rid)) continue;
         if (MO* part = spin_part(param, r.row_index)) enforce_text(part, pc::label(rid, value_of(r)));
     }
     std::vector<int32_t> kept;
+    step("UpdateScroll post: font fit and arrows");
     for (int64_t rid : pc::page_rows(page)) {
         pc::RowInfo r;
         if (!pc::row_info(rid, r) || r.kind != pc::Kind::Spin || r.spread <= 0 || r.row_index < 0) continue;
@@ -1087,10 +1382,12 @@ void per_frame(MO* param, int64_t page) {
         arrows(param, r.row_index, r.spread);
         kept.push_back(r.row_index);
     }
+    step("UpdateScroll post: restore");
     for (int32_t idx : moved_list())
         if (std::find(kept.begin(), kept.end(), idx) == kept.end()) restore_group(param, idx);
 }
 void scroll_post(bool our_list) {
+    step("UpdateScroll post");
     MO* param = param_get();
     if (!param) return;
     if (!our_list) {
@@ -1118,8 +1415,9 @@ void post_scroll(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     const bool our_list = ours && tl_scroll[d] == ours;
     if (our_list ? (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) : !pc::rebuild_pending()) return;
     int64_t pt = perf::begin();
+    SehInfo si{};
     __try { scroll_post(our_list); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { fault("UpdateScroll post"); }
+    __except (seh_filter(GetExceptionInformation(), &si)) { fault("UpdateScroll post", &si); }
     tl_building = -1;
     perf::end(perf::PmHooks, pt);
 }
@@ -1133,32 +1431,40 @@ bool g_training = false;
 bool g_menu_up = false;
 
 bool pause_up() {
+    op("get_managed_singleton PauseManager");
     MO* pm = API::get()->get_managed_singleton("app.PauseManager");
     uint32_t b = kPauseNone;
+    op("_CurrentPauseTypeBit");
     return pm && ll::read_field_u32(pm, "_CurrentPauseTypeBit", b) && b != kPauseNone && b != kPauseNone2;
 }
 
 void frame_inner(uint64_t f) {
+    step("frame: flow");
     const int32_t flow = g_api->get_flow_id();
     const bool training_flow = flow == kTrainingFlow || flow == kHubTrainingFlow;
+    if (f % 120 == 7) { step("frame: trace file"); trace_check(); }
     if (!training_flow) g_training = false;
     else if (f - g_training_checked >= 60 || g_training_checked == 0) {
+        step("frame: training check");
         MO* tm = training_manager();
         g_training = tm && field_obj(tm, "_tData");
         g_training_checked = f;
     }
+    step("frame: pause check");
     const bool paused = g_training && (pause_up() || dialogs::options::core::window_open());
     if (g_menu_up && !paused) {               // the menu closed: nothing shown, the menu's param let go
+        step("frame: menu closed");
         notify(pc::menu_closed());
         param_drop();
     }
     g_menu_up = paused;
+    step("frame: state machine");             // the install pass sets its own steps (pass_begin and the backend)
     pc::tick(f, g_training, paused);
-    if (g_training && !paused && f % 60 == 20) scan_game_rows();
+    if (g_training && !paused && f % 60 == 20) { step("frame: game rows"); scan_game_rows(); }
 }
-bool frame_seh(uint64_t f) {
+bool frame_seh(uint64_t f, SehInfo* si) {
     __try { frame_inner(f); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    __except (seh_filter(GetExceptionInformation(), si)) { return false; }
     return true;
 }
 
@@ -1178,45 +1484,14 @@ struct Spec {
     std::string other;
     uintptr_t raw = 0, code = 0;
 };
-std::vector<Spec> g_specs;
-uint64_t g_scan_ms = 0;
+std::mutex g_specs_mx;
+std::vector<Spec> g_specs;                    // made once (make_specs), before the code check's thread starts
 std::string g_refused;
 
-}  // namespace
+std::string spec_label(const Spec& s) { return std::string(s.type) + "." + s.sig; }
 
-// ======================== public ========================
-
-bool install(const Calls& calls, SF6CoreClient* engine_client) {
-    g_calls = calls;
-    g_self = engine_client;
-    g_api = sf6core_api_ptr();
-    {
-        std::lock_guard lk(g_types_mx);
-        if (!g_types_done) {
-            auto* tdb = API::get()->tdb();
-            if (!tdb) return false;
-            g_types_done = true;
-            g_td_menu = tdb->find_type("app.training.TrainingMenuData");
-            if (g_td_menu) { g_f_msg = ll::find_field_walk(g_td_menu, "_MessageID"); g_f_ftype = ll::find_field_walk(g_td_menu, "_FuncType"); }
-            g_td_param = tdb->find_type("app.training.UIFlowTrainingMenu.Param");
-            g_td_spin = tdb->find_type("app.UIPartsSpin");
-            g_td_guide = tdb->find_type("app.InputGuideData");
-            if (TD* tmf = tdb->find_type("app.training.TrainingMenuFunc")) g_m_viewupdate = tmf->find_method("ViewUpdate");
-        }
-    }
-    if (!g_self || !g_td_menu || !g_f_msg || !g_f_ftype || !g_td_param || !g_m_viewupdate) {
-        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] game types not found (TrainingMenuData %s, Param %s, ViewUpdate %s): off",
-                 g_td_menu ? "ok" : "no", g_td_param ? "ok" : "no", g_m_viewupdate ? "ok" : "no");
-        return false;
-    }
-
-    pc::Backend be;
-    be.text_new = be_text_new; be.text_set = be_text_set; be.text_release = be_text_release;
-    be.new_row_data = be_new_row_data; be.new_option_data = be_new_option_data; be.new_array = be_new_array;
-    be.set_children = be_set_children; be.new_page_data = be_new_page_data; be.new_hint = be_new_hint;
-    be.release = be_release; be.strip_read = be_strip_read; be.strip_write = be_strip_write; be.log = be_log;
-    pc::set_backend(be);
-
+void make_specs() {                           // under g_specs_mx
+    if (!g_specs.empty()) return;
     const char* tmf = "app.training.TrainingMenuFunc";
     g_specs = {
         { tmf, "GetIsActive", pre_const<pc::kGetIsActive>, post_const<pc::kGetIsActive>, false,
@@ -1249,90 +1524,401 @@ bool install(const Calls& calls, SF6CoreClient* engine_client) {
           "no per-frame font fit / arrow reset, no page rebuild after a change of a shown spin's labels (the page shows "
           "them at its next build)" },
     };
+}
 
-    auto* tdb = API::get()->tdb();
-    std::vector<FoldTarget> targets;
-    for (auto& s : g_specs) {
-        TD* td = tdb->find_type(s.type);
-        s.m = td ? td->find_method(s.sig) : nullptr;
-        FoldTarget t;
-        if (s.m) {
-            t.m = s.m;
-            t.index = s.m->get_index();
-            t.raw = reinterpret_cast<uintptr_t>(s.m->get_function_raw());
-            t.code = t.raw ? code_of(t.raw) : 0;
-            s.raw = t.raw;
-            s.code = t.code;
-        }
-        targets.push_back(t);
+// ---- R18: the code check, on a thread of its own, and its cache ----
+// The type database and the game's code are static and the check only reads them; the REFramework lookups it uses take
+// their own locks (find_type, get_method, get_function, get_full_name: shared_mutex each). So it runs once on a thread
+// of its own, started by the first pm_set_callbacks (6.5 s over every method on 10/10, the game frozen meanwhile when
+// it ran on the game thread); the game thread only polls an atomic, and installs the hooks from the frame after the
+// check ended, one per frame. The result is kept in reframework/data/sf6core/pm_codecheck.txt, keyed by the game's
+// executable (PE header, file size and time) and its method count: the next sessions read it instead of walking every
+// method again (REFramework then writes none of its "Encoded offset is 0" lines either: 345k of them on 10/10).
+struct Check {
+    std::vector<FoldTarget> targets;          // one per spec
+    bool scanned = false;                     // every method compared, or a cache that matches this game
+    bool cache_hit = false, cache_written = false, faulted = false;
+    uint32_t methods = 0;
+    uint64_t ms = 0;
+    DWORD tid = 0;
+    char key[200] = {};
+    char cache_note[160] = {};                // why the cache was not used
+    SehInfo fault{};
+};
+Check g_check;                                // written by the check's thread, then g_check_state = 2 (release)
+std::atomic<int> g_check_state{0};            // 0 not started, 1 running, 2 done
+
+constexpr const char* kCacheFile = "pm_codecheck.txt";
+constexpr const char* kCacheHeader = "sf6core pause-menu code check 1";
+
+uintptr_t exe_base() { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); }
+long long rva(uintptr_t a) { return a ? (long long)(a - exe_base()) : 0; }
+
+void exe_key(char* out, size_t n, uint32_t methods) {
+    const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    WIN32_FILE_ATTRIBUTE_DATA fa{};
+    unsigned long long size = 0, time = 0;
+    if (GetFileAttributesExW(path, GetFileExInfoStandard, &fa)) {
+        size = ((unsigned long long)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+        time = ((unsigned long long)fa.ftLastWriteTime.dwHighDateTime << 32) | fa.ftLastWriteTime.dwLowDateTime;
     }
-    // R18: every hooked method must own its machine code; a method folded with another one (or reached through the
-    // same jump) would put our hook on every call of the others (the 1.10.5 slowdown, the 18/09 freeze).
+    std::snprintf(out, n, "exe %08lX %08lX %08lX size %llu time %llX methods %u",
+                  (unsigned long)nt->FileHeader.TimeDateStamp, (unsigned long)nt->OptionalHeader.SizeOfImage,
+                  (unsigned long)nt->OptionalHeader.CheckSum, size, time, methods);
+}
+
+void chomp(char* s) {
+    size_t n = std::strlen(s);
+    while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0;
+}
+
+// The cached sharing of every target, when the file is of this game and each target is where it was (entry and code).
+bool cache_read() {
+    char path[MAX_PATH];
+    data_path(kCacheFile, path, sizeof path);
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "r") != 0 || !f) { std::snprintf(g_check.cache_note, sizeof g_check.cache_note, "no cache file yet"); return false; }
+    std::vector<FoldTarget> got = g_check.targets;
+    char line[1024];
+    const char* why = nullptr;
+    if (!std::fgets(line, sizeof line, f)) why = "empty cache file";
+    else { chomp(line); if (std::strcmp(line, kCacheHeader) != 0) why = "another cache format"; }
+    if (!why) {
+        if (!std::fgets(line, sizeof line, f)) why = "no key";
+        else { chomp(line); if (std::strncmp(line, "key ", 4) != 0 || std::strcmp(line + 4, g_check.key) != 0) why = "another game executable"; }
+    }
+    for (size_t i = 0; !why && i < g_specs.size(); ++i) {
+        if (!std::fgets(line, sizeof line, f)) { why = "targets missing"; break; }
+        chomp(line);
+        char* bar = std::strchr(line, '|');
+        if (!bar) { why = "unreadable target line"; break; }
+        *bar = 0;
+        if (spec_label(g_specs[i]) != bar + 1) { why = "the hooked methods changed"; break; }
+        int found = 0, shared = 0, nsh = 0, pos = 0;
+        unsigned index = 0;
+        long long raw = 0, code = 0, other = -1;
+        if (sscanf_s(line, "t %d %u %lld %lld %d %lld %d%n", &found, &index, &raw, &code, &shared, &other, &nsh, &pos) != 7 ||
+            nsh < 0 || nsh > 16) { why = "unreadable target line"; break; }
+        FoldTarget& t = got[i];
+        if ((found != 0) != (t.m != nullptr) || index != t.index || raw != rva(t.raw) || code != rva(t.code)) {
+            why = "a hooked method's entry or code moved";
+            break;
+        }
+        t.shared = shared;
+        t.sharers.clear();
+        const char* p = line + pos;
+        for (int k = 0; k < nsh; ++k) {
+            char* e = nullptr;
+            const unsigned long v = std::strtoul(p, &e, 10);
+            if (e == p) break;
+            t.sharers.push_back((uint32_t)v);
+            p = e;
+        }
+        if ((int)t.sharers.size() != nsh) { why = "unreadable target line"; break; }
+        t.other = other >= 0 ? API::get()->tdb()->get_method((uint32_t)other) : nullptr;
+    }
+    std::fclose(f);
+    if (why) { std::snprintf(g_check.cache_note, sizeof g_check.cache_note, "%s", why); return false; }
+    g_check.targets = std::move(got);
+    return true;
+}
+
+bool cache_write() {
+    char path[MAX_PATH], tmp[MAX_PATH];
+    data_path(kCacheFile, path, sizeof path);
+    std::snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE* f = nullptr;
+    if (fopen_s(&f, tmp, "w") != 0 || !f) return false;
+    std::fprintf(f, "%s\nkey %s\n", kCacheHeader, g_check.key);
+    for (size_t i = 0; i < g_specs.size() && i < g_check.targets.size(); ++i) {
+        const FoldTarget& t = g_check.targets[i];
+        const long long other = t.other ? (long long)t.other->get_index() : -1;
+        std::fprintf(f, "t %d %u %lld %lld %d %lld %d", t.m ? 1 : 0, t.index, rva(t.raw), rva(t.code), t.shared, other,
+                     (int)t.sharers.size());
+        for (uint32_t s : t.sharers) std::fprintf(f, " %u", s);
+        std::fprintf(f, "|%s\n", spec_label(g_specs[i]).c_str());
+    }
+    const bool ok = std::fclose(f) == 0;
+    return ok && MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
+void check_run() {
+    tl_tracing = g_trace_armed.load();
     const uint64_t t0 = GetTickCount64();
-    const bool scanned = fold_scan_seh(&targets);
-    g_scan_ms = GetTickCount64() - t0;
-    g_refused.clear();
-    // the decision (pm_core::hook_verdicts, checked offline): a hook group = the same pre / post functions
+    g_check.tid = GetCurrentThreadId();
+    step("code check: the hooked methods");
+    auto* tdb = API::get()->tdb();
+    g_check.methods = tdb ? tdb->get_num_methods() : 0;
+    g_check.targets.assign(g_specs.size(), FoldTarget{});
+    for (size_t i = 0; tdb && i < g_specs.size(); ++i) {
+        const Spec& s = g_specs[i];
+        op(s.sig);
+        TD* td = tdb->find_type(s.type);
+        API::Method* m = td ? td->find_method(s.sig) : nullptr;
+        FoldTarget& t = g_check.targets[i];
+        if (m) {
+            t.m = m;
+            t.index = m->get_index();
+            t.raw = reinterpret_cast<uintptr_t>(m->get_function_raw());
+            t.code = t.raw ? code_of(t.raw) : 0;
+        }
+        TR("check target %zu %s.%s: method %p, index %u, entry 0x%llX, code 0x%llX", i, s.type, s.sig, (void*)m, t.index,
+           (unsigned long long)t.raw, (unsigned long long)t.code);
+    }
+    if (tdb) {
+        step("code check: cache");
+        exe_key(g_check.key, sizeof g_check.key, g_check.methods);
+        TR("check key: %s", g_check.key);
+        if (cache_read()) {
+            g_check.cache_hit = true;
+            g_check.scanned = true;
+        } else {
+            TR("cache not used: %s", g_check.cache_note);
+            step("code check: every method");
+            g_check.scanned = fold_scan(g_check.targets);
+            if (g_check.scanned) {
+                step("code check: cache write");
+                g_check.cache_written = cache_write();
+            }
+        }
+    }
+    g_check.ms = GetTickCount64() - t0;
+    tl_tracing = false;
+}
+bool check_seh(SehInfo* si) {
+    __try { check_run(); }
+    __except (seh_filter(GetExceptionInformation(), si)) { return false; }
+    return true;
+}
+DWORD WINAPI check_thread(LPVOID) {
+    SehInfo si{};
+    if (!check_seh(&si)) {
+        g_check.faulted = true;
+        g_check.fault = si;
+        g_check.scanned = false;
+    }
+    tl_tracing = false;
+    g_check_state.store(2, std::memory_order_release);
+    return 0;
+}
+
+void check_start_impl() {
+    if (g_check_state.load(std::memory_order_acquire) != 0) return;
+    if (!s_initialized.load(std::memory_order_acquire)) return;   // REFramework's API ready (the core's initialize ran)
+    {
+        std::lock_guard lk(g_specs_mx);
+        make_specs();
+    }
+    int expected = 0;
+    if (!g_check_state.compare_exchange_strong(expected, 1)) return;
+    trace_check();
+    HANDLE h = CreateThread(nullptr, 0, check_thread, nullptr, 0, nullptr);
+    if (h) {
+        CloseHandle(h);
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] code check (R18) started on a background thread: the hooks "
+                 "follow when it ends, the game does not wait for it");
+    } else {
+        std::snprintf(g_check.cache_note, sizeof g_check.cache_note, "its thread was not created (error %lu)", GetLastError());
+        g_check_state.store(2, std::memory_order_release);
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] code check thread not created: no hook (R18: never hooked blind)");
+    }
+}
+
+std::string check_text() {
+    const int st = g_check_state.load(std::memory_order_acquire);
+    if (st != 2) return st ? "running" : "not started";
+    char b[200];
+    if (g_check.cache_hit)
+        std::snprintf(b, sizeof b, "%llu ms, from the cache", (unsigned long long)g_check.ms);
+    else if (g_check.scanned)
+        std::snprintf(b, sizeof b, "%llu ms over %u methods on thread %lu, cache %s", (unsigned long long)g_check.ms,
+                      g_check.methods, (unsigned long)g_check.tid, g_check.cache_written ? "written" : "not written");
+    else
+        std::snprintf(b, sizeof b, "failed");
+    return b;
+}
+
+// ---- the install on the game thread: types and backend, then (check done) the verdicts, then one hook per frame ----
+bool g_prepared = false, g_wait_logged = false, g_verdicts_done = false, g_required_ok = true;
+std::vector<pc::Verdict> g_verdicts;
+size_t g_next_hook = 0;
+int g_hooked = 0;
+
+bool prepare(const Calls& calls, SF6CoreClient* engine_client) {
+    g_calls = calls;
+    g_self = engine_client;
+    g_api = sf6core_api_ptr();
+    {
+        std::lock_guard lk(g_types_mx);
+        if (!g_types_done) {
+            auto* tdb = API::get()->tdb();
+            if (!tdb) return false;
+            g_types_done = true;
+            g_td_menu = tdb->find_type("app.training.TrainingMenuData");
+            if (g_td_menu) { g_f_msg = ll::find_field_walk(g_td_menu, "_MessageID"); g_f_ftype = ll::find_field_walk(g_td_menu, "_FuncType"); }
+            g_td_param = tdb->find_type("app.training.UIFlowTrainingMenu.Param");
+            g_td_spin = tdb->find_type("app.UIPartsSpin");
+            g_td_guide = tdb->find_type("app.InputGuideData");
+            if (TD* tmf = tdb->find_type("app.training.TrainingMenuFunc")) g_m_viewupdate = tmf->find_method("ViewUpdate");
+            if (TD* arr = tdb->find_type("System.Array")) {
+                g_m_array_new = arr->find_method("CreateInstance(System.Type, System.Int32)");
+                if (!g_m_array_new) {                    // REFramework's own pick for sdk.create_managed_array
+                    API::Method* m = arr->find_method("CreateInstance");
+                    if (m && m->get_num_params() == 2) g_m_array_new = m;
+                }
+            }
+            if (g_td_menu) g_rt_menu = g_td_menu->get_runtime_type();
+        }
+    }
+    if (!g_self || !g_td_menu || !g_f_msg || !g_f_ftype || !g_td_param || !g_m_viewupdate || !g_m_array_new || !g_rt_menu) {
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] game types not found (TrainingMenuData %s, Param %s, ViewUpdate %s, "
+                 "System.Array.CreateInstance %s, its runtime type %s): off", g_td_menu ? "ok" : "no", g_td_param ? "ok" : "no",
+                 g_m_viewupdate ? "ok" : "no", g_m_array_new ? "ok" : "no", g_rt_menu ? "ok" : "no");
+        return false;
+    }
+
+    pc::Backend be;
+    be.text_new = be_text_new; be.text_set = be_text_set; be.text_release = be_text_release;
+    be.new_row_data = be_new_row_data; be.new_option_data = be_new_option_data; be.new_array = be_new_array;
+    be.set_children = be_set_children; be.new_page_data = be_new_page_data; be.new_hint = be_new_hint;
+    be.release = be_release; be.strip_read = be_strip_read; be.strip_write = be_strip_write; be.log = be_log;
+    be.pass_begin = be_pass_begin; be.pass_end = be_pass_end; be.tracing = be_tracing; be.trace = be_trace;
+    pc::set_backend(be);
+    return true;
+}
+
+// The check's result turned into one verdict per hook (pm_core::hook_verdicts, checked offline).
+void verdicts_compute() {
+    const Check& c = g_check;
+    if (c.faulted) {
+        char d[420];
+        describe(c.fault, d, sizeof d);
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] code check (R18) failed: %s", d);
+    }
+    if (c.cache_hit)
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] code check (R18): read from %s (same game executable), %llu ms on "
+                 "thread %lu (background)", kCacheFile, (unsigned long long)c.ms, (unsigned long)c.tid);
+    else if (c.scanned)
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] code check (R18): %u methods compared in %llu ms on thread %lu "
+                 "(background: the game did not wait); cache %s (%s)", c.methods, (unsigned long long)c.ms,
+                 (unsigned long)c.tid, c.cache_written ? "written" : "NOT written", c.cache_note);
+    else
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] code check (R18) not done (%s): every hook refused",
+                 c.cache_note[0] ? c.cache_note : (c.faulted ? "a fault" : "the game closed"));
+    static const FoldTarget kNone;
     std::vector<pc::HookCode> codes;
     for (size_t i = 0; i < g_specs.size(); ++i) {
+        const FoldTarget& t = i < c.targets.size() ? c.targets[i] : kNone;
+        Spec& s = g_specs[i];
+        s.m = t.m;
+        s.raw = t.raw;
+        s.code = t.code;
+        s.shared = c.scanned ? t.shared : -1;
+        s.other = t.other ? method_label(t.other) : std::string();
         pc::HookCode h;
-        h.found = targets[i].m != nullptr;
-        h.index = targets[i].index;
-        h.raw = targets[i].raw;
-        h.code = targets[i].code;
-        h.shared = scanned ? targets[i].shared : -1;
-        h.sharers = targets[i].sharers;
-        h.group = (int)i;
+        h.found = t.m != nullptr;
+        h.index = t.index;
+        h.raw = t.raw;
+        h.code = t.code;
+        h.shared = s.shared;
+        h.sharers = t.sharers;
+        h.group = (int)i;                    // a hook group = the same pre / post functions
         for (size_t j = 0; j < i; ++j)
-            if (g_specs[j].pre == g_specs[i].pre && g_specs[j].post == g_specs[i].post) { h.group = codes[j].group; break; }
+            if (g_specs[j].pre == s.pre && g_specs[j].post == s.post) { h.group = codes[j].group; break; }
         codes.push_back(h);
     }
-    const std::vector<pc::Verdict> verdicts = pc::hook_verdicts(codes);
-    bool required_ok = true;
-    int hooked = 0;
-    for (size_t i = 0; i < g_specs.size(); ++i) {
-        Spec& s = g_specs[i];
-        const FoldTarget& t = targets[i];
-        s.shared = scanned ? t.shared : -1;
-        s.other = t.other ? method_label(t.other) : std::string();
-        const std::string label = std::string(s.type) + "." + s.sig;
-        switch (verdicts[i]) {
-        case pc::Verdict::Missing:
-            core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] hook %s: not found (%s)", label.c_str(), s.without);
-            break;
-        case pc::Verdict::Covered:
-            core_log(SF6CORE_LOG_INFO, nullptr,
-                     "[pausemenu] hook %s at 0x%llX (code 0x%llX): shares its code only with a method of the same hook (%s): covered by it",
-                     label.c_str(), (unsigned long long)s.raw, (unsigned long long)s.code, s.other.c_str());
-            break;
-        case pc::Verdict::Refused: {
-            s.refused = true;
-            const std::string why = scanned ? "shares its code with " + std::to_string(s.shared) + " other method(s), e.g. " + s.other
-                                            : std::string("the code check failed");
-            core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] hook %s at 0x%llX (code 0x%llX, declared by %s): %s: REFUSED (R18): %s",
-                     label.c_str(), (unsigned long long)s.raw, (unsigned long long)s.code, method_label(s.m).c_str(),
-                     why.c_str(), s.without);
-            g_refused += (g_refused.empty() ? "" : ", ") + std::string(s.sig);
-            break;
-        }
-        case pc::Verdict::Hook:
-            if (s.m->add_hook(s.pre, s.post, false)) {
-                s.hooked = true;
-                ++hooked;
-                core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] hook %s at 0x%llX (code 0x%llX, declared by %s): %s, hooked",
-                         label.c_str(), (unsigned long long)s.raw, (unsigned long long)s.code, method_label(s.m).c_str(),
-                         t.shared ? "its code shared only within this hook" : "own code");
-            } else {
-                core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] hook %s: add_hook failed (%s)", label.c_str(), s.without);
-            }
-            break;
-        }
-        if (s.required && !s.hooked) required_ok = false;
+    g_verdicts = pc::hook_verdicts(codes);
+    g_refused.clear();
+    g_next_hook = 0;
+    g_hooked = 0;
+    g_required_ok = true;
+}
+
+// One spec: logged; true when add_hook was called (the next one waits for the next frame).
+bool install_one(size_t i) {
+    Spec& s = g_specs[i];
+    const std::string label = spec_label(s);
+    bool called = false;
+    switch (g_verdicts[i]) {
+    case pc::Verdict::Missing:
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] hook %s: not found (%s)", label.c_str(), s.without);
+        break;
+    case pc::Verdict::Covered:
+        core_log(SF6CORE_LOG_INFO, nullptr,
+                 "[pausemenu] hook %s at 0x%llX (code 0x%llX): shares its code only with a method of the same hook (%s): covered by it",
+                 label.c_str(), (unsigned long long)s.raw, (unsigned long long)s.code, s.other.c_str());
+        break;
+    case pc::Verdict::Refused: {
+        s.refused = true;
+        const std::string why = s.shared >= 0 ? "shares its code with " + std::to_string(s.shared) + " other method(s), e.g. " + s.other
+                                              : std::string("the code check failed");
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] hook %s at 0x%llX (code 0x%llX, declared by %s): %s: REFUSED (R18): %s",
+                 label.c_str(), (unsigned long long)s.raw, (unsigned long long)s.code, method_label(s.m).c_str(),
+                 why.c_str(), s.without);
+        g_refused += (g_refused.empty() ? "" : ", ") + std::string(s.sig);
+        break;
     }
-    core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] %d / %zu hooks installed (code check over every method: %llu ms)%s",
-             hooked, g_specs.size(), (unsigned long long)g_scan_ms, required_ok ? "" : ": the engine is off");
-    g_on = required_ok;
-    return required_ok;
+    case pc::Verdict::Hook: {
+        LARGE_INTEGER q0{}, q1{}, fq{};
+        QueryPerformanceCounter(&q0);
+        const unsigned int id = s.m->add_hook(s.pre, s.post, false);
+        QueryPerformanceCounter(&q1);
+        QueryPerformanceFrequency(&fq);
+        const double ms = fq.QuadPart ? (double)(q1.QuadPart - q0.QuadPart) * 1000.0 / (double)fq.QuadPart : 0.0;
+        called = true;
+        if (id) {
+            s.hooked = true;
+            ++g_hooked;
+            core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] hook %s at 0x%llX (code 0x%llX, declared by %s): %s, hooked (%.1f ms)",
+                     label.c_str(), (unsigned long long)s.raw, (unsigned long long)s.code, method_label(s.m).c_str(),
+                     s.shared ? "its code shared only within this hook" : "own code", ms);
+        } else {
+            core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] hook %s: add_hook failed (%s)", label.c_str(), s.without);
+        }
+        break;
+    }
+    }
+    if (s.required && !s.hooked) g_required_ok = false;
+    return called;
+}
+
+}  // namespace
+
+// ======================== public ========================
+
+void check_start() { check_start_impl(); }
+
+Install install(const Calls& calls, SF6CoreClient* engine_client) {
+    if (!g_prepared) {
+        if (!prepare(calls, engine_client)) return Install::Failed;
+        g_prepared = true;
+    }
+    check_start_impl();
+    if (g_check_state.load(std::memory_order_acquire) != 2) {
+        if (!g_wait_logged) {
+            g_wait_logged = true;
+            core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] waiting for the code check (background thread)");
+        }
+        return Install::Pending;
+    }
+    if (!g_verdicts_done) {                   // the verdicts this frame, the hooks from the next one
+        verdicts_compute();
+        g_verdicts_done = true;
+        return Install::Pending;
+    }
+    // One add_hook per frame: REFramework's hook creation stops the game's threads while it patches (1 to 6 ms each on
+    // 10/10); fifteen of them in one frame were a 23 ms frame.
+    while (g_next_hook < g_specs.size())
+        if (install_one(g_next_hook++)) break;
+    if (g_next_hook < g_specs.size()) return Install::Pending;
+    core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] %d / %zu hooks installed (code check: %s)%s", g_hooked, g_specs.size(),
+             check_text().c_str(), g_required_ok ? "" : ": the engine is off");
+    g_on = g_required_ok;
+    return g_required_ok ? Install::Done : Install::Failed;
 }
 
 bool ready() { return g_on.load(); }
@@ -1340,7 +1926,9 @@ bool ready() { return g_on.load(); }
 void frame(uint64_t f) {
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return;
     int64_t pt = perf::begin();
-    if (!frame_seh(f)) fault("frame");
+    SehInfo si{};
+    if (!frame_seh(f, &si)) fault("frame", &si);
+    tl_tracing = false;
     perf::end(perf::PmFrame, pt);
 }
 
@@ -1363,19 +1951,29 @@ bool dyn_row_removable(void* dynamic_data) {
 }
 
 namespace {
+// The clients' live queries: a fault answers "no" (not counted on the engine's breaker), the first ones are logged.
+std::atomic<int> g_query_faults{0};
+void query_fault(const char* what, const SehInfo& si) {
+    if (++g_query_faults > kDetailedFaults) return;
+    char d[420];
+    describe(si, d, sizeof d);
+    core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] fault in %s (answered 'no'): %s", what, d);
+}
 int32_t page_shown_inner(int64_t page) {
+    step("pm_page_shown");
     MO* param = param_get();
     if (!param) return tl_building == page ? 1 : 0;
     const bool on = page_shown_live(param, page);
     param_put(param);
     return on ? 1 : 0;
 }
-bool page_shown_seh(int64_t page, int32_t* out) {
+bool page_shown_seh(int64_t page, int32_t* out, SehInfo* si) {
     __try { *out = page_shown_inner(page); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    __except (seh_filter(GetExceptionInformation(), si)) { return false; }
     return true;
 }
 void* row_part_inner(int64_t row) {
+    step("pm_row_part");
     pc::RowInfo r;
     if (!pc::row_info(row, r) || r.removed || r.row_index < 0) return nullptr;
     MO* param = param_get();
@@ -1384,9 +1982,9 @@ void* row_part_inner(int64_t row) {
     param_put(param);
     return out;
 }
-bool row_part_seh(int64_t row, void** out) {
+bool row_part_seh(int64_t row, void** out, SehInfo* si) {
     __try { *out = row_part_inner(row); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    __except (seh_filter(GetExceptionInformation(), si)) { return false; }
     return true;
 }
 }  // namespace
@@ -1394,37 +1992,53 @@ bool row_part_seh(int64_t row, void** out) {
 int32_t page_shown(int64_t page) {
     if (!g_on.load() || core_closing()) return 0;
     int32_t v = 0;
-    return page_shown_seh(page, &v) ? v : 0;
+    SehInfo si{};
+    if (page_shown_seh(page, &v, &si)) return v;
+    query_fault("pm_page_shown", si);
+    return 0;
 }
 
 namespace {
 // SEH frame: the game reads only (type check, GUID field); no C++ object here.
-bool menu_key_seh(void* data, pc::Key* k) {
-    __try { return menu_key(reinterpret_cast<MO*>(data), *k); }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+bool menu_key_seh(void* data, pc::Key* k, SehInfo* si) {
+    __try { step("pm_row_of"); return menu_key(reinterpret_cast<MO*>(data), *k); }
+    __except (seh_filter(GetExceptionInformation(), si)) { return false; }
 }
 }  // namespace
 
 int64_t row_of(const void* owner, void* menu_data) {
     if (!owner || !menu_data || !g_on.load() || core_closing() || !g_f_msg) return -1;
     pc::Key k;
-    if (!menu_key_seh(menu_data, &k)) return -1;
+    SehInfo si{};
+    if (!menu_key_seh(menu_data, &k, &si)) {
+        if (si.code) query_fault("pm_row_of", si);
+        return -1;
+    }
     return pc::row_of(owner, k);              // registry lock inside
 }
 
 void* row_part(int64_t row) {
     if (!g_on.load() || core_closing()) return nullptr;
     void* p = nullptr;
-    return row_part_seh(row, &p) ? p : nullptr;
+    SehInfo si{};
+    if (row_part_seh(row, &p, &si)) return p;
+    query_fault("pm_row_part", si);
+    return nullptr;
 }
 
 std::string status() {
     int hooked = 0;
-    for (const auto& s : g_specs) if (s.hooked) ++hooked;
-    char b[200];
-    std::snprintf(b, sizeof b, "on=%d faults=%d hooks %d/%zu (code check %llu ms)%s%s; ", g_on.load() ? 1 : 0,
-                  g_faults.load(), hooked, g_specs.size(), (unsigned long long)g_scan_ms,
-                  g_refused.empty() ? "" : ", refused: ", g_refused.c_str());
+    size_t n = 0;
+    std::string refused;
+    {
+        std::lock_guard lk(g_specs_mx);       // (the table itself is made once, under this lock)
+        for (const auto& s : g_specs) if (s.hooked) ++hooked;
+        n = g_specs.size();
+        refused = g_refused;
+    }
+    char b[360];
+    std::snprintf(b, sizeof b, "on=%d faults=%d hooks %d/%zu (code check: %s)%s%s; ", g_on.load() ? 1 : 0,
+                  g_faults.load(), hooked, n, check_text().c_str(), refused.empty() ? "" : ", refused: ", refused.c_str());
     return std::string(b) + pc::status();
 }
 

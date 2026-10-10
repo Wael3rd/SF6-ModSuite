@@ -164,17 +164,31 @@ void refresh_any_hints() {
 // ---- called by sf6core.cpp -----------------------------------------------------------------------------------------
 
 // LateUpdateBehavior, after the option dialogs and before the clients' frame callbacks.
+static bool g_prepared = false;                // engine client + GetMessage hook (game thread)
+
 void pausemenu_frame() {
-    if (g_wanted.load() && !g_installed.load() && !g_failed.load()) {     // the first frame after a client asked
-        SF6CoreClientDesc d{ sizeof(SF6CoreClientDesc), "sf6core.pausemenu", "1", 0 };
-        if (!g_self && sf6core_api_ptr()->register_client(&d, &g_self) != SF6CORE_OK) g_self = nullptr;
-        pausemenu::Calls calls;
-        calls.decide = c_decide; calls.spin_value = c_spin_value; calls.on_spin = c_on_spin;
-        calls.page_shown = c_page_shown; calls.hints = c_hints; calls.any_hints = c_any_hints;
-        if (!g_self) { g_failed = true; core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] engine client not registered: service off"); }
-        else if (!dialogs::guid_text::install()) { g_failed = true; core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] GetMessage hook not installed: service off"); }
-        else if (!pausemenu::install(calls, g_self)) { g_failed = true; core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] engine not installed: service off"); }
-        else g_installed = true;
+    if (g_wanted.load() && !g_installed.load() && !g_failed.load()) {     // from the first frame after a client asked
+        if (!g_prepared) {
+            SF6CoreClientDesc d{ sizeof(SF6CoreClientDesc), "sf6core.pausemenu", "1", 0 };
+            if (!g_self && sf6core_api_ptr()->register_client(&d, &g_self) != SF6CORE_OK) g_self = nullptr;
+            if (!g_self) { g_failed = true; core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] engine client not registered: service off"); }
+            else if (!dialogs::guid_text::install()) { g_failed = true; core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] GetMessage hook not installed: service off"); }
+            else g_prepared = true;
+        }
+        if (g_prepared) {
+            pausemenu::Calls calls;
+            calls.decide = c_decide; calls.spin_value = c_spin_value; calls.on_spin = c_on_spin;
+            calls.page_shown = c_page_shown; calls.hints = c_hints; calls.any_hints = c_any_hints;
+            // Pending while the code check runs on its thread, then one hook per frame (the frame never waits)
+            switch (pausemenu::install(calls, g_self)) {
+            case pausemenu::Install::Done: g_installed = true; break;
+            case pausemenu::Install::Failed:
+                g_failed = true;
+                core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] engine not installed: service off");
+                break;
+            case pausemenu::Install::Pending: break;
+            }
+        }
     }
     if (!g_installed.load() || core_closing()) return;
     pausemenu::frame(core_frame_pub());
@@ -210,8 +224,10 @@ SF6CoreStatus SF6CORE_CALL api_pm_set_callbacks(SF6CoreClient* client, const SF6
         o->cb.struct_size = sizeof(SF6CorePmCallbacks);
         refresh_any_hints();
     }
+    pausemenu::check_start();                 // the code check (R18) on its own thread, before the frame looks at it
     if (!g_wanted.exchange(true))
-        core_log(SF6CORE_LOG_INFO, client->client_id, "[pausemenu] callbacks set: the engine is installed at the next frame");
+        core_log(SF6CORE_LOG_INFO, client->client_id, "[pausemenu] callbacks set: the engine is installed once the code "
+                 "check (background thread) ended");
     return SF6CORE_OK;
 }
 
