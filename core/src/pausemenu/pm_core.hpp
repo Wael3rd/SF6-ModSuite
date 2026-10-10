@@ -80,6 +80,11 @@ struct Backend {
     bool (*strip_read)(int32_t primary_func, Strip& out) = nullptr;
     bool (*strip_write)(const Strip& strip, const std::vector<Obj>& pages, int32_t type) = nullptr;
     void (*log)(const char* line) = nullptr;
+    // diagnostics (optional): the install pass starts / ends (game thread), a trace line while tracing() says so
+    void (*pass_begin)() = nullptr;
+    void (*pass_end)() = nullptr;
+    bool (*tracing)() = nullptr;
+    void (*trace)(const char* line) = nullptr;
 };
 void set_backend(const Backend& b);
 

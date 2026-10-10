@@ -126,6 +126,17 @@ void logf(const char* fmt, ...) {
     be.log(buf);
 }
 
+// A trace line (the backend's trace mode): nothing is formatted unless the backend is tracing on this thread.
+void tracef(const char* fmt, ...) {
+    if (!be.trace || !be.tracing || !be.tracing()) return;
+    char buf[480];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    be.trace(buf);
+}
+
 int64_t fail(const char* why) { tl_error = why; return -1; }
 
 PageRec* page_of(Owner owner, int64_t id) {
@@ -246,6 +257,8 @@ bool build_row(RowRec& r) {
             else if (arr) drop(arr);
         }
     }
+    tracef("row %lld built: data %p, %s, %zu option object(s), %d in its option array", (long long)r.id, d,
+           r.kind == Kind::Spin ? "spin" : "button", r.opts.size(), r.opt_n);
     return true;
 }
 
@@ -272,11 +285,16 @@ bool build_page(PageRec& p, Obj template_page) {
         if (!be.text_new(p.guide, g)) { rel(k); return false; }
         Obj arr = be.new_array(rows);
         Obj d = arr ? be.new_page_data(template_page, k, g, arr) : nullptr;
-        if (!d) { drop(arr); rel(k); rel(g); return false; }
+        if (!d) {
+            tracef("page %lld: %s", (long long)p.id, arr ? "page data not built" : "rows array not built");
+            drop(arr); rel(k); rel(g); return false;
+        }
         p.data = d; p.key = k; p.guide_key = g;
         p.rows_array = arr; p.arrays.push_back(arr);
         g_keys[k] = { What::Page, p.id, -1 };
         p.rows_dirty = false;
+        tracef("page %lld built: data %p, rows array %p (%zu rows), template %p", (long long)p.id, d, arr, rows.size(),
+               template_page);
     } else if (p.rows_dirty) {
         Obj arr = be.new_array ? be.new_array(rows) : nullptr;
         if (!arr || !be.set_children || !be.set_children(p.data, arr)) { drop(arr); return false; }
@@ -313,6 +331,8 @@ void install_strip(int32_t pf) {
         if (id.what == What::Page) ours_present = true;
         else game.push_back(s.pages[i]);   // the game's pages, and unknown ones (another engine's): never ours to drop
     }
+    tracef("primary tab %d: strip row %p, type %d, %zu page(s): %zu of the game's, ours %s", pf, s.row, s.type,
+           s.pages.size(), game.size(), ours_present ? "present" : "absent");
     if (!ours_present || sr.row != s.row) {   // the game's strip as it built it (first sight, or rebuilt by the game)
         sr.row = s.row;
         if (!ours_present || !sr.orig_type) sr.orig_type = s.type;
@@ -358,6 +378,8 @@ void install_strip(int32_t pf) {
         sr.fail_logged = false;
     }
     bool ok = true;
+    tracef("primary tab %d: %zu page(s) of ours built, strip of %zu page(s), type %d (%s)", pf, built.size(), order.size(),
+           type, (order != s.pages || type != s.type) ? "to write" : "unchanged");
     if (order != s.pages || type != s.type) {
         ok = be.strip_write && be.strip_write(s, order, type);
         if (ok) {
@@ -427,9 +449,19 @@ void pass() {
     std::set<int32_t> funcs;
     for (auto& [id, p] : g_pages) funcs.insert(p.primary_func);
     for (auto& [pf, s] : g_strips) funcs.insert(pf);
+    tracef("pass %llu: %zu page(s), %zu row(s), %zu primary tab(s) to look at", (unsigned long long)g_passes,
+           g_pages.size(), g_rows.size(), funcs.size());
     for (int32_t pf : funcs) install_strip(pf);
     release_removed();
 }
+
+// The backend's pass_end, also when the pass is left by a fault (the stack unwinds through it: /EHa).
+struct PassScope {
+    PassScope() { if (be.pass_begin) be.pass_begin(); }
+    ~PassScope() { if (be.pass_end) be.pass_end(); }
+    PassScope(const PassScope&) = delete;
+    PassScope& operator=(const PassScope&) = delete;
+};
 
 }  // namespace
 
@@ -907,6 +939,7 @@ void tick(uint64_t frame, bool training, bool paused) {
     if (!due) return;
     g_force_pass = false;
     ++g_passes;
+    PassScope scope;
     pass();
 }
 
