@@ -11,7 +11,8 @@
   circuit-breaker trip, and it is released by the mod or when the mod unregisters. Nothing changes for a core whose
   mods use no texts (the hook is installed on the first text).
 - **Training pause menu** (ABI increment 9, appended): `pm_set_callbacks`, `pm_page`, `pm_row`, `pm_set_texts`,
-  `pm_set_options`, `pm_remove`, `pm_page_shown`, `pm_row_part`, `pm_status`. A mod adds its own pages to the training
+  `pm_set_options`, `pm_remove`, `pm_page_shown`, `pm_row_part`, `pm_status`, `pm_row_of` (the client row a
+  `hints` callback's focused menu data belongs to, so a hint can show on a mod's own rows only). A mod adds its own pages to the training
   pause menu (a sub-page next to the game's ones, e.g. in Recording Settings) with buttons and spins; the core builds
   them as the game's own menu data, answers the game for the mod's rows only (the game's rows are left to the game),
   renders the spins (up to 64 options, labels changed in place, the arrows set apart and long labels shrunk on request)

@@ -114,6 +114,10 @@ api->pm_set_options(client, spin, labels, 3);
   `Function` at the build is no decide and no change; a button's later `Function` is the decide (returns 1 to close the
   menu unless `keep_open`); a spin's later `Function` follows a press: the spin part's `_Num` (modulo the count) is the
   new option (`on_spin`), then the ViewData shows the client's value. The game's rows and unknown rows pass through.
+- **Safer than the Lua engine this replaces.** Spin values are clamped to the options shown; a deferred rebuild marks
+  its rows "being built" so no stray decide reaches the client; the rebuild starts only from another scroll group's
+  update; the font is restored once. A FuncType-only call with no known row is answered as the table above says
+  (the reference answer in offline Training, the game's in the Battle Hub).
 - **Spins.** `UIPartsSpin.Init` (both overloads) gets the row's option instead of the game's own num at every build and
   focus, and `set_Num` is held to it for 2 frames after `Init`. After `UpdateSpinBox(Int32, Boolean, Boolean)` (full
   signature, R17) the core repairs the carousel's selected index and the visible option text (compared first, R7, the
@@ -158,19 +162,24 @@ them off (the game then answers its menu alone).
 
 ## Limits and open points
 
-- Strips of 2 or 3 pages only (the game's two strip layouts); one engine per strip: a Lua engine that installs pages
-  in the same strip must not run with it.
+- Strips of 2 or 3 pages only (the game's two strip layouts): `pm_page` records the page, and the install pass leaves
+  the game's strip untouched (one log line) when the count with the client's pages has no layout, so the page does
+  not appear. One engine per strip: a Lua engine that installs pages in the same strip must not run with it.
 - The strip's own memory of the sub-page to open is the game's data, read with the game's page count: a page placed
   before the game's pages shifts it. A client that wants "reopen on the last sub-page" keeps that memory itself (for
-  Recording Settings: `RecordSetting.RecordType`, set before the menu's `CreateViewData`), with `on_page_shown`.
+  Recording Settings: `RecordSetting.RecordType`, set before the menu's `CreateViewData`), with `on_page_shown`. The
+  core does not manage that index.
 - Rows in a primary tab (`AddDynamicMenu`) are not offered (a later extension of the same registry).
-- The `hints` callback receives the focused `TrainingMenuData`; no query maps it to one of the client's row ids yet.
+- The `hints` callback receives the focused `TrainingMenuData`; `pm_row_of(client, focused)` maps it to the client's
+  row id (-1 for the game's rows, unknown objects, pages, removed rows and other clients' rows), so a hint can be
+  shown on the client's own row only.
 - `on_page_shown(page, 0)` is sent when another page of the strip is built, when the menu closes and when the page is
   removed; a change of primary tab sends nothing (use `pm_page_shown`, which reads the menu live).
 
 ## Test client (`core/tests/test_client`)
 
 Commands in `reframework/data/sf6core_test/cmd.txt`: `pm_page` (a page `sf6core_test` at index 0 of Recording
-Settings: a spin of 5 options with arrows 70 apart, a counting button, a closing button, a Y hint while shown),
+Settings: a spin of 5 options with arrows 70 apart, a counting button, a closing button, a Y hint on its own rows
+only, found with `pm_row_of`),
 `pm_labels` (7 labels, one very long: count, fit, rebuild), `pm_texts` (titles changed in place), `pm_fault` (the next
 decide faults once), `pm_status`, `pm_drop` (the page removed).

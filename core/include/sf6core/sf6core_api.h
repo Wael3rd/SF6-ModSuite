@@ -740,6 +740,8 @@ typedef struct SF6CoreAPI {
     void*         (SF6CORE_CALL *pm_row_part)(int64_t row);
     /* One-line state for logs. Returns the length written (truncated to cap-1). */
     uint32_t      (SF6CORE_CALL *pm_status)(char* buf, uint32_t cap);
+    /* The client row id carried by a TrainingMenuData the core built, or -1 (game row, unknown, not the caller's). */
+    int64_t       (SF6CORE_CALL *pm_row_of)(SF6CoreClient* client, void* menu_data);
 
 } SF6CoreAPI;
 

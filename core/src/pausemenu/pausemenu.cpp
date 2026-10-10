@@ -1397,6 +1397,21 @@ int32_t page_shown(int64_t page) {
     return page_shown_seh(page, &v) ? v : 0;
 }
 
+namespace {
+// SEH frame: the game reads only (type check, GUID field); no C++ object here.
+bool menu_key_seh(void* data, pc::Key* k) {
+    __try { return menu_key(reinterpret_cast<MO*>(data), *k); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+}  // namespace
+
+int64_t row_of(const void* owner, void* menu_data) {
+    if (!owner || !menu_data || !g_on.load() || core_closing() || !g_f_msg) return -1;
+    pc::Key k;
+    if (!menu_key_seh(menu_data, &k)) return -1;
+    return pc::row_of(owner, k);              // registry lock inside
+}
+
 void* row_part(int64_t row) {
     if (!g_on.load() || core_closing()) return nullptr;
     void* p = nullptr;

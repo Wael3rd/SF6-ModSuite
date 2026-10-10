@@ -2003,6 +2003,7 @@ SF6CoreStatus SF6CORE_CALL api_pm_remove(SF6CoreClient*, int64_t);
 int32_t       SF6CORE_CALL api_pm_page_shown(int64_t);
 void*         SF6CORE_CALL api_pm_row_part(int64_t);
 uint32_t      SF6CORE_CALL api_pm_status(char*, uint32_t);
+int64_t       SF6CORE_CALL api_pm_row_of(SF6CoreClient*, void*);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2626,7 +2627,8 @@ static const SF6CoreAPI s_api = {
     api_pm_remove,
     api_pm_page_shown,
     api_pm_row_part,
-    api_pm_status
+    api_pm_status,
+    api_pm_row_of
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)

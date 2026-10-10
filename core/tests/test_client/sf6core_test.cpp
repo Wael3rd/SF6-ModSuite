@@ -18,8 +18,8 @@
 //                  Recording Settings strip of the training pause menu
 //                  (primary tab 4): a spin of 5 options (8 slots, arrows
 //                  70 apart), a button that counts (menu stays open) and a
-//                  button that closes the menu; a Y hint while the page is
-//                  shown. Installed by the core with the menu closed.
+//                  button that closes the menu; a Y hint on its own rows
+//                  only (pm_row_of). Installed by the core with the menu closed.
 //   pm_labels      the spin's labels changed (7, one very long): retext in
 //                  place, count + font fit, page rebuilt if shown
 //   pm_texts       page and row titles changed in place (language change)
@@ -304,8 +304,9 @@ static void SF6CORE_CALL pm_on_spin(void*, int64_t row, int32_t index) {
 static void SF6CORE_CALL pm_on_page_shown(void*, int64_t page, int32_t shown) {
     test_log("PM page %lld %s", (long long)page, shown ? "shown" : "not shown");
 }
-static uint32_t SF6CORE_CALL pm_hints(void*, void*, SF6CorePmHint* out, uint32_t max) {
+static uint32_t SF6CORE_CALL pm_hints(void*, void* focused, SF6CorePmHint* out, uint32_t max) {
     if (max < 1 || s_pm_page < 0 || !s_api->pm_page_shown(s_pm_page)) return 0;
+    if (!SF6CORE_HAS(s_api, pm_row_of) || s_api->pm_row_of(s_client, focused) < 0) return 0;   // our own rows only
     out[0].button = 93;                                 // Y (T on the keyboard)
     out[0].text = "sf6core_test hint";
     return 1;

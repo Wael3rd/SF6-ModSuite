@@ -267,6 +267,11 @@ void* SF6CORE_CALL api_pm_row_part(int64_t row) {
     return g_installed.load() ? pausemenu::row_part(row) : nullptr;
 }
 
+int64_t SF6CORE_CALL api_pm_row_of(SF6CoreClient* client, void* menu_data) {
+    if (!client || !menu_data || !g_installed.load()) return -1;
+    return pausemenu::row_of(client, menu_data);
+}
+
 uint32_t SF6CORE_CALL api_pm_status(char* buf, uint32_t cap) {
     std::string line;
     try {

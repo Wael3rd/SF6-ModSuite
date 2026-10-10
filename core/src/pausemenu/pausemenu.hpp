@@ -45,6 +45,9 @@ bool dyn_row_removable(void* dynamic_data);
 
 int32_t page_shown(int64_t page);   // live check of the menu's rows
 void* row_part(int64_t row);
+// The row id (of `owner`) carried by a TrainingMenuData: a row, or the option of a spin (its row). -1 for a game row,
+// an unknown object, a page, a removed row or another client's row. Any thread; the registry lock is taken inside.
+int64_t row_of(const void* owner, void* menu_data);
 std::string status();
 
 }  // namespace pausemenu

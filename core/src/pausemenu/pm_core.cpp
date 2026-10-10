@@ -563,6 +563,13 @@ Ident identify(const Key& key) {
     return identify_locked(key);
 }
 
+int64_t row_of(Owner owner, const Key& key) {
+    if (!owner) return -1;
+    const Ident i = identify(key);
+    if ((i.what != What::Row && i.what != What::Option) || i.removed || i.owner != owner) return -1;
+    return i.id;
+}
+
 bool removable(const Key& key, bool has_delegate) {
     if (has_delegate || key.zero()) return false;
     std::lock_guard lk(mx);

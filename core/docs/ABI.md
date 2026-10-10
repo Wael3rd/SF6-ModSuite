@@ -333,6 +333,7 @@ Clients probe the increment with `SF6CORE_HAS(api, pm_status)`.
 | 88 | `pm_page_shown` | `int32_t (int64_t page)` | Any | 1 while the menu shows the page (live check) |
 | 89 | `pm_row_part` | `void* (int64_t row)` | Any | The row's `app.UIPartsGroup` while its page is shown, NULL otherwise |
 | 90 | `pm_status` | `uint32_t (char* buf, uint32_t cap)` | Any | One-line state; length written (truncated to cap-1) |
+| 91 | `pm_row_of` | `int64_t (client, void* menu_data)` | Any | The caller's row id carried by a `TrainingMenuData` the core built (the focused data of a `hints` callback); a spin's option gives its row. -1: game row, unknown object, a page, a removed row, another client's row. Looked up by the object's `_MessageID` GUID under the registry lock; the one game read is SEH-guarded |
 
 ### Training pause-menu callbacks
 

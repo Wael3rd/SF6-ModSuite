@@ -111,6 +111,9 @@ struct Ident {
     bool keep_open = false;
 };
 Ident identify(const Key& key);
+// The row id of `owner` carried by that menu data key: a row, or the option of a spin (its row). -1 for a page, a
+// game row, an unknown key, a removed row, or a row of another owner (pm_row_of).
+int64_t row_of(Owner owner, const Key& key);
 // The option-build purge: may this DYNAMIC row of a primary tab be removed? Only a row the core built and no longer
 // owns. The game's rows (a delegate) and unknown rows (another engine's) stay (ADR-0016 point 2, fixes M1).
 bool removable(const Key& key, bool has_delegate);
