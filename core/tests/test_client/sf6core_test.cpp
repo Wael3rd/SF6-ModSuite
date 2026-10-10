@@ -26,6 +26,11 @@
 //   pm_fault       the next decide faults once (SEH + client breaker)
 //   pm_status      pm_status + txt_status in the log
 //   pm_drop        pm_remove(page): the strip back to the game's two pages
+//   pm_trace       creates reframework/data/sf6core/pm_trace.txt: the core
+//                  logs its code check, hooks, next install pass and next
+//                  page build step by step; pm_trace_off removes it
+//   pm_check_reset deletes the code-check cache (pm_codecheck.txt): the next
+//                  session compares every method again (background thread)
 //
 // Build: cl /nologo /std:c++20 /EHa /O2 /LD /W4 /I include
 //            /I third_party\reframework\include sf6core_test.cpp
@@ -369,9 +374,38 @@ static void pm_make_page() {
     pm_log_status("after pm_page");
 }
 
+// A file of the core's data folder (reframework/data/sf6core/<name>): the pause menu's trace switch and code-check cache.
+static void core_data_file(const char* name, char* out, size_t n) {
+    char exe[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    char* sep = strrchr(exe, '\\');
+    if (sep) *sep = '\0';
+    snprintf(out, n, "%s\\reframework\\data\\sf6core\\%s", exe, name);
+}
+
 static void pm_command(const char* line) {
     if (!SF6CORE_HAS(s_api, pm_status)) { test_log("PM: increment 9 not in ABI"); return; }
     if (strcmp(line, "pm_page") == 0) { pm_make_page(); return; }
+    if (strcmp(line, "pm_trace") == 0 || strcmp(line, "pm_trace_off") == 0) {
+        char p[MAX_PATH];
+        core_data_file("pm_trace.txt", p, sizeof p);
+        if (line[8] == 0) {
+            FILE* f = fopen(p, "w");
+            if (f) { fputs("pause-menu trace on (sf6core_test pm_trace)\n", f); fclose(f); }
+            test_log("PM trace file %s: the core logs the next pass and page build step by step (within 2 s)",
+                     f ? "created" : "NOT created");
+        } else {
+            test_log("PM trace file %s", DeleteFileA(p) ? "removed" : "not removed (absent?)");
+        }
+        return;
+    }
+    if (strcmp(line, "pm_check_reset") == 0) {
+        char p[MAX_PATH];
+        core_data_file("pm_codecheck.txt", p, sizeof p);
+        test_log("PM code-check cache %s: the next session compares every method again",
+                 DeleteFileA(p) ? "removed" : "not removed (absent?)");
+        return;
+    }
     if (s_pm_page < 0) { test_log("PM: run pm_page first"); return; }
     if (strcmp(line, "pm_labels") == 0) {
         const char* labels[] = { "First", "Second", "Third", "Fourth",
