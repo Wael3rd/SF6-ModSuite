@@ -81,8 +81,10 @@ api->pm_set_options(client, spin, labels, 3);
 
 ## Frame model
 
-- `LateUpdateBehavior`, after the option dialogs and before the clients' frame callbacks: install on demand (the first
-  frame after a `pm_set_callbacks`), then the state: training (flow 3 or 9 and `TrainingManager._tData`, checked every
+- `pm_set_callbacks` (the first one) starts the code check of the hooked methods on a thread of its own (R18, below).
+- `LateUpdateBehavior`, after the option dialogs and before the clients' frame callbacks: install on demand (from the
+  first frame after a `pm_set_callbacks`: the engine's client and types, then, once the code check has ended, one hook
+  per frame; the frame never waits for the check), then the state: training (flow 3 or 9 and `TrainingManager._tData`, checked every
   60 frames), menu up (`PauseManager._CurrentPauseTypeBit` other than 64 / 2112, or an option window), the menu-close
   edge (pages "not shown", the menu's param let go), the **install pass** (every 60 frames at phase 33, once training
   has run 300 frames, menu closed: rule 10) and the scan for the game's own DYNAMIC rows (every 60 frames, menu closed).
@@ -139,7 +141,7 @@ Hub "End Training Session") and unknown rows stay. It used to remove every DYNAM
 Small setters can share their machine code with other methods (folded bodies, or several entries jumping to one body):
 a hook on one is then a hook on all of them (the Slots Loader 1.10.5 slowdown, the 18/09 freeze). Before any hook, the
 core resolves each method's entry and the code it jumps to, and compares them with every method of the game (one pass
-over the type database, its time in the log). A method that shares its code is **not hooked**: a WARN line gives its
+over the type database). A method that shares its code is **not hooked**: a WARN line gives its
 declaring type, address, one method that shares it and what the engine loses; the rest of the engine runs. Code shared
 only with another method of the same hook (an overload of `UIPartsSpin.Init` that jumps into the other one) is hooked
 once, on the body, and covers both. Each hooked method is logged with its declaring type and address.
@@ -159,6 +161,38 @@ once, on the body, and covers both. Each hooked method is logged with its declar
 
 The `TrainingManager.OpenMenu` hook stays single (the option engine's). After 5 faults in its hooks the engine turns
 them off (the game then answers its menu alone).
+
+**Where the check runs.** The pass over every method took 6.5 s on the game thread in the first test (10/10): the game
+froze. It now runs on a thread of its own, started by the first `pm_set_callbacks`: the type database and the game's
+code are static and the check only reads them, through REFramework lookups that take their own locks (`find_type`,
+`get_method`, `get_function`, `get_full_name`). The game thread only polls an atomic; the verdicts are computed in the
+frame after the check ended, then one hook is installed per frame (each `add_hook` stops the game's threads while
+REFramework patches: 1 to 6 ms; fifteen in one frame were a 23 ms frame). Each hook line gives the time its
+`add_hook` took; the check's line gives its duration and thread.
+
+**Cache.** The check's result is kept in `reframework/data/sf6core/pm_codecheck.txt`, keyed by the game's executable
+(PE header, file size and time) and the number of methods; each hooked method's entry and code are compared with the
+cached ones. A match: the check takes a few milliseconds and REFramework writes none of the lines it logs for every
+abstract method it is asked about (345,000 lines on 10/10). A game update, or a hooked method that moved, makes the
+core compare every method again (on its thread) and write the file anew. Deleting the file has the same effect.
+
+## Diagnostics
+
+- **Fault lines.** Each `__try` of the engine (the frame and its install pass, every hook, the code check, the clients'
+  live queries) records the step it was at (a short name set before each group of game calls), the game call under
+  way (method, field, object creation), the exception code, the faulting address as `module+offset`, the address
+  touched for an access violation, and the thread, for the first 8 faults:
+  `fault in frame (1): step 'new_array', call 'add_ref': exception 0xC0000005 at <module>+0x1234, read of 0x..., thread N`.
+- **Trace.** While `reframework/data/sf6core/pm_trace.txt` exists (looked for every 2 seconds, and when the code check
+  starts), the code check, the next install pass and the next page build are logged step by step: the targets and the
+  cache key, the menu tabs and their `_FuncType`, the strip row and its pages (`_Type`, `_MessageID`), every object
+  built (address, type, array lengths), every guarded write refused (with its status), the page's `ViewUpdate` and the
+  spin repairs of that build. 500 lines at most; deleting and re-creating the file starts another round.
+- **REFramework's plugin API.** The players' REFramework (1.5.8 nightly, 12/2024) has plugin API 1.10, while the core is
+  built with the 1.15 headers: a function-table member added after 1.10 (`create_managed_array`, `on_pre_gui_draw_element`,
+  `module`) is read past the end of the table REFramework hands over, and calling it calls whatever follows. The
+  engine's arrays are made through the game's `System.Array.CreateInstance(System.Type, System.Int32)`, as REFramework's
+  own `sdk.create_managed_array` does (the 10/10 faults were the 1.13 member).
 
 ## Limits and open points
 
@@ -182,4 +216,5 @@ Commands in `reframework/data/sf6core_test/cmd.txt`: `pm_page` (a page `sf6core_
 Settings: a spin of 5 options with arrows 70 apart, a counting button, a closing button, a Y hint on its own rows
 only, found with `pm_row_of`),
 `pm_labels` (7 labels, one very long: count, fit, rebuild), `pm_texts` (titles changed in place), `pm_fault` (the next
-decide faults once), `pm_status`, `pm_drop` (the page removed).
+decide faults once), `pm_status`, `pm_drop` (the page removed), `pm_trace` / `pm_trace_off` (the trace file created /
+removed), `pm_check_reset` (the code-check cache deleted: the next session compares every method again).

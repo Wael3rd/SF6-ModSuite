@@ -18,13 +18,20 @@
   renders the spins (up to 64 options, labels changed in place, the arrows set apart and long labels shrunk on request)
   and adds the mods' key-guide hints to the bar at the bottom. One engine for every mod; nothing is hooked until a mod
   uses it, and every method is checked first for machine code it shares with other methods of the game: such a method
-  is not hooked (logged), so the service cannot slow the game down the way a shared hook does. See
+  is not hooked (logged), so the service cannot slow the game down the way a shared hook does. The check runs on a
+  thread of its own (the game never waits for it) and its result is kept per game version
+  (`reframework/data/sf6core/pm_codecheck.txt`): the next sessions skip it. See
   [core/docs/PAUSE_MENU.md](core/docs/PAUSE_MENU.md).
 - **The game's own dynamic rows of the training pause menu are kept**, such as "End Training Session" in the Battle Hub
   training room: the clean-up at each build of the option window removed every row of that kind; it now removes only
   rows the core built and no longer uses.
 - `docs/ABI.md` lists the functions of increments 6 (option dialogs) and 7 (effective selection) too.
-- Not run in the game yet: the client texts and the training pause menu (a test page: `pm_page` in the test client).
+- Tested in the game: the client texts. The first test of the training pause menu found two faults, both fixed: its
+  pages were never built (the core called a function of REFramework's plugin interface that the REFramework most
+  players run does not have; the arrays are now made through the game itself), and the game froze about 6 seconds
+  when the first mod used the service (the method check, see above). The service's fault lines now say where they
+  happened (step, game call, address, thread), and `reframework/data/sf6core/pm_trace.txt` turns on a step-by-step
+  log of its next install and page build. Not re-tested in the game yet (test page: `pm_page` in the test client).
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 
