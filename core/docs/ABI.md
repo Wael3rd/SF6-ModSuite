@@ -172,7 +172,7 @@ Every write goes through the guard chain: kill switch/breaker (1), proof-of-life
 | 35 | `obj_set_i64` | `SF6CoreStatus (client, void* obj, const char* field, int64_t)` | Any | Any integer/enum/bool width |
 | 36 | `obj_set_f64` | `SF6CoreStatus (client, void* obj, const char* field, double)` | Any | float or double field |
 | 37 | `obj_set_string` | `SF6CoreStatus (client, void* obj, const char* field, const char* utf8)` | Any | Managed string assignment (R34) |
-| 38 | `obj_set_ref` | `SF6CoreStatus (client, void* obj, const char* field, void*)` | Any | Managed ref assignment (R34) |
+| 38 | `obj_set_ref` | `SF6CoreStatus (client, void* obj, const char* field, void*)` | Any | Managed ref assignment (R34), as the game's own stores: add_ref new / exchange / release old on a refcounted target, a plain store on a local one (negative reference count; since 0.8.0) |
 | 39 | `obj_set_color` | `SF6CoreStatus (client, void* obj, const char* field, uint32_t rgba)` | Any | via.Color value field (one 4-byte rgba, raw value) |
 | 40 | `list_add` | `SF6CoreStatus (client, void* list, void* item)` | Any | |
 | 41 | `list_set_item` | `SF6CoreStatus (client, void* list, int32_t index, void* item)` | Any | |

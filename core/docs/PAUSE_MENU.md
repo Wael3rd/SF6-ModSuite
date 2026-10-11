@@ -99,7 +99,7 @@ api->pm_set_options(client, spin, labels, 3);
   `Init` / `set_Num` of the parts, `GetGuideData`, the install pass...); a hook with nothing to do waits for it as a
   barrier. The menu's own navigation waits the same way, as it did in the Lua engine, which hooked it too: barrier
   hooks on the tab and sub-tab inputs (`UIAgent.InputTab*` / `InputChildTab*`), `Param.OnChangedTab` /
-  `ChangeTabIndex` / `UpdatePrimaryList` / `UpdateSecondaryList` / `CreateViewData` / `InitTabItem` /
+  `ChangeTabIndex` / `UpdatePrimaryList` / `UpdateSecondaryList` / `CreateViewData` /
   `set_SelectChildIndex` / `UpdateRecordSlotItem` / `UpdatePlaySlotItem`, `UIPartsPageIndex.set_PageIndex` / `Prev` /
   `Next`, `UIPartsListBase.GetNextIndex` / `GetPrevIndex`, `UIPartsSpin.InputRight` / `InputLeft`,
   `TrainingManager.ChangeMainMenuFlow`, `UITrainingMenu.ChangeFlow`, and the core's `GetMessage` hook while the engine
@@ -134,7 +134,11 @@ api->pm_set_options(client, spin, labels, 3);
   `Function` follows a press: the spin part's `_Num` (modulo the count) is the new option (`on_spin`), then the
   ViewData handed to `Function` shows the client's value. At the build, as the Lua engine: the ViewData's `Data` is the
   option shown, and the list entry the flow draws the row from gets the value when its `Data` is the row itself; the
-  core writes nothing else into the game's view data. The game's rows and unknown rows pass through.
+  core writes nothing else into the game's view data. When the ViewData handed to `Function` at the build is a local
+  object (not refcounted yet, negative reference count; the trace prints it), its `Data` gets a plain store, as the
+  game writes such objects (`obj_set_ref` follows the target's reference count since 0.8.0). Releasing the option it
+  pointed at, as before, would free that option after a few builds while the menu's lists still point at it: the
+  likely cause of the crashes of 11/10. The game's rows and unknown rows pass through.
 - **Safer than the Lua engine this replaces.** Spin values are clamped to the options shown; a deferred rebuild marks
   its rows "being built" so no stray decide reaches the client; the rebuild starts only from another scroll group's
   update; the font is restored once. A FuncType-only call with no known row is answered as the table above says

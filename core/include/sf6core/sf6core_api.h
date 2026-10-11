@@ -525,7 +525,7 @@ typedef struct SF6CoreAPI {
     SF6CoreStatus (SF6CORE_CALL *obj_set_i64)(SF6CoreClient* client, void* obj, const char* field, int64_t v);   /* any integer/enum/bool field width */
     SF6CoreStatus (SF6CORE_CALL *obj_set_f64)(SF6CoreClient* client, void* obj, const char* field, double v);    /* float or double field */
     SF6CoreStatus (SF6CORE_CALL *obj_set_string)(SF6CoreClient* client, void* obj, const char* field, const char* utf8);
-    SF6CoreStatus (SF6CORE_CALL *obj_set_ref)(SF6CoreClient* client, void* obj, const char* field, void* value); /* managed assignment (R34) */
+    SF6CoreStatus (SF6CORE_CALL *obj_set_ref)(SF6CoreClient* client, void* obj, const char* field, void* value); /* managed assignment (R34): as the game's own stores, a refcounted target gets add_ref(new) / exchange / release(old), a local target (negative refcount) a plain store */
     SF6CoreStatus (SF6CORE_CALL *obj_set_color)(SF6CoreClient* client, void* obj, const char* field, uint32_t rgba); /* via.Color (4-byte rgba) value field, raw value */
     SF6CoreStatus (SF6CORE_CALL *list_add)(SF6CoreClient* client, void* list, void* item);
     SF6CoreStatus (SF6CORE_CALL *list_set_item)(SF6CoreClient* client, void* list, int32_t index, void* item);

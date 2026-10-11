@@ -41,6 +41,12 @@
   from, nor without a page of ours. Since then the service also waits, as that engine did, on the menu's own navigation
   and on the game's text lookup while a page is being built, and writes nothing into the game's view data beyond what
   that engine wrote. `reframework/data/sf6core/pm_bisect.txt` turns its behaviours off one by one in the game.
+  The likely cause, found after the fifth test: the core's reference writes (`obj_set_ref`) always released the field's old
+  value, but the game writes a local object (not refcounted yet) with a plain store, its fields own no reference. The
+  spin's option written at each page build into such an object (the ViewData the game hands to `Function`) released
+  the option shown before, a reference it never held, until that option was freed while the menu still pointed at it.
+  `obj_set_ref` now follows the target's reference count as the game does (this also applies to the other mods' writes
+  through it).
   Not re-tested in the game yet (test page: `pm_page` in the test client).
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite

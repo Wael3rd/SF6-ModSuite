@@ -1170,8 +1170,10 @@ int64_t spin_function(const pc::FnPlan& plan, MO* param, MO* vd, int32_t idx) {
             set_i64(e, "Index", cur);
             set_i64(e, "SliderValue", cur);
         }
-        TR("spin row %lld at build (list index %d): value %d, option data %p, list entry %p%s", (long long)r.id, idx, cur, o,
-           (void*)e, same ? "" : " (not this row: not written)");
+        TR("spin row %lld at build (list index %d): value %d, option data %p, ViewData %p (refcount %d), list entry %p "
+           "(refcount %d)%s", (long long)r.id, idx, cur, o, (void*)vd, vd ? *reinterpret_cast<const int32_t*>(
+           reinterpret_cast<const uint8_t*>(vd) + 8) : 0, (void*)e, e ? *reinterpret_cast<const int32_t*>(
+           reinterpret_cast<const uint8_t*>(e) + 8) : 0, same ? "" : " (not this row: not written)");
     }
     return 0;
 }
@@ -1679,7 +1681,6 @@ void make_specs() {                           // under g_specs_mx
         { "app.training.UIFlowTrainingMenu.Param", "UpdatePrimaryList", pre_barrier, post_none, false, kBarrierLoss },
         { "app.training.UIFlowTrainingMenu.Param", "UpdateSecondaryList", pre_barrier, post_none, false, kBarrierLoss },
         { "app.training.UIFlowTrainingMenu.Param", "CreateViewData", pre_barrier, post_none, false, kBarrierLoss },
-        { "app.training.UIFlowTrainingMenu.Param", "InitTabItem(System.Int32)", pre_barrier, post_none, false, kBarrierLoss },
         { "app.training.UIFlowTrainingMenu.Param", "set_SelectChildIndex(System.Int32)", pre_barrier, post_none, false,
           kBarrierLoss },
         { "app.training.UIFlowTrainingMenu.Param", "UpdateRecordSlotItem(app.UIPartsGroup, System.Int32)", pre_barrier,

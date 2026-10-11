@@ -759,6 +759,17 @@ bool managed_str_to_utf8(void* str_obj, char* buf, int buf_size) {
 // docs/results/WIDGET_CRASH_RCA_2026-10-01.md). The field now owns exactly one
 // reference; the engine releases it when it overwrites/clears the field, so
 // the core must NOT release it again later.
+//
+// Exactly as the game's own stores, which test the TARGET first (its compiled
+// field stores, e.g. in TrainingMenuFunc.ViewUpdate): a target whose reference
+// count is negative is a local object (not refcounted yet, swept with its frame)
+// and gets a plain store, no add_ref, no release: its fields own no reference.
+// The previous version released the old value of such a field too, a reference
+// the field never held: the training pause menu's spin wrote the Data of the
+// ViewData the game hands to Function at a page build (a local object) and
+// released the option it pointed at once per build, until that option was
+// freed while the menu's lists still pointed at it (crashes of 11/10 under fast
+// sub-page switching).
 bool write_field_managed(const REFrameworkSDKData* sdk, void* obj,
                          const char* name, void* value) {
     if (!obj || !name) return false;
@@ -771,6 +782,10 @@ bool write_field_managed(const REFrameworkSDKData* sdk, void* obj,
             if (!raw) return false;
             void* volatile* field = (void* volatile*)raw;
             if (*field == value) return true;
+            if (*(volatile int32_t*)((uint8_t*)obj + 8) < 0) {    // a local target: the game's plain store
+                _InterlockedExchangePointer((PVOID volatile*)field, value);
+                return true;
+            }
             if (value)
                 sdk->managed_object->add_ref((REFrameworkManagedObjectHandle)value);
             void* old = *field;
