@@ -6,10 +6,10 @@
 //
 // Rules carried as code (reference/04_PITFALLS_CRASHES, and the notes of the engine this one was ported from):
 //   R4   the menu's update methods are never called back from their own chain: the page rebuild after a change of a
-//        shown spin's labels runs 2 frames later from ANOTHER scroll group's update (never our list's own); the spin
-//        repairs of UpdateSpinBox's post are not repeated in a nested UpdateSpinBox (set_SelectedIndex re-enters it:
-//        the residual of crash C4). ViewUpdate(page) right after the page's own Function is the game's own pattern
-//        (its record pages chain into it the same way).
+//        shown spin's labels runs 2 frames later from ANOTHER scroll group's update (never our list's own); the
+//        UpdateSpinBox that our own repair's set_SelectedIndex starts repairs nothing (the residual of crash C4; the
+//        game's own nested UpdateSpinBox calls are repaired). ViewUpdate(page) right after the page's own Function is
+//        the game's own pattern (its record pages chain into it the same way).
 //   R5   a row is ours by the GUID of its _MessageID (clones keep it); the game's DYNAMIC rows carry a delegate.
 //   R17  UpdateSpinBox hooked by its full signature; rows are data (GUID texts); the one set_Message is the visible
 //        option text of our own spin, compared first (R7), through the display API.
@@ -17,7 +17,8 @@
 //        thunks): shared = the hook is refused, logged with what it costs, the rest of the engine runs.
 //   R26  key-guide hints appended to the game's own guide data in GetGuideData's post.
 //   R29  hooks run concurrently on the game's UI job threads: per-thread state in thread_locals, the registry under
-//        pm_core's lock, the cached menu param under its own lock with a reference held while used.
+//        pm_core's lock, the cached menu param under its own lock with a reference held while used, the engine's GUI
+//        writes one at a time (a lock never waited for, see g_gui_mx).
 
 #include "pausemenu.hpp"
 
@@ -58,7 +59,7 @@ constexpr int32_t kHubTrainingFlow = 9;        // Battle Hub training room
 constexpr uint32_t kPauseNone = 64;            // PauseManager._CurrentPauseTypeBit with no menu up
 constexpr uint32_t kPauseNone2 = 2112;
 constexpr int kGroupMaxDepth = 6;              // a spin part's control is at most 6 levels under its p_Group_<row>_
-constexpr int kNest = 4;                       // per-thread nesting kept for UpdateSpinBox / UpdateScroll
+constexpr int kNest = 8;                       // per-thread nesting kept for UpdateSpinBox / UpdateScroll
 
 std::atomic<bool> g_on{false};
 std::atomic<int> g_faults{0};
@@ -88,6 +89,8 @@ MO* g_rt_menu = nullptr;                       // typeof(TrainingMenuData) (the 
 thread_local pc::Ctx tl_ctx = pc::Ctx::None;   // the row being laid out on this thread
 thread_local int64_t tl_ctx_row = -1;
 thread_local int64_t tl_building = -1;         // our page being built on this thread (its ViewUpdate)
+thread_local MO* tl_build_param = nullptr;     // the menu param of that build
+thread_local bool tl_repairing = false;        // this thread is inside the engine's own spin repair
 
 uint64_t now() { return core_frame_pub(); }
 
@@ -828,17 +831,16 @@ int32_t value_of(const pc::RowInfo& r) {      // the spin's option: the client's
     return pc::clamp_value(r.id, v);
 }
 
-// The carousel's own selected index: a press scrolls from it, and a page build leaves it at 0.
-void enforce_index(MO* part, int32_t target, int32_t n) {
+// The carousel's own selected index: a press scrolls from it, and a page build leaves it at 0. The carousel is never
+// grown (set_ItemCount): a scroll list grown after its build piles its items up unlaid (the game's own count follows
+// the option array at each build).
+void enforce_index(MO* part, int32_t target) {
     MO* sl = option_list(part);
     int32_t cur = 0;
     if (!sl || !call_i32(sl, "get_SelectedIndex", cur) || cur == target) return;
     invoke_i(sl, "set_SelectedIndex(System.Int32)", target, SF6CORE_ARG_I64);
-    if (call_i32(sl, "get_SelectedIndex", cur) && cur != target) {
-        int32_t count = 0;
-        if (call_i32(sl, "get_ItemCount", count) && count < n) invoke_i(sl, "set_ItemCount(System.Int32)", n, SF6CORE_ARG_I64);
-        invoke_i(sl, "set_SelectedIndex(System.Int32)", target, SF6CORE_ARG_I64);
-    }
+    if (tracing() && call_i32(sl, "get_SelectedIndex", cur) && cur != target)
+        tr("carousel %p: set_SelectedIndex(%d) did not take (%d)", (void*)sl, target, cur);
 }
 
 // The visible option text: ours while the page is shown, compared first (R7).
@@ -924,6 +926,64 @@ void restore_group(MO* param, int32_t idx) {
 bool entry_is(MO* param, int32_t idx, int64_t row) {
     const pc::Ident i = row_ident_of_entry(view_entry(param, idx));
     return (i.what == pc::What::Row || i.what == pc::What::Option) && i.id == row;
+}
+
+// A spin row shown with its option, after the game laid the row out: the carousel's index, the visible text (compared
+// first, R7), the font; at our page's build also the part's _Num (a press moves from it; an Init that was not held
+// leaves it at 0; only at the build: no press is under way then). tl_repairing marks the writes: set_SelectedIndex
+// re-enters UpdateSpinBox, whose post then repairs nothing (R4).
+void repair_spin(MO* part, const pc::RowInfo& r, int32_t idx) {
+    const int32_t v = value_of(r);
+    tl_repairing = true;
+    step("spin repair: part num");
+    if (tl_building == r.page) set_i64(part, "_Num", v);  // a field (R17), never set_Num: no flow code runs from here
+    step("spin repair: carousel index");
+    enforce_index(part, v);
+    step("spin repair: option text");
+    enforce_text(part, pc::label(r.id, v));
+    tl_repairing = false;
+    step("spin repair: font fit");
+    if (r.spread > 0) fit_row(r.id, part, idx);
+    TR("spin repair row %lld (list index %d): part %p, value %d of %d", (long long)r.id, idx, (void*)part, v, r.labels_n);
+}
+
+// The engine's GUI writes (spin repairs, arrows, fonts, put-backs) run one at a time across the menu's job threads, as
+// the reference engine's did (its hooks shared one lock; these hooks run concurrently, R29). The lock is never waited
+// for: busy = another job thread is writing; a spin repair skipped for that is redone by the next frame of the row list
+// (pending), the per-frame work by the next frame. Recursive: a rebuild holds it while the game lays the rows out.
+std::recursive_mutex g_gui_mx;
+std::mutex g_pend_mx;
+std::vector<int64_t> g_pending;
+std::atomic<bool> g_any_pending{false};
+
+void pend(int64_t row) {
+    std::lock_guard lk(g_pend_mx);
+    if (std::find(g_pending.begin(), g_pending.end(), row) == g_pending.end()) g_pending.push_back(row);
+    g_any_pending = true;
+}
+std::vector<int64_t> take_pending() {
+    std::lock_guard lk(g_pend_mx);
+    std::vector<int64_t> v;
+    v.swap(g_pending);
+    g_any_pending = false;
+    return v;
+}
+
+// The list entry the flow renders a row from (at the build it is not the ViewData handed to Function: two objects,
+// traced by the reference engine), fed with the row's option: Index / SliderValue, and Data when it holds one of the
+// row's options (secondary pages: Data = the option shown, whose GUID is the text the game draws). Data only (R17,
+// R26): the game then draws the option itself; the visible-text repair stays the fallback.
+void feed_entry(MO* e, const pc::RowInfo& r, int32_t v) {
+    const pc::Ident d = ident_of(field_obj(e, "Data"));
+    const bool opt_data = d.what == pc::What::Option && d.id == r.id;
+    if (!opt_data && !(d.what == pc::What::Row && d.id == r.id)) {
+        const pc::Ident p = ident_of(field_obj(e, "ParentData"));
+        if (!(p.what == pc::What::Row && p.id == r.id)) return;      // not this row's entry
+    }
+    set_i64(e, "Index", v);                                            // (compared first by the guarded write)
+    set_i64(e, "SliderValue", v);
+    if (opt_data && d.option != v)
+        if (pc::Obj o = pc::option_data(r.id, v)) set_ref(e, "Data", o);
 }
 
 void notify(const std::vector<pc::Edge>& edges) {
@@ -1060,21 +1120,18 @@ int64_t spin_function(const pc::FnPlan& plan, MO* param, MO* vd, int32_t idx) {
         set_i64(vd, "SliderValue", cur);
         set_i64(vd, "Index", cur);
     }
+    pc::Obj o = nullptr;
     if (plan.at_build) {
         // The row text is the option object the ViewData points at: at the build it points at option 0.
-        pc::Obj o = vd ? pc::option_data(r.id, cur) : nullptr;
+        o = vd ? pc::option_data(r.id, cur) : nullptr;
         if (o) set_ref(vd, "Data", o);
-        // The ViewData handed to Function at the build is not the list entry the flow renders from: that one too.
-        MO* e = view_entry(param, idx);
-        pc::Key k;
-        const bool same = e && menu_key(field_obj(e, "Data"), k) && k == r.key;
-        if (same) {
-            set_i64(e, "Index", cur);
-            set_i64(e, "SliderValue", cur);
-        }
-        TR("spin row %lld at build (list index %d): value %d, option data %p, list entry %p%s", (long long)r.id, idx, cur, o,
-           (void*)e, same ? "" : " (not this row: not written)");
     }
+    // The list entry the flow renders from, at the build and after each press (a press used to reach only the
+    // ViewData handed to Function: the entry kept the build's option and the game drew that one).
+    MO* e = view_entry(param, idx);
+    if (e && e != vd) feed_entry(e, r, cur);
+    TR("spin row %lld %s (list index %d): value %d, option data %p, list entry %p", (long long)r.id,
+       plan.at_build ? "at build" : "after a press", idx, cur, o, (void*)e);
     return 0;
 }
 
@@ -1161,8 +1218,10 @@ void view_update(MO* param, int64_t page) {
     TR("page %lld: ViewUpdate(param %p, page data %p, 0) on thread %lu", (long long)page, (void*)param, (void*)pd,
        (unsigned long)GetCurrentThreadId());
     tl_building = page;
+    tl_build_param = param;
     const auto r = g_m_viewupdate->invoke(nullptr, std::vector<void*>{ param, pd, ll::arg_i32(0) });
     tl_building = -1;
+    tl_build_param = nullptr;
     if (r.exception_thrown) core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] ViewUpdate of page %lld threw", (long long)page);
     TR("page %lld: ViewUpdate done%s", (long long)page, r.exception_thrown ? " (threw)" : "");
 }
@@ -1187,7 +1246,13 @@ void post_function(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned lon
     __try { page_build(s.page, s.param); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("Function post (page build)", &si); }
     tl_building = -1;
+    tl_build_param = nullptr;
+    tl_repairing = false;
     tl_tracing = false;
+    // REFramework keeps one return slot per thread and hook: the rows' own Function calls of the build, nested in this
+    // post (REFramework logs "(Post) Recursive hook detected" once per thread for them: expected), wrote theirs into
+    // it. The page's answer is written again, after them.
+    *ret_val = reinterpret_cast<void*>(static_cast<uintptr_t>(s.ret));
     perf::end(perf::PmHooks, pt);
 }
 
@@ -1212,8 +1277,8 @@ void spinbox_pre(int d, MO* param, int32_t idx) {
     param_seen(param);
 }
 int pre_spinbox(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (tl_sb_n < 0 || tl_sb_n >= kNest) tl_sb_n = 0;   // posts that never ran (a call left by an exception) never pile up
     const int d = tl_sb_n++;
-    if (d >= kNest) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     tl_sb[d] = SbFrame{ -1, nullptr, -1 };
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     if (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -1224,32 +1289,35 @@ int pre_spinbox(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lon
     perf::end(perf::PmHooks, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-void spinbox_post(const SbFrame f, bool outermost) {
+// Every post of our row repairs it, nested or not: the game nests this method itself (REFramework's "(Overall)
+// UpdateSpinBox appears to be calling itself" while no page of ours was shown, 11/10, and at presses), and a press laid
+// out in a nested call got no repair there. Only the re-entry from our own repair (set_SelectedIndex) is skipped
+// (tl_repairing, R4).
+void spinbox_post(const SbFrame f) {
     step("UpdateSpinBox post: restore a game row");
     if (f.row < 0) { restore_group(f.param, f.idx); return; }   // a game row in a group we changed
-    if (!outermost) return;                   // nested (our set_SelectedIndex re-enters it, R4): the outer one repairs
     step("UpdateSpinBox post: spin part");
     pc::RowInfo r;
     MO* part = pc::row_info(f.row, r) ? spin_part(f.param, f.idx) : nullptr;
     if (!part) { TR("spin repair row %lld (list index %d): no spin part", (long long)f.row, f.idx); return; }
-    const int32_t v = value_of(r);
-    step("UpdateSpinBox post: carousel index");
-    enforce_index(part, v, r.labels_n);
-    step("UpdateSpinBox post: option text");
-    enforce_text(part, pc::label(r.id, v));
-    step("UpdateSpinBox post: font fit");
-    if (r.spread > 0) fit_row(r.id, part, f.idx);
-    TR("spin repair row %lld (list index %d): part %p, value %d of %d", (long long)f.row, f.idx, (void*)part, v, r.labels_n);
+    repair_spin(part, r, f.idx);
 }
 void post_spinbox(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     const int d = --tl_sb_n;
     if (d < 0) { tl_sb_n = 0; return; }
     if (d >= kNest || !tl_sb[d].param || !g_on.load(std::memory_order_relaxed) || core_closing()) return;
+    if (tl_repairing) return;                 // our own set_SelectedIndex re-entered it (R4): the repair under way goes on
     if (tl_sb[d].row < 0 && !g_any_moved.load(std::memory_order_relaxed)) return;
+    if (!g_gui_mx.try_lock()) {               // another job thread is writing: this repair waits for the row list's frame
+        if (tl_sb[d].row >= 0) pend(tl_sb[d].row);
+        return;
+    }
     int64_t pt = perf::begin();
     SehInfo si{};
-    __try { spinbox_post(tl_sb[d], d == 0); }
+    __try { spinbox_post(tl_sb[d]); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("UpdateSpinBox post", &si); }
+    tl_repairing = false;
+    g_gui_mx.unlock();
     perf::end(perf::PmHooks, pt);
 }
 
@@ -1276,7 +1344,11 @@ bool row_of_part(MO* part, int32_t& idx, MO*& gctrl) {
 int64_t spin_row_at(int32_t idx, MO* gctrl) {
     pc::RowInfo r;
     if (tl_building >= 0) {                   // our page's build on this thread: the index Function recorded
-        const int64_t row = pc::row_at(idx);
+        int64_t row = pc::row_at(idx);
+        if (row < 0 && tl_build_param) {      // the part's Init came before the row's Function (first build of a menu):
+            const pc::Ident i = row_ident_of_entry(view_entry(tl_build_param, idx));   // its list entry says
+            if (is_our_spin(i)) { row = i.id; pc::set_row_index(row, idx); }
+        }
         return row >= 0 && pc::row_info(row, r) && r.page == tl_building && r.kind == pc::Kind::Spin && !r.removed ? row : -1;
     }
     MO* param = param_get();
@@ -1365,10 +1437,13 @@ void rebuild(MO* param, int64_t page) {
 }
 void per_frame(MO* param, int64_t page) {
     step("UpdateScroll post: retext");
-    for (int64_t rid : pc::take_retext(page)) {           // labels changed: the visible text at once
+    std::vector<int64_t> due = pc::take_retext(page);      // labels changed: the visible text at once
+    if (g_any_pending.load(std::memory_order_relaxed))      // repairs skipped while another thread was writing
+        for (int64_t rid : take_pending()) if (std::find(due.begin(), due.end(), rid) == due.end()) due.push_back(rid);
+    for (int64_t rid : due) {
         pc::RowInfo r;
-        if (!pc::row_info(rid, r) || r.row_index < 0 || !entry_is(param, r.row_index, rid)) continue;
-        if (MO* part = spin_part(param, r.row_index)) enforce_text(part, pc::label(rid, value_of(r)));
+        if (!pc::row_info(rid, r) || r.kind != pc::Kind::Spin || r.row_index < 0 || !entry_is(param, r.row_index, rid)) continue;
+        if (MO* part = spin_part(param, r.row_index)) repair_spin(part, r, r.row_index);
     }
     std::vector<int32_t> kept;
     step("UpdateScroll post: font fit and arrows");
@@ -1403,8 +1478,9 @@ void scroll_post(bool our_list) {
     param_put(param);
 }
 int pre_scroll(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (tl_scroll_n < 0 || tl_scroll_n >= kNest) tl_scroll_n = 0;   // posts that never ran never pile up
     const int d = tl_scroll_n++;
-    if (d < kNest) tl_scroll[d] = reinterpret_cast<uintptr_t>(argv[1]);
+    tl_scroll[d] = reinterpret_cast<uintptr_t>(argv[1]);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_scroll(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
@@ -1414,11 +1490,15 @@ void post_scroll(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     const uintptr_t ours = g_sec_list.load(std::memory_order_relaxed);
     const bool our_list = ours && tl_scroll[d] == ours;
     if (our_list ? (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) : !pc::rebuild_pending()) return;
+    if (!g_gui_mx.try_lock()) return;         // another job thread is writing: the next frame does this one's work
     int64_t pt = perf::begin();
     SehInfo si{};
     __try { scroll_post(our_list); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("UpdateScroll post", &si); }
     tl_building = -1;
+    tl_build_param = nullptr;
+    tl_repairing = false;
+    g_gui_mx.unlock();
     perf::end(perf::PmHooks, pt);
 }
 

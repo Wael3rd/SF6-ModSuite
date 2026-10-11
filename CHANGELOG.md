@@ -31,7 +31,13 @@
   players run does not have; the arrays are now made through the game itself), and the game froze about 6 seconds
   when the first mod used the service (the method check, see above). The service's fault lines now say where they
   happened (step, game call, address, thread), and `reframework/data/sf6core/pm_trace.txt` turns on a step-by-step
-  log of its next install and page build. Not re-tested in the game yet (test page: `pm_page` in the test client).
+  log of its next install and page build. The second test showed the test page, but its spin kept showing its first
+  option while its value changed, and the game crashed a few page switches later. Fixed since: the spin is repaired
+  after each of the game's layouts of it (nested ones included) and its option is fed into the list entry the game
+  draws from; it starts from its value at the first build of a menu too; the page's answer to the game is no longer
+  overwritten by its rows' answers; the service's writes to the menu's display run one at a time; a short option text
+  keeps the game's font (written only to shrink a long one); the option carousel is never grown. Not re-tested in the
+  game yet (test page: `pm_page` in the test client).
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 

@@ -200,10 +200,11 @@ int64_t row_at(int32_t index);                        // the row last laid out a
 void force(int64_t row, uint64_t frame);             // UIPartsSpin.Init rewritten: hold set_Num for kForceFrames
 bool forcing(int64_t row, uint64_t frame);
 // The option text fitted to the room between the arrows: base font recorded at the first call (the natural width at
-// the base font decides, stable), a write only when it differs and at most every kFitCooldown calls.
+// the base font decides, stable), a write only when it differs and at most every kFitCooldown calls. A text that fits
+// keeps the game's font (its focus state writes it too): written only to shrink, or once to undo the engine's shrink.
 struct Fit { bool write = false; float w = 0, h = 0; };
 Fit fit(int64_t row, float cur_w, float cur_h, float display_w);
-Fit fit_pure(float base_w, float base_h, float cur_w, float display_w, float spread, int& cool);   // the rule itself
+Fit fit_pure(float base_w, float base_h, float cur_w, float display_w, float spread, int& cool, bool& shrunk);   // the rule
 float arrow_x(bool right, float spread);
 bool base_font(int64_t row, float& w, float& h);
 

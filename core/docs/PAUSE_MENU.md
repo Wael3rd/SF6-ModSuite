@@ -91,8 +91,9 @@ api->pm_set_options(client, spin, labels, 3);
 - The install pass builds what is missing (row data, option arrays, page data typed like the strip's pages, texts),
   puts the pages into their strips, rebuilds a page's rows array after a row was added or removed, re-installs after
   the game rebuilt its menu data, takes removed pages out and releases what nothing shows any more.
-- Hooks: on the game's UI job threads; per-thread state in thread-locals, the registry under the state machine's
-  lock, the menu's param under its own lock with a reference held while it is used.
+- Hooks: on the game's UI job threads, concurrently (R29); per-thread state in thread-locals, the registry under the
+  state machine's lock, the menu's param under its own lock with a reference held while it is used, the engine's GUI
+  writes under one lock taken without waiting.
 
 ## How the game is answered
 
@@ -112,23 +113,34 @@ api->pm_set_options(client, spin, labels, 3);
 
 - **`Function`.** Our page selected in its strip: the page is marked shown (`on_page_shown(page, 1)`, where the client
   may set its labels), its rows marked "at build", the option arrays sized to the labels, then the game's own
-  `ViewUpdate(page)` builds the rows on the same thread (the game's record pages chain into it the same way). A row's
-  `Function` at the build is no decide and no change; a button's later `Function` is the decide (returns 1 to close the
-  menu unless `keep_open`); a spin's later `Function` follows a press: the spin part's `_Num` (modulo the count) is the
-  new option (`on_spin`), then the ViewData shows the client's value. The game's rows and unknown rows pass through.
+  `ViewUpdate(page)` builds the rows on the same thread (the game's record pages chain into it the same way). The rows'
+  own `Function` calls are then nested in the page's: REFramework logs `(Post) Recursive hook detected for
+  'app.training.TrainingMenuFunc.Function'` once per thread (expected), and since it keeps one return slot per thread
+  and hook, the page's answer is written again after the build. A row's `Function` at the build is no decide and no
+  change; a button's later `Function` is the decide (returns 1 to close the menu unless `keep_open`); a spin's later
+  `Function` follows a press: the spin part's `_Num` (modulo the count) is the new option (`on_spin`), then the
+  ViewData handed to `Function` and the list entry the flow draws the row from (`Index`, `SliderValue`, and `Data` when
+  it holds one of the row's options) show the client's value, at the build and after each press. The game's rows and
+  unknown rows pass through.
 - **Safer than the Lua engine this replaces.** Spin values are clamped to the options shown; a deferred rebuild marks
   its rows "being built" so no stray decide reaches the client; the rebuild starts only from another scroll group's
   update; the font is restored once. A FuncType-only call with no known row is answered as the table above says
   (the reference answer in offline Training, the game's in the Battle Hub).
 - **Spins.** `UIPartsSpin.Init` (both overloads) gets the row's option instead of the game's own num at every build and
-  focus, and `set_Num` is held to it for 2 frames after `Init`. After `UpdateSpinBox(Int32, Boolean, Boolean)` (full
-  signature, R17) the core repairs the carousel's selected index and the visible option text (compared first, R7, the
-  only `set_Message` of the engine) and fits the font; the nested `UpdateSpinBox` that `set_SelectedIndex` may start is
-  left alone (R4). Each frame of the row list (`UpdateScroll` post on that list) the arrows are kept apart and the font
-  fitted (a write at most every 15 checks: the game's focus state writes it too); off the page the pooled groups get
-  the game's arrows and font back, once. The rebuild after a label change runs 2 frames later from **another** scroll
-  group's update, never inside the list's own chain (R4), held while an option window is up, dropped if the page is no
-  longer shown.
+  focus (at the first build of a menu the part's `Init` can come before the row's `Function`: the row is then found by
+  its list entry), and `set_Num` is held to it for 2 frames after `Init`. After **every** `UpdateSpinBox(Int32, Boolean,
+  Boolean)` of the row (full signature, R17; the game nests this method itself, presses included) the core repairs the
+  carousel's selected index and the visible option text (compared first, R7, the only `set_Message` of the engine), at
+  the page's build also the part's `_Num` (a field), and fits the font; only the nested `UpdateSpinBox` that the
+  repair's own `set_SelectedIndex` starts is left alone (R4). The carousel is never grown (`set_ItemCount`: a scroll
+  list grown after its build piles its items up). Each frame of the row list (`UpdateScroll` post on that list) the
+  arrows are kept apart and a long option text is shrunk (a write at most every 15 checks); a text that fits keeps the
+  game's font (the game's focus state writes it too: the core writes it only to shrink, or once to undo its own
+  shrink); off the page the pooled groups get the game's arrows and font back, once. The engine's GUI writes run one at
+  a time across the menu's job threads (a lock never waited for: a repair skipped because another thread is writing is
+  redone at the next frame of the row list). The rebuild after a label change runs 2 frames later from **another**
+  scroll group's update, never inside the list's own chain (R4), held while an option window is up, dropped if the page
+  is no longer shown.
 
 ## The option-build purge
 

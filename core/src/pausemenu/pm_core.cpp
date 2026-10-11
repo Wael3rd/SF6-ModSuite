@@ -53,6 +53,7 @@ struct RowRec {
     float base_w = 0, base_h = 0;
     bool has_base = false;
     int cool = 0;
+    bool shrunk = false;                     // the engine wrote a smaller font on its option text
     bool retext = false;                     // labels changed while its page was shown
     bool removed = false;
     bool out_of_page = false;                // removed, and its page's rows array no longer holds it
@@ -815,7 +816,7 @@ bool forcing(int64_t row, uint64_t frame) {
     return r && r->forced && frame <= r->force_until;
 }
 
-Fit fit_pure(float base_w, float base_h, float cur_w, float display_w, float spread, int& cool) {
+Fit fit_pure(float base_w, float base_h, float cur_w, float display_w, float spread, int& cool, bool& shrunk) {
     Fit f;
     const float room = (kArrowRightX + spread) - (kArrowLeftX - spread) - kTextMargin;
     if (!(display_w > 1.0f && cur_w > 0.0f)) return f;
@@ -823,12 +824,20 @@ Fit fit_pure(float base_w, float base_h, float cur_w, float display_w, float spr
     float scale = 1.0f;
     if (w_base > room) scale = std::max(kMinFontScale, room / w_base);
     const float want = base_w * scale;
+    // A text that fits keeps the game's font: the game's focus state writes that font too, and a second writer on it
+    // was a job-thread crash of the reference engine (08/09). The engine writes it only to shrink a long text, or once
+    // to put back the size its own shrink changed.
+    if (scale >= 1.0f) {
+        if (!shrunk) return f;
+        if (std::fabs(cur_w - want) <= kEpsilon) { shrunk = false; return f; }
+    }
     cool -= 1;
     if (std::fabs(cur_w - want) > kEpsilon && cool <= 0) {
         cool = kFitCooldown;
         f.write = true;
         f.w = want;
         f.h = base_h * scale;
+        shrunk = scale < 1.0f;
     }
     return f;
 }
@@ -839,7 +848,7 @@ Fit fit(int64_t row, float cur_w, float cur_h, float display_w) {
     if (!r || r->spread <= 0.0f) return Fit{};
     if (!r->has_base) { r->base_w = cur_w; r->base_h = cur_h; r->has_base = cur_w > 0.0f; }
     if (!r->has_base) return Fit{};
-    return fit_pure(r->base_w, r->base_h, cur_w, display_w, r->spread, r->cool);
+    return fit_pure(r->base_w, r->base_h, cur_w, display_w, r->spread, r->cool, r->shrunk);
 }
 
 float arrow_x(bool right, float spread) { return right ? kArrowRightX + spread : kArrowLeftX - spread; }
