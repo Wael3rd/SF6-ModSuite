@@ -3,7 +3,8 @@
 // The decisions are in pm_core.{hpp,cpp} (no game header, compiled as it is into the offline bench). This file is
 // what needs the game: the backend of the state machine (TrainingMenuData rows, pages and option arrays, the sub-page
 // strip of a primary tab, key-guide data), the hooks (TrainingMenuFunc x9, UIPartsSpin.Init x2 / set_Num,
-// UIFlowTrainingMenu.Param.UpdateSpinBox, TrainingManager.GetGuideData, UIPartsGroupScroll.UpdateScroll), the check
+// UIFlowTrainingMenu.Param.UpdateSpinBox, TrainingManager.GetGuideData, UIPartsGroupScroll.UpdateScroll, and barrier
+// hooks on the menu's navigation), the engine lock (one engine at a time, page builds included), the check
 // that each hooked method has its own machine code (R18), the spin repairs and the per-frame state (training, pause).
 // pm_service.cpp holds the clients and their callbacks.
 #pragma once
@@ -41,6 +42,10 @@ void check_start();
 enum class Install { Pending, Done, Failed };
 Install install(const Calls& calls, SF6CoreClient* engine_client);
 bool ready();                     // installed and not switched off by faults
+
+// The game's text lookup (the core's GetMessage hook, guid_text.cpp) waits for a page build of another thread, as the
+// reference engine's own text hook did (its Lua lock). A no-op while the engine is off. Any thread.
+void text_barrier();
 
 // Game thread, every core frame: training and pause state, the menu-close edge, the install pass.
 void frame(uint64_t frame);

@@ -33,13 +33,15 @@
   happened (step, game call, address, thread), and `reframework/data/sf6core/pm_trace.txt` turns on a step-by-step
   log of its next install and page build. The second test showed the test page, but its spin kept showing its first
   option while its value changed, and the game crashed a few page switches later. Fixed since: the spin is repaired
-  after each of the game's layouts of it (nested ones included) and its option is fed into the list entry the game
-  draws from; it starts from its value at the first build of a menu too; the page's answer to the game is no longer
+  after each of the game's layouts of it (nested ones included); it starts from its value at the first build of a menu
+  too; the page's answer to the game is no longer
   overwritten by its rows' answers; a short option text keeps the game's font (written only to shrink a long one); the
   option carousel is never grown. The third test (spin fine) crashed the game again while switching the Recording
-  Settings sub-pages very fast; since then the service runs as the engine it was ported from did: one hook at a time,
-  each page build to its end before any other menu work of another thread. Not re-tested in the game yet (test page:
-  `pm_page` in the test client).
+  Settings sub-pages very fast, and again with one hook at a time; never with the Lua engine this service was ported
+  from, nor without a page of ours. Since then the service also waits, as that engine did, on the menu's own navigation
+  and on the game's text lookup while a page is being built, and writes nothing into the game's view data beyond what
+  that engine wrote. `reframework/data/sf6core/pm_bisect.txt` turns its behaviours off one by one in the game.
+  Not re-tested in the game yet (test page: `pm_page` in the test client).
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 

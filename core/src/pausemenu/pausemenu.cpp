@@ -95,6 +95,16 @@ thread_local bool tl_repairing = false;        // this thread is inside the engi
 
 uint64_t now() { return core_frame_pub(); }
 
+// ---- in-game bisection: reframework/data/sf6core/pm_bisect.txt ----
+// Each word found in the file turns one behaviour of the engine off, from the next check on (every 2 seconds, with the
+// trace file): hints (no key-guide hints), repair (no spin repair after UpdateSpinBox), arrows (no arrow / font writes,
+// no put-back), notify (no on_page_shown), barriers (the extra barrier hooks pass through), textbarrier (GetMessage
+// passes through), lock (no engine lock at all). For a crash hunt in the game without a rebuild; no file = all on.
+enum : uint32_t { kOffHints = 1, kOffRepair = 2, kOffArrows = 4, kOffNotify = 8, kOffBarriers = 16, kOffTextBarrier = 32,
+                  kOffLock = 64 };
+std::atomic<uint32_t> g_off{0};
+bool off(uint32_t f) { return (g_off.load(std::memory_order_relaxed) & f) != 0; }
+
 // ---- the engine lock: one engine at a time, as the reference engine ran ----
 // The reference engine's hooks, its frame and its page builds all ran under the one lock of their Lua state: a page
 // build (the game's ViewUpdate, run from the page's Function post) held it to the end, so every other thread entering
@@ -112,6 +122,7 @@ std::atomic<uint64_t> g_eng_timeouts{0};
 std::atomic<bool> g_eng_timeout_logged{false};
 
 bool eng_lock() {
+    if (off(kOffLock)) return false;
     if (g_eng_mx.try_lock()) return true;
     if (g_eng_mx.try_lock_for(std::chrono::milliseconds(kEngWaitMs))) return true;
     ++g_eng_timeouts;
@@ -122,6 +133,7 @@ bool eng_lock() {
 }
 void eng_unlock(bool locked) { if (locked) g_eng_mx.unlock(); }
 void eng_barrier() { eng_unlock(eng_lock()); }   // waits for a page build of another thread to end
+
 
 // ======================== diagnostics ========================
 
@@ -232,6 +244,35 @@ void trace_check() {                           // any thread; one file-system lo
         g_trace_builds = 0;
         core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] trace off (pm_trace.txt removed)");
     }
+}
+// pm_bisect.txt (see g_off): read with the trace file, game thread.
+void bisect_check() {
+    char p[MAX_PATH];
+    data_path("pm_bisect.txt", p, sizeof p);
+    uint32_t want = 0;
+    FILE* f = nullptr;
+    if (fopen_s(&f, p, "r") == 0 && f) {
+        char buf[512] = {};
+        const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
+        std::fclose(f);
+        buf[n] = 0;
+        for (char* c = buf; *c; ++c) if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
+        static const struct { const char* word; uint32_t bit; } kWords[] = {
+            { "textbarrier", kOffTextBarrier }, { "barriers", kOffBarriers }, { "hints", kOffHints },
+            { "repair", kOffRepair }, { "arrows", kOffArrows }, { "notify", kOffNotify }, { "lock", kOffLock } };
+        for (const auto& w : kWords) {
+            const char* at = std::strstr(buf, w.word);
+            // "barriers" must not match inside "textbarrier(s)"
+            while (at && w.bit == kOffBarriers && at > buf && at[-1] == 't') at = std::strstr(at + 1, w.word);
+            if (at) want |= w.bit;
+        }
+    }
+    const uint32_t was = g_off.exchange(want);
+    if (was != want)
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] bisect (pm_bisect.txt): off =%s%s%s%s%s%s%s%s", want ? "" : " nothing",
+                 (want & kOffHints) ? " hints" : "", (want & kOffRepair) ? " repair" : "", (want & kOffArrows) ? " arrows" : "",
+                 (want & kOffNotify) ? " notify" : "", (want & kOffBarriers) ? " barriers" : "",
+                 (want & kOffTextBarrier) ? " textbarrier" : "", (want & kOffLock) ? " lock" : "");
 }
 bool tracing() { return tl_tracing && g_trace_left.load(std::memory_order_relaxed) > 0; }
 void tr(const char* fmt, ...) {
@@ -957,15 +998,12 @@ bool entry_is(MO* param, int32_t idx, int64_t row) {
     return (i.what == pc::What::Row || i.what == pc::What::Option) && i.id == row;
 }
 
-// A spin row shown with its option, after the game laid the row out: the carousel's index, the visible text (compared
-// first, R7), the font; at our page's build also the part's _Num (a press moves from it; an Init that was not held
-// leaves it at 0; only at the build: no press is under way then). tl_repairing marks the writes: set_SelectedIndex
-// re-enters UpdateSpinBox, whose post then repairs nothing (R4).
+// A spin row shown with its option, after the game laid the row out, as the reference engine: the carousel's index,
+// the visible text (compared first, R7), the font. tl_repairing marks the writes: set_SelectedIndex re-enters
+// UpdateSpinBox, whose post then repairs nothing (R4).
 void repair_spin(MO* part, const pc::RowInfo& r, int32_t idx) {
     const int32_t v = value_of(r);
     tl_repairing = true;
-    step("spin repair: part num");
-    if (tl_building == r.page) set_i64(part, "_Num", v);  // a field (R17), never set_Num: no flow code runs from here
     step("spin repair: carousel index");
     enforce_index(part, v);
     step("spin repair: option text");
@@ -976,25 +1014,8 @@ void repair_spin(MO* part, const pc::RowInfo& r, int32_t idx) {
     TR("spin repair row %lld (list index %d): part %p, value %d of %d", (long long)r.id, idx, (void*)part, v, r.labels_n);
 }
 
-// The list entry the flow renders a row from (at the build it is not the ViewData handed to Function: two objects,
-// traced by the reference engine), fed with the row's option: Index / SliderValue, and Data when it holds one of the
-// row's options (secondary pages: Data = the option shown, whose GUID is the text the game draws). Data only (R17,
-// R26): the game then draws the option itself; the visible-text repair stays the fallback.
-void feed_entry(MO* e, const pc::RowInfo& r, int32_t v) {
-    const pc::Ident d = ident_of(field_obj(e, "Data"));
-    const bool opt_data = d.what == pc::What::Option && d.id == r.id;
-    if (!opt_data && !(d.what == pc::What::Row && d.id == r.id)) {
-        const pc::Ident p = ident_of(field_obj(e, "ParentData"));
-        if (!(p.what == pc::What::Row && p.id == r.id)) return;      // not this row's entry
-    }
-    set_i64(e, "Index", v);                                            // (compared first by the guarded write)
-    set_i64(e, "SliderValue", v);
-    if (opt_data && d.option != v)
-        if (pc::Obj o = pc::option_data(r.id, v)) set_ref(e, "Data", o);
-}
-
 void notify(const std::vector<pc::Edge>& edges) {
-    if (!g_calls.page_shown) return;
+    if (!g_calls.page_shown || off(kOffNotify)) return;
     for (const auto& e : edges) g_calls.page_shown(e.owner, e.page, e.shown);
 }
 
@@ -1135,18 +1156,23 @@ int64_t spin_function(const pc::FnPlan& plan, MO* param, MO* vd, int32_t idx) {
         set_i64(vd, "SliderValue", cur);
         set_i64(vd, "Index", cur);
     }
-    pc::Obj o = nullptr;
     if (plan.at_build) {
-        // The row text is the option object the ViewData points at: at the build it points at option 0.
-        o = vd ? pc::option_data(r.id, cur) : nullptr;
+        // As the reference engine, at the build only: the row text is the option object the ViewData points at (at
+        // the build it points at option 0), and the list entry the flow renders from gets the option when its Data is
+        // the row itself. No other write into the game's view data (the entry's Data and a press's entry were written
+        // since 0.8.0's second test build, a difference with the reference engine: taken out after the third crash).
+        pc::Obj o = vd ? pc::option_data(r.id, cur) : nullptr;
         if (o) set_ref(vd, "Data", o);
+        MO* e = view_entry(param, idx);
+        pc::Key k;
+        const bool same = e && menu_key(field_obj(e, "Data"), k) && k == r.key;
+        if (same) {
+            set_i64(e, "Index", cur);
+            set_i64(e, "SliderValue", cur);
+        }
+        TR("spin row %lld at build (list index %d): value %d, option data %p, list entry %p%s", (long long)r.id, idx, cur, o,
+           (void*)e, same ? "" : " (not this row: not written)");
     }
-    // The list entry the flow renders from, at the build and after each press (a press used to reach only the
-    // ViewData handed to Function: the entry kept the build's option and the game drew that one).
-    MO* e = view_entry(param, idx);
-    if (e && e != vd) feed_entry(e, r, cur);
-    TR("spin row %lld %s (list index %d): value %d, option data %p, list entry %p", (long long)r.id,
-       plan.at_build ? "at build" : "after a press", idx, cur, o, (void*)e);
     return 0;
 }
 
@@ -1300,7 +1326,7 @@ int pre_spinbox(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lon
     const int d = tl_sb_n++;
     tl_sb[d] = SbFrame{ -1, nullptr, -1 };
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    if (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) { eng_barrier(); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    if (!pc::any_shown()) { eng_barrier(); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
     const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
@@ -1315,8 +1341,6 @@ int pre_spinbox(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lon
 // out in a nested call got no repair there. Only the re-entry from our own repair (set_SelectedIndex) is skipped
 // (tl_repairing, R4).
 void spinbox_post(const SbFrame f) {
-    step("UpdateSpinBox post: restore a game row");
-    if (f.row < 0) { restore_group(f.param, f.idx); return; }   // a game row in a group we changed
     step("UpdateSpinBox post: spin part");
     pc::RowInfo r;
     MO* part = pc::row_info(f.row, r) ? spin_part(f.param, f.idx) : nullptr;
@@ -1328,7 +1352,8 @@ void post_spinbox(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (d < 0) { tl_sb_n = 0; return; }
     if (d >= kNest || !tl_sb[d].param || !g_on.load(std::memory_order_relaxed) || core_closing()) return;
     if (tl_repairing) return;                 // our own set_SelectedIndex re-entered it (R4): the repair under way goes on
-    if (tl_sb[d].row < 0 && !g_any_moved.load(std::memory_order_relaxed)) { eng_barrier(); return; }
+    if (tl_sb[d].row < 0 || off(kOffRepair)) { eng_barrier(); return; }   // a game row: never touched here (put-backs run
+                                                                          // from the row list's frame, as the reference engine)
     const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
@@ -1418,7 +1443,7 @@ int pre_guide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long 
     tl_guide_slot = nullptr;
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     eng_barrier();
-    if (!g_calls.any_hints || !g_calls.any_hints()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_calls.any_hints || !g_calls.any_hints() || off(kOffHints)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     tl_guide_focus = argv[2];
     tl_guide_slot = reinterpret_cast<void**>(argv[3]);    // the lists are created inside the call: read in the post
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -1466,6 +1491,7 @@ void per_frame(MO* param, int64_t page) {
         if (!pc::row_info(rid, r) || r.kind != pc::Kind::Spin || r.row_index < 0 || !entry_is(param, r.row_index, rid)) continue;
         if (MO* part = spin_part(param, r.row_index)) repair_spin(part, r, r.row_index);
     }
+    if (off(kOffArrows)) return;
     std::vector<int32_t> kept;
     step("UpdateScroll post: font fit and arrows");
     for (int64_t rid : pc::page_rows(page)) {
@@ -1494,7 +1520,7 @@ void scroll_post(bool our_list) {
     } else {
         const int64_t p = pc::shown_page();
         if (p >= 0 && page_shown_live(param, p)) per_frame(param, p);
-        else for (int32_t idx : moved_list()) restore_group(param, idx);
+        else if (!off(kOffArrows)) for (int32_t idx : moved_list()) restore_group(param, idx);
     }
     param_put(param);
 }
@@ -1527,6 +1553,17 @@ void post_scroll(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     eng_unlock(lk);
 }
 
+// ---- barrier hooks: the menu's own navigation waits for a page build of another thread ----
+// The reference engine also hooked the training menu's navigation (tab and sub-tab inputs, the page index, the list
+// updates, the record / replay row updaters, the cursor, the list's next / previous row, a spin's left / right) and the
+// game's text lookup: each such call entered its Lua lock, so none of them ran while a page of ours was being built,
+// and its page builds never overlapped the game's own page switch. These hooks do the same: the pre waits for the
+// engine lock and gives it back at once (a hook with nothing else to do). R18 checks each one like the others.
+int pre_barrier(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_on.load(std::memory_order_relaxed) && !core_closing() && !off(kOffBarriers)) eng_barrier();
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
 #pragma warning(pop)
 
 // ======================== frame (game thread) ========================
@@ -1547,7 +1584,7 @@ void frame_inner(uint64_t f) {
     step("frame: flow");
     const int32_t flow = g_api->get_flow_id();
     const bool training_flow = flow == kTrainingFlow || flow == kHubTrainingFlow;
-    if (f % 120 == 7) { step("frame: trace file"); trace_check(); }
+    if (f % 120 == 7) { step("frame: trace and bisect files"); trace_check(); bisect_check(); }
     if (!training_flow) g_training = false;
     else if (f - g_training_checked >= 60 || g_training_checked == 0) {
         step("frame: training check");
@@ -1595,6 +1632,8 @@ std::string g_refused;
 
 std::string spec_label(const Spec& s) { return std::string(s.type) + "." + s.sig; }
 
+constexpr const char* kBarrierLoss = "that navigation step does not wait for a page build of another thread";
+
 void make_specs() {                           // under g_specs_mx
     if (!g_specs.empty()) return;
     const char* tmf = "app.training.TrainingMenuFunc";
@@ -1628,6 +1667,34 @@ void make_specs() {                           // under g_specs_mx
         { "app.UIPartsGroupScroll", "UpdateScroll", pre_scroll, post_scroll, false,
           "no per-frame font fit / arrow reset, no page rebuild after a change of a shown spin's labels (the page shows "
           "them at its next build)" },
+        // barrier hooks (pre_barrier): the methods the reference engine also hooked on the menu's navigation path
+        { "app.UIAgent", "InputTab", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIAgent", "InputTabNext", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIAgent", "InputTabBack", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIAgent", "InputChildTab", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIAgent", "InputChildTabNext", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIAgent", "InputChildTabBack", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "OnChangedTab", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "ChangeTabIndex", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "UpdatePrimaryList", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "UpdateSecondaryList", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "CreateViewData", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "InitTabItem(System.Int32)", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "set_SelectChildIndex(System.Int32)", pre_barrier, post_none, false,
+          kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "UpdateRecordSlotItem(app.UIPartsGroup, System.Int32)", pre_barrier,
+          post_none, false, kBarrierLoss },
+        { "app.training.UIFlowTrainingMenu.Param", "UpdatePlaySlotItem(app.UIPartsGroup, System.Int32)", pre_barrier,
+          post_none, false, kBarrierLoss },
+        { "app.UIPartsPageIndex", "set_PageIndex", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIPartsPageIndex", "Prev", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIPartsPageIndex", "Next", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIPartsListBase", "GetNextIndex", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIPartsListBase", "GetPrevIndex", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIPartsSpin", "InputRight(app.InputDigitalFlag)", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.UIPartsSpin", "InputLeft(app.InputDigitalFlag)", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.TrainingManager", "ChangeMainMenuFlow", pre_barrier, post_none, false, kBarrierLoss },
+        { "app.training.UITrainingMenu", "ChangeFlow", pre_barrier, post_none, false, kBarrierLoss },
     };
 }
 
@@ -2027,6 +2094,10 @@ Install install(const Calls& calls, SF6CoreClient* engine_client) {
 }
 
 bool ready() { return g_on.load(); }
+
+void text_barrier() {
+    if (g_on.load(std::memory_order_relaxed) && !core_closing() && !off(kOffTextBarrier)) eng_barrier();
+}
 
 void frame(uint64_t f) {
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return;

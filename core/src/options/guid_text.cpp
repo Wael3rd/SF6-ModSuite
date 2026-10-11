@@ -22,6 +22,7 @@
 
 #include "ll_common.hpp"
 #include "opt_common.hpp"
+#include "../pausemenu/pausemenu.hpp"
 
 namespace dialogs::guid_text {
 namespace {
@@ -76,6 +77,7 @@ void post_get_message_inner(void** ret_val) {
 
 int pre_get_message(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on || live() == 0 || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    pausemenu::text_barrier();        // no text of ours is looked up while a pause-menu page is being built elsewhere
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { rc = pre_get_message_inner(argv); }

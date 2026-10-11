@@ -97,9 +97,16 @@ api->pm_set_options(client, spin, labels, 3);
   the Lua engine this one was ported from ran under the one lock of its Lua state: a page build holds it until the game
   has rebound the rows, so no other thread runs hooked menu work meanwhile (`UpdateScroll` of every scroll group,
   `Init` / `set_Num` of the parts, `GetGuideData`, the install pass...); a hook with nothing to do waits for it as a
-  barrier. The wait is bounded (30 ms): past it the call goes on unlocked, the count is in `pm_status` and the first
-  one is logged. (Before that lock, fast sub-page switching crashed the game twice on a GUI job thread, 11/10: a
-  per-frame engine event delivered to a managed delegate already freed; the cause is not proven.)
+  barrier. The menu's own navigation waits the same way, as it did in the Lua engine, which hooked it too: barrier
+  hooks on the tab and sub-tab inputs (`UIAgent.InputTab*` / `InputChildTab*`), `Param.OnChangedTab` /
+  `ChangeTabIndex` / `UpdatePrimaryList` / `UpdateSecondaryList` / `CreateViewData` / `InitTabItem` /
+  `set_SelectChildIndex` / `UpdateRecordSlotItem` / `UpdatePlaySlotItem`, `UIPartsPageIndex.set_PageIndex` / `Prev` /
+  `Next`, `UIPartsListBase.GetNextIndex` / `GetPrevIndex`, `UIPartsSpin.InputRight` / `InputLeft`,
+  `TrainingManager.ChangeMainMenuFlow`, `UITrainingMenu.ChangeFlow`, and the core's `GetMessage` hook while the engine
+  runs. The wait is bounded (30 ms): past it the call goes on unlocked, the count is in `pm_status` and the first one
+  is logged. (Fast sub-page switching crashed the game three times on a GUI job thread, 11/10, with this engine and
+  never with the Lua engine nor without a page of ours: a per-frame engine event delivered to a managed delegate
+  already freed; the cause is not proven.)
 
 ## How the game is answered
 
@@ -125,9 +132,9 @@ api->pm_set_options(client, spin, labels, 3);
   and hook, the page's answer is written again after the build. A row's `Function` at the build is no decide and no
   change; a button's later `Function` is the decide (returns 1 to close the menu unless `keep_open`); a spin's later
   `Function` follows a press: the spin part's `_Num` (modulo the count) is the new option (`on_spin`), then the
-  ViewData handed to `Function` and the list entry the flow draws the row from (`Index`, `SliderValue`, and `Data` when
-  it holds one of the row's options) show the client's value, at the build and after each press. The game's rows and
-  unknown rows pass through.
+  ViewData handed to `Function` shows the client's value. At the build, as the Lua engine: the ViewData's `Data` is the
+  option shown, and the list entry the flow draws the row from gets the value when its `Data` is the row itself; the
+  core writes nothing else into the game's view data. The game's rows and unknown rows pass through.
 - **Safer than the Lua engine this replaces.** Spin values are clamped to the options shown; a deferred rebuild marks
   its rows "being built" so no stray decide reaches the client; the rebuild starts only from another scroll group's
   update; the font is restored once. A FuncType-only call with no known row is answered as the table above says
@@ -136,8 +143,8 @@ api->pm_set_options(client, spin, labels, 3);
   focus (at the first build of a menu the part's `Init` can come before the row's `Function`: the row is then found by
   its list entry), and `set_Num` is held to it for 2 frames after `Init`. After **every** `UpdateSpinBox(Int32, Boolean,
   Boolean)` of the row (full signature, R17; the game nests this method itself, presses included) the core repairs the
-  carousel's selected index and the visible option text (compared first, R7, the only `set_Message` of the engine), at
-  the page's build also the part's `_Num` (a field), and fits the font; only the nested `UpdateSpinBox` that the
+  carousel's selected index and the visible option text (compared first, R7, the only `set_Message` of the engine),
+  and fits the font (a game row is never touched there); only the nested `UpdateSpinBox` that the
   repair's own `set_SelectedIndex` starts is left alone (R4). The carousel is never grown (`set_ItemCount`: a scroll
   list grown after its build piles its items up). Each frame of the row list (`UpdateScroll` post on that list) the
   arrows are kept apart and a long option text is shrunk (a write at most every 15 checks); a text that fits keeps the
@@ -175,6 +182,7 @@ once, on the body, and covers both. Each hooked method is logged with its declar
 | `UIPartsSpin.set_Num(Int32)` | the flow's own `set_Num` after `Init` is not held: a press may start from option 0 after a build or a focus |
 | `TrainingManager.GetGuideData` | no key-guide hints |
 | `UIPartsGroupScroll.UpdateScroll` | no per-frame font fit / arrow reset, no rebuild after a change of a shown spin's labels |
+| the barrier hooks (navigation, see "One engine at a time") | that step does not wait for a page build of another thread |
 
 The `TrainingManager.OpenMenu` hook stays single (the option engine's). After 5 faults in its hooks the engine turns
 them off (the game then answers its menu alone).
@@ -200,6 +208,10 @@ core compare every method again (on its thread) and write the file anew. Deletin
   way (method, field, object creation), the exception code, the faulting address as `module+offset`, the address
   touched for an access violation, and the thread, for the first 8 faults:
   `fault in frame (1): step 'new_array', call 'add_ref': exception 0xC0000005 at <module>+0x1234, read of 0x..., thread N`.
+- **Bisection.** `reframework/data/sf6core/pm_bisect.txt` (read every 2 seconds) turns behaviours off by word, for a
+  crash hunt without a rebuild: `hints`, `repair` (spin repairs), `arrows` (arrows, font, put-backs), `notify`
+  (`on_page_shown`), `barriers` (the navigation barrier hooks), `textbarrier` (`GetMessage`), `lock` (the engine lock).
+  Each change is logged (`bisect (pm_bisect.txt): off = ...`). No file: everything on.
 - **Trace.** While `reframework/data/sf6core/pm_trace.txt` exists (looked for every 2 seconds, and when the code check
   starts), the code check, the next install pass and the next page build are logged step by step: the targets and the
   cache key, the menu tabs and their `_FuncType`, the strip row and its pages (`_Type`, `_MessageID`), every object
