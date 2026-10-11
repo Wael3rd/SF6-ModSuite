@@ -92,8 +92,14 @@ api->pm_set_options(client, spin, labels, 3);
   puts the pages into their strips, rebuilds a page's rows array after a row was added or removed, re-installs after
   the game rebuilt its menu data, takes removed pages out and releases what nothing shows any more.
 - Hooks: on the game's UI job threads, concurrently (R29); per-thread state in thread-locals, the registry under the
-  state machine's lock, the menu's param under its own lock with a reference held while it is used, the engine's GUI
-  writes under one lock taken without waiting.
+  state machine's lock, the menu's param under its own lock with a reference held while it is used.
+- **One engine at a time.** Every hook body, the frame and every page build run under one engine lock (recursive), as
+  the Lua engine this one was ported from ran under the one lock of its Lua state: a page build holds it until the game
+  has rebound the rows, so no other thread runs hooked menu work meanwhile (`UpdateScroll` of every scroll group,
+  `Init` / `set_Num` of the parts, `GetGuideData`, the install pass...); a hook with nothing to do waits for it as a
+  barrier. The wait is bounded (30 ms): past it the call goes on unlocked, the count is in `pm_status` and the first
+  one is logged. (Before that lock, fast sub-page switching crashed the game twice on a GUI job thread, 11/10: a
+  per-frame engine event delivered to a managed delegate already freed; the cause is not proven.)
 
 ## How the game is answered
 
@@ -136,9 +142,8 @@ api->pm_set_options(client, spin, labels, 3);
   list grown after its build piles its items up). Each frame of the row list (`UpdateScroll` post on that list) the
   arrows are kept apart and a long option text is shrunk (a write at most every 15 checks); a text that fits keeps the
   game's font (the game's focus state writes it too: the core writes it only to shrink, or once to undo its own
-  shrink); off the page the pooled groups get the game's arrows and font back, once. The engine's GUI writes run one at
-  a time across the menu's job threads (a lock never waited for: a repair skipped because another thread is writing is
-  redone at the next frame of the row list). The rebuild after a label change runs 2 frames later from **another**
+  shrink); off the page the pooled groups get the game's arrows and font back, once. The rebuild after a label change
+  runs 2 frames later from **another**
   scroll group's update, never inside the list's own chain (R4), held while an option window is up, dropped if the page
   is no longer shown.
 

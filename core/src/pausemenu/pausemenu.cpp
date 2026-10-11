@@ -17,8 +17,8 @@
 //        thunks): shared = the hook is refused, logged with what it costs, the rest of the engine runs.
 //   R26  key-guide hints appended to the game's own guide data in GetGuideData's post.
 //   R29  hooks run concurrently on the game's UI job threads: per-thread state in thread_locals, the registry under
-//        pm_core's lock, the cached menu param under its own lock with a reference held while used, the engine's GUI
-//        writes one at a time (a lock never waited for, see g_gui_mx).
+//        pm_core's lock, the cached menu param under its own lock with a reference held while used; every hook body,
+//        the frame and the page builds under one engine lock, as the reference engine ran (see g_eng_mx).
 
 #include "pausemenu.hpp"
 
@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -93,6 +94,34 @@ thread_local MO* tl_build_param = nullptr;     // the menu param of that build
 thread_local bool tl_repairing = false;        // this thread is inside the engine's own spin repair
 
 uint64_t now() { return core_frame_pub(); }
+
+// ---- the engine lock: one engine at a time, as the reference engine ran ----
+// The reference engine's hooks, its frame and its page builds all ran under the one lock of their Lua state: a page
+// build (the game's ViewUpdate, run from the page's Function post) held it to the end, so every other thread entering
+// one of the hooked menu methods (UpdateScroll of every scroll group, Init / set_Num of the parts, GetGuideData...)
+// waited until the rows were rebound. These hooks run concurrently (R29), so the game's GUI jobs ran in the middle of
+// our page builds: the one difference with the reference engine left when fast sub-page switching crashed the game on
+// a GUI job thread (11/10, tests A2 and A3: a per-frame engine event delivered to a managed delegate already freed;
+// the cause is not proven). Every hook body and the frame take this lock (recursive: the build's own nested calls go
+// through), a hook with nothing to do takes it as a barrier. The wait
+// is bounded (kEngWaitMs): past it the call goes on unlocked (as before this lock) and the wait is counted, so a game
+// lock taken in the other order can never become a deadlock.
+constexpr int kEngWaitMs = 30;
+std::recursive_timed_mutex g_eng_mx;
+std::atomic<uint64_t> g_eng_timeouts{0};
+std::atomic<bool> g_eng_timeout_logged{false};
+
+bool eng_lock() {
+    if (g_eng_mx.try_lock()) return true;
+    if (g_eng_mx.try_lock_for(std::chrono::milliseconds(kEngWaitMs))) return true;
+    ++g_eng_timeouts;
+    if (!g_eng_timeout_logged.exchange(true))
+        core_log(SF6CORE_LOG_WARN, nullptr, "[pausemenu] engine lock not taken within %d ms on thread %lu: the call went "
+                 "on unlocked (counted in pm_status)", kEngWaitMs, (unsigned long)GetCurrentThreadId());
+    return false;
+}
+void eng_unlock(bool locked) { if (locked) g_eng_mx.unlock(); }
+void eng_barrier() { eng_unlock(eng_lock()); }   // waits for a page build of another thread to end
 
 // ======================== diagnostics ========================
 
@@ -947,28 +976,6 @@ void repair_spin(MO* part, const pc::RowInfo& r, int32_t idx) {
     TR("spin repair row %lld (list index %d): part %p, value %d of %d", (long long)r.id, idx, (void*)part, v, r.labels_n);
 }
 
-// The engine's GUI writes (spin repairs, arrows, fonts, put-backs) run one at a time across the menu's job threads, as
-// the reference engine's did (its hooks shared one lock; these hooks run concurrently, R29). The lock is never waited
-// for: busy = another job thread is writing; a spin repair skipped for that is redone by the next frame of the row list
-// (pending), the per-frame work by the next frame. Recursive: a rebuild holds it while the game lays the rows out.
-std::recursive_mutex g_gui_mx;
-std::mutex g_pend_mx;
-std::vector<int64_t> g_pending;
-std::atomic<bool> g_any_pending{false};
-
-void pend(int64_t row) {
-    std::lock_guard lk(g_pend_mx);
-    if (std::find(g_pending.begin(), g_pending.end(), row) == g_pending.end()) g_pending.push_back(row);
-    g_any_pending = true;
-}
-std::vector<int64_t> take_pending() {
-    std::lock_guard lk(g_pend_mx);
-    std::vector<int64_t> v;
-    v.swap(g_pending);
-    g_any_pending = false;
-    return v;
-}
-
 // The list entry the flow renders a row from (at the build it is not the ViewData handed to Function: two objects,
 // traced by the reference engine), fed with the row's option: Index / SliderValue, and Data when it holds one of the
 // row's options (secondary pages: Data = the option shown, whose GUID is the text the game draws). Data only (R17,
@@ -1011,11 +1018,13 @@ void set_ctx(MO* data) {                      // a TrainingMenuData laid out on 
 // ---- TrainingMenuFunc.ViewUpdate(BaseParam, TrainingMenuData, Int32): the row being laid out ----
 int pre_view_update(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
     __try { set_ctx(reinterpret_cast<MO*>(argv[3])); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("ViewUpdate", &si); }
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_none(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
@@ -1034,14 +1043,16 @@ int const_inner(int m, void** argv) {
 }
 template <int M> int pre_const(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_ret_set[M] = false;
-    if (!g_on.load(std::memory_order_relaxed) || core_closing() || arg_i32(argv[2]) != pc::kDynamic)
-        return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (arg_i32(argv[2]) != pc::kDynamic) { eng_barrier(); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
     SehInfo si{};
     __try { rc = const_inner(M, argv); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("TrainingMenuFunc (FuncType-only)", &si); }
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
     return rc;
 }
 template <int M> void post_const(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
@@ -1076,22 +1087,26 @@ void text_out(int which, void** ret_val) {
 }
 template <int W> int pre_text(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_text_set[W] = false;
-    if (!g_on.load(std::memory_order_relaxed) || core_closing() || arg_i32(argv[2]) != pc::kDynamic)
-        return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (arg_i32(argv[2]) != pc::kDynamic) { eng_barrier(); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
     SehInfo si{};
     __try { rc = text_inner(W, argv); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("GetOptionText", &si); }
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
     return rc;
 }
 template <int W> void post_text(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (!tl_text_set[W]) return;
     tl_text_set[W] = false;
+    const bool lk = eng_lock();
     SehInfo si{};
     __try { text_out(W, ret_val); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("GetOptionText post", &si); }
+    eng_unlock(lk);
 }
 
 // ---- Function(ftype, BaseParam, ViewData, value) ----
@@ -1196,6 +1211,7 @@ int function_inner(void** argv) {
 int pre_function(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_fn = FnState{ false, 0, -1, nullptr };
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
     SehInfo si{};
@@ -1205,6 +1221,7 @@ int pre_function(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lo
         rc = tl_fn.set ? REFRAMEWORK_HOOK_SKIP_ORIGINAL : REFRAMEWORK_HOOK_CALL_ORIGINAL;
     }
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
     return rc;
 }
 
@@ -1239,7 +1256,8 @@ void post_function(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned lon
     tl_fn = FnState{ false, 0, -1, nullptr };
     *ret_val = reinterpret_cast<void*>(static_cast<uintptr_t>(s.ret));
     if (s.page < 0 || !g_on.load(std::memory_order_relaxed) || core_closing()) return;
-    int64_t pt = perf::begin();
+    const bool lk = eng_lock();                // held to the end of the build: no hooked menu work of another thread
+    int64_t pt = perf::begin();                //  runs while the game rebinds the rows (the reference engine's model)
     // the first page build after the trace file appeared is traced (this thread, the game's layout included)
     if (g_trace_builds.load(std::memory_order_relaxed) > 0 && g_trace_builds.fetch_sub(1) > 0) tl_tracing = true;
     SehInfo si{};
@@ -1254,6 +1272,7 @@ void post_function(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned lon
     // it. The page's answer is written again, after them.
     *ret_val = reinterpret_cast<void*>(static_cast<uintptr_t>(s.ret));
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
 }
 
 // ---- UIFlowTrainingMenu.Param.UpdateSpinBox(Int32, Boolean, Boolean): the spin repairs after the game's layout ----
@@ -1281,12 +1300,14 @@ int pre_spinbox(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lon
     const int d = tl_sb_n++;
     tl_sb[d] = SbFrame{ -1, nullptr, -1 };
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    if (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) { eng_barrier(); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
     __try { spinbox_pre(d, reinterpret_cast<MO*>(argv[1]), arg_i32(argv[2])); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("UpdateSpinBox", &si); }
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 // Every post of our row repairs it, nested or not: the game nests this method itself (REFramework's "(Overall)
@@ -1307,18 +1328,15 @@ void post_spinbox(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (d < 0) { tl_sb_n = 0; return; }
     if (d >= kNest || !tl_sb[d].param || !g_on.load(std::memory_order_relaxed) || core_closing()) return;
     if (tl_repairing) return;                 // our own set_SelectedIndex re-entered it (R4): the repair under way goes on
-    if (tl_sb[d].row < 0 && !g_any_moved.load(std::memory_order_relaxed)) return;
-    if (!g_gui_mx.try_lock()) {               // another job thread is writing: this repair waits for the row list's frame
-        if (tl_sb[d].row >= 0) pend(tl_sb[d].row);
-        return;
-    }
+    if (tl_sb[d].row < 0 && !g_any_moved.load(std::memory_order_relaxed)) { eng_barrier(); return; }
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
     __try { spinbox_post(tl_sb[d]); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("UpdateSpinBox post", &si); }
     tl_repairing = false;
-    g_gui_mx.unlock();
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
 }
 
 // ---- UIPartsSpin.Init(min, max, num, action[, bool]) / set_Num(num): the option shown after a build or a focus ----
@@ -1380,12 +1398,15 @@ void num_inner(void** argv, int slot, bool init) {
     if (arg_i32(argv[slot]) != target) argv[slot] = reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint32_t>(target)));
 }
 template <int Slot, bool Init> int pre_num(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!g_on.load(std::memory_order_relaxed) || core_closing() || !pc::any_shown()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!pc::any_shown()) { eng_barrier(); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
     __try { num_inner(argv, Slot, Init); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault(Init ? "UIPartsSpin.Init" : "UIPartsSpin.set_Num", &si); }
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -1395,8 +1416,9 @@ thread_local void** tl_guide_slot = nullptr;
 
 int pre_guide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     tl_guide_slot = nullptr;
-    if (!g_on.load(std::memory_order_relaxed) || core_closing() || !g_calls.any_hints || !g_calls.any_hints())
-        return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!g_on.load(std::memory_order_relaxed) || core_closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    eng_barrier();
+    if (!g_calls.any_hints || !g_calls.any_hints()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     tl_guide_focus = argv[2];
     tl_guide_slot = reinterpret_cast<void**>(argv[3]);    // the lists are created inside the call: read in the post
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -1419,11 +1441,13 @@ void post_guide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     void* focus = tl_guide_focus;
     tl_guide_slot = nullptr;
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return;
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
     __try { guide_post(focus, slot); }
     __except (seh_filter(GetExceptionInformation(), &si)) { fault("GetGuideData post", &si); }
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
 }
 
 // ---- UIPartsGroupScroll.UpdateScroll: per frame on the menu's thread ----
@@ -1437,10 +1461,7 @@ void rebuild(MO* param, int64_t page) {
 }
 void per_frame(MO* param, int64_t page) {
     step("UpdateScroll post: retext");
-    std::vector<int64_t> due = pc::take_retext(page);      // labels changed: the visible text at once
-    if (g_any_pending.load(std::memory_order_relaxed))      // repairs skipped while another thread was writing
-        for (int64_t rid : take_pending()) if (std::find(due.begin(), due.end(), rid) == due.end()) due.push_back(rid);
-    for (int64_t rid : due) {
+    for (int64_t rid : pc::take_retext(page)) {           // labels changed: the visible text at once
         pc::RowInfo r;
         if (!pc::row_info(rid, r) || r.kind != pc::Kind::Spin || r.row_index < 0 || !entry_is(param, r.row_index, rid)) continue;
         if (MO* part = spin_part(param, r.row_index)) repair_spin(part, r, r.row_index);
@@ -1481,6 +1502,7 @@ int pre_scroll(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long
     if (tl_scroll_n < 0 || tl_scroll_n >= kNest) tl_scroll_n = 0;   // posts that never ran never pile up
     const int d = tl_scroll_n++;
     tl_scroll[d] = reinterpret_cast<uintptr_t>(argv[1]);
+    if (g_on.load(std::memory_order_relaxed) && !core_closing()) eng_barrier();   // no scroll group moves during a build
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 void post_scroll(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
@@ -1489,8 +1511,11 @@ void post_scroll(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (d >= kNest || !g_on.load(std::memory_order_relaxed) || core_closing()) return;
     const uintptr_t ours = g_sec_list.load(std::memory_order_relaxed);
     const bool our_list = ours && tl_scroll[d] == ours;
-    if (our_list ? (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) : !pc::rebuild_pending()) return;
-    if (!g_gui_mx.try_lock()) return;         // another job thread is writing: the next frame does this one's work
+    if (our_list ? (!pc::any_shown() && !g_any_moved.load(std::memory_order_relaxed)) : !pc::rebuild_pending()) {
+        eng_barrier();
+        return;
+    }
+    const bool lk = eng_lock();
     int64_t pt = perf::begin();
     SehInfo si{};
     __try { scroll_post(our_list); }
@@ -1498,8 +1523,8 @@ void post_scroll(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     tl_building = -1;
     tl_build_param = nullptr;
     tl_repairing = false;
-    g_gui_mx.unlock();
     perf::end(perf::PmHooks, pt);
+    eng_unlock(lk);
 }
 
 #pragma warning(pop)
@@ -2005,11 +2030,13 @@ bool ready() { return g_on.load(); }
 
 void frame(uint64_t f) {
     if (!g_on.load(std::memory_order_relaxed) || core_closing()) return;
+    const bool lk = eng_lock();                // the install pass changes the menu data: never during a page build
     int64_t pt = perf::begin();
     SehInfo si{};
     if (!frame_seh(f, &si)) fault("frame", &si);
     tl_tracing = false;
     perf::end(perf::PmFrame, pt);
+    eng_unlock(lk);
 }
 
 bool dyn_row_removable(void* dynamic_data) {
@@ -2116,9 +2143,10 @@ std::string status() {
         n = g_specs.size();
         refused = g_refused;
     }
-    char b[360];
-    std::snprintf(b, sizeof b, "on=%d faults=%d hooks %d/%zu (code check: %s)%s%s; ", g_on.load() ? 1 : 0,
-                  g_faults.load(), hooked, n, check_text().c_str(), refused.empty() ? "" : ", refused: ", refused.c_str());
+    char b[420];
+    std::snprintf(b, sizeof b, "on=%d faults=%d hooks %d/%zu (code check: %s)%s%s, engine lock waits past %d ms: %llu; ",
+                  g_on.load() ? 1 : 0, g_faults.load(), hooked, n, check_text().c_str(), refused.empty() ? "" : ", refused: ",
+                  refused.c_str(), kEngWaitMs, (unsigned long long)g_eng_timeouts.load());
     return std::string(b) + pc::status();
 }
 
