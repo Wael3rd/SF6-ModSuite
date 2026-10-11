@@ -46,8 +46,9 @@ api->pm_set_options(client, spin, labels, 3);
 - **Texts in place.** `pm_set_texts(id, title, guide)` (NULL = unchanged) and `pm_set_options(row, labels, n)` change
   the texts at once (the game resolves them at each draw: a language change is a `pm_set_texts`). The count of options
   shown follows `n`, at most the capacity (the labels past it are dropped); `n == 0` shows one empty option. A change of
-  labels while the page is shown refreshes the visible option at once, sizes the option array to the labels and
-  brings the spin part's range and number into it at once, and rebuilds the page 2 frames later (R4).
+  labels while the page is shown refreshes the visible option at once, sizes the option array to the labels,
+  brings the spin part's range and number and its carousel's count into it at once, and rebuilds the page 2 frames
+  later (R4).
 - **Removal.** `pm_remove(page_or_row)`: taken out of the menu at the next install pass (menu closed), texts released
   after. A client that unregisters loses its pages and rows the same way.
 - **Queries.** `pm_page_shown(page)` (live: the menu's first row is one of the page's), `pm_row_part(row)` (the row's
@@ -158,7 +159,10 @@ api->pm_set_options(client, spin, labels, 3);
   part's own range and number (`MaxNum`, `_Num`, R17's data-only edit) inside the option array the game reads and the
   labels: a page build sets them through `Init`, a label change on the shown page did not (the deferred `ViewUpdate`
   rebuilds the rows' data, not the part: a 5 -> 7 change kept looping over 5 options, a shrinking list left `_Num` past the
-  new count). Compared first: a build's own values are never rewritten. The rebuild after a label change
+  new count). Compared first: a build's own values are never rewritten. At a label change on the shown page the spin's
+  carousel part (`app.UIPartsScrollList`, the spin part's child 0) is initialised as the game's layout does it,
+  `InitList(count, option, -1)` (a grow left it at the old count: the presses stopped at the last option instead of
+  wrapping); the next 16 changes of the spin's state are logged. The rebuild after a label change
   runs 2 frames later from **another**
   scroll group's update, never inside the list's own chain (R4), held while an option window is up, dropped if the page
   is no longer shown.

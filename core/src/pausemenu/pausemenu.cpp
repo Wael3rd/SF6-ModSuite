@@ -76,6 +76,7 @@ API::Field* g_f_msg = nullptr;                 // its _MessageID (System.Guid)
 API::Field* g_f_ftype = nullptr;               // its _FuncType
 TD* g_td_param = nullptr;                      // app.training.UIFlowTrainingMenu.Param
 TD* g_td_spin = nullptr;                       // app.UIPartsSpin
+TD* g_td_scroll = nullptr;                     // app.UIPartsScrollList (a spin's carousel part, its child 0)
 TD* g_td_guide = nullptr;                      // app.InputGuideData
 API::Method* g_m_viewupdate = nullptr;         // app.training.TrainingMenuFunc.ViewUpdate
 // TrainingMenuData[] through the game's System.Array.CreateInstance(System.Type, System.Int32), as the reference
@@ -1006,6 +1007,54 @@ void enforce_range(MO* part, const pc::RowInfo& r, int32_t v) {
     if (v >= 0 && v < n && call_i32(part, "get_Num", num) && num != v) set_i64(part, "_Num", v);
 }
 
+// The spin's carousel part (app.UIPartsScrollList): the spin part's child 0. The game's own spin layout (ViewUpdate ->
+// the training menu's spin setup) runs UIPartsSpin.Init(0, count - 1, num, action, true), sets the part's CheckAdd /
+// CheckSub, then initialises this list with InitList(count, num, -1), count = the row's option array length. A label
+// change on the shown page left the list at the count of the last build: after a grow (11 options, list of 10) the
+// presses stopped at the last option instead of wrapping and ran on past it unseen (test B step 6, Save As).
+MO* carousel_part(MO* part) {
+    MO* c = call_obj(part, "GetChild(System.Int32)", { ll::arg_i32(0) });
+    return c && g_td_scroll && c->get_type_definition() == g_td_scroll ? c : nullptr;
+}
+// At a label change on the shown page: the list initialised as the layout does, with the options the array holds now
+// (compared first: nothing when the list already has that count). `before` / `after`: its count, -1 = no list.
+void init_carousel(MO* part, int32_t n, int32_t v, int32_t& before, int32_t& after) {
+    before = after = -1;
+    MO* sl = carousel_part(part);
+    if (!sl || !call_i32(sl, "get_ItemMax", before)) return;
+    after = before;
+    if (n < 1 || before == n) return;
+    SF6CoreArg a[3]{};
+    a[0].type = a[1].type = a[2].type = SF6CORE_ARG_I64;
+    a[0].v.i = n;
+    a[1].v.i = v < 0 ? 0 : (v >= n ? n - 1 : v);
+    a[2].v.i = -1;
+    op("UIPartsScrollList.InitList");
+    const SF6CoreStatus st = g_api->obj_invoke(g_self, sl, "InitList(System.Int32, System.Int32, System.Int32)", a, 3, nullptr);
+    if (st != SF6CORE_OK) TR("InitList on %p: status %d", (void*)sl, (int)st);
+    call_i32(sl, "get_ItemMax", after);
+}
+
+// After a label change on the shown page, the next states of the spin (its number and range, its list's count and
+// index) are logged when they change, 16 lines at most: what the presses did (bounded, INFO).
+std::atomic<int> g_range_trace{0};
+struct RangeSeen { int64_t row = -1; int32_t v = -2, num = -2, mx = -2, cnt = -2, sel = -2; };
+RangeSeen g_range_seen;                        // under the engine lock (repairs run under it)
+void trace_range(MO* part, const pc::RowInfo& r, int32_t v) {
+    RangeSeen s;
+    s.row = r.id;
+    s.v = v;
+    call_i32(part, "get_Num", s.num);
+    call_i32(part, "get_MaxNum", s.mx);
+    if (MO* sl = carousel_part(part)) { call_i32(sl, "get_ItemMax", s.cnt); call_i32(sl, "get_SelectedIndex", s.sel); }
+    const RangeSeen& o = g_range_seen;
+    if (o.row == s.row && o.v == s.v && o.num == s.num && o.mx == s.mx && o.cnt == s.cnt && o.sel == s.sel) return;
+    g_range_seen = s;
+    if (g_range_trace.fetch_sub(1) <= 0) { g_range_trace = 0; return; }
+    core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] row %lld after its label change: option %d of %d, part number %d of 0..%d, "
+             "list %d of %d", (long long)r.id, v, r.labels_n, s.num, s.mx, s.sel, s.cnt);
+}
+
 // The row's entry in the list is still that row.
 bool entry_is(MO* param, int32_t idx, int64_t row) {
     const pc::Ident i = row_ident_of_entry(view_entry(param, idx));
@@ -1024,6 +1073,7 @@ void repair_spin(MO* part, const pc::RowInfo& r, int32_t idx) {
     enforce_text(part, pc::label(r.id, v));
     step("spin repair: range");
     enforce_range(part, r, v);
+    if (g_range_trace.load(std::memory_order_relaxed) > 0) { step("spin repair: range trace"); trace_range(part, r, v); }
     tl_repairing = false;
     step("spin repair: font fit");
     if (r.spread > 0) fit_row(r.id, part, idx);
@@ -1518,10 +1568,20 @@ void per_frame(MO* param, int64_t page) {
         // past the array the game reads
         repair_spin(part, r, r.row_index);
         if (pc::size_options(rid) && pc::row_info(rid, r)) repair_spin(part, r, r.row_index);
+        // the carousel list as the layout initialises it (InitList(count, num, -1)), then the repair once more (its index,
+        // text and range follow the list)
+        int32_t cnt0 = -1, cnt1 = -1;
+        tl_repairing = true;
+        init_carousel(part, std::min(r.labels_n, r.opt_n), value_of(r), cnt0, cnt1);
+        tl_repairing = false;
+        if (cnt0 != cnt1) repair_spin(part, r, r.row_index);
         call_i32(part, "get_MaxNum", mx1);
         call_i32(part, "get_Num", num1);
         core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] row %lld: labels changed on the shown page: %d option(s), array %d -> %d, "
-                 "part range 0..%d -> 0..%d, number %d -> %d", (long long)rid, r.labels_n, arr0, r.opt_n, mx0, mx1, num0, num1);
+                 "part range 0..%d -> 0..%d, number %d -> %d, list count %d -> %d", (long long)rid, r.labels_n, arr0, r.opt_n, mx0,
+                 mx1, num0, num1, cnt0, cnt1);
+        g_range_seen = RangeSeen{};
+        g_range_trace = 16;
     }
     if (off(kOffArrows)) return;
     std::vector<int32_t> kept;
@@ -1965,6 +2025,7 @@ bool prepare(const Calls& calls, SF6CoreClient* engine_client) {
             if (g_td_menu) { g_f_msg = ll::find_field_walk(g_td_menu, "_MessageID"); g_f_ftype = ll::find_field_walk(g_td_menu, "_FuncType"); }
             g_td_param = tdb->find_type("app.training.UIFlowTrainingMenu.Param");
             g_td_spin = tdb->find_type("app.UIPartsSpin");
+            g_td_scroll = tdb->find_type("app.UIPartsScrollList");
             g_td_guide = tdb->find_type("app.InputGuideData");
             if (TD* tmf = tdb->find_type("app.training.TrainingMenuFunc")) g_m_viewupdate = tmf->find_method("ViewUpdate");
             if (TD* arr = tdb->find_type("System.Array")) {
