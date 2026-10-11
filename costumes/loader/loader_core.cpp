@@ -4227,7 +4227,8 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
 // then the same Fluffy bundle, then the same folder or archive; in every case it must touch the
 // same costume folder (except for the explicit "addonfor" name). A base with up to three add-ons
 // gets one variant per add-on, plus one with all of them when they do not replace the same files;
-// with more add-ons only the base is used. Modular mods (see build_modular) are handled apart.
+// with more add-ons only the base is used. Separate add-ons the user put with the costume in one
+// sub-folder give the complete outfit only. Modular mods (see build_modular) are handled apart.
 static void finalize_units(ScanOutputs& o) {
     // Options of one mod often replace the same files (skins, bodies) and got the same id, hence
     // the same slot: the first one (by path) keeps the id, the others get one derived from their path.
@@ -4318,6 +4319,23 @@ static void finalize_units(ScanOutputs& o) {
 
     for (auto& [j, adds] : addons_of) {
         const auto& b = g_units[j];
+        bool apart = true;
+        for (size_t x = 0; x < adds.size(); ++x)
+            for (size_t y = x + 1; y < adds.size(); ++y)
+                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
+        // Separate downloads put with their costume in one sub-folder (each add-on its own archive or
+        // folder, not options of one mod) are all meant to be worn: only the complete outfit is made
+        bool separate = adds.size() >= 2 && apart;
+        for (size_t x = 0; x < adds.size() && separate; ++x) {
+            if (!user_grouped(g_units[adds[x]], b)) separate = false;
+            for (size_t y = x + 1; y < adds.size() && separate; ++y)
+                if (!user_grouped(g_units[adds[x]], g_units[adds[y]])) separate = false;
+        }
+        if (adds.size() > 3 && !separate) {
+            printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
+                   unit_label(b).c_str(), adds.size());
+            continue;
+        }
         // An add-on put with its costume in one sub-folder is meant for that costume: only the combined
         // outfit is made, not the costume alone as well
         bool grouped = false;
@@ -4327,18 +4345,15 @@ static void finalize_units(ScanOutputs& o) {
                              [&](const auto& e) { return e.first == b.mod_id; }), o.mods_out.end());
             printf("\n  %s: put with its add-on(s) in one sub-folder, only the combined outfit is made\n", unit_label(b).c_str());
         }
-        if (adds.size() > 3) {
-            printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
-                   unit_label(b).c_str(), adds.size());
-            continue;
-        }
         std::vector<std::vector<size_t>> variants;
-        for (auto a : adds) variants.push_back({a});
-        bool apart = true;
-        for (size_t x = 0; x < adds.size(); ++x)
-            for (size_t y = x + 1; y < adds.size(); ++y)
-                if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
-        if (adds.size() >= 2 && apart) variants.push_back(adds);
+        if (separate) {
+            variants.push_back(adds);
+            printf("  %s: %zu separate add-ons in its sub-folder, only the complete outfit (all of them) is made\n",
+                   unit_label(b).c_str(), adds.size());
+        } else {
+            for (auto a : adds) variants.push_back({a});
+            if (adds.size() >= 2 && apart) variants.push_back(adds);
+        }
         for (auto& v : variants) {
             std::vector<size_t> parts{j};
             std::string label = unit_label(b);

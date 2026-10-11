@@ -84,7 +84,9 @@ with the outfits each one gave, then the extra outfits by character. The report 
   outfit. Each outfit gets one variant per add-on, plus one with all of them.
 - **Combining two downloads**: a costume and an add-on published separately (a hair, a weapon) are combined
   when both archives sit in one sub-folder of the character, `costume_mods\<Character>\<any name>\`. Only
-  the combined outfit is made, not the costume alone as well. An add-on made for another outfit's folder than
+  the combined outfit is made, not the costume alone as well. Several add-ons downloaded separately (a cat
+  and a book, one archive each) in that sub-folder give one outfit wearing all of them, as long as they do not
+  replace the same files (otherwise one variant per add-on). An add-on made for another outfit's folder than
   the costume's (a hair for Outfit 1 next to a costume of Outfit 2) still brings its parts to the costume,
   as long as the costume has none of that part.
 - **Modular mods** (main files, body options, skin options, optional extras) give one outfit per body
