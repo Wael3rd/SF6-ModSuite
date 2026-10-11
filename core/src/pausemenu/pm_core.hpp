@@ -184,6 +184,7 @@ struct RowInfo {
     float spread = 0.0f;
     uint32_t capacity = 0;
     int32_t labels_n = 1;             // options shown: max(1, min(labels, capacity))
+    int32_t opt_n = 0;                // options in the array the game reads (sized to labels_n at a build / size_options)
     int32_t row_index = -1;
     Obj data = nullptr;
     Key key;
@@ -214,6 +215,10 @@ bool rebuild_pending();
 int64_t take_rebuild(uint64_t frame, bool hold);     // the page due now (cleared), -1 = none; hold = an option window is up.
                                                      // The caller runs page_built(page) (arrays sized, rows at build) then rebuilds
 std::vector<int64_t> take_retext(int64_t page);      // spins of the page whose labels changed (visible text to refresh)
+// A shown spin whose labels changed: its option array sized to them now, as the reference engine's prepare_page did at
+// a list change (the deferred rebuild rebuilds the rows' data; the spin part's range follows the array in the repair).
+// True when the array changed. Menu thread, page shown.
+bool size_options(int64_t row);
 
 // ---- hints ----------------------------------------------------------------------------------------------------------
 Obj hint_obj(Owner owner, int32_t button, const std::string& text);   // created once per (owner, button, text), held

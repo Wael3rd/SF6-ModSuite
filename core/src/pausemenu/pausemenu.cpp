@@ -992,6 +992,20 @@ void restore_group(MO* param, int32_t idx) {
         g_api->ui_set_font_size(g_self, t, m.w, m.h);
 }
 
+// The spin part's own range and number (R17: MaxNum, _Num; the Color Mod edits its DI panel spins in place the same
+// way). A build sets them (UIPartsSpin.Init, from the option array); a change of the labels while the page is shown did
+// not: the deferred ViewUpdate rebuilds the rows' data, not the part. Test A 11/10: 5 -> 7 labels on a shown page, the
+// presses still looped over 5 options until the page was left; a client's list shrinking on the shown page (10 -> 9)
+// left _Num past the new count and the presses fell on option 0. The range never goes past the option array the game reads
+// (min(labels, array) - 1); _Num is set only inside it. Compared first: a build's own values are never rewritten.
+void enforce_range(MO* part, const pc::RowInfo& r, int32_t v) {
+    const int32_t n = std::min(r.labels_n, r.opt_n);
+    if (n < 1) return;
+    int32_t mx = 0, num = 0;
+    if (call_i32(part, "get_MaxNum", mx) && mx != n - 1) invoke_i(part, "set_MaxNum(System.Int32)", n - 1, SF6CORE_ARG_I64);
+    if (v >= 0 && v < n && call_i32(part, "get_Num", num) && num != v) set_i64(part, "_Num", v);
+}
+
 // The row's entry in the list is still that row.
 bool entry_is(MO* param, int32_t idx, int64_t row) {
     const pc::Ident i = row_ident_of_entry(view_entry(param, idx));
@@ -1008,6 +1022,8 @@ void repair_spin(MO* part, const pc::RowInfo& r, int32_t idx) {
     enforce_index(part, v);
     step("spin repair: option text");
     enforce_text(part, pc::label(r.id, v));
+    step("spin repair: range");
+    enforce_range(part, r, v);
     tl_repairing = false;
     step("spin repair: font fit");
     if (r.spread > 0) fit_row(r.id, part, idx);
@@ -1491,7 +1507,21 @@ void per_frame(MO* param, int64_t page) {
     for (int64_t rid : pc::take_retext(page)) {           // labels changed: the visible text at once
         pc::RowInfo r;
         if (!pc::row_info(rid, r) || r.kind != pc::Kind::Spin || r.row_index < 0 || !entry_is(param, r.row_index, rid)) continue;
-        if (MO* part = spin_part(param, r.row_index)) repair_spin(part, r, r.row_index);
+        MO* part = spin_part(param, r.row_index);
+        if (!part) continue;
+        int32_t mx0 = -1, num0 = -1, mx1 = -1, num1 = -1;
+        call_i32(part, "get_MaxNum", mx0);
+        call_i32(part, "get_Num", num0);
+        const int32_t arr0 = r.opt_n;
+        // the range first brought inside what both the labels and the current array allow, then the array sized to the
+        // labels (the reference engine's prepare_page at a list change) and the range with it: the part never points
+        // past the array the game reads
+        repair_spin(part, r, r.row_index);
+        if (pc::size_options(rid) && pc::row_info(rid, r)) repair_spin(part, r, r.row_index);
+        call_i32(part, "get_MaxNum", mx1);
+        call_i32(part, "get_Num", num1);
+        core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] row %lld: labels changed on the shown page: %d option(s), array %d -> %d, "
+                 "part range 0..%d -> 0..%d, number %d -> %d", (long long)rid, r.labels_n, arr0, r.opt_n, mx0, mx1, num0, num1);
     }
     if (off(kOffArrows)) return;
     std::vector<int32_t> kept;

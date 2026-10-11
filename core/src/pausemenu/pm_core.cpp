@@ -657,6 +657,18 @@ FnPlan plan_function(const FnInput& in) {
 
 void building(int64_t page) { std::lock_guard lk(mx); g_building = page; }
 
+// The option array of a spin sized to its labels, so the arrows stop at the last one (reference: prepare_page). The old
+// array stays held (r.arrays): a reader of the previous one still reads live objects. Under mx.
+static bool size_row(RowRec& r) {
+    if (r.kind != Kind::Spin || !r.data) return false;
+    const int32_t n = std::min<int32_t>(labels_n_of(r), (int32_t)r.opts.size());
+    if (n <= 0 || n == r.opt_n || !be.new_array || !be.set_children) return false;
+    Obj arr = be.new_array(std::vector<Obj>(r.opts.begin(), r.opts.begin() + n));
+    if (arr && be.set_children(r.data, arr)) { r.arrays.push_back(arr); r.opt_n = n; return true; }
+    if (arr) drop(arr);
+    return false;
+}
+
 bool page_built(int64_t page, uint64_t frame) {
     std::lock_guard lk(mx);
     if (g_building == page) g_building = -1;
@@ -666,17 +678,16 @@ bool page_built(int64_t page, uint64_t frame) {
         RowRec* r = row_any(rid);
         if (!r || r->removed) continue;
         r->built_frame = frame;
-        if (r->kind != Kind::Spin || !r->data) continue;
-        // the option array sized to the labels, so the arrows stop at the last one (reference: prepare_page)
-        const int32_t n = std::min<int32_t>(labels_n_of(*r), (int32_t)r->opts.size());
-        if (n > 0 && n != r->opt_n && be.new_array && be.set_children) {
-            Obj arr = be.new_array(std::vector<Obj>(r->opts.begin(), r->opts.begin() + n));
-            if (arr && be.set_children(r->data, arr)) { r->arrays.push_back(arr); r->opt_n = n; }
-            else if (arr) drop(arr);
-        }
+        size_row(*r);
         r->retext = false;
     }
     return true;
+}
+
+bool size_options(int64_t row) {
+    std::lock_guard lk(mx);
+    RowRec* r = row_any(row);
+    return r && !r->removed && size_row(*r);
 }
 
 bool at_build(int64_t row, uint64_t frame) {
@@ -748,7 +759,7 @@ bool row_info(int64_t row, RowInfo& out) {
     if (!r) return false;
     out.id = r->id; out.page = r->page; out.owner = r->owner; out.kind = r->kind; out.keep_open = r->keep_open;
     out.removed = r->removed; out.spread = r->spread; out.capacity = r->capacity; out.labels_n = labels_n_of(*r);
-    out.row_index = r->row_index; out.data = r->data; out.key = r->key;
+    out.opt_n = r->opt_n; out.row_index = r->row_index; out.data = r->data; out.key = r->key;
     return true;
 }
 
