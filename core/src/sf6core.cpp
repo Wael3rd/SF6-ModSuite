@@ -2727,15 +2727,19 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     core_log(SF6CORE_LOG_INFO, nullptr,
              "registered on_pre_application_entry(LateUpdateBehavior)");
 
-    // Register draw-element callback for element hiding (increment 2)
-    if (param->functions->on_pre_gui_draw_element) {
+    // Register draw-element callback for element hiding (increment 2). The member only exists from plugin API
+    // 1.14 on: an older REFramework (1.5.8 = 1.10) has no such entry, the pointer would be read past its table.
+    const bool has_draw_cb = param->version &&
+        (param->version->major > 1 || (param->version->major == 1 && param->version->minor >= 14));
+    if (has_draw_cb && param->functions->on_pre_gui_draw_element) {
         param->functions->on_pre_gui_draw_element(on_pre_gui_draw_element);
         s_elem_draw_registered = true;
         core_log(SF6CORE_LOG_INFO, nullptr,
                  "registered on_pre_gui_draw_element (element hiding)");
     } else {
         core_log(SF6CORE_LOG_WARN, nullptr,
-                 "on_pre_gui_draw_element not available (element hiding disabled)");
+                 "on_pre_gui_draw_element needs plugin API >= 1.14 (have %d.%d): element hiding disabled",
+                 param->version ? param->version->major : 0, param->version ? param->version->minor : 0);
     }
 
     // Register window message callback (closing guard, 0.7.2)

@@ -446,7 +446,8 @@ typedef struct SF6CoreAPI {
      *   A segment of just '*' matches any child name.
      * hidden: 1 = hide (set_ForceInvisible true), 0 = restore original
      *   visibility. Enforced at draw time via on_pre_gui_draw_element
-     *   (O(1) owner lookup, no per-frame tree scan when no hides).
+     *   (O(1) owner lookup, no per-frame tree scan when no hides); that
+     *   callback needs REFramework plugin API >= 1.14: below, hiding is off.
      *   Re-resolved on flow changes. Restored when client unregisters
      *   or is breaker-disabled. */
     SF6CoreStatus (SF6CORE_CALL *set_element_hidden)(

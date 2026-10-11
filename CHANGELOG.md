@@ -46,8 +46,13 @@
   spin's option written at each page build into such an object (the ViewData the game hands to `Function`) released
   the option shown before, a reference it never held, until that option was freed while the menu still pointed at it.
   `obj_set_ref` now follows the target's reference count as the game does (this also applies to the other mods' writes
-  through it).
-  Not re-tested in the game yet (test page: `pm_page` in the test client).
+  through it). Confirmed by the sixth test: the view data is such a local object, and the test page went through
+  several hundred very fast sub-page switches, spin changes, label and text changes, a deliberate fault in its
+  callback (caught, the game went on) and its removal without a crash.
+- **REFramework 1.5.8 (plugin API 1.10)**: element hiding (`set_element_hidden`) needs `on_pre_gui_draw_element`, which
+  only exists from plugin API 1.14 on. The core registered it on any REFramework, reading past an older one's
+  function table; it now checks the API version first and keeps element hiding off (one log line) below 1.14. No mod
+  of this suite uses element hiding.
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 
