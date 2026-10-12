@@ -1,4 +1,4 @@
-// pm_service.cpp - increment 9: the training pause menu as a core service (ADR-0016, docs/PAUSE_MENU.md).
+// pm_service.cpp - increment 8: the training pause menu as a core service (ADR-0016, docs/PAUSE_MENU.md).
 //
 // The engine: pm_core (the state machine, no game header) and pausemenu (the game side: backend, hooks). This file
 // is the service around it: the clients and their callbacks, the api_pm_* functions, the frame entry and the clean-up
@@ -208,7 +208,7 @@ void pausemenu_release_client(SF6CoreClient* c) {
     if (n) core_log(SF6CORE_LOG_INFO, c->client_id, "[pausemenu] %zu page(s) / row(s) removed (unregistered)", n);
 }
 
-// ---- the API (sf6core_api.h, increment 9) --------------------------------------------------------------------------
+// ---- the API (sf6core_api.h, increment 8) --------------------------------------------------------------------------
 
 SF6CoreStatus SF6CORE_CALL api_pm_set_callbacks(SF6CoreClient* client, const SF6CorePmCallbacks* cb) {
     if (!client || !cb || cb->struct_size < sizeof(uint32_t) + sizeof(void*)) return SF6CORE_ERR_INVALID_ARG;

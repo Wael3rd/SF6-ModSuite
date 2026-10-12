@@ -2002,13 +2002,7 @@ uint32_t      SF6CORE_CALL api_opt_status(char*, uint32_t);
 // Increment 7: effective selection (defined in selection.cpp)
 SF6CoreStatus SF6CORE_CALL api_sel_set_effective(SF6CoreClient*, int32_t, int32_t, int32_t, int32_t);
 int32_t       SF6CORE_CALL api_sel_get_effective(int32_t, int32_t, int32_t*, int32_t*);
-// Increment 8: client texts (defined in texts.cpp; obj_set_guid in display.cpp)
-SF6CoreStatus SF6CORE_CALL api_txt_new(SF6CoreClient*, const char*, uint8_t[16]);
-SF6CoreStatus SF6CORE_CALL api_txt_set(SF6CoreClient*, const uint8_t[16], const char*);
-SF6CoreStatus SF6CORE_CALL api_txt_release(SF6CoreClient*, const uint8_t[16]);
-SF6CoreStatus SF6CORE_CALL api_obj_set_guid(SF6CoreClient*, void*, const char*, const uint8_t[16]);
-uint32_t      SF6CORE_CALL api_txt_status(char*, uint32_t);
-// Increment 9: training pause menu (defined in pausemenu/pm_service.cpp)
+// Increment 8: training pause menu (defined in pausemenu/pm_service.cpp)
 SF6CoreStatus SF6CORE_CALL api_pm_set_callbacks(SF6CoreClient*, const SF6CorePmCallbacks*);
 int64_t       SF6CORE_CALL api_pm_page(SF6CoreClient*, const SF6CorePmPageDesc*);
 int64_t       SF6CORE_CALL api_pm_row(SF6CoreClient*, int64_t, const SF6CorePmRowDesc*);
@@ -2093,9 +2087,6 @@ static void on_late_update() {
     update_breakers(snapshot);
     perf::end(perf::UpdateBreakers, pt_brk);
 
-    // -- 2b. Client texts (increment 8): the GetMessage hook, before any
-    //        callback, for texts made off the game thread or before init --
-    texts_frame();
 
     // -- 3. Flow-change callbacks --
     if (new_flow != s_flow_id && new_flow != -1) {
@@ -2137,7 +2128,7 @@ static void on_late_update() {
         perf::end(perf::OptionsFrame, pt_opt);
     }
 
-    // -- 3c. Training pause menu (increment 9): installed on demand, then its
+    // -- 3c. Training pause menu (increment 8): installed on demand, then its
     //        state (training, pause, menu close) and the install pass --
     pausemenu_frame();
 
@@ -2263,10 +2254,7 @@ static void SF6CORE_CALL api_unregister_client(SF6CoreClient* client) {
         auto it2 = std::find(s_pending.begin(), s_pending.end(), client);
         if (it2 != s_pending.end()) s_pending.erase(it2);
     }
-    // Client texts (increment 8): released once the client is inactive, so a
-    // txt_new racing with this call stores nothing after the release
-    texts_release_client(client);
-    // Training pause menu (increment 9): its callbacks gone, its pages / rows out of
+    // Training pause menu (increment 8): its callbacks gone, its pages / rows out of
     // the menu at the next pass
     pausemenu_release_client(client);
 
@@ -2627,13 +2615,7 @@ static const SF6CoreAPI s_api = {
     // -- Increment 7: effective selection (ADR-0014) --
     api_sel_set_effective,
     api_sel_get_effective,
-    // -- Increment 8: client texts (ADR-0006 amendment 2026-10-09) --
-    api_txt_new,
-    api_txt_set,
-    api_txt_release,
-    api_obj_set_guid,
-    api_txt_status,
-    // -- Increment 9: training pause menu (ADR-0016) --
+    // -- Increment 8: training pause menu (ADR-0016) --
     api_pm_set_callbacks,
     api_pm_page,
     api_pm_row,

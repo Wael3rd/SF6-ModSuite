@@ -125,7 +125,7 @@ void purge(bool keep_current) {
 size_t count() { std::lock_guard lk(g_mx); return g_count; }
 size_t live() { return g_live.load(std::memory_order_relaxed); }
 
-// ---- client texts (increment 8) -----------------------------------------------------------------------------------
+// ---- owned texts (the training pause-menu engine) ---------------------------------------------------------------
 
 bool alloc_owned(Owner owner, const std::string& text, bool (*keep)(Owner), GuidBytes& out, size_t* owned_after) {
     if (!owner) return false;
@@ -155,22 +155,6 @@ bool release_owned(Owner owner, const GuidBytes& gb) {
     return true;
 }
 
-size_t release_owner(Owner owner) {
-    if (!owner) return 0;
-    std::lock_guard lk(g_mx);
-    if (g_owned.find(owner) == g_owned.end()) return 0;
-    size_t n = 0;
-    for (auto it = g_map.begin(); it != g_map.end();) {
-        for (auto it2 = it->second.begin(); it2 != it->second.end();) {
-            if (it2->second.owner == owner) { it2 = it->second.erase(it2); --g_live; ++n; } else ++it2;
-        }
-        if (it->second.empty()) it = g_map.erase(it); else ++it;
-    }
-    owned_dec_locked(owner, n);
-    g_owned.erase(owner);
-    return n;
-}
-
 Stats stats() {
     std::lock_guard lk(g_mx);
     Stats s;
@@ -180,11 +164,6 @@ Stats stats() {
     s.hits = g_hits;
     s.owned_hits = g_owned_hits;
     return s;
-}
-
-void owners(std::vector<std::pair<Owner, size_t>>& out) {
-    std::lock_guard lk(g_mx);
-    out.assign(g_owned.begin(), g_owned.end());
 }
 
 }  // namespace dialogs::guid_text

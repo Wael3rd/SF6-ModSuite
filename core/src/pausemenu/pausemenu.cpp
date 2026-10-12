@@ -1,7 +1,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-// pausemenu - the game side of the training pause-menu engine (increment 9, ADR-0016). See pausemenu.hpp and
+// pausemenu - the game side of the training pause-menu engine (increment 8, ADR-0016). See pausemenu.hpp and
 // docs/PAUSE_MENU.md; every decision is in pm_core.cpp.
 //
 // Rules carried as code (reference/04_PITFALLS_CRASHES, and the notes of the engine this one was ported from):
@@ -507,7 +507,7 @@ void set_guid(MO* o, const char* f, const pc::Key& k) {
     std::memcpy(g, &k.hi, 8);
     std::memcpy(g + 8, &k.lo, 8);
     op(f);
-    const SF6CoreStatus st = g_api->obj_set_guid(g_self, o, f, g);
+    const SF6CoreStatus st = core_obj_set_guid(g_self, o, f, g);
     if (st != SF6CORE_OK) TR("obj_set_guid %p.%s: status %d", (void*)o, f, (int)st);
 }
 void invoke_i(MO* o, const char* sig, int64_t v, int32_t type) {

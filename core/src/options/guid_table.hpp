@@ -7,9 +7,9 @@
 // the Lua never did (its table only grows). The texts of the tree that stays in the game's list are kept: that
 // tree is opened again without a rebuild, and its root row stays visible in the game's own Options screen.
 //
-// Client texts (core increment 8, ADR-0006 amendment 2026-10-09): the same table also holds texts owned by a core
-// client (txt_new). The option engine's purge never touches them; only their owner releases them (one, all of them,
-// or all at once when it unregisters). One table, one GetMessage hook in the process.
+// Owned texts (core increment 8, ADR-0016): the same table also holds texts owned by a core
+// client (the pause-menu engine). The option engine's purge never touches them; only their owner releases them.
+// One table, one GetMessage hook in the process.
 #pragma once
 
 #include <cstddef>
@@ -40,7 +40,7 @@ void purge(bool keep_current);
 size_t count();   // GUIDs issued since load (:70 guid_count, a census: never reset)
 size_t live();    // texts in the table (option engine + clients)
 
-// ---- client texts (increment 8) -----------------------------------------------------------------------------------
+// ---- owned texts (the training pause-menu engine) ---------------------------------------------------------------
 using Owner = const void*;            // the owning client's handle (never null for a client text)
 
 // A fresh GUID owned by `owner`. `keep(owner)` is checked under the table's lock: false (the owner unregistered
@@ -50,15 +50,11 @@ bool alloc_owned(Owner owner, const std::string& text, bool (*keep)(Owner), Guid
 bool retext_owned(Owner owner, const GuidBytes& gb, const std::string& text);
 // Forget one of the owner's GUIDs. False when the GUID is not the owner's.
 bool release_owned(Owner owner, const GuidBytes& gb);
-// Forget all of the owner's GUIDs; returns how many.
-size_t release_owner(Owner owner);
 
 struct Stats {
     size_t live = 0, owned = 0;                  // texts in the table, of which client texts
     uint64_t lookups = 0, hits = 0, owned_hits = 0;  // hook lookups, found, found among client texts
 };
 Stats stats();
-// The owners with at least one text, and how many each holds.
-void owners(std::vector<std::pair<Owner, size_t>>& out);
 
 }  // namespace dialogs::guid_text

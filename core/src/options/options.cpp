@@ -331,7 +331,7 @@ void attach_unit(MO* parent, MO* child) {
     if (auto* add_m = ll::find_method_full(cul->get_type_definition(), "Add")) add_m->invoke(cul, std::vector<void*>{ sr2.ptr });
 }
 
-// :244-260, made ownership-aware (core increment 9, ADR-0016 point 2): a DYNAMIC row of a primary tab is removed only
+// :244-260, made ownership-aware (core increment 8, ADR-0016 point 2): a DYNAMIC row of a primary tab is removed only
 // when the core built it and no longer owns it. The game's own rows (a delegate: Battle Hub "End Training Session")
 // and unknown rows (another engine's) stay; the purge used to remove every DYNAMIC row, the game's included.
 void purge_pause_menu_rows() {

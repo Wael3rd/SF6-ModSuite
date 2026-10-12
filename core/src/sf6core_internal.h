@@ -161,15 +161,11 @@ void query_client_state_and_suspended(const char* client_id,
 void handle_fault_by_id(const char* client_id, DWORD exc_code, const char* phase);
 
 // ========================================================================
-// Increment 8: client texts (texts.cpp, ADR-0006 amendment 2026-10-09)
+// Increment 8: training pause menu (pausemenu/pm_service.cpp, ADR-0016)
 // ========================================================================
 
-void texts_frame();                               // start of each core frame: the hook, when texts are wanted
-void texts_release_client(SF6CoreClient* c);      // unregister_client, once the client is inactive
-
-// ========================================================================
-// Increment 9: training pause menu (pausemenu/pm_service.cpp, ADR-0016)
-// ========================================================================
+// System.Guid field write with the obj_set_* guard chain (display.cpp); not part of the client API.
+SF6CoreStatus core_obj_set_guid(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]);
 
 void pausemenu_frame();                            // each core frame, after the option dialogs: install on demand, then the engine
 void pausemenu_release_client(SF6CoreClient* c);  // unregister_client, once the client is inactive

@@ -1569,8 +1569,8 @@ SF6CoreStatus SF6CORE_CALL api_obj_set_color(SF6CoreClient* client, void* obj, c
     return SF6CORE_OK;
 }
 
-// obj_set_guid (increment 8, ADR-0006 amendment): System.Guid value field (16 bytes), e.g. a client text's GUID
-// (txt_new) into TrainingMenuData._MessageID. Same guard chain as obj_set_*, plus a type check: the field must be a
+// core_obj_set_guid (internal, used by the pause-menu engine; not in the API table): System.Guid value field (16 bytes), a text GUID
+// into TrainingMenuData._MessageID. Same guard chain as obj_set_*, plus a type check: the field must be a
 // System.Guid, never written past.
 static bool is_guid_field_type(const REFrameworkSDKData* sdk, REFrameworkTypeDefinitionHandle ft) {
     if (!ft || sdk->type_definition->get_valuetype_size(ft) != 16) return false;
@@ -1580,7 +1580,7 @@ static bool is_guid_field_type(const REFrameworkSDKData* sdk, REFrameworkTypeDef
     return ns && nm && strcmp(ns, "System") == 0 && strcmp(nm, "Guid") == 0;
 }
 
-SF6CoreStatus SF6CORE_CALL api_obj_set_guid(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]) {
+SF6CoreStatus core_obj_set_guid(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]) {
     if (!field || !guid16) return SF6CORE_ERR_INVALID_ARG;
     DisplayStatsInternal* st = nullptr;
     auto rc = guard_prefix(client, obj, field, false, &st);

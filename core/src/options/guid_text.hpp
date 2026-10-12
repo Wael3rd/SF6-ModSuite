@@ -15,8 +15,8 @@
 
 namespace dialogs::guid_text {
 
-// Install the GetMessage hook; false on a failure. Idempotent and serialized: the option service and the client
-// texts (increment 8) both call it, the first caller installs, the others find it in place. A hard failure (type or
+// Install the GetMessage hook; false on a failure. Idempotent and serialized: the option service and the
+// pause-menu service both call it, the first caller installs, the others find it in place. A hard failure (type or
 // method not found, add_hook refused) is final.
 bool install();
 bool installed();       // the hook was installed (it may have been switched off by faults since: see ready())

@@ -12,8 +12,6 @@ game's UI directly.
 - **Option dialogs**: the game's own option window as a service (groups, sliders, choices, buttons), see `docs/OPTIONS.md`.
 - **Effective selection**: a client can declare what a fighter really wears (the Slots Loader's online alias), another
   reads it (the Color Mod's Drive squares).
-- **Client texts**: message GUIDs that the game resolves to a client's own texts in data-driven UI (training
-  pause-menu rows, input guides), answered by the core's single `GetMessage` hook, see `docs/ABI.md` (increment 8).
 - **Training pause menu**: clients' pages (a sub-page of a primary tab's strip) with buttons and spins, answered by one
   engine for every client, with key-guide hints, see `docs/PAUSE_MENU.md`.
 - **Fault isolation**: a client that faults is skipped after five consecutive faults (circuit breaker), the others keep running.

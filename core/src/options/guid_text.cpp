@@ -34,8 +34,8 @@ constexpr int kMaxFaults = 5;         // same threshold as the screens modules
 
 bool g_on = false;
 int  g_faults = 0;
-std::mutex g_install_mx;                      // install() is called by the option service and by the client texts
-std::atomic<bool> g_hooked{false};            // read from any thread (txt_new)
+std::mutex g_install_mx;                      // install() is called by the option service and by the pause-menu service
+std::atomic<bool> g_hooked{false};            // read from any thread
 std::atomic<bool> g_failed{false};
 
 void fault(const char* where) {

@@ -1,7 +1,7 @@
-# Training pause menu (increment 9, core 0.8.0)
+# Training pause menu (increment 8, core 0.8.0)
 
 Design decision: ADR-0016 (accepted 2026-10-09): the game's training pause menu is a service of the core, for every
-mod. Texts come from the client texts of increment 8 (ADR-0006 amendment).
+mod. Its texts are GUIDs answered by the core's one `GetMessage` hook (shared with the option dialogs).
 
 The game builds its training pause menu (`app.training.UIFlowTrainingMenu`) from data: `TrainingManager._UIData.MenuData`
 holds the primary tabs, their rows are `app.training.TrainingMenuData`, and every row answers the game through

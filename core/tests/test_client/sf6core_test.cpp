@@ -7,14 +7,7 @@
 // Commands (one per line in reframework/data/sf6core_test/cmd.txt):
 //   status, fault[N], widget_*, hide/unhide, disp_selftest,
 //   disc_selftest, bridge_selftest,
-//   text_selftest  increment 8: txt_new / txt_set / txt_release /
-//                  obj_set_guid / txt_status, each GUID read back through
-//                  the game's hMsg.GetMessage (the core installs its hook
-//                  on the first txt_new); keeps two texts for text_check
-//   text_check     reads the kept texts back (after an option-window
-//                  build, a breaker trip with fault5...)
-//   text_release   txt_release(NULL), then reads them back (gone)
-//   pm_page        increment 9: a page "sf6core_test" at index 0 of the
+//   pm_page        increment 8: a page "sf6core_test" at index 0 of the
 //                  Recording Settings strip of the training pause menu
 //                  (primary tab 4): a spin of 5 options (8 slots, arrows
 //                  70 apart), a button that counts (menu stays open) and a
@@ -24,7 +17,7 @@
 //                  place, count + font fit, page rebuilt if shown
 //   pm_texts       page and row titles changed in place (language change)
 //   pm_fault       the next decide faults once (SEH + client breaker)
-//   pm_status      pm_status + txt_status in the log
+//   pm_status      pm_status in the log
 //   pm_drop        pm_remove(page): the strip back to the game's two pages
 //   pm_trace       creates reframework/data/sf6core/pm_trace.txt: the core
 //                  logs its code check, hooks, next install pass and next
@@ -79,12 +72,8 @@ static std::atomic<int>   s_faults_remaining{0};
 // Increment 2: widget and element hiding state
 static SF6CoreWidget*     s_widget = nullptr;
 
-// Increment 8: the client texts kept by text_selftest for text_check
-static uint8_t            s_txt_guid[2][16] = {};
-static char               s_txt_want[2][96] = {};
-static int                s_txt_kept = 0;
 
-// Increment 9: the training pause-menu test page
+// Increment 8: the training pause-menu test page
 static int64_t              s_pm_page = -1, s_pm_spin = -1, s_pm_count = -1, s_pm_close = -1;
 static std::atomic<int32_t> s_pm_value{1};
 static std::atomic<int32_t> s_pm_counter{0};
@@ -112,172 +101,7 @@ static void test_log(const char* fmt, ...) {
 }
 
 // ========================================================================
-// Increment 8 helpers: what the game resolves a message GUID to
-// ========================================================================
-
-// hMsg.GetMessage(guid) through the game, as its UI does at each draw (the
-// core's hook answers the client texts). The returned string carries the
-// hook's extra reference (R6): one small leak per call, test only.
-static bool game_message(const uint8_t guid16[16], char* out, int cap) {
-    out[0] = '\0';
-    try {
-        auto& api = reframework::API::get();
-        auto* m = api->tdb()->find_method("app.helper.hMsg", "GetMessage(System.Guid)");
-        if (!m) return false;
-        auto ret = m->invoke(nullptr, std::vector<void*>{ (void*)guid16 });
-        if (ret.exception_thrown || !ret.ptr) return false;
-        const uint8_t* str = (const uint8_t*)ret.ptr;      // System.String: length +0x10, UTF-16 +0x14
-        int32_t len = *(const int32_t*)(str + 0x10);
-        if (len <= 0) return true;
-        int n = WideCharToMultiByte(CP_UTF8, 0, (const wchar_t*)(str + 0x14), len, out, cap - 1, nullptr, nullptr);
-        out[n > 0 ? n : 0] = '\0';
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-static bool guid_is_zero(const uint8_t g[16]) {
-    for (int i = 0; i < 16; ++i) if (g[i]) return false;
-    return true;
-}
-
-static void log_txt_status(const char* when) {
-    char buf[512];
-    s_api->txt_status(buf, sizeof buf);
-    test_log("TEXT %s: %s", when, buf);
-}
-
-// Read the kept texts back through the game.
-static void text_check(const char* when) {
-    for (int i = 0; i < s_txt_kept; ++i) {
-        char got[256];
-        bool ok = game_message(s_txt_guid[i], got, sizeof got);
-        test_log("TEXT %s [%d]: %s (GetMessage %s, got '%s', want '%s')", when, i,
-                 ok && strcmp(got, s_txt_want[i]) == 0 ? "RESOLVES" : "does not resolve",
-                 ok ? "ok" : "failed", got, s_txt_want[i]);
-    }
-    if (!s_txt_kept) test_log("TEXT %s: no kept text (run text_selftest first)", when);
-}
-
-static void text_selftest() {
-    int pass = 0, fail = 0;
-    auto res = [&](const char* name, bool ok, int st) {
-        test_log("TEXT %s: %s (st=%d)", name, ok ? "PASS" : "FAIL", st);
-        ok ? pass++ : fail++;
-    };
-    char got[256];
-    log_txt_status("before");
-
-    // T1: argument checks
-    {
-        uint8_t g[16];
-        auto st = s_api->txt_new(s_client, "x", nullptr);
-        res("T1 null_out", st == SF6CORE_ERR_INVALID_ARG, (int)st);
-        st = s_api->txt_new(nullptr, "x", g);
-        res("T1 null_client", st == SF6CORE_ERR_INVALID_ARG, (int)st);
-    }
-    // T2: two texts with the same string -> two fresh GUIDs (R6)
-    s_txt_kept = 0;
-    uint8_t g0[16] = {}, g1[16] = {};
-    {
-        snprintf(s_txt_want[0], sizeof s_txt_want[0], "sf6core_test text A (frame %llu)", (unsigned long long)s_frame);
-        auto st0 = s_api->txt_new(s_client, s_txt_want[0], g0);
-        auto st1 = s_api->txt_new(s_client, s_txt_want[0], g1);
-        bool ok = st0 == SF6CORE_OK && st1 == SF6CORE_OK && !guid_is_zero(g0) && memcmp(g0, g1, 16) != 0;
-        res("T2 fresh_guid_per_call", ok, (int)st1);
-        if (ok) {
-            memcpy(s_txt_guid[0], g0, 16);
-            memcpy(s_txt_guid[1], g1, 16);
-            snprintf(s_txt_want[1], sizeof s_txt_want[1], "%s", s_txt_want[0]);
-            s_txt_kept = 2;
-        }
-    }
-    if (!s_txt_kept) { test_log("TEXT selftest stopped: %d PASS, %d FAIL", pass, fail); return; }
-    // T3: the game resolves the GUID to the text (txt_new installed the hook on this thread)
-    {
-        bool ok = game_message(g0, got, sizeof got) && strcmp(got, s_txt_want[0]) == 0;
-        test_log("TEXT T3 got '%s'", got);
-        res("T3 game_resolves", ok, 0);
-    }
-    // T4: retext in place
-    {
-        snprintf(s_txt_want[0], sizeof s_txt_want[0], "sf6core_test text A, retexted");
-        auto st = s_api->txt_set(s_client, g0, s_txt_want[0]);
-        bool ok = st == SF6CORE_OK && game_message(g0, got, sizeof got) && strcmp(got, s_txt_want[0]) == 0;
-        res("T4 txt_set", ok, (int)st);
-        uint8_t zero[16] = {};
-        st = s_api->txt_set(s_client, zero, "nobody's");
-        res("T4 txt_set_unknown", st == SF6CORE_ERR_NOT_FOUND, (int)st);
-    }
-    // T5: another client's texts: not ours to change; released when it unregisters
-    {
-        SF6CoreClientDesc d = {};
-        d.struct_size = sizeof(d);
-        d.client_id = "sf6core_test_texts";
-        d.client_version = CLIENT_VERSION;
-        d.priority = CLIENT_PRIORITY + 1;
-        SF6CoreClient* other = nullptr;
-        if (s_api->register_client(&d, &other) == SF6CORE_OK) {
-            uint8_t go[16] = {};
-            auto st = s_api->txt_new(other, "sf6core_test_texts text", go);
-            res("T5 other_txt_new", st == SF6CORE_OK, (int)st);
-            st = s_api->txt_set(s_client, go, "stolen");
-            res("T5 not_ours", st == SF6CORE_ERR_NOT_FOUND, (int)st);
-            st = s_api->txt_release(s_client, go);
-            res("T5 not_ours_release", st == SF6CORE_ERR_NOT_FOUND, (int)st);
-            log_txt_status("with sf6core_test_texts");
-            s_api->unregister_client(other);   // registered during this frame: not in its dispatch
-            bool still = game_message(go, got, sizeof got) && strcmp(got, "sf6core_test_texts text") == 0;
-            res("T5 released_on_unregister", !still, 0);
-            test_log("TEXT T5 after unregister: GetMessage gives '%s'", got);
-        } else {
-            test_log("TEXT T5: SKIP (register_client failed)");
-        }
-    }
-    // T6: obj_set_guid into a training pause-menu row's data (TrainingMenuData._MessageID)
-    {
-        void* row = s_api->obj_new(s_client, "app.training.TrainingMenuData");
-        if (row) {
-            auto st = s_api->obj_set_guid(s_client, row, "_MessageID", g0);
-            bool same = false;
-            try {
-                auto* f = reframework::API::get()->tdb()->find_field("app.training.TrainingMenuData", "_MessageID");
-                void* raw = f ? f->get_data_raw(row, false) : nullptr;
-                same = raw && memcmp(raw, g0, 16) == 0;
-            } catch (...) {}
-            res("T6 obj_set_guid", st == SF6CORE_OK && same, (int)st);
-            SF6CoreDisplayStats a = {}, b = {};
-            a.struct_size = b.struct_size = sizeof(SF6CoreDisplayStats);
-            s_api->get_display_stats(s_client, &a);
-            st = s_api->obj_set_guid(s_client, row, "_MessageID", g0);
-            s_api->get_display_stats(s_client, &b);
-            res("T6 identical_skipped", st == SF6CORE_OK && b.skipped_identical == a.skipped_identical + 1, (int)st);
-            st = s_api->obj_set_guid(s_client, row, "_FuncType", g0);
-            res("T6 wrong_field_type", st == SF6CORE_ERR_TYPE, (int)st);
-            st = s_api->obj_set_guid(s_client, row, "no_such_field_xyz", g0);
-            res("T6 unknown_field", st == SF6CORE_ERR_NOT_FOUND, (int)st);
-        } else {
-            test_log("TEXT T6 obj_set_guid: SKIP (obj_new app.training.TrainingMenuData failed)");
-        }
-    }
-    // T7: release one (the two above stay for text_check)
-    {
-        uint8_t gx[16] = {};
-        auto st = s_api->txt_new(s_client, "sf6core_test text X", gx);
-        auto st2 = s_api->txt_release(s_client, gx);
-        bool gone = !(game_message(gx, got, sizeof got) && strcmp(got, "sf6core_test text X") == 0);
-        res("T7 txt_release_one", st == SF6CORE_OK && st2 == SF6CORE_OK && gone, (int)st2);
-        st2 = s_api->txt_release(s_client, gx);
-        res("T7 release_twice", st2 == SF6CORE_ERR_NOT_FOUND, (int)st2);
-    }
-    log_txt_status("after");
-    text_check("selftest");
-    test_log("TEXT selftest complete: %d PASS, %d FAIL (texts kept: text_check / text_release)", pass, fail);
-}
-
-// ========================================================================
-// Increment 9: training pause-menu test page
+// Increment 8: training pause-menu test page
 // ========================================================================
 
 // Callbacks: called by the core on the game's UI job threads, synchronously,
@@ -320,8 +144,6 @@ static uint32_t SF6CORE_CALL pm_hints(void*, void* focused, SF6CorePmHint* out, 
 static void pm_log_status(const char* when) {
     char b[768];
     s_api->pm_status(b, sizeof b);
-    test_log("PM %s: %s", when, b);
-    s_api->txt_status(b, sizeof b);
     test_log("PM %s: %s", when, b);
 }
 
@@ -384,7 +206,7 @@ static void core_data_file(const char* name, char* out, size_t n) {
 }
 
 static void pm_command(const char* line) {
-    if (!SF6CORE_HAS(s_api, pm_status)) { test_log("PM: increment 9 not in ABI"); return; }
+    if (!SF6CORE_HAS(s_api, pm_status)) { test_log("PM: increment 8 not in ABI"); return; }
     if (strcmp(line, "pm_page") == 0) { pm_make_page(); return; }
     if (strcmp(line, "pm_trace") == 0 || strcmp(line, "pm_trace_off") == 0) {
         char p[MAX_PATH];
@@ -778,21 +600,8 @@ static void SF6CORE_CALL on_frame(uint64_t frame, void* /*user*/) {
                 }
                 test_log("BRIDGE complete: %d exercised", pass);
             }
-        } else if (strcmp(line, "text_selftest") == 0 || strcmp(line, "text_check") == 0 ||
-                   strcmp(line, "text_release") == 0) {
-            // ---- Increment 8: client texts ----
-            if (!s_api || !s_client) { test_log("TEXT: no API"); }
-            else if (!SF6CORE_HAS(s_api, txt_status)) { test_log("TEXT: increment 8 not in ABI"); }
-            else if (line[5] == 's') { text_selftest(); }
-            else if (line[5] == 'c') { text_check("check"); log_txt_status("check"); }
-            else {
-                auto st = s_api->txt_release(s_client, nullptr);
-                test_log("TEXT release all -> %d", (int)st);
-                text_check("released");
-                log_txt_status("released");
-            }
         } else if (strncmp(line, "pm_", 3) == 0) {
-            // ---- Increment 9: training pause menu ----
+            // ---- Increment 8: training pause menu ----
             if (!s_api || !s_client) { test_log("PM: no API"); }
             else { pm_command(line); }
         } else {

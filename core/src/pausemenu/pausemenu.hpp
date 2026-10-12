@@ -1,4 +1,4 @@
-// pausemenu - the training pause-menu engine (increment 9, ADR-0016): the game side.
+// pausemenu - the training pause-menu engine (increment 8, ADR-0016): the game side.
 //
 // The decisions are in pm_core.{hpp,cpp} (no game header, compiled as it is into the offline bench). This file is
 // what needs the game: the backend of the state machine (TrainingMenuData rows, pages and option arrays, the sub-page

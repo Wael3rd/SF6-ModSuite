@@ -1,4 +1,4 @@
-// pausemenu::core - the training pause-menu engine's state machine, without any game dependency (increment 9,
+// pausemenu::core - the training pause-menu engine's state machine, without any game dependency (increment 8,
 // ADR-0016, docs/PAUSE_MENU.md).
 //
 // The engine answers the game's training pause menu (app.training.UIFlowTrainingMenu) for the pages and rows of the
