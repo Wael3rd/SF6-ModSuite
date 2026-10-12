@@ -28,6 +28,8 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // ========================================================================
@@ -1039,6 +1041,72 @@ SF6CoreStatus SF6CORE_CALL api_ui_set_block_input(SF6CoreClient* client, void* a
 // Method lookup exactly like the original (LL's method()): walk the object's type chain; on each type try the
 // full signature, accepting it only if it has a native function; otherwise the unique method with the same
 // name and arity that has a native function.
+// REFramework's get_methods takes its buffer size in BYTES (see API.hpp's own wrapper); passing a count left room for
+// only 64 handles, and a type with more methods answered "too small" (the level was skipped silently). The buffer is
+// sized from get_num_methods. The lookup runs on every display write, so results (also "not found") are cached per
+// (object type, sig); the logs below are written once per (type, sig) because only a cache miss reaches them.
+static SRWLOCK                                                  s_flm_lock = SRWLOCK_INIT;
+static std::unordered_map<std::string, REFrameworkMethodHandle> s_flm_cache;
+static std::unordered_set<std::string>                          s_flm_logged;   // one-off log keys, same lock
+
+static std::string flm_type_name(const REFrameworkSDKData* sdk, REFrameworkTypeDefinitionHandle td) {
+    char buf[256] = {};
+    unsigned int len = 0;
+    if (td && sdk->type_definition->get_full_name(td, buf, (unsigned int)sizeof buf, &len) == REFRAMEWORK_ERROR_NONE && buf[0])
+        return buf;
+    const char* nm = td ? sdk->type_definition->get_name(td) : nullptr;
+    return nm ? nm : "?";
+}
+
+static bool flm_log_once(const std::string& key) {
+    AcquireSRWLockExclusive(&s_flm_lock);
+    const bool fresh = s_flm_logged.insert(key).second;
+    ReleaseSRWLockExclusive(&s_flm_lock);
+    return fresh;
+}
+
+static REFrameworkMethodHandle find_method_ll_scan(const REFrameworkSDKData* sdk, REFrameworkTypeDefinitionHandle start,
+                                                   const char* sig, const char* open, size_t name_len, unsigned arity) {
+    for (auto td = start; td; td = sdk->type_definition->get_parent_type(td)) {
+        auto exact = sdk->type_definition->find_method(td, sig);
+        if (exact && sdk->method->get_function(exact)) return exact;
+        const unsigned int total = sdk->type_definition->get_num_methods(td);
+        if (!total) continue;
+        REFrameworkMethodHandle stack_buf[256];
+        std::vector<REFrameworkMethodHandle> heap_buf;
+        REFrameworkMethodHandle* methods = stack_buf;
+        if (total > 256) { heap_buf.resize(total); methods = heap_buf.data(); }
+        const unsigned int cap = total > 256 ? total : 256;
+        unsigned int n = 0;
+        const auto res = sdk->type_definition->get_methods(td, methods, cap * (unsigned int)sizeof(REFrameworkMethodHandle), &n);
+        if (res != REFRAMEWORK_ERROR_NONE) {
+            char key[64];
+            snprintf(key, sizeof key, "gm|%p", (void*)td);
+            if (flm_log_once(key))
+                core_log(SF6CORE_LOG_WARN, nullptr, "[lookup] %s: get_methods failed (%d) for %u methods",
+                         flm_type_name(sdk, td).c_str(), (int)res, total);
+            continue;
+        }
+        if (n > cap) n = cap;
+        for (unsigned int i = 0; i < n; ++i) {
+            const char* nm = sdk->method->get_name(methods[i]);
+            if (!nm || strlen(nm) != name_len || strncmp(nm, sig, name_len) != 0) continue;
+            if (open && sdk->method->get_num_params(methods[i]) != arity) continue;
+            if (!sdk->method->get_function(methods[i])) continue;
+            if (total > 64) {
+                const std::string tn = flm_type_name(sdk, td);
+                const std::string nmstr(sig, name_len);
+                if (flm_log_once("big|" + tn + "|" + sig))
+                    core_log(SF6CORE_LOG_INFO, nullptr,
+                             "[lookup] %s.%s found by name in a type with %u methods (missed before: the 64-method limit)",
+                             tn.c_str(), nmstr.c_str(), total);
+            }
+            return methods[i];
+        }
+    }
+    return nullptr;
+}
+
 static REFrameworkMethodHandle find_method_ll(const REFrameworkSDKData* sdk, void* obj, const char* sig) {
     if (!obj || !sig) return nullptr;
     const char* open = strchr(sig, '(');
@@ -1046,21 +1114,24 @@ static REFrameworkMethodHandle find_method_ll(const REFrameworkSDKData* sdk, voi
     unsigned arity = 0;
     if (open && open[1] != ')') { arity = 1; for (const char* c = open; *c; ++c) if (*c == ',') ++arity; }
     auto td = sdk->managed_object->get_type_definition((REFrameworkManagedObjectHandle)obj);
-    for (; td; td = sdk->type_definition->get_parent_type(td)) {
-        auto exact = sdk->type_definition->find_method(td, sig);
-        if (exact && sdk->method->get_function(exact)) return exact;
-        REFrameworkMethodHandle methods[512];
-        unsigned int n = 0;
-        if (sdk->type_definition->get_methods(td, methods, 512, &n) != REFRAMEWORK_ERROR_NONE) continue;
-        for (unsigned int i = 0; i < n && i < 512; ++i) {
-            const char* nm = sdk->method->get_name(methods[i]);
-            if (!nm || strlen(nm) != name_len || strncmp(nm, sig, name_len) != 0) continue;
-            if (open && sdk->method->get_num_params(methods[i]) != arity) continue;
-            if (!sdk->method->get_function(methods[i])) continue;
-            return methods[i];
-        }
+    if (!td) return nullptr;
+    std::string key((const char*)&td, sizeof td);
+    key += sig;
+    AcquireSRWLockShared(&s_flm_lock);
+    auto it = s_flm_cache.find(key);
+    if (it != s_flm_cache.end()) { auto r = it->second; ReleaseSRWLockShared(&s_flm_lock); return r; }
+    ReleaseSRWLockShared(&s_flm_lock);
+
+    auto found = find_method_ll_scan(sdk, td, sig, open, name_len, arity);
+    if (!found) {
+        const std::string tn = flm_type_name(sdk, td);
+        if (flm_log_once("nf|" + tn + "|" + sig))
+            core_log(SF6CORE_LOG_WARN, nullptr, "[lookup] %s: no method '%s' by name", tn.c_str(), sig);
     }
-    return nullptr;
+    AcquireSRWLockExclusive(&s_flm_lock);
+    s_flm_cache[key] = found;
+    ReleaseSRWLockExclusive(&s_flm_lock);
+    return found;
 }
 
 static bool clone_call(const REFrameworkSDKData* sdk, void* obj, const char* sig,

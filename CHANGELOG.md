@@ -53,6 +53,14 @@
   only exists from plugin API 1.14 on. The core registered it on any REFramework, reading past an older one's
   function table; it now checks the API version first and keeps element hiding off (one log line) below 1.14. No mod
   of this suite uses element hiding.
+- **Method lookup on types with more than 64 methods** (bug): the core's by-name method lookup (used by every display
+  write: `get_Message`, `set_Message`, the style setters of `via.gui.Text`, `ui_clone_row`...) passed REFramework's
+  `get_methods` a buffer size in elements where it expects bytes, so room for 64 handles only. A type with more
+  methods answered "too small" and that level of the type chain was skipped silently: a lookup that depended on such
+  a level failed. The buffer is now sized from the type's method count, results (also "not found") are cached per
+  object type and signature, and the log says once per type and signature when a method is found only thanks to the
+  fix (`[lookup] ... found by name in a type with N methods`) or not found at all (`[lookup] ... no method ... by
+  name`).
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 
