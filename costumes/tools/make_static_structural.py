@@ -3,13 +3,19 @@
 make_static_structural.py -- Generate static structural files for the costume
 slot loader.  Built ONCE, shipped as-is; no RSZ parser needed at runtime.
 
-Produces out/static/:
+Produces out/static/ (or the folder given as the first argument):
   esf.scn.20                         -- 1800 via.Folder for 18 base fighters
   ver_02_0300_esf.scn.20             -- 1200 via.Folder for 12 DLC fighters
   ver_02_0400_esf.scn.20             -- 100  via.Folder for esf033 (Yasmine)
-  fightercostumeuserdata.user.2      -- 3100 records (31 fighters x 100 slots)
+  ver_02_0500_esf.scn.20             -- 100  via.Folder for esf034 (Arjun)
+  fightercostumeuserdata.user.2      -- 3200 records (32 fighters x 100 slots)
   fightercostumemessage.msg.21       -- 100 messages ("Outfit I" .. "Outfit C")
   static_meta.json                   -- id map + file list for C++ loader
+
+These files replace the game's own copies: rebuild them from the game after every update that adds a
+fighter or an outfit (the game's records and folders are copied from the pak, ours are appended).
+A new fighter goes at the END of ALL_FIGHTER_IDS: its index gives its record ids, and a slot keeps
+its number for good (saved choices, replays).
 """
 
 import os
@@ -19,14 +25,19 @@ REASY = os.environ.get("REASY_PARSER", r"..\REasy-parser")  # point REASY_PARSER
 sys.path.insert(0, REASY)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from costume_loader import (PakIndex, filepath_hash, GAME_DIR_DEFAULT,
-                             ESF_ROOT_SCENE, COSTUME_TABLE, COSTUME_MSG)
+try:
+    from costume_loader import (PakIndex, filepath_hash, GAME_DIR_DEFAULT,
+                                 ESF_ROOT_SCENE, COSTUME_TABLE, COSTUME_MSG)
+except ImportError:   # the copy kept in this repository
+    from costume_loader_reference import (PakIndex, filepath_hash, GAME_DIR_DEFAULT,
+                                           ESF_ROOT_SCENE, COSTUME_TABLE, COSTUME_MSG)
 
 SLOT_RANGE = range(5, 105)
 RECORD_ID_BASE = 5000
 MSG_ID_BASE = 5000
 SORT_NO_BASE = 101
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "static")
+OUT_DIR = (os.path.abspath(sys.argv[1]) if len(sys.argv) > 1
+           else os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "static"))
 
 def _int_to_roman(n):
     """Convert integer 1..100 to Roman numeral."""
@@ -40,15 +51,18 @@ def _int_to_roman(n):
 ROMAN = [_int_to_roman(i) for i in range(1, 101)]  # I..C
 MSG_GUIDS = [f"a1b2c3d4-{i+1:04x}-4000-8000-{5000+i:012x}" for i in range(100)]
 ALL_FIGHTER_IDS = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,
-                   19,20,21,22,25,26,27,28,29,30,31,32,33]
+                   19,20,21,22,25,26,27,28,29,30,31,32,33,34]
 
-VER_0300_SCENE = "natives/stm/product/flow/version_update/ver_02_0300/esf.scn.20"
-VER_0400_SCENE = "natives/stm/product/flow/version_update/ver_02_0400/esf.scn.20"
+# The game adds a version scene per season (ver_02_0300: Year 1 DLC, 0400: Yasmine, 0500: Arjun and
+# C. Viper's Outfit 4...): every one found in the pak is taken, in this order.
+VER_SCENE_FMT = "natives/stm/product/flow/version_update/ver_02_{:04d}/esf.scn.20"
+VER_SCENE_NUMBERS = range(300, 2000, 100)
 
 
 def add_folders_to_scene(rsz, data, label, dlc_fighter_dirs, slot_range):
     """Add via.Folder entries to an RSZ scene for the specified fighters.
-    Uses the existing v04 folder as template for each fighter.
+    Uses the fighter's v04 folder as template (Drive Tech), or its lowest costume
+    folder when it has none yet (a new fighter ships with Outfit 1 and 2 only).
     Returns (patched_bytes, added_count)."""
     from file_handlers.rsz.rsz_file import RszFolderInfo, RszInstanceInfo
 
@@ -57,23 +71,25 @@ def add_folders_to_scene(rsz, data, label, dlc_fighter_dirs, slot_range):
     # Build map: fighter_dir -> (parent_folder_id, template_inst_id)
     # In ver scenes, the parent is a 'fighterXXX' folder at the root,
     # and costume folders (esfXXXv04) are children.
-    templates = {}  # fighter_dir -> (parent_id, inst_id)
+    templates = {}  # fighter_dir -> (rank, parent_id, inst_id); rank 0 = v04, else 1 + costume
     for fi in rsz.folder_infos:
         iid = rsz.object_table[fi.id]
         fields = rsz.parsed_elements.get(iid, {})
         nf = fields.get("Name")
         if not nf: continue
         name = (nf.value if hasattr(nf, "value") else str(nf)).rstrip("\x00")
-        m = _re.match(r"(esf\d{3})v04$", name)
+        m = _re.match(r"(esf\d{3})v(\d{2})$", name)
         if m:
-            fd = m.group(1)
-            if fd in dlc_fighter_dirs:
-                templates[fd] = (fi.parent_id, iid)
+            fd, cno = m.group(1), int(m.group(2))
+            rank = 0 if cno == 4 else 1 + cno
+            if fd in dlc_fighter_dirs and (fd not in templates or rank < templates[fd][0]):
+                templates[fd] = (rank, fi.parent_id, iid)
+    templates = {fd: (p, i) for fd, (_, p, i) in templates.items()}
 
     added = 0
     for fd in sorted(dlc_fighter_dirs):
         if fd not in templates:
-            print(f"  WARN: no v04 template for {fd} in {label}")
+            print(f"  WARN: no costume folder to copy for {fd} in {label}")
             continue
         parent_id, tmpl_iid = templates[fd]
         src_inst = rsz.instance_infos[tmpl_iid]
@@ -136,31 +152,30 @@ def main():
             m = _re.match(r"(esf\d{3})v00$", (nf.value if hasattr(nf,"value") else "").rstrip("\x00"))
             if m: base_dirs.add(m.group(1))
 
-    ver0300_data = paks.read_data(filepath_hash(VER_0300_SCENE))
-    ver0300_rsz = parse_rsz(ver0300_data, "ver_02_0300_esf.scn.20")
-    ver0300_dirs = set()
-    for fi in ver0300_rsz.folder_infos:
-        iid = ver0300_rsz.object_table[fi.id]
-        nf = ver0300_rsz.parsed_elements.get(iid, {}).get("Name")
-        if nf:
-            m = _re.match(r"(esf\d{3})v\d{2}$", (nf.value if hasattr(nf,"value") else "").rstrip("\x00"))
-            if m: ver0300_dirs.add(m.group(1))
-    dlc_in_0300 = ver0300_dirs - base_dirs  # DLC fighters in ver_02_0300
-
-    ver0400_data = paks.read_data(filepath_hash(VER_0400_SCENE))
-    ver0400_rsz = parse_rsz(ver0400_data, "ver_02_0400_esf.scn.20")
-    ver0400_dirs = set()
-    for fi in ver0400_rsz.folder_infos:
-        iid = ver0400_rsz.object_table[fi.id]
-        nf = ver0400_rsz.parsed_elements.get(iid, {}).get("Name")
-        if nf:
-            m = _re.match(r"(esf\d{3})v\d{2}$", (nf.value if hasattr(nf,"value") else "").rstrip("\x00"))
-            if m: ver0400_dirs.add(m.group(1))
-    dlc_in_0400 = ver0400_dirs - base_dirs - dlc_in_0300
+    # Version scenes: a fighter belongs to the first one that has its costume folders (a later one
+    # can add an outfit to an older fighter, e.g. ver_02_0500 has C. Viper's Outfit 4: not hers).
+    ver_scenes = []   # (number, pak path, data, new fighter dirs)
+    seen = set(base_dirs)
+    for num in VER_SCENE_NUMBERS:
+        vpath = VER_SCENE_FMT.format(num)
+        if not paks.has(filepath_hash(vpath)): continue
+        vdata = paks.read_data(filepath_hash(vpath))
+        vrsz = parse_rsz(vdata, f"ver_02_{num:04d}_esf.scn.20")
+        vdirs = set()
+        for fi in vrsz.folder_infos:
+            iid = vrsz.object_table[fi.id]
+            nf = vrsz.parsed_elements.get(iid, {}).get("Name")
+            if nf:
+                m = _re.match(r"(esf\d{3})v\d{2}$", (nf.value if hasattr(nf,"value") else "").rstrip("\x00"))
+                if m: vdirs.add(m.group(1))
+        new_dirs = vdirs - seen
+        seen |= new_dirs
+        # Only playable fighters get slots (esf103 in ver_02_0300 is not one)
+        ver_scenes.append((num, vpath, vdata, {d for d in new_dirs if int(d[3:]) in ALL_FIGHTER_IDS}))
 
     print(f"\nBase fighters (esf.scn.20): {len(base_dirs)}")
-    print(f"DLC in ver_02_0300: {sorted(dlc_in_0300)} ({len(dlc_in_0300)})")
-    print(f"DLC in ver_02_0400: {sorted(dlc_in_0400)} ({len(dlc_in_0400)})")
+    for num, _, _, new_dirs in ver_scenes:
+        print(f"DLC in ver_02_{num:04d}: {sorted(new_dirs)} ({len(new_dirs)})")
 
     # ================================================================
     # 1. esf.scn.20 -- base fighters (v00 template)
@@ -200,20 +215,18 @@ def main():
     print(f"  {len(esf_data)}B -> {len(esf_out)}B, {added_base} folders")
 
     # ================================================================
-    # 2. ver_02_0300/esf.scn.20 -- DLC fighters (v04 template)
+    # 2. ver_02_NNNN/esf.scn.20 -- DLC fighters, in the scene that brought them
     # ================================================================
-    print("\n=== ver_02_0300/esf.scn.20 ===")
-    ver0300_rsz2 = parse_rsz(ver0300_data, "ver_02_0300_esf.scn.20")
-    ver0300_out, added_0300 = add_folders_to_scene(
-        ver0300_rsz2, ver0300_data, "ver_02_0300", dlc_in_0300, SLOT_RANGE)
-
-    # ================================================================
-    # 3. ver_02_0400/esf.scn.20 -- esf033 (v04 template)
-    # ================================================================
-    print("\n=== ver_02_0400/esf.scn.20 ===")
-    ver0400_rsz2 = parse_rsz(ver0400_data, "ver_02_0400_esf.scn.20")
-    ver0400_out, added_0400 = add_folders_to_scene(
-        ver0400_rsz2, ver0400_data, "ver_02_0400", dlc_in_0400, SLOT_RANGE)
+    ver_outs = []   # (local name, pak path, data)
+    added_ver = 0
+    for num, vpath, vdata, new_dirs in ver_scenes:
+        if not new_dirs: continue
+        label = f"ver_02_{num:04d}"
+        print(f"\n=== {label}/esf.scn.20 ===")
+        vout, added = add_folders_to_scene(parse_rsz(vdata, f"{label}_esf.scn.20"), vdata, label,
+                                           new_dirs, SLOT_RANGE)
+        ver_outs.append((f"{label}_esf.scn.20", vpath, vout))
+        added_ver += added
 
     # ================================================================
     # 4. Costume table
@@ -222,6 +235,13 @@ def main():
     ct_data = paks.read_data(filepath_hash(COSTUME_TABLE))
     ct = parse_rsz(ct_data, "fightercostumeuserdata.user.2")
     assert bytes(ct.build()) == ct_data
+    # Every fighter of the game's table needs its slot records: one missing from ALL_FIGHTER_IDS
+    # would keep the game's outfits but get no slot.
+    missing = sorted({ct.parsed_elements[v.value]["fighterId"].value
+                      for v in ct.parsed_elements[ct.object_table[0]]["DataArray"].values}
+                     - set(ALL_FIGHTER_IDS))
+    if missing:
+        sys.exit(f"ERROR: fighters {missing} are in the game's costume table but not in ALL_FIGHTER_IDS: append them")
     root = ct.object_table[0]; da = ct.parsed_elements[root]["DataArray"]
     tmpl_idx = None
     for v in da.values:
@@ -285,8 +305,7 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     output_files = [
         ("esf.scn.20", ESF_ROOT_SCENE, esf_out),
-        ("ver_02_0300_esf.scn.20", VER_0300_SCENE, ver0300_out),
-        ("ver_02_0400_esf.scn.20", VER_0400_SCENE, ver0400_out),
+        *ver_outs,
         ("fightercostumeuserdata.user.2", COSTUME_TABLE, ct_out),
         ("fightercostumemessage.msg.21", COSTUME_MSG, msg_out),
     ]
@@ -298,7 +317,6 @@ def main():
         files_meta.append({"local": local_name, "pak_path": pak_path})
 
     # Metadata
-    all_base_and_dlc = sorted(base_dirs | dlc_in_0300 | dlc_in_0400)
     meta = {
         "slot_range": [SLOT_RANGE.start, SLOT_RANGE.stop],
         "record_id_base": RECORD_ID_BASE,
@@ -307,8 +325,7 @@ def main():
         "msg_guids": MSG_GUIDS,
         "fighter_ids": ALL_FIGHTER_IDS,
         "base_fighter_dirs": sorted(base_dirs),
-        "dlc_fighter_dirs_0300": sorted(dlc_in_0300),
-        "dlc_fighter_dirs_0400": sorted(dlc_in_0400),
+        **{f"dlc_fighter_dirs_{num:04d}": sorted(new_dirs) for num, _, _, new_dirs in ver_scenes if new_dirs},
         "files": files_meta,
         "records": [
             {"fighter": fid, "costume_no": cno,
@@ -322,7 +339,7 @@ def main():
     print(f"  wrote static_meta.json")
 
     paks.close()
-    total_folders = added_base + added_0300 + added_0400
+    total_folders = added_base + added_ver
     print(f"\nDone. {total_folders} folders, {added_records} records, "
           f"{len(SLOT_RANGE)} messages.")
 

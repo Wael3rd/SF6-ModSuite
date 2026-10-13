@@ -109,7 +109,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-09-selectprefabs";
+static const char* LOADER_BUILD_ID = "2026-10-13-arjun";
 
 // ============================================================================
 // Utility
@@ -3460,9 +3460,9 @@ static const char* CHARACTER_NAMES[] = {
     "Dhalsim", "Cammy", "Ken", "Dee Jay", "Lily", "A.K.I", "Rashid",  // pas de point final : Windows le retire du nom de dossier
     "Blanka", "Juri", "Marisa", "Guile", "Ed", "E. Honda", "Jamie",
     "Akuma", "Sagat", "M. Bison", "Terry", "Mai", "Elena", "C. Viper",
-    "Alex", "Ingrid", "Yasmine",
+    "Alex", "Ingrid", "Yasmine", "Arjun",
 };
-static const int N_CHARACTERS = 31;
+static const int N_CHARACTERS = 32;
 
 static void ensure_costume_mods_dirs(const std::string& game_dir) {
     std::string base = game_dir + "\\reframework\\costume_mods";
@@ -4986,6 +4986,20 @@ static std::string dlc_fingerprint(const std::string& game_dir) {
     return fp;
 }
 
+// A game update rewrites re_chunk_000.pak: part of the fingerprint, so that the costume pak is built
+// again from the updated game (13/10: the pak of the day before was kept after the update that added
+// Arjun, and its copies of the game's tables hid him).
+static std::string base_pak_fingerprint(const std::string& base_path) {
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExA(base_path.c_str(), GetFileExInfoStandard, &fa)) return {};
+    char buf[96];
+    snprintf(buf, sizeof buf, ";base:%llu:%llu",
+             (unsigned long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow),
+             (unsigned long long)((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32)
+                                  | fa.ftLastWriteTime.dwLowDateTime));
+    return buf;
+}
+
 // ============================================================================
 // costume_loader_run  (entry point for exe and DLL)
 // ============================================================================
@@ -5146,7 +5160,8 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
 
     // 3d. Fingerprint check for early exit
-    std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir);
+    std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir)
+                       + base_pak_fingerprint(base_path);
     int max_mod_num = stage_pak_num;
     for (auto& pi : mod_paks) max_mod_num = std::max(max_mod_num, pi.num);
     int target_num = max_mod_num + 1;

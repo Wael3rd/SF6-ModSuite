@@ -11,7 +11,7 @@ Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
   reframework/data/SF6_Costumes_Data/loader/vanilla_costume_index.tsv
   reframework/data/SF6_Costumes_Data/loader/static/*      (5 fichiers structurels + static_meta.json)
   reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt   (du depot, fins de ligne LF)
-  reframework/costume_mods/<31 personnages>/, reframework/stage_mods/   (vides, avec leur mode d'emploi)
+  reframework/costume_mods/<32 personnages>/, reframework/stage_mods/   (vides, avec leur mode d'emploi)
 
 Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"] [--costumes-only]
 La vraie AGS est prise dans l'ordre : <jeu>/amd_ags_x64_real.dll, puis reframework/_backup/amd_ags_x64_real_orig_20260922.dll.
@@ -38,7 +38,7 @@ CHARACTERS = [
     "Dhalsim", "Cammy", "Ken", "Dee Jay", "Lily", "A.K.I", "Rashid",
     "Blanka", "Juri", "Marisa", "Guile", "Ed", "E. Honda", "Jamie",
     "Akuma", "Sagat", "M. Bison", "Terry", "Mai", "Elena", "C. Viper",
-    "Alex", "Ingrid", "Yasmine",
+    "Alex", "Ingrid", "Yasmine", "Arjun",
 ]
 
 CRLF = chr(13) + chr(10)
@@ -203,7 +203,7 @@ def main():
             zi = zipfile.ZipInfo("reframework/costume_mods/%s/" % name)
             zi.external_attr = (0o40755 << 16) | 0x10   # repertoire
             z.writestr(zi, b"")
-        print("  %-70s %10s  %s" % ("reframework/costume_mods/<31 personnages>/", "-", "structure"))
+        print("  %-70s %10s  %s" % ("reframework/costume_mods/<32 personnages>/", "-", "structure"))
     print("zip :", out, os.path.getsize(out), "octets")
 
 if __name__ == "__main__":

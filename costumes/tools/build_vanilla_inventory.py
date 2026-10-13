@@ -7,7 +7,11 @@ user-data, chains, etc.). The output is a single JSON file that a mod
 loader can use to detect which vanilla files a mod pak overwrites.
 
 Usage:
-    python build_vanilla_inventory.py
+    python build_vanilla_inventory.py [--out <dir>]
+
+The output folder defaults to OUT_DIR under the game folder; override it with
+--out <dir> or the VANILLA_INVENTORY_OUT environment variable (the game folder
+is then only read, never written).
 """
 
 import os
@@ -90,6 +94,10 @@ def filepath_hash(filepath: str) -> int:
 # ---------------------------------------------------------------------------
 GAME_DIR = r"C:\Program Files (x86)\Steam\steamapps\common\Street Fighter 6"
 OUT_DIR  = os.path.join(GAME_DIR, "reframework", "agent", "tmp", "costume_loader")
+if "--out" in sys.argv:
+    OUT_DIR = sys.argv[sys.argv.index("--out") + 1]
+elif os.environ.get("VANILLA_INVENTORY_OUT"):
+    OUT_DIR = os.environ["VANILLA_INVENTORY_OUT"]
 REGISTRY_PATH = os.path.join(REASY, "resources", "data", "dumps", "rszsf6.json")
 
 PAK_PATHS = [
@@ -601,6 +609,7 @@ def build_inventory():
     output["unresolved"] = dict(unresolved) if unresolved else {}
     output["costumes"] = costumes_out
 
+    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, "vanilla_costume_paths.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)

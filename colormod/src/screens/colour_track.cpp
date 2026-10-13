@@ -1223,7 +1223,7 @@ void write_readmes() {
         { 6, "Zangief" }, { 7, "JP" }, { 8, "Dhalsim" }, { 9, "Cammy" }, { 10, "Ken" }, { 11, "DeeJay" }, { 12, "Lily" }, { 13, "AKI" },
         { 14, "Rashid" }, { 15, "Blanka" }, { 16, "Juri" }, { 17, "Marisa" }, { 18, "Guile" }, { 19, "Ed" }, { 20, "EHonda" }, { 21, "Jamie" },
         { 22, "Akuma" }, { 25, "Sagat" }, { 26, "Bison" }, { 27, "Terry" }, { 28, "Mai" }, { 29, "Elena" }, { 30, "CViper" }, { 31, "Alex" },
-        { 32, "Ingrid" }, { 33, "Yasmine" } };
+        { 32, "Ingrid" }, { 33, "Yasmine" }, { 34, "Arjun" } };
     for (const auto& [id, name] : kNames) {
         char rel[160], text[400];
         std::snprintf(rel, sizeof rel, "SF6_ColorSpinExtra_data/colors/%s_esf%03d/README.txt", name, id);

@@ -56,7 +56,7 @@ bool tonumber(const json& v, double& out) {
 const char* const kNames[] = {
     nullptr, "Ryu", "Luke", "Kimberly", "ChunLi", "Manon", "Zangief", "JP", "Dhalsim", "Cammy", "Ken", "DeeJay", "Lily",
     "AKI", "Rashid", "Blanka", "Juri", "Marisa", "Guile", "Ed", "EHonda", "Jamie", "Akuma", nullptr, nullptr, "Sagat",
-    "Bison", "Terry", "Mai", "Elena", "CViper", "Alex", "Ingrid", "Yasmine",
+    "Bison", "Terry", "Mai", "Elena", "CViper", "Alex", "Ingrid", "Yasmine", "Arjun",
 };
 
 constexpr int64_t kRed = 0xFF0000FF, kWhite = 0xFFFFFFFF;

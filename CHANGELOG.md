@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.10.6 (2026-10-13) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.10.6 | Arjun, C. Viper's Outfit 4; the costume pak is built again after a game update |
+| SF6 Color Mod | 0.19.11 | Arjun's name for his colour and Drive files |
+| SF6 Native Core | 0.7.3 | unchanged |
+
+Updating the Slots Loader in Fluffy Mod Manager: disable or remove the previous version first.
+
+### SF6 Slots Loader 1.10.6
+- **Arjun works again with the Slots Loader**, and C. Viper's Outfit 4 is back. The game update of 13/10 added them to
+  the game's costume tables; the costume pak replaces those tables with its own copies, which did not have them yet:
+  Arjun had no outfit (selecting him acted like a broken character) and C. Viper's new outfit was hidden. The copies
+  are rebuilt from the updated game, Arjun gets his 100 slots, his `costume_mods\Arjun` folder and the vanilla costume
+  index knows his outfits (mods made for him are recognised).
+- **The costume pak is built again after every game update** (it was kept as long as the mods did not change).
+- The tools that make the shipped tables find the game's new version scenes by themselves; the tool that writes the
+  vanilla costume index is back in the repository (`costumes/tools/make_vanilla_index.py`).
+
+### SF6 Color Mod 0.19.11
+- Arjun's colour packs and Drive settings use his name (`Arjun_esf034`, `Arjun.json`) like the other fighters.
+
+### Known issues
+- A game update that adds a fighter or an outfit needs a new Slots Loader release (its copies of the game's costume
+  tables must be rebuilt); until then that fighter or outfit does not work with the Slots Loader installed.
+- The select-screen prop of a slot (Slots Loader 1.10.5) is built and checked in the costume pak; its display on the
+  select screen has not been confirmed in game yet.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 
 | Package | Version | |
