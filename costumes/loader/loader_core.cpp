@@ -893,8 +893,11 @@ static bool delete_with_retry(const std::string& path) {
 // The stage slots' pak (stages/) is neither a mod nor ours: it holds stage files under names of
 // their own, so it is left out of the scan and of the fingerprint (adding a stage mod does not
 // rebuild the costumes); only its number is kept, since ours goes above it.
+// Ours is split in real paks and marker-only placeholders (see retire_pak): a placeholder is never
+// the pak that holds the costumes. A stage placeholder is not a stage pak (stage_pak_num ignores it).
 static void classify_patch_paks(const std::string& pak_dir,
                                 std::vector<PakInfo>& our_paks,
+                                std::vector<PakInfo>& our_stubs,
                                 std::vector<PakInfo>& mod_paks,
                                 int& stage_pak_num) {
     stage_pak_num = 0;
@@ -910,13 +913,44 @@ static void classify_patch_paks(const std::string& pak_dir,
         int num = atoi(fn.c_str() + ps + 6);
         std::string full = pak_dir + "\\" + fn;
         // Ours (costume marker), the stage slots' or a mod's: common/pak.cpp, shared with SF6_SlotsClean
-        PatchPakKind kind = classify_patch_pak(full.c_str());
+        uint32_t entries = 0;
+        PatchPakKind kind = classify_patch_pak(full.c_str(), &entries);
         if (kind == PatchPakKind::Unreadable) continue;
-        if (kind == PatchPakKind::Stage) { stage_pak_num = std::max(stage_pak_num, num); continue; }
-        (kind == PatchPakKind::Costume ? our_paks : mod_paks).push_back({num, full});
+        if (kind == PatchPakKind::Stage) { if (entries != 1) stage_pak_num = std::max(stage_pak_num, num); continue; }
+        if (kind == PatchPakKind::Costume) (entries == 1 ? our_stubs : our_paks).push_back({num, full});
+        else mod_paks.push_back({num, full});
     } while (FindNextFileA(h, &fd));
     FindClose(h);
     std::sort(mod_paks.begin(), mod_paks.end(), [](auto& a, auto& b){ return a.num < b.num; });
+}
+
+// Takes one of our paks out of the row of patch paks. The game reads them as an unbroken row from
+// patch_001 (a hole = black screen), so a pak that sits below a pak which stays (top_foreign: the
+// highest number of a mod's pak or of the stage slots' pak) is not deleted but replaced in place by a
+// pak holding only our marker; it is deleted for good (by drop_stale_stubs) once nothing stays above it.
+static bool retire_pak(const PakInfo& op, int top_foreign, bool* kept_as_stub = nullptr) {
+    if (kept_as_stub) *kept_as_stub = false;
+    if (op.num > top_foreign) return delete_with_retry(op.path);
+    const std::string tmp = op.path + ".tmp";
+    if (!write_marker_pak(tmp.c_str(), PatchPakKind::Costume)) { DeleteFileA(tmp.c_str()); return false; }
+    for (int i = 0; i < 20; i++) {
+        if (MoveFileExA(tmp.c_str(), op.path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            if (kept_as_stub) *kept_as_stub = true;
+            return true;
+        }
+        Sleep(500);
+    }
+    DeleteFileA(tmp.c_str());
+    return false;
+}
+
+// Marker-only placeholders with nothing foreign above them any more are not needed: they would
+// otherwise sit where the real pak goes, or above it.
+static void drop_stale_stubs(const std::vector<PakInfo>& stubs, int top_foreign) {
+    for (auto& st : stubs) {
+        if (st.num <= top_foreign) continue;
+        if (delete_with_retry(st.path)) logf("  removed placeholder: %s\n", st.path.c_str());
+    }
 }
 
 static std::string identify_mod_pak(const char* path) {
@@ -5314,9 +5348,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // 3. Classify patch paks
     logf("Scanning patch paks...\n");
-    std::vector<PakInfo> our_paks, mod_paks;
+    std::vector<PakInfo> our_paks, our_stubs, mod_paks;
     int stage_pak_num = 0;
-    classify_patch_paks(pak_dir, our_paks, mod_paks, stage_pak_num);
+    classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num);
+    int top_foreign = stage_pak_num;   // our pak goes above these
+    for (auto& pi : mod_paks) top_foreign = std::max(top_foreign, pi.num);
+    drop_stale_stubs(our_stubs, top_foreign);
     if (stage_pak_num)
         logf("  patch_%03d: stage slots pak, not a costume mod (the costume pak goes above it)\n", stage_pak_num);
 
@@ -5333,8 +5370,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         logf("  no mod paks found\n");
         // Delete our old paks
         for (auto& op : our_paks) {
-            DeleteFileA(op.path.c_str());
-            logf("  deleted %s\n", op.path.c_str());
+            bool stub = false;
+            if (!retire_pak(op, top_foreign, &stub)) { logf("  WARN: cannot remove %s\n", op.path.c_str()); continue; }
+            logf(stub ? "  replaced %s by a marker-only pak (a pak of another mod sits above it)\n" : "  deleted %s\n", op.path.c_str());
         }
         // Clear possession in registry
         std::string reg_path = registry_dir + "\\registry.json";
@@ -5395,9 +5433,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 3d. Fingerprint check for early exit
     std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir)
                        + base_pak_fingerprint(base_path);
-    int max_mod_num = stage_pak_num;
-    for (auto& pi : mod_paks) max_mod_num = std::max(max_mod_num, pi.num);
-    int target_num = max_mod_num + 1;
+    int target_num = top_foreign + 1;
     char target_name[128];
     sprintf(target_name, "re_chunk_000.pak.patch_%03d.pak", target_num);
     std::string target_path = out_dir + "\\" + target_name;
@@ -5406,8 +5442,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         std::string reg_path = registry_dir + "\\registry.json";
         auto reg_check = load_registry(reg_path.c_str());
         if (reg_check.fingerprint == new_fp && !new_fp.empty()) {
-            // Check our pak exists
-            if (GetFileAttributesA(target_path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            // Check our pak exists (the real one: a marker-only placeholder holds no costume)
+            uint32_t target_entries = 0;
+            if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);   // the stage loader may have moved it
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match, %s exists) in %.1f ms\n",
@@ -5417,6 +5454,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             // Same mods, our pak one number off (the stage pak came or went below it): it only
             // has to move, the game reading the patch paks in an unbroken row from 001
             if (our_paks.size() == 1 && MoveFileA(our_paks[0].path.c_str(), target_path.c_str())) {
+                // it came from below a pak that stays: a placeholder takes its place, no hole in the row
+                if (our_paks[0].num < top_foreign)
+                    write_marker_pak(our_paks[0].path.c_str(), PatchPakKind::Costume);
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match), %s moved to %s in %.1f ms\n",
@@ -5520,12 +5560,13 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             mods_with_costumes.end(), [](auto& p){ return !p.second.empty(); })) {
         logf("No costume mods detected -- cleaning up\n");
         for (auto& op : our_paks) {
-            if (!delete_with_retry(op.path)) {
+            bool stub = false;
+            if (!retire_pak(op, top_foreign, &stub)) {
                 logf("ERROR: %s is in use by another Street Fighter 6 process, not removed. "
                      "Close every Street Fighter 6 and launch the game again.\n", op.path.c_str());
                 log_close(); return 1;
             }
-            logf("  deleted %s\n", op.path.c_str());
+            logf(stub ? "  replaced %s by a marker-only pak (a pak of another mod sits above it)\n" : "  deleted %s\n", op.path.c_str());
         }
         std::string reg_path = registry_dir + "\\registry.json";
         auto registry = load_registry(reg_path.c_str());
@@ -5792,13 +5833,15 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // waiting covers a normal exit; past that nothing is changed, the old pak and the old registry
     // still match, and the next launch tries again.
     for (auto& op : our_paks) {
-        if (!delete_with_retry(op.path)) {
+        bool stub = false;
+        if (!retire_pak(op, top_foreign, &stub)) {
             logf("ERROR: %s is in use by another Street Fighter 6 process, costumes not updated. "
                  "Close every Street Fighter 6 (see the Task Manager) and launch the game again.\n",
                  op.path.c_str());
             log_close(); return 1;
         }
-        logf("  removed old pak: %s\n", op.path.c_str());
+        logf(stub ? "  old pak replaced by a marker-only pak (a pak of another mod sits above it): %s\n"
+                  : "  removed old pak: %s\n", op.path.c_str());
     }
 
     {

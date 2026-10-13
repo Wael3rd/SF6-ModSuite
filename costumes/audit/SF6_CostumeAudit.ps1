@@ -116,7 +116,8 @@ Say '== Costume mods found =='
 $ourPak = ''
 if ($list) { $ourPak = [string]$list.pak }
 $paks = Get-ChildItem $game -Filter 're_chunk_000.pak.patch_*.pak' | Sort-Object Name
-$fluffy = $paks | Where-Object { $_.Name -ne $ourPak }
+# marker-only placeholders (under 1 KB) are the loaders' own, kept so the row of patch paks has no hole
+$fluffy = $paks | Where-Object { $_.Name -ne $ourPak -and $_.Length -gt 1024 }
 Say '  Fluffy Mod Manager (patch paks in the game folder):'
 if (-not $fluffy) { Say '    none' }
 foreach ($p in $fluffy) {

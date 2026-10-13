@@ -139,9 +139,8 @@ static void check_fluffy_untouched(const Game& g, const std::map<std::string, st
     check(snapshot(g.fluffy) == fb, "Fluffy folder untouched");
 }
 
-int main(int argc, char** argv) {
-    if (argc < 3) { printf("usage: slots_clean_test <SF6_SlotsClean.exe> <work dir>\n"); return 2; }
-    g_tool = argv[1]; g_work = argv[2];
+static int run_clean_tests(const char* tool, const char* work) {
+    g_tool = tool; g_work = work;
     std::string out;
 
     printf("[1] ours on top (stage 002, costume 003 above foreign 001): both deleted\n");
@@ -241,4 +240,147 @@ int main(int argc, char** argv) {
     printf("\n%d checks, %d failed\n", g_checks, g_fail);
     printf(g_fail ? "FAIL\n" : "PASS\n");
     return g_fail ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Row test: the real loaders (costume_loader.exe, stagetest.exe) on a fake game folder. The patch pak
+// row must stay unbroken from 001 at every step while mod paks come and go above the loaders' paks.
+// The game folder given is only read (its base pak and shipped data are used, nothing is written there).
+// ---------------------------------------------------------------------------------------------
+
+static void copy_tree(const std::string& from, const std::string& to) {
+    make_dirs(to + "\\x");
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((from + "\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        std::string n = fd.cFileName;
+        if (n == "." || n == "..") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) copy_tree(from + "\\" + n, to + "\\" + n);
+        else CopyFileA((from + "\\" + n).c_str(), (to + "\\" + n).c_str(), FALSE);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+// The row as text: number then M mod, S stage pak, s stage placeholder, C costume pak, c costume placeholder.
+// *unbroken is false when a pak exists above a missing number.
+static std::string row_of(const std::string& game, bool* unbroken) {
+    std::string out;
+    *unbroken = true;
+    for (int n = 1; n < 100; n++) {
+        const std::string p = game + "\\" + pak_name(n);
+        if (!exists(p)) {
+            for (int k = n + 1; k < 100; k++) if (exists(game + "\\" + pak_name(k))) *unbroken = false;
+            break;
+        }
+        uint32_t e = 0;
+        PatchPakKind k = classify_patch_pak(p.c_str(), &e);
+        char c = k == PatchPakKind::Stage ? (e == 1 ? 's' : 'S') : k == PatchPakKind::Costume ? (e == 1 ? 'c' : 'C') : 'M';
+        out += (out.empty() ? "" : " ") + std::to_string(n) + c;
+    }
+    return out;
+}
+
+static std::string g_build, g_row_game, g_base_pak;
+
+static void run_loader(const char* which) {   // "costume" or "stage"
+    std::string cmd = std::string(which) == "costume"
+        ? "\"" + g_build + "\\costume_loader.exe\" \"" + g_row_game + "\" --base-pak \"" + g_base_pak + "\""
+        : "\"" + g_build + "\\stagetest.exe\" \"" + g_row_game + "\"";
+    system(("cmd /c \"" + cmd + " > \"" + g_work + "\\row_" + which + ".txt\" 2>&1\"").c_str());
+}
+
+static void expect_row(const char* step, const char* want) {
+    bool unbroken;
+    const std::string got = row_of(g_row_game, &unbroken);
+    printf("  %-44s %s\n", step, got.c_str());
+    check(unbroken, step);
+    if (got != want) { printf("    expected: %s\n", want); check(false, step); }
+}
+
+static int run_row_test(const char* build, const char* work, const char* game, const char* mod_archive) {
+    g_build = build; g_work = work; g_base_pak = std::string(game) + "\\re_chunk_000.pak";
+    g_row_game = g_work + "\\row\\game";
+    copy_tree(std::string(game) + "\\reframework\\data\\SF6_Costumes_Data\\loader", g_row_game + "\\reframework\\data\\SF6_Costumes_Data\\loader");
+    const std::string stage_idx = g_row_game + "\\reframework\\data\\SF6_StageSlots_Data\\loader\\stage_paths.txt";
+    make_dirs(stage_idx);
+    CopyFileA((std::string(game) + "\\reframework\\data\\SF6_StageSlots_Data\\loader\\stage_paths.txt").c_str(), stage_idx.c_str(), FALSE);
+    const std::string zip = g_row_game + "\\reframework\\costume_mods\\Cammy\\mod.zip";
+    make_dirs(zip);
+    CopyFileA(mod_archive, zip.c_str(), FALSE);
+    // a stage mod: one pak holding the first file of the stage path index
+    std::string first = slurp(stage_idx);
+    first = first.substr(0, first.find_first_of("\r\n"));
+    const std::string stage_src = g_row_game + "\\reframework\\stage_mods\\test.pak";
+    auto put_stage_mod = [&]() {
+        make_dirs(stage_src);
+        PakWriter w;
+        w.add_uncompressed(pak_path_hash(std::string_view(first)), std::vector<uint8_t>(64, 7));
+        w.write(stage_src.c_str());
+    };
+    put_stage_mod();
+    auto foreign = [&](int n) { make_pak(g_row_game + "\\" + pak_name(n), PatchPakKind::Mod, 2); };
+    auto drop = [&](int n) { DeleteFileA((g_row_game + "\\" + pak_name(n)).c_str()); };
+
+    printf("[7] costume loader: a mod pak appears above ours, then goes away\n");
+    foreign(1);
+    run_loader("costume");  expect_row("foreign 001, loader run", "1M 2C");
+    foreign(3);
+    run_loader("costume");  expect_row("foreign 003 added, loader run", "1M 2c 3M 4C");
+    run_loader("costume");  expect_row("loader run again (up to date)", "1M 2c 3M 4C");
+    foreign(5);
+    run_loader("costume");  expect_row("foreign 005 added, loader run", "1M 2c 3M 4c 5M 6C");
+    drop(5); drop(3);
+    run_loader("costume");  expect_row("foreign 005 and 003 removed, loader run", "1M 2C");
+
+    printf("[8] costume loader: the stage pak appears above ours (same mods: ours moves), then goes\n");
+    make_pak(g_row_game + "\\" + pak_name(3), PatchPakKind::Stage, 3);
+    run_loader("costume");  expect_row("stage pak 003 added, loader run", "1M 2c 3S 4C");
+    drop(3);
+    run_loader("costume");  expect_row("stage pak removed, loader run", "1M 2C");
+
+    printf("[9] costume loader: no costume mod left while a mod pak sits above ours\n");
+    foreign(3);
+    run_loader("costume");  expect_row("foreign 003 added, loader run", "1M 2c 3M 4C");
+    DeleteFileA(zip.c_str());
+    run_loader("costume");  expect_row("costume mod removed, loader run", "1M 2c 3M");
+    drop(3);
+    run_loader("costume");  expect_row("foreign 003 removed, loader run", "1M");
+    CopyFileA(mod_archive, zip.c_str(), FALSE);
+    drop(2);
+
+    printf("[10] stage loader: a mod pak appears above the stage pak, then goes away\n");
+    run_loader("stage");    expect_row("stage run", "1M 2S");
+    foreign(3);
+    run_loader("stage");    expect_row("foreign 003 added, stage run", "1M 2s 3M 4S");
+    drop(3);
+    run_loader("stage");    expect_row("foreign 003 removed, stage run", "1M 2S");
+    foreign(3);
+    DeleteFileA(stage_src.c_str());
+    run_loader("stage");    expect_row("stage mod removed, foreign 003 above", "1M 2s 3M");
+    drop(3);
+    run_loader("stage");    expect_row("foreign 003 removed too", "1M");
+    put_stage_mod();
+
+    printf("[11] both loaders (stage first, as in the game), mod pak above then removed\n");
+    run_loader("stage"); run_loader("costume");
+    expect_row("stage then costume", "1M 2S 3C");
+    foreign(4);
+    run_loader("stage"); run_loader("costume");
+    expect_row("foreign 004 added", "1M 2s 3c 4M 5S 6C");
+    drop(4);
+    run_loader("stage"); run_loader("costume");
+    expect_row("foreign 004 removed", "1M 2S 3C");
+
+    printf("\n%d checks, %d failed\n", g_checks, g_fail);
+    printf(g_fail ? "FAIL\n" : "PASS\n");
+    return g_fail ? 1 : 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc >= 6 && std::string(argv[1]) == "--row") return run_row_test(argv[2], argv[3], argv[4], argv[5]);
+    if (argc >= 3 && argv[1][0] != '-') return run_clean_tests(argv[1], argv[2]);
+    printf("usage: slots_clean_test <SF6_SlotsClean.exe> <work dir>\n"
+           "       slots_clean_test --row <build dir> <work dir> <game dir (read only)> <costume mod archive>\n");
+    return 2;
 }

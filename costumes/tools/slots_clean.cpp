@@ -21,7 +21,7 @@
 #include <vector>
 #include "pak.hpp"
 
-struct PatchPak { int num; std::string name, path; PatchPakKind kind; };
+struct PatchPak { int num; std::string name, path; PatchPakKind kind; uint32_t entries; };
 
 static const char* GAME_EXE = "StreetFighter6.exe";
 
@@ -67,16 +67,6 @@ static std::string exe_folder() {
     return sl == std::string::npos ? "." : s.substr(0, sl);
 }
 
-// Number of entries in a pak, -1 when unreadable.
-static long pak_entry_count(const std::string& path) {
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) return -1;
-    struct { uint32_t magic; uint8_t maj, min; int16_t feat; uint32_t count, fp; } hdr;
-    long n = fread(&hdr, 1, sizeof(hdr), f) == sizeof(hdr) ? long(hdr.count) : -1;
-    fclose(f);
-    return n;
-}
-
 static std::vector<PatchPak> list_patch_paks(const std::string& dir) {
     std::vector<PatchPak> out;
     WIN32_FIND_DATAA fd;
@@ -87,8 +77,8 @@ static std::vector<PatchPak> list_patch_paks(const std::string& dir) {
         std::string name = fd.cFileName;
         size_t ps = name.find("patch_");
         if (ps == std::string::npos) continue;
-        PatchPak p{ atoi(name.c_str() + ps + 6), name, dir + "\\" + name, PatchPakKind::Mod };
-        p.kind = classify_patch_pak(p.path.c_str());
+        PatchPak p{ atoi(name.c_str() + ps + 6), name, dir + "\\" + name, PatchPakKind::Mod, 0 };
+        p.kind = classify_patch_pak(p.path.c_str(), &p.entries);
         out.push_back(p);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
@@ -154,7 +144,7 @@ int main(int argc, char** argv) {
             if (dry) deleted++;
             else if (DeleteFileA(p.path.c_str())) deleted++;
             else { printf("    ERROR: cannot delete it (error %lu)\n", GetLastError()); errors++; }
-        } else if (pak_entry_count(p.path) == 1) {
+        } else if (p.entries == 1) {
             printf("  %s: %s pak below a pak of another mod, already marker-only -> kept\n", p.name.c_str(), what);
             kept++;
         } else {

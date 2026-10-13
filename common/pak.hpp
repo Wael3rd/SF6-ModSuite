@@ -24,7 +24,9 @@ constexpr const char* STAGE_SLOTS_MARKER   = "natives/stm/sf6_stage_slots.marker
 // What a re_chunk_000.pak.patch_NNN.pak is, by the marker file it holds (a pak nobody marked is a
 // mod's). Shared by the loader and SF6_SlotsClean, so both see the same paks as ours.
 enum class PatchPakKind { Unreadable, Mod, Costume, Stage };
-PatchPakKind classify_patch_pak(const char* path);
+// entries (optional) receives the number of entries; a loader pak with exactly one is a marker-only
+// placeholder (write_marker_pak), never a real pak: those hold the marker and at least one more file.
+PatchPakKind classify_patch_pak(const char* path, uint32_t* entries = nullptr);
 
 // Writes a valid pak that holds only the marker of a loader (Costume or Stage): it keeps its file
 // name in the row of patch paks, loads nothing, and is recognised as that loader's at the next scan.

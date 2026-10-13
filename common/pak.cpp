@@ -455,12 +455,14 @@ bool PakWriter::write(const char* path) {
 // Patch pak kinds, marker-only paks, Fluffy's ArchiveList.bin
 // ============================================================================
 
-PatchPakKind classify_patch_pak(const char* path) {
+PatchPakKind classify_patch_pak(const char* path, uint32_t* entries) {
     FILE* fp = std::fopen(path, "rb");
     if (!fp) return PatchPakKind::Unreadable;
     PatchPakKind kind = PatchPakKind::Mod;
     PakHeader hdr{};
+    if (entries) *entries = 0;
     if (std::fread(&hdr, 1, sizeof(hdr), fp) == sizeof(hdr)) {
+        if (entries) *entries = hdr.count;
         const uint64_t costume_h = pak_path_hash(std::string_view(COSTUME_SLOTS_MARKER));
         const uint64_t stage_h = pak_path_hash(std::string_view(STAGE_SLOTS_MARKER));
         for (uint32_t i = 0; i < hdr.count; i++) {

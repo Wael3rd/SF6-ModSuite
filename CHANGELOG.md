@@ -14,6 +14,12 @@
   Street Fighter 6 runs. If Fluffy's `ArchiveList.bin` lists one of the paks it says so.
 - The loader logs a `WARN:` line at each pak build when Fluffy's `ArchiveList.bin` lists one of its paks.
 - "Patch day" procedure in the README and in `docs/FLUFFY.md`.
+- **No more hole in the patch pak row.** The game reads the patch paks as an unbroken row from patch_001. When a mod pak
+  was added above the loader's pak, the loader deleted its old pak and wrote the new one above the mod's, leaving a hole
+  (the black screen of 03/10). The costume loader and the stage loader now replace their old pak, in place, by a
+  marker-only placeholder when a mod pak sits above it, and delete the placeholder once no mod pak is above it any more.
+  Placeholders are never taken for the real pak (the "up to date" check and the move of the pak ignore them), and the
+  audit script does not list them as mods.
 - Tests: `costumes/tools/slots_clean_test/`.
 
 ## 1.10.6 (2026-10-13) — SF6 Mod Suite

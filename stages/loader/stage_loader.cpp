@@ -535,6 +535,28 @@ bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, 
 }
 
 // ---------------------------------------------------------------------------------------------
+// Taking a pak of ours out of the row of patch paks
+// ---------------------------------------------------------------------------------------------
+
+// The game reads the patch paks as an unbroken row from patch_001 (a hole = black screen). A pak of
+// ours that sits below a mod's pak is therefore not deleted but replaced in place by a pak holding
+// only the marker (a placeholder, like the costume loader's); it goes for good once no mod's pak is
+// above it. True once done; `stub` tells which.
+bool retire_pak(const std::wstring& game_dir, const PatchPak& p, int max_mod, bool& stub) {
+    stub = false;
+    if (p.num > max_mod) return delete_with_retry(p.path);
+    const std::wstring tmp = p.path + L".tmp";
+    const std::string ap = ascii_path(game_dir, leaf(tmp));
+    if (ap.empty() || !write_marker_pak(ap.c_str(), PatchPakKind::Stage)) { DeleteFileW(tmp.c_str()); return false; }
+    for (int i = 0; i < 20; ++i) {
+        if (MoveFileExW(tmp.c_str(), p.path.c_str(), MOVEFILE_REPLACE_EXISTING)) { stub = true; return true; }
+        Sleep(500);
+    }
+    DeleteFileW(tmp.c_str());
+    return false;
+}
+
+// ---------------------------------------------------------------------------------------------
 // The pass
 // ---------------------------------------------------------------------------------------------
 
@@ -557,10 +579,15 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
 
     auto paks = classify_patch_paks(game_dir);
     int max_mod = 0;
-    std::vector<PatchPak> stage_paks;
+    std::vector<PatchPak> stage_paks, stubs;   // stubs: marker-only placeholders, ours and the costume loader's
     for (auto& p : paks) {
         if (p.kind == PakKind::Mod) max_mod = std::max(max_mod, p.num);
-        if (p.kind == PakKind::Stage) stage_paks.push_back(p);
+        if (p.kind != PakKind::Mod && p.entries == 1) stubs.push_back(p);
+        else if (p.kind == PakKind::Stage) stage_paks.push_back(p);
+    }
+    // A placeholder with no mod's pak above it any more is not needed (it would sit where a real pak goes)
+    for (auto& p : stubs) {
+        if (p.num > max_mod && delete_with_retry(p.path)) slog("  removed placeholder %s", narrow(leaf(p.path)).c_str());
     }
     const int target = max_mod + 1;
     const std::wstring target_path = patch_path(game_dir, target);
@@ -666,11 +693,13 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     // Our old pak goes; the costume loader's pak moves up when it sits where ours goes (it is
     // rebuilt right after us anyway, its mod list having changed).
     for (auto& p : stage_paks) {
-        if (!delete_with_retry(p.path)) {
+        bool stub = false;
+        if (!retire_pak(game_dir, p, max_mod, stub)) {
             slog("ERROR: %s is in use (another Street Fighter 6 still running?): stages not updated", narrow(p.path).c_str());
             return;
         }
-        slog("  removed old pak %s", narrow(leaf(p.path)).c_str());
+        slog(stub ? "  old pak %s replaced by a marker-only pak (a mod's pak sits above it)" : "  removed old pak %s",
+             narrow(leaf(p.path)).c_str());
     }
     size_t pak_entries = 0;
     if (!vars.empty()) {

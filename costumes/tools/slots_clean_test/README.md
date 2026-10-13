@@ -13,3 +13,13 @@ is still recognised as ours, second run changes nothing); stage pak below and co
 purpose only); not a game folder. Every case also checks that `registry.json` / `outfits.json` / the stage slots' state
 files are gone, that `reframework\costume_mods`, other mods' data, the shipped `loader\` files, the logs and Fluffy's
 folder are byte for byte unchanged, and that the note about Fluffy's `ArchiveList.bin` appears only when it lists our paks.
+
+## Row test (the loaders themselves)
+
+`slots_clean_test.exe --row <build dir> <scratch folder> <game folder> <costume mod archive>` runs the real
+`costume_loader.exe` and `stagetest.exe` (both from `build\`) on a fake game folder in the scratch folder. The game folder
+is only read: its `re_chunk_000.pak` (passed as `--base-pak`), the shipped loader data and the stage path index are used,
+nothing is written there. Any small costume mod archive (.zip, .7z, .rar) will do. Mod paks (synthetic) appear and
+disappear above the loaders' paks, and after every run the patch paks must form an unbroken row from 001. A loader pak
+that has to stay below a mod pak becomes a marker-only placeholder (shown `c` / `s` in the output, `C` / `S` are the real
+paks) and is deleted once no mod pak is above it. A full run takes a few minutes.
