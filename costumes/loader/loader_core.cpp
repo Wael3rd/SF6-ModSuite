@@ -6,6 +6,8 @@
 #endif
 #include "pak.hpp"
 #include "patch.hpp"
+#include "structural_scene.hpp"
+#include "structural_msg.hpp"
 #include "loader_core.hpp"
 #include "archive.hpp"
 
@@ -5016,6 +5018,124 @@ static std::string base_pak_fingerprint(const std::string& base_path) {
 }
 
 // ============================================================================
+// Structural files, built from the game's own
+// ============================================================================
+// The costume pak replaces some game files to declare the slots: the root fighter scene and one version
+// scene per season (a via.Folder per slot), the costume table (a record per slot) and the costume name file
+// ("Outfit I" .. "Outfit C"). They are built here from the game's current files, so that an update that
+// adds a fighter or an outfit is taken in without a new release (13/10: the copies shipped in static/,
+// made before the update, hid Arjun and C. Viper's Outfit 4). Same output as make_static_structural.py
+// (checked byte for byte by costumes/tools/structural_test). The shipped copies stay as the fallback.
+
+static const char* VER_SCENE_FMT = "natives/stm/product/flow/version_update/ver_02_%04d/esf.scn.20";
+static const uint32_t SLOT_RECORD_ID_BASE = 5000;
+static const uint32_t SLOT_SORT_NO_BASE = 101;
+static const int SLOTS_PER_FIGHTER = 100;   // costume_slot_index() blocks
+
+struct StructuralFiles {
+    bool ok = false;
+    std::string why;                           // when !ok
+    std::vector<StaticRecord> records;         // every slot record of every fighter of the game
+    std::vector<int> fighters;
+    struct File { std::string pak; std::vector<uint8_t> data; };
+    std::vector<File> files;                   // the costume table holds every record (trimmed later)
+};
+
+static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int slot_max) {
+    StructuralFiles st;
+    auto fail = [&](const std::string& why) { st.why = why; st.files.clear(); st.records.clear(); return st; };
+    auto load = [&](const std::string& p, std::vector<uint8_t>& out) {
+        auto* e = base_pak.find(pak_path_hash(std::string_view(p)));
+        if (!e) return false;
+        out = base_pak.read(*e);
+        return !out.empty();
+    };
+    if (slot_max - slot_min + 1 != SLOTS_PER_FIGHTER) return fail("slot range is not 100 slots");
+
+    // Fighters: those of the game's costume table
+    std::vector<uint8_t> table;
+    std::vector<std::pair<int, int>> game_records;
+    if (!load(COSTUME_TBL, table) || !costume_table_records(table, game_records))
+        return fail("costume table not found or not recognised");
+    std::set<int> fighters;
+    for (auto& r : game_records) fighters.insert(r.first);
+    auto dir_of = [](int f) { char b[16]; snprintf(b, sizeof b, "esf%03d", f); return std::string(b); };
+    auto is_fighter = [&](const std::string& dir) {
+        return dir.size() == 6 && fighters.count(atoi(dir.c_str() + 3)) > 0;
+    };
+
+    // Root scene: the fighters that have their Outfit 1 folder there, each slot a copy of it
+    std::vector<uint8_t> root;
+    if (!load(ESF_ROOT, root)) return fail("root fighter scene not found");
+    std::set<std::string> seen;
+    std::vector<std::string> root_dirs;
+    for (auto& [dir, costumes] : scene_costume_folders(root)) {
+        if (!costumes.count(0)) continue;
+        seen.insert(dir);
+        if (is_fighter(dir)) root_dirs.push_back(dir);
+    }
+    std::string err;
+    if (!add_scene_folders(root, root_dirs, false, slot_min, slot_max + 1, &err))
+        return fail("root fighter scene: " + err);
+    st.files.push_back({ ESF_ROOT, std::move(root) });
+
+    // Version scenes: a fighter goes in the first one that has its folders (a later one can add an outfit
+    // to an older fighter: ver_02_0500 has C. Viper's Outfit 4, she stays in ver_02_0300)
+    std::set<std::string> in_scene(root_dirs.begin(), root_dirs.end());
+    for (int num = 300; num < 2000; num += 100) {
+        char p[128];
+        snprintf(p, sizeof p, VER_SCENE_FMT, num);
+        std::vector<uint8_t> scn;
+        if (!load(p, scn)) continue;
+        std::vector<std::string> dirs;
+        for (auto& [dir, costumes] : scene_costume_folders(scn)) {
+            if (seen.count(dir)) continue;
+            seen.insert(dir);
+            if (is_fighter(dir)) dirs.push_back(dir);
+        }
+        if (dirs.empty()) continue;
+        if (!add_scene_folders(scn, dirs, true, slot_min, slot_max + 1, &err))
+            return fail(std::string(p) + ": " + err);
+        in_scene.insert(dirs.begin(), dirs.end());
+        st.files.push_back({ p, std::move(scn) });
+    }
+    for (int f : fighters)
+        if (!in_scene.count(dir_of(f))) logf("  WARN: fighter %d is in the costume table but in no fighter scene: its slots cannot load\n", f);
+
+    // Costume table: 100 records per fighter, ids and sort numbers by fighter block (costume_slot_index)
+    std::vector<std::vector<uint8_t>> guids(SLOTS_PER_FIGHTER);
+    std::vector<MsgEntry> names;
+    for (int so = 0; so < SLOTS_PER_FIGHTER; so++) {
+        char g[64];
+        snprintf(g, sizeof g, "a1b2c3d4-%04x-4000-8000-%012x", so + 1, (unsigned)(STATIC_MSG_ID_BASE + so));
+        guid_bytes(g, guids[so]);
+        names.push_back({ g, "FighterCostumeMessage" + std::to_string(6 + so), "Outfit " + int_to_roman(so + 1) });
+    }
+    std::vector<CostumeSlotRecord> add;
+    for (int f : fighters) {
+        const int idx = costume_slot_index(f);
+        for (int so = 0; so < SLOTS_PER_FIGHTER; so++) {
+            const uint32_t id = SLOT_RECORD_ID_BASE + (uint32_t)(idx * SLOTS_PER_FIGHTER + so);
+            add.push_back({ id, (uint32_t)f, (uint32_t)(slot_min + so),
+                            SLOT_SORT_NO_BASE + (uint32_t)(idx * SLOTS_PER_FIGHTER + so), (uint32_t)so });
+            st.records.push_back({ f, slot_min + so, (int)id, (int)id });
+        }
+    }
+    if (!add_costume_records(table, add, STATIC_MSG_ID_BASE, guids, &err)) return fail("costume table: " + err);
+    st.files.push_back({ COSTUME_TBL, std::move(table) });
+
+    // Names
+    std::vector<uint8_t> msg;
+    if (!load(COSTUME_MSG, msg)) return fail("costume name file not found");
+    if (!add_msg_entries(msg, names, &err)) return fail("costume name file: " + err);
+    st.files.push_back({ COSTUME_MSG, std::move(msg) });
+
+    st.fighters.assign(fighters.begin(), fighters.end());
+    st.ok = true;
+    return st;
+}
+
+// ============================================================================
 // costume_loader_run  (entry point for exe and DLL)
 // ============================================================================
 
@@ -5221,6 +5341,21 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     open_dlc_paks(game_dir, base_pak, dlc_readers);
     if (!dlc_readers.empty()) logf("  + %zu DLC paks read over it\n", dlc_readers.size());
     load_current_crcs(base_pak);
+
+    // 4b. Structural files from the game's own: every fighter of the game gets its slots, new ones included
+    StructuralFiles structural = build_structural(base_pak, meta.slot_min, meta.slot_max);
+    if (structural.ok) {
+        std::set<int> shipped;
+        for (auto& r : meta.records) shipped.insert(r.fighter);
+        std::string added;
+        for (int f : structural.fighters)
+            if (!shipped.count(f)) added += (added.empty() ? "" : ", ") + std::to_string(f);
+        logf("  structural files built from the game: %zu fighters%s%s\n", structural.fighters.size(),
+             added.empty() ? "" : ", not in the shipped tables: ", added.c_str());
+        meta.records = structural.records;
+    } else {
+        logf("  WARN: structural files taken from the shipped copies (%s)\n", structural.why.c_str());
+    }
 
 
     // 5. Scan each mod pak
@@ -5441,6 +5576,17 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 auto sd = ctx.gf.load(ci.scene);
                 if (!sd.empty()) outfit1[ci.fighter] = {ci.fighter_dir, std::move(sd)};
             }
+            // A fighter newer than the vanilla index: its Outfit 1 scene by the game's naming
+            for (auto& r : meta.records) {
+                if (outfit1.count(r.fighter)) continue;
+                char fd[16], p[96];
+                snprintf(fd, sizeof fd, "esf%03d", r.fighter);
+                snprintf(p, sizeof p, "natives/stm/product/charparam/esf/%s/%sv00.scn.20", fd, fd);
+                auto sd = ctx.gf.load(p);
+                outfit1[r.fighter] = {fd, std::move(sd)};
+            }
+            for (auto it = outfit1.begin(); it != outfit1.end(); )
+                it = it->second.second.empty() ? outfit1.erase(it) : std::next(it);
             std::set<std::pair<int, int>> used;
             for (auto& sl : slots) used.insert({sl.fighter, sl.new_costume_no});
             int n_fallback = 0;
@@ -5459,10 +5605,13 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         }
     }
 
-    // Static structural files (generic list from static_meta.json, fallback to hardcoded)
+    // Structural files: built from the game's (4b), else the shipped copies (static_meta.json's list, else
+    // the 3 hardcoded names)
     struct SFile { std::string local; std::string pak; };
     std::vector<SFile> sfiles;
-    if (!meta.files.empty()) {
+    if (structural.ok) {
+        for (auto& f : structural.files) sfiles.push_back({ "", f.pak });
+    } else if (!meta.files.empty()) {
         for (auto& mf : meta.files)
             sfiles.push_back({mf.local, mf.pak_path});
     } else {
@@ -5472,11 +5621,17 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         sfiles.push_back({"fightercostumemessage.msg.21", COSTUME_MSG});
     }
     for (auto& sf : sfiles) {
-        std::string fp = static_dir + "\\" + sf.local;
-        auto data = read_file_bin(fp.c_str());
-        if (data.empty()) {
-            printf("  WARN: static file not found: %s\n", fp.c_str());
-            continue;
+        std::vector<uint8_t> data;
+        if (structural.ok) {
+            for (auto& f : structural.files) if (f.pak == sf.pak) data = std::move(f.data);
+            sf.local = sf.pak.substr(sf.pak.find("product/") + 8);
+        } else {
+            std::string fp = static_dir + "\\" + sf.local;
+            data = read_file_bin(fp.c_str());
+            if (data.empty()) {
+                printf("  WARN: static file not found: %s\n", fp.c_str());
+                continue;
+            }
         }
         // The costume table only lists the slots in use: a character the player does not own shows
         // every record of the table, and a reserved slot has no scene to load.
@@ -5498,7 +5653,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         uint64_t h = pak_path_hash(std::string_view(sf.pak));
         writer.add_uncompressed(h, std::move(data));
         written_paths.insert(sf.pak);
-        printf("  static: %s (%zu bytes)\n", sf.local.c_str(), dsz);
+        printf("  %s: %s (%zu bytes)\n", structural.ok ? "from the game" : "static", sf.local.c_str(), dsz);
     }
 
 

@@ -460,6 +460,151 @@ bool trim_costume_table(std::vector<uint8_t>& b,
     return true;
 }
 
+namespace {
+// The game's costume table: instance types and where each instance starts in the data block. Same checks as
+// trim_costume_table, plus: nothing after the root (the table as the game ships it).
+struct CostumeTable {
+    size_t R = 0, inst_off = 0, D = 0;
+    uint32_t ic = 0, root = 0;
+    std::vector<uint32_t> type;
+    std::vector<size_t> start;
+};
+
+bool read_costume_table(const std::vector<uint8_t>& b, CostumeTable& t) {
+    if (b.size() < 48 || memcmp(b.data(), "USR\0", 4) != 0) return false;
+    t.R = (size_t)rd<uint64_t>(b, 32);
+    if (t.R + 56 > b.size() || memcmp(b.data() + t.R, "RSZ\0", 4) != 0) return false;
+    const uint32_t oc = rd<uint32_t>(b, t.R + 8), udc = rd<uint32_t>(b, t.R + 16);
+    t.ic = rd<uint32_t>(b, t.R + 12);
+    t.inst_off = (size_t)rd<uint64_t>(b, t.R + 24);
+    const size_t data_off = (size_t)rd<uint64_t>(b, t.R + 32), ud_off = (size_t)rd<uint64_t>(b, t.R + 40);
+    if (oc != 1 || udc != 0 || data_off != ud_off || t.inst_off != 52) return false;
+    const int32_t root = rd<int32_t>(b, t.R + 48);
+    if (root <= 0 || (uint32_t)root != t.ic - 1 || t.R + t.inst_off + 8ull * t.ic > b.size()) return false;
+    t.root = (uint32_t)root;
+    t.type.assign(t.ic, 0);
+    for (uint32_t i = 0; i < t.ic; i++) t.type[i] = rd<uint32_t>(b, t.R + t.inst_off + 8ull * i);
+    if (t.type[t.root] != T_COSTUME_ROOT) return false;
+    t.D = t.R + data_off;
+    t.start.assign(t.ic, 0);
+    size_t pos = 0;
+    for (uint32_t i = 1; i < t.ic; i++) {
+        size_t s = align_up(pos, 4), e;
+        if (t.type[i] == T_COSTUME_MSG) e = align_up(s + 4, 8) + 16;
+        else if (t.type[i] == T_COSTUME_REC) e = s + COSTUME_REC_SIZE;
+        else if (t.type[i] == T_COSTUME_ROOT) {
+            if (t.D + s + 4 > b.size()) return false;
+            e = s + 4 + 4ull * rd<uint32_t>(b, t.D + s);
+        } else return false;
+        if (t.D + e > b.size()) return false;
+        t.start[i] = s; pos = e;
+    }
+    return t.D + pos == b.size();
+}
+}  // namespace
+
+bool costume_table_records(const std::vector<uint8_t>& b, std::vector<std::pair<int, int>>& out) {
+    CostumeTable t;
+    if (!read_costume_table(b, t)) return false;
+    out.clear();
+    for (uint32_t i = 1; i < t.ic; i++)
+        if (t.type[i] == T_COSTUME_REC)
+            out.push_back({ (int)rd<uint32_t>(b, t.D + t.start[i] + 8), (int)rd<uint32_t>(b, t.D + t.start[i] + 16) });
+    return true;
+}
+
+int costume_slot_index(int fighter) {
+    if (fighter >= 1 && fighter <= 22) return fighter - 1;
+    if (fighter >= 25) return fighter - 3;
+    return 1000 + fighter;
+}
+
+bool guid_bytes(std::string_view text, std::vector<uint8_t>& out) {
+    std::string hex;
+    for (char c : text) if (c != '-') hex += c;
+    if (hex.size() != 32) return false;
+    uint8_t raw[16];
+    for (int i = 0; i < 16; i++) {
+        unsigned v = 0;
+        for (int k = 0; k < 2; k++) {
+            char c = (char)std::tolower((unsigned char)hex[2 * i + k]);
+            if (c >= '0' && c <= '9') v = v * 16 + (c - '0');
+            else if (c >= 'a' && c <= 'f') v = v * 16 + (c - 'a' + 10);
+            else return false;
+        }
+        raw[i] = (uint8_t)v;
+    }
+    out.assign(16, 0);
+    static const int order[16] = { 3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15 };
+    for (int i = 0; i < 16; i++) out[i] = raw[order[i]];
+    return true;
+}
+
+bool add_costume_records(std::vector<uint8_t>& b, const std::vector<CostumeSlotRecord>& records,
+                         uint32_t msg_id_base, const std::vector<std::vector<uint8_t>>& message_guids,
+                         std::string* err) {
+    auto fail = [&](const char* why) { if (err) *err = why; return false; };
+    CostumeTable t;
+    if (!read_costume_table(b, t)) return fail("costume table layout not recognised");
+    uint32_t tmpl_rec = 0, tmpl_msg = 0;
+    for (uint32_t i = 1; i < t.ic; i++) {
+        if (!tmpl_msg && t.type[i] == T_COSTUME_MSG) tmpl_msg = i;
+        if (!tmpl_rec && t.type[i] == T_COSTUME_REC && rd<uint32_t>(b, t.D + t.start[i] + 8) == 1
+            && rd<uint32_t>(b, t.D + t.start[i] + 16) == 0) tmpl_rec = i;
+    }
+    if (!tmpl_rec || !tmpl_msg) return fail("no record of fighter 1 / Outfit 1, or no message, to copy");
+    for (auto& g : message_guids) if (g.size() != 16) return fail("a message GUID is not 16 bytes");
+    for (auto& r : records) if (r.message >= message_guids.size()) return fail("a record names a missing message");
+
+    const uint32_t n_msg = (uint32_t)message_guids.size(), n_rec = (uint32_t)records.size();
+    const uint32_t new_ic = t.ic + n_msg + n_rec;
+    const size_t new_data_off = align_up(t.inst_off + 8ull * new_ic, 16);
+
+    // Headers and instance infos: the game's, then a copy of its message's and record's (type, crc)
+    std::vector<uint8_t> out(b.begin(), b.begin() + t.R + t.inst_off + 8ull * t.ic);
+    wr<uint32_t>(out, t.R + 12, new_ic);
+    wr<uint64_t>(out, t.R + 32, new_data_off);
+    wr<uint64_t>(out, t.R + 40, new_data_off);
+    const size_t info = t.R + t.inst_off;
+    for (uint32_t k = 0; k < n_msg; k++)
+        out.insert(out.end(), b.begin() + info + 8ull * tmpl_msg, b.begin() + info + 8ull * tmpl_msg + 8);
+    for (uint32_t k = 0; k < n_rec; k++)
+        out.insert(out.end(), b.begin() + info + 8ull * tmpl_rec, b.begin() + info + 8ull * tmpl_rec + 8);
+    out.resize(t.R + new_data_off, 0);
+
+    // Data: the game's instances up to the root, the root with the new records at the end of its array,
+    // the messages, the records
+    std::vector<uint8_t> data(b.begin() + t.D, b.begin() + t.D + t.start[t.root]);
+    auto pad_to = [&](size_t a) { data.resize(align_up(data.size(), a), 0); };
+    const uint32_t n_arr = rd<uint32_t>(b, t.D + t.start[t.root]);
+    pad_to(4);
+    put<uint32_t>(data, n_arr + n_rec);
+    data.insert(data.end(), b.begin() + t.D + t.start[t.root] + 4, b.begin() + t.D + t.start[t.root] + 4 + 4ull * n_arr);
+    for (uint32_t k = 0; k < n_rec; k++) put<uint32_t>(data, t.ic + n_msg + k);
+    for (uint32_t k = 0; k < n_msg; k++) {
+        pad_to(4); put<uint32_t>(data, msg_id_base + k);
+        pad_to(8); data.insert(data.end(), message_guids[k].begin(), message_guids[k].end());
+    }
+    for (auto& r : records) {
+        pad_to(4);
+        const size_t o = data.size();
+        data.insert(data.end(), b.begin() + t.D + t.start[tmpl_rec], b.begin() + t.D + t.start[tmpl_rec] + COSTUME_REC_SIZE);
+        wr<uint32_t>(data, o + 0, r.id);
+        wr<uint32_t>(data, o + 4, r.id);                    // ManageId
+        wr<uint32_t>(data, o + 8, r.fighter);
+        wr<uint32_t>(data, o + 12, 0);                      // isDefault = false (+3 padding)
+        wr<uint32_t>(data, o + 16, r.costume_no);
+        wr<uint32_t>(data, o + COSTUME_REC_MSG, t.ic + r.message);
+        data[o + 25] = data[o + 26] = data[o + 27] = 0;     // isShowName kept, its padding cleared
+        wr<uint32_t>(data, o + 28, r.sort_no);
+        wr<uint32_t>(data, o + 32, r.costume_no);           // visualNo
+        wr<uint32_t>(data, o + 36, 0);                      // arrangeId
+    }
+    out.insert(out.end(), data.begin(), data.end());
+    b.swap(out);
+    return true;
+}
+
 // ============================================================================
 // User file type signatures
 // ============================================================================

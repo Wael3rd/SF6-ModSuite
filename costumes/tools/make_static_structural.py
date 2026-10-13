@@ -12,8 +12,10 @@ Produces out/static/ (or the folder given as the first argument):
   fightercostumemessage.msg.21       -- 100 messages ("Outfit I" .. "Outfit C")
   static_meta.json                   -- id map + file list for C++ loader
 
-These files replace the game's own copies: rebuild them from the game after every update that adds a
-fighter or an outfit (the game's records and folders are copied from the pak, ours are appended).
+These files replace the game's own copies (the game's records and folders are copied from the pak, ours
+are appended). Since Slots Loader 1.11 the loader builds the same bytes itself from the game's current files
+at each pak build (costumes/loader/structural_*.cpp, add_costume_records); the copies made here are its
+fallback and the reference of costumes/tools/structural_test (make_oracle.py).
 A new fighter goes at the END of ALL_FIGHTER_IDS: its index gives its record ids, and a slot keeps
 its number for good (saved choices, replays).
 """

@@ -53,6 +53,34 @@ bool trim_costume_table(std::vector<uint8_t>& data,
                         size_t* kept_records, size_t* removed_records,
                         const std::unordered_map<uint32_t, uint32_t>* message_for_record = nullptr);
 
+// The game's costume table as it ships: (fighter id, costume number) of every record. False when data is
+// not a costume table, or already carries slot records (instances after the root).
+bool costume_table_records(const std::vector<uint8_t>& data, std::vector<std::pair<int, int>>& out);
+
+// Slot records of a fighter: index of its block of 100 ids in the table. Fixed for good (saved choices and
+// replays name slots by record): 1-22 -> 0-21, 25 and up -> 22 and up (Arjun, 34 -> 31). 23 and 24 are no
+// fighter today; they get blocks past every other one.
+int costume_slot_index(int fighter);
+
+struct CostumeSlotRecord {
+    uint32_t id;           // record id and ManageId
+    uint32_t fighter;
+    uint32_t costume_no;
+    uint32_t sort_no;
+    uint32_t message;      // index into the messages added with it (outfit name)
+};
+
+// Adds slot records to the game's costume table, the way make_static_structural.py did: after the root
+// instance, one name message per entry of message_guids (id msg_id_base + n), then the records, each a copy
+// of the game's record of fighter 1 / Outfit 1, not owned by default, visualNo = its costume number. The
+// records go at the end of the root's DataArray. trim_costume_table then keeps those in use.
+// False and data untouched when the layout is not the expected one.
+bool add_costume_records(std::vector<uint8_t>& data, const std::vector<CostumeSlotRecord>& records,
+                         uint32_t msg_id_base, const std::vector<std::vector<uint8_t>>& message_guids,
+                         std::string* err = nullptr);
+// "a1b2c3d4-0001-4000-8000-000000001388" -> the 16 bytes of a System.Guid (first three groups little-endian)
+bool guid_bytes(std::string_view text, std::vector<uint8_t>& out);
+
 // Colour tints of a costume colour file (cmd_*.user): each material cluster in file order, with its
 // customize colours (enabled flag, RGBA packed as the file stores it: R in the low byte).
 struct CmdCluster { std::string name; std::vector<std::pair<bool, uint32_t>> colors; };
