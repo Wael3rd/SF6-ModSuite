@@ -29,6 +29,33 @@ when it is done:
 Without stage mods, the stage hooks are not installed; without costume slots, the costume ones are not. A
 fight triggers none of these events: during a fight the plugin reads nothing but its own memory.
 
+## Slots of outfits the player does not own
+
+A slot made from a character's Outfit 2 (or 3, 4) is shown only if the game counts that outfit as the player's.
+The plugin asks the game the question its own screens ask: `app.InventoryManager.CostumeInventory.GetCostumeNoList`
+(the costume numbers of a character the player can pick), which the character select screen
+(`app.UIFlowUI10505.Param.GetCostumeId`) and Battle Settings (`app.helper.hGUI.GetEnableFighterCostumeIdList`) list.
+An outfit is in it when it is a default one, bought (in-game currency, shop) or given by a DLC the game counts as
+valid (`app.DlcManager.IsValidDlcItem`, through `SystemSaveInventory.Contains`). An unlock-all script that hooks the
+DLC checks makes every outfit valid: every slot is shown then.
+
+- Hidden means not owned: the slot's record is not given (`AddDlcSaveData`), or is taken back (`DeleteDlcSaveData`)
+  if an earlier session gave it, so the game's own list leaves it out. The slot stays in the costume pak (its scene
+  and files): a replay or a saved setting that names it still finds it.
+- Asked at boot (an answer then can only show a slot), then each time the title screen is left and each time the
+  character select screen or Battle Settings opens; not during an online battle, where REFramework stops Lua
+  scripts (an unlock-all script's hooks with them) and the game would answer with what the player really owns.
+  An outfit seen owned once stays so until the game is closed: such a slot never disappears during a session.
+- A list without Outfit 1 (every character's default) is no answer (the inventory is not loaded yet); if the method
+  is missing (a game update), every slot is shown as before.
+- A Battle Settings choice of a hidden slot is kept (`state.json`) but not applied online until the outfit is the
+  player's: the menu shows DriveTech in its place.
+- Log, one line per hidden slot: `[F1] slot v05 (Outfit I, <mod>) hidden: made for Outfit 2, which the player does
+  not own`; `... shown: the player owns Outfit 2 now` if it changes.
+- Probe (read-only, off by default): create `reframework\data\SF6_CostumeSlots_data\ownership_probe.txt` (empty) and
+  the log gets, at up to 8 ownership passes a session, what each candidate method answers for the outfits of the
+  characters that have slots (`probe F1 list=[0,1,4,...] | c1 r2: has 1 save 0 default 0 valid 1 dlc 1 ...`).
+
 ## Files
 
 - `reframework/data/SF6_Costumes_Data/registry.json` (written by the loader): slots, record ids, colour squares.

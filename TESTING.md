@@ -32,6 +32,34 @@ folder; the loader rewrites it at every launch where something changed.
 - 1.8.1, all of it: C. Viper Bayonetta (wings included), Ken SFV with Ken SFV Hair in one sub-folder (only the
   combined outfit), several mods of the same outfit installed together (colours no longer mixed).
 
+## Slots of outfits the player does not own (plugin), to check in game
+
+A slot made from an outfit the game does not count as the player's is hidden (see plugin/README.md). Before the
+tests: the new `SF6_CostumeSlotsNative.dll` in `reframework\plugins\` (game closed), an empty
+`reframework\data\SF6_CostumeSlots_data\ownership_probe.txt` (the log then shows each method's answer). The log is
+`reframework\data\SF6_CostumeSlots_data\native_log.txt`; `outfits.json` (`based_on`: 1 = Outfit 2, 2 = Outfit 3,
+3 = Outfit 4) says which slots are made from which outfit.
+
+1. **With an unlock-all script** (one that hooks `app.DlcManager`'s checks, in `reframework\autorun`): launch, leave
+   the title screen, open Battle Settings, then Training's character select. Every slot is shown as before. Log: no
+   `hidden:` line, no `ownership taken back`; the `probe F..` lines list the outfits 1, 2 (and 3) of the characters
+   and `dlc 1` on every record.
+2. **Without it** (game closed, move the script out of `autorun`): launch, same screens. Log: one `[F..] slot vNN
+   (Outfit .., <mod>) hidden: made for Outfit 2, which the player does not own` per slot of an outfit not owned, once
+   `ownership taken back from N hidden slots`; probe: those outfits absent from `list=[...]`, their records `has 0
+   save 0 default 0 valid 1 dlc 0`. On the select screen and in Battle Settings, a character with such a slot no
+   longer lists it; its slots made from Outfit 1 or DriveTech, and from an outfit really owned (bought: `save 1`,
+   DLC: `dlc 1`), are still there. Known: the names of the slots left keep their numbers (Outfit I, Outfit III when
+   Outfit II is hidden).
+3. **A choice kept**: with the unlock-all script, pick in Battle Settings a slot made from an outfit not owned; close
+   the game, move the script out, launch: Battle Settings shows DriveTech for that character, `state.json` keeps the
+   slot; Combo Trials in DriveTech Wear: DriveTech, no `slot vN mounted` line. Put the script back: the slot is
+   applied again.
+4. **Online, with the unlock-all script**: a casual match with a slot made from an outfit not owned (chosen in Battle
+   Settings): the slot shows on the player's fighter as before, no `hidden:` line during or after the match (a pass
+   at the battle's loading logs `online battle, outfit ownership not asked`). Back in the menus, still listed.
+5. **Online, without it**: the same character: DriveTech, as the opponent sees it; no communication error.
+
 ## New in 1.9.0, to check in game
 
 - Checked on 2026-09-30: boot (colour records, select screen data, ownership), ownership given back after the
