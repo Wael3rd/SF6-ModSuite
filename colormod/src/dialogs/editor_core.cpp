@@ -15,6 +15,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include "../fighters.hpp"
 #include "../engine/catalog.hpp"
 #include "../engine/chips.hpp"
 
@@ -384,18 +385,12 @@ std::string edit_okey() {                                       // :2212
     return fmt("%d_%d_game_%d", edit.fighter, edit.costume, edit.color_id);
 }
 std::string pristine_path(int fighter, int costume, int id) { return fmt("%spristine/%d_%d_game_%d.user.2", DATA_DIR, fighter, costume, id); }
-const char* fighter_name(int id) {
-    static const std::map<int, const char*> names = { { 1, "Ryu" }, { 2, "Luke" }, { 3, "Kimberly" }, { 4, "ChunLi" }, { 5, "Manon" }, { 6, "Zangief" },
-        { 7, "JP" }, { 8, "Dhalsim" }, { 9, "Cammy" }, { 10, "Ken" }, { 11, "DeeJay" }, { 12, "Lily" }, { 13, "AKI" }, { 14, "Rashid" }, { 15, "Blanka" },
-        { 16, "Juri" }, { 17, "Marisa" }, { 18, "Guile" }, { 19, "Ed" }, { 20, "EHonda" }, { 21, "Jamie" }, { 22, "Akuma" }, { 25, "Sagat" },
-        { 26, "Bison" }, { 27, "Terry" }, { 28, "Mai" }, { 29, "Elena" }, { 30, "CViper" }, { 31, "Alex" }, { 32, "Ingrid" }, { 33, "Yasmine" }, { 34, "Arjun" } };
-    auto it = names.find(id);
-    return it == names.end() ? nullptr : it->second;
-}
+// the fixed name, else the game's (fighters.hpp); "" when unknown
+std::string fighter_name(int id) { return fighters::name_or_empty(id); }
 // next free MANUALCOLORS_NN/esfXXX_YYY_cmd_NNN.user.2 for a fighter / costume (:2153)
 bool manual_path(int fighter, int costume, std::string& rel) {
-    const char* nm = fighter_name(fighter);
-    const std::string folder = fmt("%scolors/%s_esf%03d/", DATA_DIR, nm ? nm : fmt("Fighter%d", fighter).c_str(), fighter);
+    const std::string nm = fighter_name(fighter);
+    const std::string folder = fmt("%scolors/%s_esf%03d/", DATA_DIR, (nm.empty() ? fmt("Fighter%d", fighter) : nm).c_str(), fighter);
     std::unordered_set<std::string> existing;
     if (auto* list = entries_for(fighter, costume)) for (auto& e : *list) existing.insert(backslashes(e.path));
     for (int pack = 1; pack <= 99; ++pack) {

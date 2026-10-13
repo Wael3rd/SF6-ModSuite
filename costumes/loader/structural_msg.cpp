@@ -264,3 +264,84 @@ bool add_msg_entries(std::vector<uint8_t>& msg, const std::vector<MsgEntry>& add
     msg.swap(out);
     return true;
 }
+
+// ============================================================================
+// read_msg_texts
+// ============================================================================
+
+static void utf16_to_utf8(const U16& in, std::string& out) {
+    out.clear();
+    for (size_t i = 0; i < in.size(); ++i) {
+        uint32_t cp = in[i];
+        if (cp >= 0xD800 && cp < 0xDC00 && i + 1 < in.size() && in[i + 1] >= 0xDC00 && in[i + 1] < 0xE000) {
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (in[i + 1] - 0xDC00);
+            ++i;
+        } else if (cp >= 0xD800 && cp < 0xE000) {
+            cp = 0xFFFD;   // lone surrogate
+        }
+        if (cp < 0x80) out.push_back(static_cast<char>(cp));
+        else if (cp < 0x800) { out.push_back(static_cast<char>(0xC0 | (cp >> 6))); out.push_back(static_cast<char>(0x80 | (cp & 0x3F))); }
+        else if (cp < 0x10000) {
+            out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        }
+    }
+}
+
+bool read_msg_texts(const std::vector<uint8_t>& msg, uint32_t language,
+                    std::map<std::string, std::string>& out, std::string* err) {
+    out.clear();
+    auto bad = [&](const char* why) { out.clear(); return fail(err, why); };
+    // Same header layout as add_msg_entries (encrypted by-hash family, no user parameters).
+    if (msg.size() < 72) return bad("file too small");
+    if (std::memcmp(msg.data() + 4, "GMSG", 4) != 0) return bad("no GMSG magic");
+    uint32_t version = rd32(msg, 0);
+    if (version <= 15 || version == 0x2022033Du) return bad("unsupported msg version");
+    uint32_t count = rd32(msg, 16), nparam = rd32(msg, 20), nlang = rd32(msg, 24);
+    if (nparam != 0) return bad("user parameters not supported");
+    if (nlang == 0 || nlang > 256 || count > 100000) return bad("implausible counts");
+    uint64_t data_off = rd64(msg, 32), lang_off = rd64(msg, 48);
+    if (data_off < 72 || data_off > msg.size()) return bad("bad string pool offset");
+    if (lang_off < 72 || lang_off + uint64_t(nlang) * 4 > data_off) return bad("bad language table");
+    uint64_t esize = 40 + uint64_t(nlang) * 8;
+    if (72 + uint64_t(count) * 8 > data_off) return bad("entry table past pool");
+
+    uint32_t col = nlang;
+    for (uint32_t l = 0; l < nlang; ++l)
+        if (rd32(msg, lang_off + l * 4) == language) { col = l; break; }
+    if (col == nlang) return bad("language not in the file");
+
+    std::vector<uint8_t> pool(msg.begin() + static_cast<ptrdiff_t>(data_off), msg.end());
+    pool_decrypt(pool.data(), pool.size());
+    auto read_str = [&](uint64_t ptr, U16& s) -> bool {
+        s.clear();
+        if (ptr == 0) return true;
+        if (ptr < data_off) return false;
+        for (uint64_t p = ptr - data_off; p + 1 < pool.size(); p += 2) {
+            if (pool[p] == 0 && pool[p + 1] == 0) return true;
+            s.push_back(static_cast<char16_t>(pool[p] | (pool[p + 1] << 8)));
+        }
+        return false;
+    };
+
+    std::map<std::string, std::string> res;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint64_t eo = rd64(msg, 72 + size_t(i) * 8);
+        if (eo < 72 || eo + esize > data_off) return bad("entry outside file");
+        U16 name, text;
+        if (!read_str(rd64(msg, eo + 24), name)) return bad("bad name string");
+        if (!read_str(rd64(msg, eo + 40 + uint64_t(col) * 8), text)) return bad("bad text string");
+        std::string n8, t8;
+        for (char16_t c : name) n8.push_back(c < 0x80 ? static_cast<char>(c) : '?');
+        utf16_to_utf8(text, t8);
+        res[n8] = t8;
+    }
+    out.swap(res);
+    return true;
+}

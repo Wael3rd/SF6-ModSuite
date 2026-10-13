@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -17,3 +18,10 @@ struct MsgEntry {
 // null) says why. Only the encrypted by-hash versions (21) without user parameters are accepted.
 bool add_msg_entries(std::vector<uint8_t>& msg, const std::vector<MsgEntry>& entries,
                      std::string* err);
+
+// Reads one language of a game .msg.21 file: entry name (ASCII) -> text (UTF-8). `language` is the
+// via.Language id (0 = Japanese, 1 = English); the column is found through the file's language table.
+// Returns false (and an empty `out`) on any layout it does not recognise, or when the file has no
+// such language; `err` (may be null) says why. Read-only: the file is not modified.
+bool read_msg_texts(const std::vector<uint8_t>& msg, uint32_t language,
+                    std::map<std::string, std::string>& out, std::string* err = nullptr);

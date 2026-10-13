@@ -15,6 +15,7 @@
 #include <reframework/API.hpp>
 
 #include "common.hpp"
+#include "fighters.hpp"
 #include "dialogs/locale.hpp"
 #include "engine/decide.hpp"
 #include "engine/live.hpp"
@@ -55,6 +56,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
     if (!param || !param->functions) return false;
     try { reframework::API::initialize(param); } catch (...) { return false; }
     try {
+        fighters::preload_async();                              // the game's fighter names, off the game's frames
         cmn::g_bridge_editor.status = engine::live::status;
         cmn::g_bridge_editor.ready = engine::live::ready;
         cmn::g_bridge_decide.ready = engine::decide::ready;

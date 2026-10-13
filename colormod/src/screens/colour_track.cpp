@@ -24,6 +24,7 @@
 #include "../dialogs/editor_core.hpp"
 #include "../dialogs/locale.hpp"
 #include "../dialogs/options_driver.hpp"
+#include "../fighters.hpp"
 #include "../engine/catalog.hpp"
 #include "../engine/chips.hpp"
 #include "../engine/decide.hpp"
@@ -1214,21 +1215,17 @@ void decide_push() {
     }
 }
 
-// the drop folders' READMEs (the file name decides the fighter, the folder is only for humans), once per session
+// the drop folders' READMEs (the file name decides the fighter, the folder is only for humans), once per session, once
+// the game's fighter names are read (fighters::preload_async)
 void write_readmes() {
     static bool done = false;
-    if (done) return;
+    if (done || !fighters::ready()) return;
     done = true;
-    static const std::pair<int, const char*> kNames[] = { { 1, "Ryu" }, { 2, "Luke" }, { 3, "Kimberly" }, { 4, "ChunLi" }, { 5, "Manon" },
-        { 6, "Zangief" }, { 7, "JP" }, { 8, "Dhalsim" }, { 9, "Cammy" }, { 10, "Ken" }, { 11, "DeeJay" }, { 12, "Lily" }, { 13, "AKI" },
-        { 14, "Rashid" }, { 15, "Blanka" }, { 16, "Juri" }, { 17, "Marisa" }, { 18, "Guile" }, { 19, "Ed" }, { 20, "EHonda" }, { 21, "Jamie" },
-        { 22, "Akuma" }, { 25, "Sagat" }, { 26, "Bison" }, { 27, "Terry" }, { 28, "Mai" }, { 29, "Elena" }, { 30, "CViper" }, { 31, "Alex" },
-        { 32, "Ingrid" }, { 33, "Yasmine" }, { 34, "Arjun" } };
-    for (const auto& [id, name] : kNames) {
+    for (const auto& [id, name] : fighters::all_known()) {
         char rel[160], text[400];
-        std::snprintf(rel, sizeof rel, "SF6_ColorSpinExtra_data/colors/%s_esf%03d/README.txt", name, id);
+        std::snprintf(rel, sizeof rel, "SF6_ColorSpinExtra_data/colors/%s_esf%03d/README.txt", name.c_str(), id);
         std::snprintf(text, sizeof text, "Drop %s colour files here: esf%03d_<costume>_cmd_<n>.user.2 (costume 001 = Outfit 1, n = RW n). "
-                      "Sub-folders are fine; the file name decides everything.", name, id);
+                      "Sub-folders are fine; the file name decides everything.", name.c_str(), id);
         const std::filesystem::path path = std::filesystem::path(kDataPrefix) / rel;
         std::ifstream in(path, std::ios::binary);
         const std::string cur((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());

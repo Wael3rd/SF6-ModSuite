@@ -8,6 +8,8 @@
 #include "patch.hpp"
 #include "structural_scene.hpp"
 #include "structural_msg.hpp"
+#include "vanilla_inventory.hpp"
+#include "fighter_names.hpp"
 #include "loader_core.hpp"
 #include "archive.hpp"
 
@@ -203,73 +205,81 @@ struct VanillaIndex {
     // folder that is no costume's main folder (Dhalsim's DriveTech: 005/01): a slot must not get it.
     std::unordered_map<int, std::set<int>> vanilla_folders;
 
+    enum Section { SEC_NONE = 0, SEC_SUFFIXES = 1, SEC_COSTUMES = 2, SEC_FILES = 3 };
+
     bool load(const char* tsv_path) {
         FILE* f = fopen(tsv_path, "r");
         if (!f) return false;
-        int section = 0; // 0=none, 1=suffixes, 2=costumes, 3=files
+        int section = SEC_NONE;
         char line[2048];
         while (fgets(line, sizeof(line), f)) {
             size_t len = strlen(line);
             while (len > 0 && (line[len-1]=='\n'||line[len-1]=='\r')) line[--len]=0;
             if (len == 0) continue;
             if (line[0] == '#') {
-                if (strncmp(line, "#SUFFIXES", 9) == 0) section = 1;
-                else if (strncmp(line, "#COSTUMES", 9) == 0) section = 2;
-                else if (strncmp(line, "#FILES", 6) == 0) section = 3;
+                if (strncmp(line, "#SUFFIXES", 9) == 0) section = SEC_SUFFIXES;
+                else if (strncmp(line, "#COSTUMES", 9) == 0) section = SEC_COSTUMES;
+                else if (strncmp(line, "#FILES", 6) == 0) section = SEC_FILES;
                 continue;
             }
-            if (section == 1) {
-                char ext[64], ver[64];
-                if (sscanf(line, "%63[^\t]\t%63s", ext, ver) == 2)
-                    suffixes[ext] = ver;
-            } else if (section == 2) {
-                CostumeInfo ci;
-                char fdir[32], mdir[256], scn[256];
-                mdir[0] = scn[0] = 0;
-                if (sscanf(line, "%d\t%31[^\t]\t%d\t%255[^\t]\t%255s",
-                           &ci.fighter, fdir, &ci.costume_no, mdir, scn) >= 3) {
-                    ci.fighter_dir = fdir;
-                    ci.model_dir = mdir;
-                    ci.scene = scn;
-                    costumes.push_back(ci);
-                    if (ci.model_dir.size() > 0) {
-                        auto slash = ci.model_dir.rfind('/');
-                        if (slash != std::string::npos) {
-                            std::string folder = ci.model_dir.substr(slash+1);
-                            std::string key = ci.fighter_dir + "\t" + folder;
-                            // A model folder can serve two costumes (Dhalsim: C1 and DriveTech both
-                            // use 001). A mod of that folder is a mod of the lowest costume number;
-                            // keeping the last one made every Dhalsim C1 mod load as DriveTech.
-                            auto prev = folder_to_costume.find(key);
-                            if (prev == folder_to_costume.end()
-                                || ci.costume_no < costumes[prev->second].costume_no)
-                                folder_to_costume[key] = costumes.size() - 1;
-                        }
-                    }
-                }
-            } else if (section == 3) {
-                char hash_s[32], kind[32], path[512];
-                int fighter, cno;
-                if (sscanf(line, "%31[^\t]\t%d\t%d\t%31[^\t]\t%511s",
-                           hash_s, &fighter, &cno, kind, path) == 5) {
-                    uint64_t h = strtoull(hash_s, nullptr, 16);
-                    hash_to_paths[h].push_back(path);
-                    all_hashes.insert(h);
-                    // ".../model/esf/esfNNN/FFF/..." -> folder FFF
-                    std::string low = str_lower(path);
-                    size_t at = low.find("/model/esf/esf");
-                    if (at != std::string::npos) {
-                        size_t fs = low.find('/', at + 11);
-                        if (fs != std::string::npos && fs + 4 < low.size() && low[fs + 4] == '/'
-                            && isdigit((unsigned char)low[fs + 1]) && isdigit((unsigned char)low[fs + 2])
-                            && isdigit((unsigned char)low[fs + 3]))
-                            vanilla_folders[fighter].insert(atoi(low.c_str() + fs + 1));
-                    }
-                }
-            }
+            add_row(section, line);
         }
         fclose(f);
         return true;
+    }
+
+    // One row of a section, as the TSV writes it (no line end). The TSV is read through this, and so are the
+    // rows of a costume inventoried from the game's files (vanilla_inventory.cpp): both end up the same.
+    void add_row(int section, const char* line) {
+        if (section == SEC_SUFFIXES) {
+            char ext[64], ver[64];
+            if (sscanf(line, "%63[^\t]\t%63s", ext, ver) == 2)
+                suffixes[ext] = ver;
+        } else if (section == SEC_COSTUMES) {
+            CostumeInfo ci;
+            char fdir[32], mdir[256], scn[256];
+            mdir[0] = scn[0] = 0;
+            if (sscanf(line, "%d\t%31[^\t]\t%d\t%255[^\t]\t%255s",
+                       &ci.fighter, fdir, &ci.costume_no, mdir, scn) >= 3) {
+                ci.fighter_dir = fdir;
+                ci.model_dir = mdir;
+                ci.scene = scn;
+                costumes.push_back(ci);
+                if (ci.model_dir.size() > 0) {
+                    auto slash = ci.model_dir.rfind('/');
+                    if (slash != std::string::npos) {
+                        std::string folder = ci.model_dir.substr(slash+1);
+                        std::string key = ci.fighter_dir + "\t" + folder;
+                        // A model folder can serve two costumes (Dhalsim: C1 and DriveTech both
+                        // use 001). A mod of that folder is a mod of the lowest costume number;
+                        // keeping the last one made every Dhalsim C1 mod load as DriveTech.
+                        auto prev = folder_to_costume.find(key);
+                        if (prev == folder_to_costume.end()
+                            || ci.costume_no < costumes[prev->second].costume_no)
+                            folder_to_costume[key] = costumes.size() - 1;
+                    }
+                }
+            }
+        } else if (section == SEC_FILES) {
+            char hash_s[32], kind[32], path[512];
+            int fighter, cno;
+            if (sscanf(line, "%31[^\t]\t%d\t%d\t%31[^\t]\t%511s",
+                       hash_s, &fighter, &cno, kind, path) == 5) {
+                uint64_t h = strtoull(hash_s, nullptr, 16);
+                hash_to_paths[h].push_back(path);
+                all_hashes.insert(h);
+                // ".../model/esf/esfNNN/FFF/..." -> folder FFF
+                std::string low = str_lower(path);
+                size_t at = low.find("/model/esf/esf");
+                if (at != std::string::npos) {
+                    size_t fs = low.find('/', at + 11);
+                    if (fs != std::string::npos && fs + 4 < low.size() && low[fs + 4] == '/'
+                        && isdigit((unsigned char)low[fs + 1]) && isdigit((unsigned char)low[fs + 2])
+                        && isdigit((unsigned char)low[fs + 3]))
+                        vanilla_folders[fighter].insert(atoi(low.c_str() + fs + 1));
+                }
+            }
+        }
     }
 
     int max_costume_no(int fighter) const {
@@ -3466,6 +3476,10 @@ static const char* CHARACTER_NAMES[] = {
 };
 static const int N_CHARACTERS = 32;
 
+// Folders of fighters the game has and the list above does not (a fighter added by a game update), set once
+// the game's costume table is known (note_new_fighter_folders).
+static std::vector<std::string> g_extra_character_dirs;
+
 static void ensure_costume_mods_dirs(const std::string& game_dir) {
     std::string base = game_dir + "\\reframework\\costume_mods";
     // Use wide API for directory creation (names with dots/spaces)
@@ -3478,6 +3492,7 @@ static void ensure_costume_mods_dirs(const std::string& game_dir) {
     for (int i = 0; i < N_CHARACTERS; i++) {
         mkdirW(base + "\\" + CHARACTER_NAMES[i]);
     }
+    for (auto& d : g_extra_character_dirs) mkdirW(base + "\\" + d);
 }
 
 struct FolderModInfo {
@@ -5136,6 +5151,84 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
 }
 
 // ============================================================================
+// costume_mods folders of the game's fighters
+// ============================================================================
+
+// A folder per fighter of the game's costume table that the fixed list has none for, named like the
+// others from the game's own name for the fighter. Existing folders are never touched: this only adds
+// names to what ensure_costume_mods_dirs creates.
+static void note_new_fighter_folders(const std::string& game_dir, const std::vector<int>& fighters) {
+    g_extra_character_dirs.clear();
+    // "Edmond Honda" (the game's spelling) is the "E. Honda" folder: a name of several words is compared by its
+    // first letter and its last word, case and dots ignored
+    auto key = [](std::string n) {
+        n = str_lower(n);
+        n.erase(std::remove(n.begin(), n.end(), '.'), n.end());
+        size_t sp = n.rfind(' ');
+        return sp == std::string::npos ? n : n.substr(0, 1) + " " + n.substr(sp + 1);
+    };
+    const auto names = game_fighter_names(game_dir);
+    std::string added;
+    for (int f : fighters) {
+        auto it = names.find(f);
+        if (it == names.end()) continue;
+        const std::string folder = fighter_folder_name(it->second);
+        if (folder.empty()) continue;
+        bool known = false;
+        for (int i = 0; i < N_CHARACTERS; i++)
+            if (key(folder) == key(CHARACTER_NAMES[i])) known = true;
+        for (auto& d : g_extra_character_dirs)
+            if (key(folder) == key(d)) known = true;
+        if (known) continue;
+        g_extra_character_dirs.push_back(folder);
+        added += (added.empty() ? "" : ", ") + folder;
+    }
+    if (!added.empty()) logf("  costume_mods folders for fighters of the game not in the shipped list: %s\n", added.c_str());
+}
+
+// ============================================================================
+// Vanilla index completed from the game
+// ============================================================================
+
+// vanilla_costume_index.tsv lists the costumes of the game it was built from. A costume a game update
+// added (a fighter, an outfit) is missing from it, and a mod for that costume would not be recognised
+// until the index is rebuilt. Such a costume is inventoried here from the game's paks (vanilla_inventory.cpp,
+// the rules of costumes/tools/build_vanilla_inventory.py) and its rows go through the same parser as the
+// TSV's. Costumes the index has cost nothing: finding which are missing is one lookup per possible scene.
+static void complete_vanilla_index(VanillaIndex& inv, PakReader& base_pak, const std::vector<int>& fighters) {
+    const auto t0 = std::chrono::high_resolution_clock::now();
+    SuffixMap suffixes = vanilla_known_suffixes();
+    for (auto& kv : inv.suffixes) suffixes[kv.first] = kv.second;
+    std::string done;
+    size_t n = 0;
+    for (int f : fighters) {
+        for (int no : vanilla_costume_numbers(base_pak, f, suffixes)) {
+            if (inv.get_costume(f, no)) continue;
+            VanillaCostume vc;
+            std::string why;
+            if (!vanilla_costume_inventory(base_pak, f, no, suffixes, vc, &why)) {
+                logf("  WARN: %s is not in the vanilla index and could not be inventoried from the game: %s\n",
+                     vanilla_costume_label(f, no).c_str(), why.c_str());
+                continue;
+            }
+            if (!vc.fallback.empty())
+                logf("  WARN: %s: layout not recognised (%s): its files were found by scanning for paths\n",
+                     vanilla_costume_label(f, no).c_str(), vc.fallback.c_str());
+            inv.add_row(VanillaIndex::SEC_COSTUMES, vanilla_costume_row(vc).c_str());
+            for (auto& row : vanilla_file_rows(vc)) inv.add_row(VanillaIndex::SEC_FILES, row.c_str());
+            done += (done.empty() ? "" : ", ") + vanilla_costume_label(f, no);
+            n++;
+        }
+    }
+    if (!n) return;
+    // extensions whose version was found along the way (or known to the inventory only)
+    for (auto& kv : suffixes)
+        if (!inv.suffixes.count(kv.first)) inv.add_row(VanillaIndex::SEC_SUFFIXES, (kv.first + "\t" + kv.second).c_str());
+    logf("  vanilla index completed from the game: %zu costumes (%s) in %.0f ms\n", n, done.c_str(),
+         std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count());
+}
+
+// ============================================================================
 // costume_loader_run  (entry point for exe and DLL)
 // ============================================================================
 
@@ -5356,6 +5449,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     } else {
         logf("  WARN: structural files taken from the shipped copies (%s)\n", structural.why.c_str());
     }
+
+    // 4c. Costumes of the game that the shipped vanilla index does not know (added by a game update)
+    if (structural.ok) complete_vanilla_index(inv, base_pak, structural.fighters);
+    if (structural.ok) note_new_fighter_folders(game_dir, structural.fighters);
 
 
     // 5. Scan each mod pak

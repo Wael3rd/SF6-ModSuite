@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #include "data.hpp"
+#include "../fighters.hpp"
 #include "../engine/luajson.hpp"
 #include "nlohmann/json.hpp"
 
@@ -52,12 +53,6 @@ bool tonumber(const json& v, double& out) {
 }
 
 // ---- SF6_DIRecolor ------------------------------------------------------------------------------------------------
-
-const char* const kNames[] = {
-    nullptr, "Ryu", "Luke", "Kimberly", "ChunLi", "Manon", "Zangief", "JP", "Dhalsim", "Cammy", "Ken", "DeeJay", "Lily",
-    "AKI", "Rashid", "Blanka", "Juri", "Marisa", "Guile", "Ed", "EHonda", "Jamie", "Akuma", nullptr, nullptr, "Sagat",
-    "Bison", "Terry", "Mai", "Elena", "CViper", "Alex", "Ingrid", "Yasmine", "Arjun",
-};
 
 constexpr int64_t kRed = 0xFF0000FF, kWhite = 0xFFFFFFFF;
 
@@ -196,12 +191,7 @@ json dr_load(const fs::path& root, int id) {
 
 }  // namespace
 
-std::string char_name(int id) {
-    if (id >= 0 && id < (int)(sizeof(kNames) / sizeof(kNames[0])) && kNames[id]) return kNames[id];
-    char b[16];
-    std::snprintf(b, sizeof(b), "esf%03d", id);
-    return b;
-}
+std::string char_name(int id) { return fighters::name(id); }
 
 json load_table(const std::string& root, const std::string& kind, int id, std::string* err) {
     try {
