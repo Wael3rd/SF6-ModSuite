@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Slots Loader
+- **`SF6_SlotsClean.exe`** (package root, next to `amd_ags_x64.dll`): removes what the loader made at runtime in the game
+  folder, for the patch day. After a game update Fluffy Mod Manager re-reads the game archives and records every pak
+  it finds as a game file, the loader's slot paks included; with the package turned off nothing removes them, and the
+  slots keep showing. Run it first. It finds the loader's paks by their marker (costume and stage slots), deletes one
+  only when no pak of another mod has a higher number and otherwise replaces it in place by a pak holding only the
+  marker (the game reads the patch paks as an unbroken row), then removes `registry.json` and `outfits.json` of the
+  costume data and the stage slots' runtime state. `reframework\costume_mods`, other mods' data, the shipped `loader\`
+  files, logs and Fluffy's files are not touched. `--dry-run` lists without changing anything; it refuses while
+  Street Fighter 6 runs. If Fluffy's `ArchiveList.bin` lists one of the paks it says so.
+- The loader logs a `WARN:` line at each pak build when Fluffy's `ArchiveList.bin` lists one of its paks.
+- "Patch day" procedure in the README and in `docs/FLUFFY.md`.
+- Tests: `costumes/tools/slots_clean_test/`.
+
 ## 1.10.6 (2026-10-13) — SF6 Mod Suite
 
 | Package | Version | |

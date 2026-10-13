@@ -9,6 +9,7 @@ rem   amd_ags_x64.dll                  costume slots + stage slots: the DLL the 
 rem   costumes_only\amd_ags_x64.dll    the costume loader alone (what the releases ship so far)
 rem   SF6_CostumeSlotsNative.dll       REFramework plugin used during online matches
 rem   costume_loader.exe paktool.exe loadtest.exe    costume tools
+rem   SF6_SlotsClean.exe              removes the loader's runtime paks and state (shipped next to amd_ags_x64.dll)
 rem   stagepak.exe stagetest.exe textest.exe         stage tools
 rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first.
 
@@ -82,6 +83,8 @@ if errorlevel 1 goto :failed
 cl %CF% /Fo%O%\tools\ %C%\paktool.cpp %PAK% %O%\core\patch.obj /Fe%B%\paktool.exe %LK%
 if errorlevel 1 goto :failed
 cl %CF% /Fo%O%\tools\ %CO%\loadtest.cpp /Fe%B%\loadtest.exe %LK%
+if errorlevel 1 goto :failed
+cl %CF% /Fo%O%\tools\ costumes\tools\slots_clean.cpp %PAK% /Fe%B%\SF6_SlotsClean.exe %LK%
 if errorlevel 1 goto :failed
 
 echo === stage tools ===

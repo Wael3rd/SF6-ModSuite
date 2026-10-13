@@ -897,8 +897,6 @@ static void classify_patch_paks(const std::string& pak_dir,
                                 std::vector<PakInfo>& our_paks,
                                 std::vector<PakInfo>& mod_paks,
                                 int& stage_pak_num) {
-    uint64_t marker_h = pak_path_hash(std::string_view(MARKER_PATH));
-    uint64_t stage_h = pak_path_hash(std::string_view(STAGE_SLOTS_MARKER));
     stage_pak_num = 0;
     WIN32_FIND_DATAA fd;
     std::string pattern = pak_dir + "\\re_chunk_000.pak.patch_*.pak";
@@ -911,23 +909,11 @@ static void classify_patch_paks(const std::string& pak_dir,
         if (ps == std::string::npos) continue;
         int num = atoi(fn.c_str() + ps + 6);
         std::string full = pak_dir + "\\" + fn;
-        // Check for marker
-        FILE* fp = fopen(full.c_str(), "rb");
-        if (!fp) continue;
-        struct { uint32_t magic; uint8_t maj,min; int16_t feat; uint32_t count,fp_; } hdr;
-        fread(&hdr, 1, 16, fp);
-        bool has_marker = false, is_stage = false;
-        for (uint32_t i = 0; i < hdr.count; i++) {
-            uint32_t lo, hi; int64_t dummy[5];
-            fread(&lo, 4, 1, fp); fread(&hi, 4, 1, fp);
-            fread(dummy, 8, 5, fp);
-            uint64_t h = (uint64_t(hi)<<32)|lo;
-            if (h == marker_h) { has_marker = true; break; }
-            if (h == stage_h) { is_stage = true; break; }
-        }
-        fclose(fp);
-        if (is_stage) { stage_pak_num = std::max(stage_pak_num, num); continue; }
-        (has_marker ? our_paks : mod_paks).push_back({num, full});
+        // Ours (costume marker), the stage slots' or a mod's: common/pak.cpp, shared with SF6_SlotsClean
+        PatchPakKind kind = classify_patch_pak(full.c_str());
+        if (kind == PatchPakKind::Unreadable) continue;
+        if (kind == PatchPakKind::Stage) { stage_pak_num = std::max(stage_pak_num, num); continue; }
+        (kind == PatchPakKind::Costume ? our_paks : mod_paks).push_back({num, full});
     } while (FindNextFileA(h, &fd));
     FindClose(h);
     std::sort(mod_paks.begin(), mod_paks.end(), [](auto& a, auto& b){ return a.num < b.num; });
@@ -4737,6 +4723,25 @@ static void find_fluffy(const std::string& game_dir, const std::string& costume_
          mods.size(), matched, costume, arcs.size(), list_ms);
 }
 
+// Fluffy's re-read of the game archives records every pak present as a game file. When its
+// ArchiveList.bin lists a pak of ours, Fluffy later reports "EXE changed" and the slots stay in
+// the game even with every mod off: one WARN line says so and points to SF6_SlotsClean.exe.
+static void warn_fluffy_archive_list(const std::string& registry_dir, const std::vector<std::string>& pak_names) {
+    std::string dir = trim_ws(read_text_file(registry_dir + "\\fluffy_location.txt"));
+    if (dir.empty() && !g_fluffy.ini.empty()) {
+        size_t cut = g_fluffy.ini.rfind("\\Games\\SF6\\");
+        if (cut != std::string::npos) dir = g_fluffy.ini.substr(0, cut);
+    }
+    if (dir.empty()) return;
+    auto hits = archive_list_hits(join_dir(dir, "Games\\SF6\\ArchiveList.bin"), pak_names);
+    if (hits.empty()) return;
+    std::string list;
+    for (auto& h : hits) list += (list.empty() ? "" : ", ") + h;
+    logf("  WARN: Fluffy Mod Manager's ArchiveList.bin lists %s as a game file. Fluffy recorded the slots' "
+         "pak while re-reading the game archives. After a game update, run SF6_SlotsClean.exe first and "
+         "only then let Fluffy re-read the archives (Patch day in the README)\n", list.c_str());
+}
+
 // The claimed files as the scan names them (old texture versions renamed to the current one)
 static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv) {
     static std::set<std::string> out;
@@ -5794,6 +5799,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             log_close(); return 1;
         }
         logf("  removed old pak: %s\n", op.path.c_str());
+    }
+
+    {
+        std::vector<std::string> pak_names{ target_name };
+        for (auto& op : our_paks) pak_names.push_back(op.path.substr(op.path.find_last_of("\\/") + 1));
+        warn_fluffy_archive_list(registry_dir, pak_names);
     }
 
     // 9. Write output pak; the registry is saved only once it is on disk

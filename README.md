@@ -64,6 +64,19 @@ Fluffy's copy over everything else. To keep the original outfit as well, put the
 
 More in [docs/FLUFFY.md](docs/FLUFFY.md): checking it worked, log lines, what to send when reporting.
 
+## Patch day (after a game update)
+
+The slots exist as patch paks the loader writes into the game folder at launch. If the loader is turned off
+before Fluffy Mod Manager re-reads the game archives, those paks stay and Fluffy records them as game files
+(the slots then show even with every mod off). So, in this order:
+
+1. The game updated: **before** letting Fluffy re-read the archives ("EXE changed") and before turning mods off,
+   close the game and run `SF6_SlotsClean.exe` (double-click, in the game folder; `--dry-run` only lists). It removes
+   the loader's runtime paks and state files, and nothing else: `reframework\costume_mods`, other mods' data and
+   Fluffy's files are not touched.
+2. Let Fluffy re-read the game archives.
+3. Launch the game: the loader rebuilds the slots from `reframework\costume_mods`.
+
 ## Checking what is installed
 
 Double-click `reframework\costume_mods\SF6_CostumeAudit.bat`. It changes nothing: it checks that the loader,
@@ -148,6 +161,7 @@ common/              shared by both loaders: KPKA pak reader and writer, archive
 proxy/               the AGS proxy: one DllMain for the stage and costume passes
 costumes/loader/     costume loader: mod detection, slot relocation, scene and material patching
 costumes/tools/      generators for the data files, run against your own game installation
+                     slots_clean.cpp: SF6_SlotsClean.exe, the patch-day clean-up
 costumes/audit/      SF6_CostumeAudit.bat / .ps1, shipped in costume_mods: what is installed, for users
 stages/              stage slots: loader pass, redirection, tools, notes
 plugin/              native REFramework plugin: menus, ownership, colours, online alias, stage select, VS screen

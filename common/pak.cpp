@@ -1,5 +1,6 @@
 #include "pak.hpp"
 #include <cstring>
+#include <cctype>
 #include <cstdlib>
 #include <algorithm>
 #include <stdexcept>
@@ -448,4 +449,72 @@ bool PakWriter::write(const char* path) {
 
     ok = (std::fclose(fp) == 0) && ok;
     return ok;
+}
+
+// ============================================================================
+// Patch pak kinds, marker-only paks, Fluffy's ArchiveList.bin
+// ============================================================================
+
+PatchPakKind classify_patch_pak(const char* path) {
+    FILE* fp = std::fopen(path, "rb");
+    if (!fp) return PatchPakKind::Unreadable;
+    PatchPakKind kind = PatchPakKind::Mod;
+    PakHeader hdr{};
+    if (std::fread(&hdr, 1, sizeof(hdr), fp) == sizeof(hdr)) {
+        const uint64_t costume_h = pak_path_hash(std::string_view(COSTUME_SLOTS_MARKER));
+        const uint64_t stage_h = pak_path_hash(std::string_view(STAGE_SLOTS_MARKER));
+        for (uint32_t i = 0; i < hdr.count; i++) {
+            PakEntryDisk d;
+            if (std::fread(&d, 1, sizeof(d), fp) != sizeof(d)) break;
+            const uint64_t h = (uint64_t(d.hash_upper) << 32) | d.hash_lower;
+            if (h == costume_h) { kind = PatchPakKind::Costume; break; }
+            if (h == stage_h) { kind = PatchPakKind::Stage; break; }
+        }
+    }
+    std::fclose(fp);
+    return kind;
+}
+
+bool write_marker_pak(const char* path, PatchPakKind kind) {
+    // The same bytes the loaders write into their own paks
+    static const char costume_data[20] = { 'S','F','6','_','C','o','s','t','u','m','e','S','l','o','t','s',' ','v','1','\n' };
+    static const char stage_data[21] = { 'S','F','6','_','S','t','a','g','e','S','l','o','t','s',' ','v','1','\n',0,0,0 };
+    PakWriter w;
+    if (kind == PatchPakKind::Costume)
+        w.add_uncompressed(pak_path_hash(std::string_view(COSTUME_SLOTS_MARKER)),
+                           std::vector<uint8_t>(costume_data, costume_data + sizeof(costume_data)));
+    else if (kind == PatchPakKind::Stage)
+        w.add_uncompressed(pak_path_hash(std::string_view(STAGE_SLOTS_MARKER)),
+                           std::vector<uint8_t>(stage_data, stage_data + sizeof(stage_data)));
+    else
+        return false;
+    return w.write(path);
+}
+
+std::vector<std::string> archive_list_hits(const std::string& archive_list_path,
+                                           const std::vector<std::string>& names) {
+    std::vector<std::string> hits;
+    FILE* fp = std::fopen(archive_list_path.c_str(), "rb");
+    if (!fp) return hits;
+    std::string data;
+    char buf[65536];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), fp)) > 0) data.append(buf, n);
+    std::fclose(fp);
+    auto lower = [](std::string s) { for (auto& c : s) c = char(std::tolower((unsigned char)c)); return s; };
+    std::vector<std::string> listed;   // file names (no folder), lower case
+    for (size_t i = 0; i < data.size();) {
+        size_t e = data.find('\0', i);
+        if (e == std::string::npos) e = data.size();
+        std::string tok = data.substr(i, e - i);
+        size_t sl = tok.find_last_of("\\/");
+        if (sl != std::string::npos) tok = tok.substr(sl + 1);
+        if (!tok.empty()) listed.push_back(lower(tok));
+        i = e + 1;
+    }
+    for (auto& nm : names) {
+        const std::string l = lower(nm);
+        if (std::find(listed.begin(), listed.end(), l) != listed.end()) hits.push_back(nm);
+    }
+    return hits;
 }

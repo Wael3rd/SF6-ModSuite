@@ -21,6 +21,21 @@ uint64_t pak_path_hash(std::string_view  path); // ASCII convenience
 constexpr const char* COSTUME_SLOTS_MARKER = "natives/stm/sf6_costume_slots.marker";
 constexpr const char* STAGE_SLOTS_MARKER   = "natives/stm/sf6_stage_slots.marker";
 
+// What a re_chunk_000.pak.patch_NNN.pak is, by the marker file it holds (a pak nobody marked is a
+// mod's). Shared by the loader and SF6_SlotsClean, so both see the same paks as ours.
+enum class PatchPakKind { Unreadable, Mod, Costume, Stage };
+PatchPakKind classify_patch_pak(const char* path);
+
+// Writes a valid pak that holds only the marker of a loader (Costume or Stage): it keeps its file
+// name in the row of patch paks, loads nothing, and is recognised as that loader's at the next scan.
+bool write_marker_pak(const char* path, PatchPakKind kind);
+
+// Which of these file names Fluffy Mod Manager's ArchiveList.bin ("ARCH" header, then NUL-separated
+// names) lists, compared on the file name alone, case-insensitively. Empty when the file is absent.
+std::vector<std::string> archive_list_hits(const std::string& archive_list_path,
+                                           const std::vector<std::string>& names);
+
+
 // ============================================================================
 // PakEntry  (48 bytes on disk, v4 format)
 // ============================================================================
