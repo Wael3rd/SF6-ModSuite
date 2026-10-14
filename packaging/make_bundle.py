@@ -3,8 +3,8 @@
   SF6_ModSuite_AllInOne_v<version>.zip   every file of every package zip found in the release folder, one modinfo.ini,
                                          one README.txt (this package's notice, then each package's README)
 
-Run it after make_suite_packages.py, once every package of the release is in the folder (the Recording Manager's zip
-is built apart and copied there). Two packages shipping the same path with different contents stop the build.
+Run it after make_suite_packages.py, once every package of the release is in the folder. Two packages shipping the
+same path with different contents stop the build.
 
 Usage: python make_bundle.py --version <release version> [--release "<folder>"]
 """

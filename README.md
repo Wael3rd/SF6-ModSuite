@@ -8,7 +8,7 @@ packages:
 | **SF6 Slots Loader** | costume mods become **extra** outfit slots, the original outfits stay; stage mods become variants of their stage (experimental) | REFramework |
 | **SF6 Color Mod** | extra costume colours, a colour editor, Drive colours per character and per player, all from the game's own menus: [colormod/README.md](colormod/README.md) | REFramework, SF6 Native Core |
 | **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
-| **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, loadouts, a reversal picker and online sharing of recordings, all in the game's training pause menu. Released as a binary (its source is not in this repository) | REFramework, SF6 Native Core |
+| **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, loadouts, a reversal picker and online sharing of recordings, all in the game's training pause menu: [crsm/README.md](crsm/README.md) | REFramework, SF6 Native Core |
 
 Install what you want: the Slots Loader works on its own; the Color Mod and the Recording Manager need the Native Core of the same
 release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, the four packages in one: install either it or
@@ -33,7 +33,8 @@ with no Lua script.
 - **Community** (since 2.1.0): sharing and liking loadouts need an identity verified by Steam, obtained by the plugin
   in the background (nothing to click). The server keeps your Steam account id for moderation; lists only show your
   CFN name, with `[V]` for a verified share. Version 2.0.x can browse and download, not share or like.
-- The zip's `README.txt` has the details (settings, logs, the emergency stop).
+- The zip's `README.txt` has the details (settings, logs, the emergency stop). The source is in `crsm/`;
+  [crsm/README.md](crsm/README.md) also says what the plugin sends to the Community server.
 
 The rest of this page is about the Slots Loader.
 
@@ -202,7 +203,8 @@ stages/              stage slots: loader pass, redirection, tools, notes
 plugin/              native REFramework plugin: menus, ownership, colours, online alias, stage select, VS screen
 core/                SF6 Native Core: sf6core_native.dll, its C API (core/include) and docs
 colormod/            SF6 Color Mod: SF6_ColorModNative.dll and its locale table
-packaging/           builds the distributable zips (make_suite_packages.py: three of a release; make_bundle.py: the all-in-one)
+crsm/                SF6 Recording Manager: SF6_CRSMNative.dll, its locale table, package texts and offline tests
+packaging/           builds the distributable zips (make_suite_packages.py: the four of a release; make_bundle.py: the all-in-one)
 ```
 
 The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash
@@ -221,6 +223,7 @@ build\costumes_only\amd_ags_x64.dll    costume slots alone, no stage slots
 build\SF6_CostumeSlotsNative.dll       REFramework plugin
 build\core\sf6core_native.dll         SF6 Native Core (core\build.bat)
 build\colormod\SF6_ColorModNative.dll SF6 Color Mod (colormod\build.bat)
+build\crsm\SF6_CRSMNative.dll         SF6 Recording Manager (crsm\build.bat)
 build\costume_loader.exe, paktool.exe, loadtest.exe, stagepak.exe, stagetest.exe, textest.exe
 ```
 
@@ -251,9 +254,10 @@ loader loads nothing else.
 
 ## Requirements
 
-REFramework in `dinput8.dll`, official build 1.5.8 or newer (plugin API 1.10). The Native Core and the Color Mod are
-built with REFramework's plugin API 1.15 headers (`core/third_party/reframework`, REFramework commit 76520cac) and
-run on REFramework 1.5.8 (the core checks the running version before using anything newer).
+REFramework in `dinput8.dll`, official build 1.5.8 or newer (plugin API 1.10). The Native Core, the Color Mod and the
+Recording Manager are built with REFramework's plugin API 1.15 headers (`core/third_party/reframework`, REFramework
+commit 76520cac) and run on REFramework 1.5.8 (the core checks the running version before using anything newer; the
+Recording Manager uses nothing past plugin API 1.10).
 
 ## Credits and licence
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **The SF6 Recording Manager's source is now in this repository**, in `crsm/` (MIT, as the rest of the suite): the
+  plugin `SF6_CRSMNative.dll`, its locale table, its package texts and its offline tests. `build.bat` builds it and
+  `packaging/make_suite_packages.py` builds its zip with the three others (no more separate build). The Community
+  server is not part of it. [crsm/README.md](crsm/README.md) says what the plugin sends to the Community server.
+
+### SF6 Recording Manager (next version)
+- A deleted `reframework/data/SF6_CRSMNative_data/settings.json` no longer turns the mod off. It is written again as
+  the package ships it (every part native, the menu taken 2 s into Training) and used at once, when no Lua version of
+  the mod is installed; before, it was written with every part left to a Lua script that is not there, and the mod
+  did nothing until the package was reinstalled.
+
 ## 1.11.2 (2026-10-14) — SF6 Mod Suite
 
 | Package | Version | |

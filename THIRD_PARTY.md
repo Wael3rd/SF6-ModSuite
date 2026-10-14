@@ -50,8 +50,8 @@ This code is not under the MIT licence of the rest of the repository.
 Headers from [REFramework](https://github.com/praydog/REFramework) by praydog, MIT licence, taken at tag
 v1.5.8. They define the C interface a native plugin uses to reach the game through REFramework.
 
-The core and the Color Mod use the same headers at REFramework commit 76520cac (plugin API 1.15.0), in
-`core/third_party/reframework/include/reframework/` (origin noted in `SOURCE.txt` there).
+The core, the Color Mod and the Recording Manager (`crsm/`) use the same headers at REFramework commit 76520cac
+(plugin API 1.15.0), in `core/third_party/reframework/include/reframework/` (origin noted in `SOURCE.txt` there).
 
 ## Lua 5.4.3 — `core/third_party/lua/`
 
@@ -60,7 +60,8 @@ The core and the Color Mod use the same headers at REFramework commit 76520cac (
 
 ## JSON for Modern C++ — `colormod/third_party/nlohmann/json.hpp`
 
-[nlohmann/json](https://github.com/nlohmann/json) by Niels Lohmann, MIT licence. The Color Mod's settings files.
+[nlohmann/json](https://github.com/nlohmann/json) by Niels Lohmann, MIT licence. The Color Mod's settings files;
+the Recording Manager (`crsm/`) uses the same copy for its files and the Community protocol.
 
 ## LL's REFramework helpers — `core/src/options/ll_common.hpp`, `colormod/src/ll_common.hpp`
 
