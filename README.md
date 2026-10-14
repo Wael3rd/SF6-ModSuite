@@ -11,7 +11,8 @@ packages:
 | **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, loadouts, a reversal picker and online sharing of recordings, all in the game's training pause menu. Released as a binary (its source is not in this repository) | REFramework, SF6 Native Core |
 
 Install what you want: the Slots Loader works on its own; the Color Mod and the Recording Manager need the Native Core of the same
-release.
+release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, the four packages in one: install either it or
+the separate packages, never both (two packages shipping the same files conflict in Fluffy Mod Manager).
 
 This repository was named SF6-SlotsLoader until 07/10/2026 and SF6-CostumeSlotsLoader until 30/09/2026; the old
 links lead here. The rest of this page is about the Slots Loader.
@@ -169,7 +170,7 @@ stages/              stage slots: loader pass, redirection, tools, notes
 plugin/              native REFramework plugin: menus, ownership, colours, online alias, stage select, VS screen
 core/                SF6 Native Core: sf6core_native.dll, its C API (core/include) and docs
 colormod/            SF6 Color Mod: SF6_ColorModNative.dll and its locale table
-packaging/           builds the distributable zips (make_suite_packages.py: the three of a release)
+packaging/           builds the distributable zips (make_suite_packages.py: three of a release; make_bundle.py: the all-in-one)
 ```
 
 The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash

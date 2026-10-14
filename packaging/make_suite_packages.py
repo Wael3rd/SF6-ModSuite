@@ -83,7 +83,7 @@ def main():
     print("== SF6 Native Core %s" % core_v)
     core_zip = os.path.join(a.out, "SF6_NativeCore_%s.zip" % core_v)
     write_zip(core_zip,
-              "name=SF6 Native Core\nversion=%s\ndescription=Shared native-UI core of the SF6 mods (SF6 Color Mod needs it). Changes nothing on its own.\nauthor=Wael\nNameAsBundle=SF6 Native Core\n" % core_v,
+              "name=SF6 Native Core\nversion=%s\ndescription=Shared native-UI core of the SF6 mods (SF6 Color Mod and SF6 Recording Manager need it). Changes nothing on its own.\nauthor=Wael\nNameAsBundle=SF6 Native Core\n" % core_v,
               CORE_README % core_v,
               [(os.path.join(REPO, "build", "core", "sf6core_native.dll"), "reframework/plugins/sf6core_native.dll")])
 

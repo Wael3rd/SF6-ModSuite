@@ -12,6 +12,10 @@
 Updating in Fluffy Mod Manager: disable or remove the previous version of each package first. The costume pak is
 built again once at the first start of the game (the loader's build changed).
 
+**New: `SF6_ModSuite_AllInOne_v1.11.0.zip`**, the four packages in one Fluffy package (`packaging/make_bundle.py`).
+Install either it or the separate packages, never both: two packages shipping the same files conflict in Fluffy Mod
+Manager.
+
 ### SF6 Slots Loader 1.11.0
 - **Extra slots only for the outfits you own.** A slot made from a fighter's Outfit 2, 3 or 4 shows only when the game
   lists that outfit as yours (default outfit, bought with in-game currency or in the shop, or given by a DLC the game
