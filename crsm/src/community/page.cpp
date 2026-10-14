@@ -55,6 +55,13 @@ Msg auth_verdict(const json& data) {
     return {};
 }
 
+Msg busy_verdict(bool verifying) {
+    if (verifying) return {"com_busy_verifying", "", "Steam verification in progress, try again in a moment"};
+    return {"com_busy", "", "Community: please wait, a request is in progress"};
+}
+
+Msg verifying_notice() { return {"com_verifying", "", "Verifying with Steam..."}; }
+
 std::string item_author(const json& item) {
     json a = lj::index(item, "author_cfn");
     if (!lu::truthy(a)) a = lj::index(item, "uploader_name");
@@ -131,7 +138,11 @@ void Page::say(const Msg& m) const {
     env_.ticker(m.en);
 }
 
-Page::Page(Client& client, Env env) : client_(client), env_(std::move(env)) {}
+Page::Page(Client& client, Env env) : client_(client), env_(std::move(env)) {
+    client_.set_verifying_hook([this] { say(verifying_notice()); });
+}
+
+Page::~Page() { client_.set_verifying_hook(nullptr); }
 
 std::string Page::tr_or(const std::string& key, const std::string& en) const {
     if (!env_.tr) return en;
@@ -267,7 +278,7 @@ void Page::cycle_sort() {
 bool Page::download_prompt(int row, std::string* message) {
     if (row < 1 || row > (int)rows_.size() || rows_[(size_t)row - 1].id.empty()) return false;
     const Row& r = rows_[(size_t)row - 1];
-    if (client_.busy()) { say("Busy, try again"); return false; }
+    if (client_.busy()) { say(busy_verdict(client_.verifying())); return false; }
     const std::string display = lu::truthy(lj::index(r.item, "display_name")) ? lua_tostring(lj::index(r.item, "display_name")) : std::string();
     const auto local_ver = st::dl_version(state_, display);
     const json sv = lj::index(r.item, "version");
@@ -326,7 +337,7 @@ void Page::vote(int row) {
     const Row r = rows_[(size_t)row - 1];
     const std::string display = lu::truthy(lj::index(r.item, "display_name")) ? lua_tostring(lj::index(r.item, "display_name")) : std::string();
     if (!st::dl_version(state_, display)) { say("Download it first (F)"); return; }
-    if (client_.busy()) { say("Busy..."); return; }
+    if (client_.busy()) { say(busy_verdict(client_.verifying())); return; }
     const Identity info = who();
     json cmd = json::object();
     cmd["cmd"] = "vote";
@@ -364,7 +375,7 @@ void Page::share(const std::string& char_name, const std::string& pack_file, con
     const Identity info = who();
     const json data = lj::load_file(data_path(st::pack_path(char_name, pack_file)));
     if (!lu::truthy(data)) { say("Cannot read the loadout file"); return; }
-    if (client_.busy()) { say("Community: busy, try again"); return; }
+    if (client_.busy()) { say(busy_verdict(client_.verifying())); return; }
     json cmd = json::object();
     cmd["cmd"] = "share";
     cmd["char"] = char_name;

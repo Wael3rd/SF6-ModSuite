@@ -20,6 +20,15 @@ namespace community {
 
 constexpr int kTimeoutTicks = 600;     // CommunityBridge.lua TIMEOUT: ~10 s at 60 fps
 
+// Pure: true exactly once per request, at the first poll where the worker is getting the Steam-verified token (ticket +
+// /auth, ~3-4 s on a player's first write): the "Verifying with Steam..." ticker. `*announced` is the request's own flag.
+inline bool verify_notice(bool in_flight, bool authenticating, bool* announced) {
+    if (!in_flight) { *announced = false; return false; }
+    if (!authenticating || *announced) return false;
+    *announced = true;
+    return true;
+}
+
 class Client {
 public:
     using Callback = std::function<void(bool ok, const json& data)>;
@@ -31,6 +40,9 @@ public:
     void stop();                             // tests only
 
     bool busy() const;
+    bool verifying() const { return worker_.authenticating(); }   // a request in flight is waiting for the Steam verification
+    // called from poll() (outside the lock), once per request, when its Steam verification starts (verify_notice)
+    void set_verifying_hook(std::function<void()> h);
     // false = refused (busy): the callback was called with the busy error.
     bool send(json cmd, Callback cb);
     void poll();
@@ -48,6 +60,8 @@ private:
     Worker worker_;
     std::string config_path_, response_path_;
     bool in_flight_ = false;
+    bool announced_ = false;
+    std::function<void()> verifying_hook_;
     Pending pending_;
     uint64_t next_id_ = 1;
     Counters counters_;

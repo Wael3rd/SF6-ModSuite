@@ -3,7 +3,7 @@
 // com_state.json, the pack file written by a download, the tickers. The display (NativeOptions dialog today, the core's
 // option service in P4) calls these methods and shows `title()` / `rows()`; tickers go out through Env::ticker.
 //
-// Same texts as the Lua ("Community: 12 loadouts", "Community: timeout", "Busy, try again", "Download failed: ...",
+// Same texts as the Lua ("Community: 12 loadouts", "Community: timeout", "Download failed: ...",
 // "Vote failed: ...", "Share failed: ...", ...). All file IO happens in the caller's thread (the core's frame callback):
 // never call these from a game hook.
 #pragma once
@@ -36,6 +36,12 @@ Msg list_verdict(bool ok, const json& data);
 // verification_unavailable (no token could be had: never sent), update_required (426), invalid_token (401), banned
 // (403), not_owner (403), rate_limited (429). key "" and en "" = none of them.
 Msg auth_verdict(const json& data);
+// What a second request is told when one is already in flight: verifying (the first write of a player waits for the Steam
+// ticket + /auth, ~3-4 s) -> "Steam verification in progress, try again in a moment"; otherwise "Community: please wait,
+// a request is in progress".
+Msg busy_verdict(bool verifying);
+// The ticker when a request starts waiting for the Steam verification (once per request, see verify_notice)
+Msg verifying_notice();
 // The author of a list item: author_cfn (Worker v4), else uploader_name (2.0.0 answers), "?" when neither; and whether the
 // Worker vouches for it (author_verified: a Steam-verified account)
 std::string item_author(const json& item);
@@ -72,6 +78,7 @@ public:
     static constexpr int kPerPage = 50;                     // the list is fetched once (per_page 50), paged on the client
 
     Page(Client& client, Env env);
+    ~Page();
 
     // com_state.json -> last_id, downloaded (the file is read once, at construction in the Lua)
     void load_state();

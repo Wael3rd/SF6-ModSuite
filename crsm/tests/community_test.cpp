@@ -515,6 +515,30 @@ std::string wire_line(const StubReq& r) {
 void test_fixes() {
     section("fixes: pure verdicts on the Worker's answers");
     {
+        {   // busy / Steam-verification messages: pure decisions
+            check_eq(busy_verdict(true).en, "Steam verification in progress, try again in a moment", "busy while verifying: the Steam text");
+            check_eq(busy_verdict(true).key, "com_busy_verifying", "busy while verifying: its locale key");
+            check_eq(busy_verdict(false).en, "Community: please wait, a request is in progress", "busy otherwise: the wait text");
+            check_eq(busy_verdict(false).key, "com_busy", "busy otherwise: its locale key");
+            check_eq(verifying_notice().en, "Verifying with Steam...", "the verifying ticker text");
+            bool an = false;
+            check(!verify_notice(false, true, &an), "verify_notice: nothing in flight, nothing said");
+            check(!verify_notice(true, false, &an) && !an, "verify_notice: in flight, no Steam wait yet");
+            check(verify_notice(true, true, &an) && an, "verify_notice: the Steam wait starts: said");
+            check(!verify_notice(true, true, &an), "verify_notice: said once per request");
+            check(!verify_notice(true, false, &an) && !verify_notice(true, true, &an), "verify_notice: still once after the wait blinks off/on");
+            check(!verify_notice(false, false, &an) && !an, "verify_notice: request done, flag reset");
+            check(verify_notice(true, true, &an), "verify_notice: the next request says it again");
+        }
+        {   // the hook is wired by Page and cleared by its destructor
+            Client c2;
+            int n = 0;
+            c2.set_verifying_hook([&] { ++n; });
+            check(!c2.busy() && !c2.verifying(), "client: idle, not verifying");
+            c2.set_verifying_hook(nullptr);
+            c2.poll();
+            check(n == 0, "client: no request, hook not called");
+        }
         Msg m = share_verdict(true, C({{"ok", true}, {"id", "x"}, {"version", 1}, {"action", "created"}}), "P");
         check(m.en.empty(), "share: { ok = true } is shared");
         m = share_verdict(true, C({{"error", "No changes: content is identical to v1"}}), "P");

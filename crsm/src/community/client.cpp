@@ -25,6 +25,11 @@ void Client::configure(std::string config_path, std::string response_path) {
 void Client::start() { worker_.start(); }
 void Client::stop() { worker_.stop(); }
 
+void Client::set_verifying_hook(std::function<void()> h) {
+    std::lock_guard<std::mutex> lk(mx_);
+    verifying_hook_ = std::move(h);
+}
+
 bool Client::busy() const {
     std::lock_guard<std::mutex> lk(mx_);
     return in_flight_;
@@ -36,6 +41,7 @@ bool Client::send(json cmd, Callback cb) {
         std::lock_guard<std::mutex> lk(mx_);
         if (!in_flight_) {
             pending_ = Pending{};
+            announced_ = false;
             pending_.id = next_id_++;
             pending_.cb = cb;
             in_flight_ = true;
@@ -81,9 +87,11 @@ void Client::poll() {
     bool ok = false;
     json data;
     bool deliver = false;
+    std::function<void()> notice;
     {
         std::lock_guard<std::mutex> lk(mx_);
-        if (!in_flight_) return;
+        if (!in_flight_) { announced_ = false; return; }
+        if (!have && verify_notice(true, worker_.authenticating(), &announced_)) notice = verifying_hook_;
         if (!worker_.authenticating()) ++pending_.ticks;   // a Steam ticket wait has its own bound (kTicketWaitMs)
         if (have && d.id == pending_.id) {
             cb = std::move(pending_.cb);
@@ -104,6 +112,7 @@ void Client::poll() {
             deliver = true;
         }
     }
+    if (notice) { try { notice(); } catch (...) {} }
     if (deliver) call(cb, ok, data);
 }
 
