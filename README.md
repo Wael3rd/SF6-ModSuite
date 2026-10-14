@@ -15,7 +15,24 @@ release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, the f
 the separate packages, never both (two packages shipping the same files conflict in Fluffy Mod Manager).
 
 This repository was named SF6-SlotsLoader until 07/10/2026 and SF6-CostumeSlotsLoader until 30/09/2026; the old
-links lead here. The rest of this page is about the Slots Loader.
+links lead here.
+
+## Recording Manager
+
+`SF6_CRSM_<version>.zip` (the Recording Manager, CRSM) adds slots 9-30 to the game's 8 recording slots in Training,
+loadouts, slot names, a reversal picker and Community sharing of loadouts, all in the training pause menu (Recording
+Settings > Manager / Record / Replay). Since 2.0.0 it is one native plugin, `reframework/plugins/SF6_CRSMNative.dll`,
+with no Lua script.
+
+- Install the SF6 Native Core of the same release with it.
+- **Remove the Lua version (1.x) first**: delete `SF6_RecordingManager.lua`, `SF6_RecordingSlotManager.lua` and the
+  `crsm` folder from `reframework\autorun\` (and `CRSM_REFrameworkUI.lua` if you added it). While one of them is there
+  the plugin leaves the menu to it.
+- Your 1.x recordings, loadouts and names are kept: they stay in `reframework\data\SF6_RecordingSlotManager_data\`,
+  the same folder as 1.x, and no package overwrites it.
+- The zip's `README.txt` has the details (settings, logs, the emergency stop).
+
+The rest of this page is about the Slots Loader.
 
 ## Costume slots
 
@@ -26,12 +43,22 @@ outfit back, so Outfit 1 and the mod live side by side in the costume spinner.
 Install it once. After that nothing changes in how you use the game: install costume mods the way you already
 do, start the game, and the new outfits are there.
 
+**Only the outfits you own get extra slots** (since 1.11.0). A mod made for a fighter's Outfit 2, 3 or 4 shows only
+when the game counts that outfit as yours: a default outfit, one bought with in-game currency or in the shop, or one
+given by a DLC. Mods made for Outfit 1 or the Drive Tech outfit always show. Whatever makes the game say yes counts,
+an unlock-all script included. The check is made offline and kept until the game closes, so nothing changes during an
+online session. `reframework\data\SF6_CostumeSlots_data\native_log.txt` has one line per hidden slot.
+
+**Game updates** (since 1.11.0): when an update adds a fighter or an outfit, the loader picks it up from the game by
+itself at the next launch; no new Slots Loader release is needed. Run the clean-up below first (Patch day).
+
 ## Install
 
 Grab `SF6_SlotsLoader_v<version>.zip` from [Releases](https://github.com/Wael3rd/SF6-ModSuite/releases), install it in
 Fluffy Mod Manager or copy it over your Street Fighter 6 folder, then install costume mods as usual. You need
-REFramework in `dinput8.dll`, official build 1.5.8 or newer. For the Color Mod, install `SF6_NativeCore_<version>.zip`
-and `SF6_ColorMod_<version>.zip` from the same release.
+REFramework in `dinput8.dll`, official build 1.5.8 or newer. For the Color Mod or the Recording Manager, install
+`SF6_NativeCore_<version>.zip` and `SF6_ColorMod_<version>.zip` / `SF6_CRSM_<version>.zip` from the same release. Or
+take `SF6_ModSuite_AllInOne_v<version>.zip` alone: it holds the four packages.
 
 Costume mods can also go straight into `reframework\costume_mods\<Character>\`, **as downloaded**: the
 `.zip`, `.7z` or `.rar` file itself, or an unpacked folder with a `natives` tree or a `.pak`. Nothing to
@@ -131,13 +158,15 @@ before any engine code runs. That is the moment the loader does its work:
    the patch paks and loose files in the game folder, and the archives and folders under
    `reframework/costume_mods/`.
 2. It rebuilds a patch pak that relocates each modded costume to a free slot, from 5 to 104, which is
-   **100 extra slots per character**, and restores the outfit the mod had overwritten from the base pak.
+   **100 extra slots per character**, and restores the outfit the mod had overwritten from the base pak. The game
+   files that declare the slots (its costume table, version scenes and outfit names) are built from the game's own,
+   so the fighters and outfits of the installed game version are always there.
 3. Colours, physics chains, shared body parts, weapons and the `streaming/` high resolution textures follow the
    costume to its new slot. Files made before a game update are brought up to date on the way (see below).
 4. It reads every slot back the way the game will load it, repairs what cannot load, and leaves out a slot it
    cannot repair instead of letting it stall the game. Only the slots in use are declared to the game.
-5. It writes a registry that the native plugin reads to make the slots selectable and, online, to show the
-   other players a legal outfit. The registry also carries each slot's colour swatches.
+5. It writes a registry that the native plugin reads to make the slots selectable (those of the outfits the player
+   owns) and, online, to show the other players a legal outfit. The registry also carries each slot's colour swatches.
 
 A fingerprint of the installed mods is kept, so a launch with nothing changed costs about 20 ms. A launch after
 installing or removing a mod takes a few seconds, up to about fifteen with many large archives.
@@ -198,14 +227,17 @@ taking the game down with it.
 
 ## Data files
 
-The loader needs two data files that are **derived from your own copy of the game** and are deliberately not
+The loader starts from two data files that are **derived from your own copy of the game** and are deliberately not
 distributed here:
 
-- `vanilla_costume_index.tsv`, an index of the original costume files, built by `costumes/tools/build_vanilla_inventory.py`.
+- `vanilla_costume_index.tsv`, an index of the original costume files, built by `costumes/tools/build_vanilla_inventory.py`
+  and `costumes/tools/make_vanilla_index.py`.
 - the static structural tables that declare the extra slots, built by `costumes/tools/make_static_structural.py`.
 
 Both scripts read the game paks through [REasy-parser](https://github.com/seifhassine/REasy). Point the
-`REASY_PARSER` environment variable at your checkout before running them.
+`REASY_PARSER` environment variable at your checkout before running them. Since 1.11.0 the loader builds the structural
+tables from the game at each pak build and adds the game's costumes missing from the index by itself: the shipped
+copies are the fallback (logged) and the starting point.
 
 ## Installing another proxy alongside
 
