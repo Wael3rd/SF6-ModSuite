@@ -37,7 +37,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.7.3";
+static constexpr const char* CORE_VERSION = "0.8.0";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -219,6 +219,7 @@ static std::mutex             s_hide_mutex;
 static std::atomic<int>       s_elem_count_pub{0};    // rule count, for early-out
 static std::atomic<bool>      s_name_cache_flush{false};
 static std::atomic<uint64_t>  s_frame_pub{0};         // s_frame mirror for the render thread
+uint64_t core_frame_pub() { return s_frame_pub.load(std::memory_order_relaxed); }
 static NameCacheSlot s_name_cache[NAME_CACHE_BUCKETS] = {};
 static bool s_elem_draw_registered = false;
 
@@ -758,6 +759,17 @@ bool managed_str_to_utf8(void* str_obj, char* buf, int buf_size) {
 // docs/results/WIDGET_CRASH_RCA_2026-10-01.md). The field now owns exactly one
 // reference; the engine releases it when it overwrites/clears the field, so
 // the core must NOT release it again later.
+//
+// Exactly as the game's own stores, which test the TARGET first (its compiled
+// field stores, e.g. in TrainingMenuFunc.ViewUpdate): a target whose reference
+// count is negative is a local object (not refcounted yet, swept with its frame)
+// and gets a plain store, no add_ref, no release: its fields own no reference.
+// The previous version released the old value of such a field too, a reference
+// the field never held: the training pause menu's spin wrote the Data of the
+// ViewData the game hands to Function at a page build (a local object) and
+// released the option it pointed at once per build, until that option was
+// freed while the menu's lists still pointed at it (crashes of 11/10 under fast
+// sub-page switching).
 bool write_field_managed(const REFrameworkSDKData* sdk, void* obj,
                          const char* name, void* value) {
     if (!obj || !name) return false;
@@ -770,6 +782,10 @@ bool write_field_managed(const REFrameworkSDKData* sdk, void* obj,
             if (!raw) return false;
             void* volatile* field = (void* volatile*)raw;
             if (*field == value) return true;
+            if (*(volatile int32_t*)((uint8_t*)obj + 8) < 0) {    // a local target: the game's plain store
+                _InterlockedExchangePointer((PVOID volatile*)field, value);
+                return true;
+            }
             if (value)
                 sdk->managed_object->add_ref((REFrameworkManagedObjectHandle)value);
             void* old = *field;
@@ -1986,6 +2002,17 @@ uint32_t      SF6CORE_CALL api_opt_status(char*, uint32_t);
 // Increment 7: effective selection (defined in selection.cpp)
 SF6CoreStatus SF6CORE_CALL api_sel_set_effective(SF6CoreClient*, int32_t, int32_t, int32_t, int32_t);
 int32_t       SF6CORE_CALL api_sel_get_effective(int32_t, int32_t, int32_t*, int32_t*);
+// Increment 8: training pause menu (defined in pausemenu/pm_service.cpp)
+SF6CoreStatus SF6CORE_CALL api_pm_set_callbacks(SF6CoreClient*, const SF6CorePmCallbacks*);
+int64_t       SF6CORE_CALL api_pm_page(SF6CoreClient*, const SF6CorePmPageDesc*);
+int64_t       SF6CORE_CALL api_pm_row(SF6CoreClient*, int64_t, const SF6CorePmRowDesc*);
+SF6CoreStatus SF6CORE_CALL api_pm_set_texts(SF6CoreClient*, int64_t, const char*, const char*);
+SF6CoreStatus SF6CORE_CALL api_pm_set_options(SF6CoreClient*, int64_t, const char* const*, uint32_t);
+SF6CoreStatus SF6CORE_CALL api_pm_remove(SF6CoreClient*, int64_t);
+int32_t       SF6CORE_CALL api_pm_page_shown(int64_t);
+void*         SF6CORE_CALL api_pm_row_part(int64_t);
+uint32_t      SF6CORE_CALL api_pm_status(char*, uint32_t);
+int64_t       SF6CORE_CALL api_pm_row_of(SF6CoreClient*, void*);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2060,6 +2087,7 @@ static void on_late_update() {
     update_breakers(snapshot);
     perf::end(perf::UpdateBreakers, pt_brk);
 
+
     // -- 3. Flow-change callbacks --
     if (new_flow != s_flow_id && new_flow != -1) {
         int64_t pt_flow = perf::begin();
@@ -2099,6 +2127,10 @@ static void on_late_update() {
         options_frame();
         perf::end(perf::OptionsFrame, pt_opt);
     }
+
+    // -- 3c. Training pause menu (increment 8): installed on demand, then its
+    //        state (training, pause, menu close) and the install pass --
+    pausemenu_frame();
 
     // -- 4. Frame callbacks --
     {
@@ -2222,6 +2254,9 @@ static void SF6CORE_CALL api_unregister_client(SF6CoreClient* client) {
         auto it2 = std::find(s_pending.begin(), s_pending.end(), client);
         if (it2 != s_pending.end()) s_pending.erase(it2);
     }
+    // Training pause menu (increment 8): its callbacks gone, its pages / rows out of
+    // the menu at the next pass
+    pausemenu_release_client(client);
 
     push_breadcrumb(BC_UNREGISTER, client->client_id, nullptr);
     core_log(SF6CORE_LOG_INFO, client->client_id, "unregistered");
@@ -2579,7 +2614,18 @@ static const SF6CoreAPI s_api = {
     api_opt_status,
     // -- Increment 7: effective selection (ADR-0014) --
     api_sel_set_effective,
-    api_sel_get_effective
+    api_sel_get_effective,
+    // -- Increment 8: training pause menu (ADR-0016) --
+    api_pm_set_callbacks,
+    api_pm_page,
+    api_pm_row,
+    api_pm_set_texts,
+    api_pm_set_options,
+    api_pm_remove,
+    api_pm_page_shown,
+    api_pm_row_part,
+    api_pm_status,
+    api_pm_row_of
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)
@@ -2663,15 +2709,19 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     core_log(SF6CORE_LOG_INFO, nullptr,
              "registered on_pre_application_entry(LateUpdateBehavior)");
 
-    // Register draw-element callback for element hiding (increment 2)
-    if (param->functions->on_pre_gui_draw_element) {
+    // Register draw-element callback for element hiding (increment 2). The member only exists from plugin API
+    // 1.14 on: an older REFramework (1.5.8 = 1.10) has no such entry, the pointer would be read past its table.
+    const bool has_draw_cb = param->version &&
+        (param->version->major > 1 || (param->version->major == 1 && param->version->minor >= 14));
+    if (has_draw_cb && param->functions->on_pre_gui_draw_element) {
         param->functions->on_pre_gui_draw_element(on_pre_gui_draw_element);
         s_elem_draw_registered = true;
         core_log(SF6CORE_LOG_INFO, nullptr,
                  "registered on_pre_gui_draw_element (element hiding)");
     } else {
         core_log(SF6CORE_LOG_WARN, nullptr,
-                 "on_pre_gui_draw_element not available (element hiding disabled)");
+                 "on_pre_gui_draw_element needs plugin API >= 1.14 (have %d.%d): element hiding disabled",
+                 param->version ? param->version->major : 0, param->version ? param->version->minor : 0);
     }
 
     // Register window message callback (closing guard, 0.7.2)

@@ -13,7 +13,8 @@
  * The client need not keep the string alive after the call returns.
  *
  * Threading: all callbacks are invoked on the game thread inside the
- * core's single LateUpdateBehavior callback. register_client and
+ * core's single LateUpdateBehavior callback, except the training pause-menu
+ * callbacks (increment 8: the game's UI job threads, see SF6CorePmCallbacks). register_client and
  * unregister_client acquire an internal mutex and are safe to call
  * from a plugin's reframework_plugin_initialize. Callbacks never fire
  * before the core's own reframework_plugin_initialize has completed.
@@ -275,6 +276,66 @@ typedef struct SF6CoreOptCallbacks {
 #define SF6CORE_OPT_NAV_PUSH    4
 #define SF6CORE_OPT_NAV_POP     8
 
+/* ---- Training pause-menu types (increment 8, ADR-0016) ---------------- */
+
+/* The game's training pause menu (app.training.UIFlowTrainingMenu) filled
+ * with the clients' pages and rows. One engine for every client: the core
+ * builds the menu data (rows of FuncType 345 with the clients' texts), puts
+ * each page into the sub-page strip of a primary tab, answers the game for
+ * its own rows only (the game's rows and unknown rows pass through), renders
+ * the spins and merges the clients' key-guide hints. Page and row ids are the
+ * core's (>= 0), unique across clients and kinds. See docs/PAUSE_MENU.md. */
+typedef enum SF6CorePmKind {
+    SF6CORE_PM_BUTTON = 0,
+    SF6CORE_PM_SPIN   = 1
+} SF6CorePmKind;
+
+typedef struct SF6CorePmPageDesc {
+    uint32_t    struct_size;
+    int32_t     primary_func;   /* TrainingFuncType of the primary tab whose sub-page strip receives the page */
+    int32_t     strip_index;    /* position in that strip, 0 = first */
+    const char* title;          /* strip label */
+    const char* guide;          /* page guide line */
+} SF6CorePmPageDesc;
+
+typedef struct SF6CorePmRowDesc {
+    uint32_t    struct_size;
+    int32_t     kind;           /* SF6CorePmKind */
+    const char* title;
+    const char* guide;
+    uint32_t    capacity;       /* spin: option slots built once (1..64) */
+    int32_t     keep_open;      /* button: 1 = the menu stays open after the decide */
+    float       arrow_spread;   /* spin: extra distance between the arrows, 0 = the game's layout */
+} SF6CorePmRowDesc;
+
+typedef struct SF6CorePmHint {
+    int32_t     button;         /* the game's digital config id (decide 90, cancel 91, X 92, Y 93, LB 94, RB 95, LT 96, RT 97) */
+    const char* text;           /* copied by the core before the callback returns to the game */
+} SF6CorePmHint;
+
+/* Per-client callbacks. They run SYNCHRONOUSLY on the game's UI job threads,
+ * inside the menu's own update (several threads, concurrently: the client
+ * must be thread-safe), SEH-guarded and counted on the client's breaker.
+ * They may call any pm_* function; they must never call the menu's own
+ * update methods back (ViewUpdate, UpdateSpinBox...: R4). Any member may be
+ * NULL. */
+typedef struct SF6CorePmCallbacks {
+    uint32_t struct_size;
+    void*    user;
+    /* a button of the client was pressed (decide) */
+    void     (SF6CORE_CALL *on_decide)(void* user, int64_t row);
+    /* a spin's current option, 0-based (NULL: the core keeps the value itself) */
+    int32_t  (SF6CORE_CALL *spin_value)(void* user, int64_t row);
+    /* the player moved a spin to option `index` (0-based) */
+    void     (SF6CORE_CALL *on_spin)(void* user, int64_t row, int32_t index);
+    /* one of the client's pages was built (shown 1), or another page of its
+     * strip was built / the menu closed / the page was removed (shown 0) */
+    void     (SF6CORE_CALL *on_page_shown)(void* user, int64_t page, int32_t shown);
+    /* hints for the focused row (any row, the game's included: its
+     * app.training.TrainingMenuData); returns how many of out[0..max-1] it filled */
+    uint32_t (SF6CORE_CALL *hints)(void* user, void* focused_menu_data, SF6CorePmHint* out, uint32_t max);
+} SF6CorePmCallbacks;
+
 /*
  * Check whether a function pointer is readable in the API struct.
  * Usage: if (SF6CORE_HAS(api, create_widget)) { api->create_widget(...); }
@@ -385,7 +446,8 @@ typedef struct SF6CoreAPI {
      *   A segment of just '*' matches any child name.
      * hidden: 1 = hide (set_ForceInvisible true), 0 = restore original
      *   visibility. Enforced at draw time via on_pre_gui_draw_element
-     *   (O(1) owner lookup, no per-frame tree scan when no hides).
+     *   (O(1) owner lookup, no per-frame tree scan when no hides); that
+     *   callback needs REFramework plugin API >= 1.14: below, hiding is off.
      *   Re-resolved on flow changes. Restored when client unregisters
      *   or is breaker-disabled. */
     SF6CoreStatus (SF6CORE_CALL *set_element_hidden)(
@@ -464,7 +526,7 @@ typedef struct SF6CoreAPI {
     SF6CoreStatus (SF6CORE_CALL *obj_set_i64)(SF6CoreClient* client, void* obj, const char* field, int64_t v);   /* any integer/enum/bool field width */
     SF6CoreStatus (SF6CORE_CALL *obj_set_f64)(SF6CoreClient* client, void* obj, const char* field, double v);    /* float or double field */
     SF6CoreStatus (SF6CORE_CALL *obj_set_string)(SF6CoreClient* client, void* obj, const char* field, const char* utf8);
-    SF6CoreStatus (SF6CORE_CALL *obj_set_ref)(SF6CoreClient* client, void* obj, const char* field, void* value); /* managed assignment (R34) */
+    SF6CoreStatus (SF6CORE_CALL *obj_set_ref)(SF6CoreClient* client, void* obj, const char* field, void* value); /* managed assignment (R34): as the game's own stores, a refcounted target gets add_ref(new) / exchange / release(old), a local target (negative refcount) a plain store */
     SF6CoreStatus (SF6CORE_CALL *obj_set_color)(SF6CoreClient* client, void* obj, const char* field, uint32_t rgba); /* via.Color (4-byte rgba) value field, raw value */
     SF6CoreStatus (SF6CORE_CALL *list_add)(SF6CoreClient* client, void* list, void* item);
     SF6CoreStatus (SF6CORE_CALL *list_set_item)(SF6CoreClient* client, void* list, int32_t index, void* item);
@@ -605,6 +667,46 @@ typedef struct SF6CoreAPI {
      * 0 otherwise (outputs untouched). Any thread. */
     int32_t       (SF6CORE_CALL *sel_get_effective)(int32_t fighter, int32_t costume,
                                                     int32_t* real_costume, int32_t* real_colour);
+
+    /* -- Increment 8: training pause menu (ADR-0016, append-only) ------------- */
+
+    /* Pages are built and put into their strip by the core, on the game
+     * thread, with the menu closed (every 60 frames in training, 5 s after
+     * training starts); pm_page / pm_row / pm_remove only record what the next
+     * pass does, from any thread. Texts and option labels change in place, at
+     * once. The engine's hooks are installed on the first pm_set_callbacks of
+     * any client, at the next core frame (no cost without clients). */
+
+    /* Callbacks of this client (copied). ERR_DISABLED when the engine could
+     * not be installed. */
+    SF6CoreStatus (SF6CORE_CALL *pm_set_callbacks)(SF6CoreClient* client, const SF6CorePmCallbacks* cb);
+    /* A page in the sub-page strip of the primary tab desc->primary_func.
+     * Returns the page id, -1 on failure. */
+    int64_t       (SF6CORE_CALL *pm_page)(SF6CoreClient* client, const SF6CorePmPageDesc* desc);
+    /* A row at the end of one of the client's pages (13 rows at most per
+     * page). Returns the row id, -1 on failure. */
+    int64_t       (SF6CORE_CALL *pm_row)(SF6CoreClient* client, int64_t page, const SF6CorePmRowDesc* desc);
+    /* New title / guide of a page (strip label, page guide) or a row, in place.
+     * NULL = unchanged. */
+    SF6CoreStatus (SF6CORE_CALL *pm_set_texts)(SF6CoreClient* client, int64_t page_or_row, const char* title, const char* guide);
+    /* A spin's option labels, in place; the count shown follows n (at most the
+     * row's capacity: labels past it are dropped; n == 0 shows one empty
+     * option). A change of count while the page is shown rebuilds the page 2
+     * frames later. */
+    SF6CoreStatus (SF6CORE_CALL *pm_set_options)(SF6CoreClient* client, int64_t row, const char* const* labels, uint32_t n);
+    /* Remove one of the client's pages (with its rows) or rows: taken out of
+     * the menu at the next pass, texts released after. */
+    SF6CoreStatus (SF6CORE_CALL *pm_remove)(SF6CoreClient* client, int64_t page_or_row);
+    /* 1 while the page is the one the menu shows (live check of the menu's
+     * rows), 0 otherwise. */
+    int32_t       (SF6CORE_CALL *pm_page_shown)(int64_t page);
+    /* The row's UIParts group (app.UIPartsGroup of the menu's row list) while
+     * its page is shown, NULL otherwise. For decoration with the display API. */
+    void*         (SF6CORE_CALL *pm_row_part)(int64_t row);
+    /* One-line state for logs. Returns the length written (truncated to cap-1). */
+    uint32_t      (SF6CORE_CALL *pm_status)(char* buf, uint32_t cap);
+    /* The client row id carried by a TrainingMenuData the core built, or -1 (game row, unknown, not the caller's). */
+    int64_t       (SF6CORE_CALL *pm_row_of)(SF6CoreClient* client, void* menu_data);
 
 } SF6CoreAPI;
 

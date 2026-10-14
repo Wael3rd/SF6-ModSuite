@@ -30,8 +30,8 @@ constexpr double kSlowFactor  = 1.5;
 constexpr double kSlowOursMs  = 2.0;            // or the DLL alone took this long in it
 
 const char* const kFixedNames[kCount] = {
-    "OnLateUpdate", "DrawElement", "OptionsPump", "OptHooks", "GuidHook", "Api",
-    "PollFlow", "UpdateBreakers", "FlowCallbacks", "OptionsFrame", "FrameCallbacks",
+    "OnLateUpdate", "DrawElement", "OptionsPump", "OptHooks", "GuidHook", "Api", "PmHooks",
+    "PollFlow", "UpdateBreakers", "FlowCallbacks", "OptionsFrame", "PmFrame", "FrameCallbacks",
     "CommitPhase", "CommitWidgets", "CommitElemHides", "CommitZenHides",
     "Client0", "Client1", "Client2", "Client3",
     "Client4", "Client5", "Client6", "Client7",

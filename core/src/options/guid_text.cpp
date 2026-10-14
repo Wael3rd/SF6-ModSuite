@@ -12,7 +12,9 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstring>
+#include <mutex>
 
 #include "../perf.hpp"
 #include <string>
@@ -20,6 +22,7 @@
 
 #include "ll_common.hpp"
 #include "opt_common.hpp"
+#include "../pausemenu/pausemenu.hpp"
 
 namespace dialogs::guid_text {
 namespace {
@@ -31,6 +34,9 @@ constexpr int kMaxFaults = 5;         // same threshold as the screens modules
 
 bool g_on = false;
 int  g_faults = 0;
+std::mutex g_install_mx;                      // install() is called by the option service and by the pause-menu service
+std::atomic<bool> g_hooked{false};            // read from any thread
+std::atomic<bool> g_failed{false};
 
 void fault(const char* where) {
     ++g_faults;
@@ -71,6 +77,7 @@ void post_get_message_inner(void** ret_val) {
 
 int pre_get_message(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (!g_on || live() == 0 || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    pausemenu::text_barrier();        // no text of ours is looked up while a pause-menu page is being built elsewhere
     int64_t pt = perf::begin();
     int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
     __try { rc = pre_get_message_inner(argv); }
@@ -92,23 +99,30 @@ void post_get_message(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned 
 }  // namespace
 
 bool install() {
+    std::lock_guard lk(g_install_mx);
+    if (g_hooked.load()) return true;                 // already in place: one hook in the process (ADR-0006)
+    if (g_failed.load()) return false;
     auto* tdb = API::get()->tdb();
-    if (!tdb) return false;
+    if (!tdb) return false;                           // not final: tried again by the next caller
+    auto fail = [](const char* why) { cmn::log_warn("[guid_text] %s: off", why); g_failed = true; return false; };
     auto* hmsg_td = tdb->find_type("app.helper.hMsg");
-    if (!hmsg_td) { cmn::log_warn("[guid_text] app.helper.hMsg not found: off"); return false; }
+    if (!hmsg_td) return fail("app.helper.hMsg not found");
     auto* m = hmsg_td->find_method("GetMessage(System.Guid)");
     if (!m) {
         for (auto* method : hmsg_td->get_methods()) {
             if (method && method->get_name() && std::string_view{method->get_name()} == "GetMessage") { m = method; break; }
         }
     }
-    if (!m || !m->get_function_raw()) { cmn::log_warn("[guid_text] GetMessage not found: off"); return false; }
-    if (!m->add_hook(pre_get_message, post_get_message, false)) { cmn::log_warn("[guid_text] GetMessage hook failed: off"); return false; }
+    if (!m || !m->get_function_raw()) return fail("GetMessage not found");
+    if (!m->add_hook(pre_get_message, post_get_message, false)) return fail("GetMessage hook failed");
     g_on = true;
+    g_hooked = true;
     cmn::journal("[guid_text] GetMessage hook installed");
     return true;
 }
 
+bool installed() { return g_hooked.load(); }
+bool install_failed() { return g_failed.load(); }
 bool ready() { return g_on; }
 
 bool set_field(void* obj, const char* field_name, const GuidBytes& gb) {
@@ -125,7 +139,9 @@ bool set_field(void* obj, const char* field_name, const GuidBytes& gb) {
 
 std::string status() {
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "on=%d faults=%d issued=%zu live=%zu", (int)g_on, g_faults, count(), live());
+    const Stats st = stats();
+    std::snprintf(buf, sizeof(buf), "on=%d faults=%d issued=%zu live=%zu clients=%zu", (int)g_on, g_faults, count(),
+                  st.live, st.owned);
     return buf;
 }
 

@@ -20,6 +20,7 @@
 #include "opt_common.hpp"
 #include "guid_text.hpp"
 #include "options_core.hpp"
+#include "../pausemenu/pausemenu.hpp"
 
 namespace dialogs::options {
 namespace {
@@ -29,7 +30,7 @@ using MO  = API::ManagedObject;
 
 constexpr int kMaxFaults = 5;          // same threshold as the screens modules
 constexpr int kPauseType = 8;          // :713 BATTLE_MENU_PAUSE, the one that freezes the fight
-constexpr int kDynamicRowFunc = 345;   // :254 rows a previous Lua state added to the training pause menu
+constexpr int kDynamicRowFunc = 345;   // :254 TrainingFuncType.DYNAMIC (the game's own dynamic rows use it too)
 constexpr int kEventSettingReset = 1;  // :430, :503 DecideEventType.SettingReset
 
 bool g_on = false;
@@ -330,7 +331,9 @@ void attach_unit(MO* parent, MO* child) {
     if (auto* add_m = ll::find_method_full(cul->get_type_definition(), "Add")) add_m->invoke(cul, std::vector<void*>{ sr2.ptr });
 }
 
-// :244-260
+// :244-260, made ownership-aware (core increment 8, ADR-0016 point 2): a DYNAMIC row of a primary tab is removed only
+// when the core built it and no longer owns it. The game's own rows (a delegate: Battle Hub "End Training Session")
+// and unknown rows (another engine's) stay; the purge used to remove every DYNAMIC row, the game's included.
 void purge_pause_menu_rows() {
     auto* tm = API::get()->get_managed_singleton("app.training.TrainingManager");
     MO* ui_data = tm ? ll::read_field_object(tm, "_UIData") : nullptr;
@@ -361,7 +364,8 @@ void purge_pause_menu_rows() {
             if (di.exception_thrown || !di.ptr) continue;
             MO* cd = ll::read_field_object(reinterpret_cast<MO*>(di.ptr), "ChildData");
             int32_t ft = 0;
-            if (cd && ll::read_field_i32(cd, "_FuncType", ft) && ft == kDynamicRowFunc) dl_remove->invoke(dl, std::vector<void*>{ ll::arg_i32(i) });
+            if (cd && ll::read_field_i32(cd, "_FuncType", ft) && ft == kDynamicRowFunc && pausemenu::dyn_row_removable(di.ptr))
+                dl_remove->invoke(dl, std::vector<void*>{ ll::arg_i32(i) });
         }
     }
 }

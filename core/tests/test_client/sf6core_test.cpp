@@ -4,6 +4,27 @@
 // frame callback, cmd-file polling, deliberate faults to exercise
 // the SEH containment and circuit breaker.
 //
+// Commands (one per line in reframework/data/sf6core_test/cmd.txt):
+//   status, fault[N], widget_*, hide/unhide, disp_selftest,
+//   disc_selftest, bridge_selftest,
+//   pm_page        increment 8: a page "sf6core_test" at index 0 of the
+//                  Recording Settings strip of the training pause menu
+//                  (primary tab 4): a spin of 5 options (8 slots, arrows
+//                  70 apart), a button that counts (menu stays open) and a
+//                  button that closes the menu; a Y hint on its own rows
+//                  only (pm_row_of). Installed by the core with the menu closed.
+//   pm_labels      the spin's labels changed (7, one very long): retext in
+//                  place, count + font fit, page rebuilt if shown
+//   pm_texts       page and row titles changed in place (language change)
+//   pm_fault       the next decide faults once (SEH + client breaker)
+//   pm_status      pm_status in the log
+//   pm_drop        pm_remove(page): the strip back to the game's two pages
+//   pm_trace       creates reframework/data/sf6core/pm_trace.txt: the core
+//                  logs its code check, hooks, next install pass and next
+//                  page build step by step; pm_trace_off removes it
+//   pm_check_reset deletes the code-check cache (pm_codecheck.txt): the next
+//                  session compares every method again (background thread)
+//
 // Build: cl /nologo /std:c++20 /EHa /O2 /LD /W4 /I include
 //            /I third_party\reframework\include sf6core_test.cpp
 // Output: sf6core_test.dll (REFramework plugin)
@@ -22,7 +43,9 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <thread>
+#include <vector>
 
 // ========================================================================
 // Constants
@@ -49,6 +72,13 @@ static std::atomic<int>   s_faults_remaining{0};
 // Increment 2: widget and element hiding state
 static SF6CoreWidget*     s_widget = nullptr;
 
+
+// Increment 8: the training pause-menu test page
+static int64_t              s_pm_page = -1, s_pm_spin = -1, s_pm_count = -1, s_pm_close = -1;
+static std::atomic<int32_t> s_pm_value{1};
+static std::atomic<int32_t> s_pm_counter{0};
+static std::atomic<int>     s_pm_fault{0};
+
 // ========================================================================
 // Logging (through REFramework when core is unavailable)
 // ========================================================================
@@ -67,6 +97,160 @@ static void test_log(const char* fmt, ...) {
             auto& api = reframework::API::get();
             if (api) api->log_info("%s%s", TAG, buf);
         } catch (...) {}
+    }
+}
+
+// ========================================================================
+// Increment 8: training pause-menu test page
+// ========================================================================
+
+// Callbacks: called by the core on the game's UI job threads, synchronously,
+// SEH-guarded and counted on this client's breaker. Thread-safe on purpose.
+static void SF6CORE_CALL pm_on_decide(void*, int64_t row) {
+    if (s_pm_fault.exchange(0)) {
+        test_log("PM decide row %lld: deliberate fault (the core's SEH must catch it)", (long long)row);
+        volatile int* p = nullptr;
+        *p = 7;
+        return;
+    }
+    if (row == s_pm_count) {
+        const int32_t n = ++s_pm_counter;
+        char t[64];
+        snprintf(t, sizeof t, "Count: %d", n);
+        auto st = s_api->pm_set_texts(s_client, row, t, nullptr);   // allowed from a callback
+        test_log("PM decide 'count' -> %d (pm_set_texts %d)", n, (int)st);
+    } else if (row == s_pm_close) {
+        test_log("PM decide 'close': the menu must close");
+    } else {
+        test_log("PM decide row %lld", (long long)row);
+    }
+}
+static int32_t SF6CORE_CALL pm_spin_value(void*, int64_t) { return s_pm_value.load(); }
+static void SF6CORE_CALL pm_on_spin(void*, int64_t row, int32_t index) {
+    s_pm_value.store(index);
+    test_log("PM spin row %lld -> option %d", (long long)row, index);
+}
+static void SF6CORE_CALL pm_on_page_shown(void*, int64_t page, int32_t shown) {
+    test_log("PM page %lld %s", (long long)page, shown ? "shown" : "not shown");
+}
+static uint32_t SF6CORE_CALL pm_hints(void*, void* focused, SF6CorePmHint* out, uint32_t max) {
+    if (max < 1 || s_pm_page < 0 || !s_api->pm_page_shown(s_pm_page)) return 0;
+    if (!SF6CORE_HAS(s_api, pm_row_of) || s_api->pm_row_of(s_client, focused) < 0) return 0;   // our own rows only
+    out[0].button = 93;                                 // Y (T on the keyboard)
+    out[0].text = "sf6core_test hint";
+    return 1;
+}
+
+static void pm_log_status(const char* when) {
+    char b[768];
+    s_api->pm_status(b, sizeof b);
+    test_log("PM %s: %s", when, b);
+}
+
+static void pm_make_page() {
+    if (s_pm_page >= 0) { test_log("PM: page already made (%lld)", (long long)s_pm_page); return; }
+    SF6CorePmCallbacks cb = {};
+    cb.struct_size = sizeof cb;
+    cb.on_decide = pm_on_decide;
+    cb.spin_value = pm_spin_value;
+    cb.on_spin = pm_on_spin;
+    cb.on_page_shown = pm_on_page_shown;
+    cb.hints = pm_hints;
+    auto st = s_api->pm_set_callbacks(s_client, &cb);
+    SF6CorePmPageDesc pd = {};
+    pd.struct_size = sizeof pd;
+    pd.primary_func = 4;                                // TrainingFuncType.RECORD: "Recording Settings"
+    pd.strip_index = 0;
+    pd.title = "sf6core_test";
+    pd.guide = "Test page of the core's test client.";
+    s_pm_page = s_api->pm_page(s_client, &pd);
+    SF6CorePmRowDesc rd = {};
+    rd.struct_size = sizeof rd;
+    rd.kind = SF6CORE_PM_SPIN;
+    rd.title = "Test spin";
+    rd.guide = "Left / right: the client's on_spin.";
+    rd.capacity = 8;
+    rd.arrow_spread = 70.0f;
+    s_pm_spin = s_api->pm_row(s_client, s_pm_page, &rd);
+    const char* labels[] = { "Option A", "Option B", "Option C", "Option D", "Option E" };
+    auto st2 = s_api->pm_set_options(s_client, s_pm_spin, labels, 5);
+    rd = {};
+    rd.struct_size = sizeof rd;
+    rd.kind = SF6CORE_PM_BUTTON;
+    rd.title = "Count: 0";
+    rd.guide = "Decide: count (the menu stays open).";
+    rd.keep_open = 1;
+    s_pm_count = s_api->pm_row(s_client, s_pm_page, &rd);
+    rd.title = "Close the menu";
+    rd.guide = "Decide: the menu closes.";
+    rd.keep_open = 0;
+    s_pm_close = s_api->pm_row(s_client, s_pm_page, &rd);
+    test_log("PM page: callbacks %d, page %lld, spin %lld (options %d), count %lld, close %lld", (int)st,
+             (long long)s_pm_page, (long long)s_pm_spin, (int)st2, (long long)s_pm_count, (long long)s_pm_close);
+    // refusals: a spin of 65 slots, a row on a page that is not ours
+    rd.kind = SF6CORE_PM_SPIN;
+    rd.capacity = 65;
+    test_log("PM check capacity 65 refused: %s", s_api->pm_row(s_client, s_pm_page, &rd) < 0 ? "PASS" : "FAIL");
+    rd.capacity = 4;
+    test_log("PM check unknown page refused: %s", s_api->pm_row(s_client, 999999, &rd) < 0 ? "PASS" : "FAIL");
+    pm_log_status("after pm_page");
+}
+
+// A file of the core's data folder (reframework/data/sf6core/<name>): the pause menu's trace switch and code-check cache.
+static void core_data_file(const char* name, char* out, size_t n) {
+    char exe[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    char* sep = strrchr(exe, '\\');
+    if (sep) *sep = '\0';
+    snprintf(out, n, "%s\\reframework\\data\\sf6core\\%s", exe, name);
+}
+
+static void pm_command(const char* line) {
+    if (!SF6CORE_HAS(s_api, pm_status)) { test_log("PM: increment 8 not in ABI"); return; }
+    if (strcmp(line, "pm_page") == 0) { pm_make_page(); return; }
+    if (strcmp(line, "pm_trace") == 0 || strcmp(line, "pm_trace_off") == 0) {
+        char p[MAX_PATH];
+        core_data_file("pm_trace.txt", p, sizeof p);
+        if (line[8] == 0) {
+            FILE* f = fopen(p, "w");
+            if (f) { fputs("pause-menu trace on (sf6core_test pm_trace)\n", f); fclose(f); }
+            test_log("PM trace file %s: the core logs the next pass and page build step by step (within 2 s)",
+                     f ? "created" : "NOT created");
+        } else {
+            test_log("PM trace file %s", DeleteFileA(p) ? "removed" : "not removed (absent?)");
+        }
+        return;
+    }
+    if (strcmp(line, "pm_check_reset") == 0) {
+        char p[MAX_PATH];
+        core_data_file("pm_codecheck.txt", p, sizeof p);
+        test_log("PM code-check cache %s: the next session compares every method again",
+                 DeleteFileA(p) ? "removed" : "not removed (absent?)");
+        return;
+    }
+    if (s_pm_page < 0) { test_log("PM: run pm_page first"); return; }
+    if (strcmp(line, "pm_labels") == 0) {
+        const char* labels[] = { "First", "Second", "Third", "Fourth",
+                                 "A very long option label that must shrink to the room between the arrows",
+                                 "Sixth", "Seventh" };
+        auto st = s_api->pm_set_options(s_client, s_pm_spin, labels, 7);
+        test_log("PM labels: 7 -> %d", (int)st);
+    } else if (strcmp(line, "pm_texts") == 0) {
+        auto a = s_api->pm_set_texts(s_client, s_pm_page, "sf6core_test (retexted)", nullptr);
+        auto b = s_api->pm_set_texts(s_client, s_pm_spin, "Test spin (retexted)", "Retexted guide line.");
+        test_log("PM texts: page %d, spin %d", (int)a, (int)b);
+    } else if (strcmp(line, "pm_fault") == 0) {
+        s_pm_fault.store(1);
+        test_log("PM fault armed: decide a button of the test page");
+    } else if (strcmp(line, "pm_status") == 0) {
+        test_log("PM page shown (live): %d, spin part: %p", s_api->pm_page_shown(s_pm_page), s_api->pm_row_part(s_pm_spin));
+        pm_log_status("status");
+    } else if (strcmp(line, "pm_drop") == 0) {
+        auto st = s_api->pm_remove(s_client, s_pm_page);
+        test_log("PM remove page -> %d (taken out at the next pass, menu closed)", (int)st);
+        s_pm_page = s_pm_spin = s_pm_count = s_pm_close = -1;
+    } else {
+        test_log("PM: unknown command '%s'", line);
     }
 }
 
@@ -416,6 +600,10 @@ static void SF6CORE_CALL on_frame(uint64_t frame, void* /*user*/) {
                 }
                 test_log("BRIDGE complete: %d exercised", pass);
             }
+        } else if (strncmp(line, "pm_", 3) == 0) {
+            // ---- Increment 8: training pause menu ----
+            if (!s_api || !s_client) { test_log("PM: no API"); }
+            else { pm_command(line); }
         } else {
             test_log("CMD: unknown command '%s'", line);
         }

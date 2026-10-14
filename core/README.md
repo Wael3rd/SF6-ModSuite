@@ -12,6 +12,8 @@ game's UI directly.
 - **Option dialogs**: the game's own option window as a service (groups, sliders, choices, buttons), see `docs/OPTIONS.md`.
 - **Effective selection**: a client can declare what a fighter really wears (the Slots Loader's online alias), another
   reads it (the Color Mod's Drive squares).
+- **Training pause menu**: clients' pages (a sub-page of a primary tab's strip) with buttons and spins, answered by one
+  engine for every client, with key-guide hints, see `docs/PAUSE_MENU.md`.
 - **Fault isolation**: a client that faults is skipped after five consecutive faults (circuit breaker), the others keep running.
 - A small **Lua bridge** (`SF6Core` in REFramework's Lua state) for scripts and diagnostics.
 - A log: `reframework/data/sf6core/sf6core.log` (one previous log kept as `sf6core.old.log` past 8 MB).

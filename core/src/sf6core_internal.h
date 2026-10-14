@@ -99,6 +99,8 @@ const SF6CoreAPI* sf6core_api_ptr();
 
 void display_set_game_thread(DWORD tid);
 bool is_game_thread();
+// True only on the recorded game thread (false before the first frame records it, unlike is_game_thread).
+bool on_recorded_game_thread();
 void display_log_init();
 void lua_bridge_init(const REFrameworkPluginFunctions* functions);
 
@@ -157,5 +159,18 @@ void query_client_state_and_suspended(const char* client_id,
 
 // Safe handle_fault by client id (re-looks up the client under s_registry_mutex).
 void handle_fault_by_id(const char* client_id, DWORD exc_code, const char* phase);
+
+// ========================================================================
+// Increment 8: training pause menu (pausemenu/pm_service.cpp, ADR-0016)
+// ========================================================================
+
+// System.Guid field write with the obj_set_* guard chain (display.cpp); not part of the client API.
+SF6CoreStatus core_obj_set_guid(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]);
+
+void pausemenu_frame();                            // each core frame, after the option dialogs: install on demand, then the engine
+void pausemenu_release_client(SF6CoreClient* c);  // unregister_client, once the client is inactive
+
+// The core's frame counter, readable from any thread (the hooks run on the game's UI job threads).
+uint64_t core_frame_pub();
 
 #endif // SF6CORE_INTERNAL_H

@@ -21,12 +21,14 @@ enum Id : int {
     OptHooks,           // option-dialog hooks in options.cpp
     GuidHook,           // GetMessage hook in guid_text.cpp
     Api,                // display API calls (ui_*, obj_*, list_*, dict_*)
+    PmHooks,            // training pause-menu hooks (pausemenu/pausemenu.cpp)
     kTopCount,
     // sub-parts of OnLateUpdate (shown, not added again)
     PollFlow = kTopCount,
     UpdateBreakers,
     FlowCallbacks,
     OptionsFrame,
+    PmFrame,            // training pause menu: state and install pass
     FrameCallbacks,
     CommitPhase,
     CommitWidgets,
