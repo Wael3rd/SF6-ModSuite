@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.11.2 (2026-10-14) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Recording Manager | 2.1.0 | Community shares and likes verified by Steam |
+| SF6 Slots Loader | 1.11.0 | unchanged |
+| SF6 Native Core | 0.8.0 | unchanged |
+| SF6 Color Mod | 0.19.12 | unchanged |
+
+Only the Recording Manager zip and `SF6_ModSuite_AllInOne_v1.11.2.zip` changed. Updating in Fluffy Mod Manager: disable or
+remove the previous version first.
+
+### SF6 Recording Manager 2.1.0
+- **Community: who shares or likes a loadout is verified by Steam.** The plugin asks the Steam client, which runs with
+  the game, for a ticket made for the Community server; the server checks it with Steam. No login, no password, nothing
+  to click. Until now the author's name was declared by the game itself and could be faked.
+- Lists show the author's CFN name with a green `[V]` for a verified share. Shares made before this version have no mark.
+- Your Steam account id stays on the server for moderation: it is never shown to other players, never in the lists.
+  The plugin no longer writes your SteamID or Steam name into `config.json`, and never sends a SteamID as a name.
+- One like per Steam account and loadout. Deleting a shared loadout is done by the admin.
+- Your verification is kept in `reframework/data/SF6_Community_data/identity.json`: never share that file.
+- **Versions 2.0.x can still browse and download loadouts, but no longer share or like** (the server answers "Update SF6
+  Recording Manager to 2.1.0 to share or like.").
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- The select-screen prop of a slot (Slots Loader 1.10.5) is built and checked in the costume pak; its display on the
+  select screen has not been confirmed in game yet.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.11.1 (2026-10-14) — SF6 Mod Suite
 
 | Package | Version | |

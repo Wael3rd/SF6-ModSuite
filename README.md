@@ -30,6 +30,9 @@ with no Lua script.
   the plugin leaves the menu to it.
 - Your 1.x recordings, loadouts and names are kept: they stay in `reframework\data\SF6_RecordingSlotManager_data\`,
   the same folder as 1.x, and no package overwrites it.
+- **Community** (since 2.1.0): sharing and liking loadouts need an identity verified by Steam, obtained by the plugin
+  in the background (nothing to click). The server keeps your Steam account id for moderation; lists only show your
+  CFN name, with `[V]` for a verified share. Version 2.0.x can browse and download, not share or like.
 - The zip's `README.txt` has the details (settings, logs, the emergency stop).
 
 The rest of this page is about the Slots Loader.
