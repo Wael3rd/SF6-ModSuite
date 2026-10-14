@@ -28,7 +28,7 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "2.1.0";              // 2.1.0: Community writes with a Steam-verified identity (ADR-0018 method A); 2.0.1: Replay sub-page kept, a record keeps its slot's name and rate, slot 8 after a record ending on its own, the menu tab held under CRSM dialogs, Community answers; 2.0.0: first public release
+constexpr const char* kVersion = "2.1.1";              // 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
 constexpr const char* kClientId = "SF6_CRSMNative";
 // The game's working directory is the game folder (convention of the other native mods).
 constexpr const char* kDataDir = "reframework/data/SF6_CRSMNative_data";

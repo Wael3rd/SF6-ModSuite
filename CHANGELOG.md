@@ -1,17 +1,43 @@
 # Changelog
 
-## Unreleased
+## 1.12.0 (2026-10-14) — SF6 Mod Suite
 
-- **The SF6 Recording Manager's source is now in this repository**, in `crsm/` (MIT, as the rest of the suite): the
-  plugin `SF6_CRSMNative.dll`, its locale table, its package texts and its offline tests. `build.bat` builds it and
-  `packaging/make_suite_packages.py` builds its zip with the three others (no more separate build). The Community
-  server is not part of it. [crsm/README.md](crsm/README.md) says what the plugin sends to the Community server.
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.11.1 | a slot's chain and cloth files follow the mod (contribution by ZZtaii) |
+| SF6 Recording Manager | 2.1.1 | its source is now in this repository; a deleted settings.json no longer turns it off; "Verifying with Steam..." |
+| SF6 Native Core | 0.8.0 | unchanged |
+| SF6 Color Mod | 0.19.12 | unchanged |
 
-### SF6 Recording Manager (next version)
-- A deleted `reframework/data/SF6_CRSMNative_data/settings.json` no longer turns the mod off. It is written again as
-  the package ships it (every part native, the menu taken 2 s into Training) and used at once, when no Lua version of
-  the mod is installed; before, it was written with every part left to a Lua script that is not there, and the mod
-  did nothing until the package was reinstalled.
+Updating in Fluffy Mod Manager: disable or remove the previous version first. The costume pak is built again once at
+the first start (the loader's build changed).
+
+### SF6 Slots Loader 1.11.1
+- **A slot's physics files follow the mod** (pull request #1 by ZZtaii): when a mod ships its own `chain.user` /
+  `havok.user`, the slot's copies named the original outfit's chain and cloth, so the slot moved with the game's
+  physics on the mod's mesh. They now point at the slot's own copies.
+- Wind and pose chain references of a slot (`Weather/Wind/...`, the challenger pose) are no longer renamed to files that
+  exist nowhere; they stay on the game's file. Outfits without their own physics files give the same pak as before.
+
+### SF6 Recording Manager 2.1.1
+- **The Recording Manager's source is now in this repository**, in `crsm/` (MIT, as the rest of the suite): the plugin
+  `SF6_CRSMNative.dll`, its locale table, its package texts and its offline tests. `build.bat` builds it and
+  `packaging/make_suite_packages.py` builds its zip with the three others. The Community server is not part of it.
+  [crsm/README.md](crsm/README.md) says what the plugin sends to the Community server.
+- A deleted `reframework/data/SF6_CRSMNative_data/settings.json` no longer turns the mod off: when no Lua version of the
+  mod is installed it is written again as the package ships it (every part native, the menu taken 2 s into Training)
+  and used at once. Before, the mod did nothing until the package was reinstalled.
+- Community: the first share or like of a player shows "Verifying with Steam..." while the Steam check runs (a few
+  seconds); another request in that time says "Steam verification in progress, try again in a moment", and any other
+  request while one is running says "Community: please wait, a request is in progress", instead of "busy".
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- The select-screen prop of a slot (Slots Loader 1.10.5) is built and checked in the costume pak; its display on the
+  select screen has not been confirmed in game yet.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
 
 ## 1.11.2 (2026-10-14) — SF6 Mod Suite
 
