@@ -2,8 +2,9 @@
 //
 // Phase P0: the skeleton. Registers with the Native Core as client
 // "SF6_CRSMNative", keeps a journal, status.json and settings.json, draws nothing. The probes (probes.cpp) are off
-// unless probes_on.txt exists. Phase P3 (mech/): the files, replay, reversal and record layers, each "lua" by default
-// (settings.json): the DLL installs nothing and touches no user data until a layer is switched to "native".
+// unless probes_on.txt exists. Phase P3 (mech/): the files, replay, reversal and record layers, each "lua" unless
+// settings.json says "native" (a missing settings.json is written all "native" when no CRSM Lua script is installed,
+// all "lua" when one is: owners.hpp); a "lua" layer installs nothing and touches no user data.
 // Phase P4 (ui/): the screens (owner "ui", needs every layer native), started when the Lua loader hands the UI over.
 // Phase P5 (ui/): the Manager page of the Recording strip on the core's training pause-menu service (same owner), asked
 // of the core at that same hand-over (ui_claim).

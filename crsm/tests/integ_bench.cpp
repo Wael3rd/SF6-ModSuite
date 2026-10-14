@@ -4,7 +4,8 @@
 //
 //   integ_bench --repo <crsm folder>
 //
-// Groups: the owner rule (owners.hpp: every layer lua by default, ui only with the five others), the name keys (one
+// Groups: the owner rule (owners.hpp: every layer lua unless asked native, ui only with the five others; a missing
+// settings.json: all native without a CRSM Lua script, all lua with one, and the standalone claim follows), the name keys (one
 // reader: T / pad Y renames the loadout on the Manager page, names a slot on the Record page, nothing under a dialog;
 // G / R / pad X), T on the Manager page through P5's queue and Runner, the asynchronous tickers (exactly one consumer:
 // the Lua's frame_poll or the DLL's strip), the refresh after a Community download (the Manager page re-reads the list
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -364,6 +366,62 @@ void test_standalone() {
     }
 }
 
+// ---- a missing settings.json (owners::default_settings): the mod is never left inert -----------------------------------------
+// common.cpp load_settings: no file -> find_lua over reframework/autorun -> default_settings(lua found) written and
+// default_requested(lua found) used at once. Without a CRSM Lua the DLL alone must run the mod (as the package ships it).
+void test_settings_default() {
+    using standalone::Decision;
+    using standalone::Mode;
+    begin("owners: a missing settings.json");
+    const std::array<bool, owners::kCount> all{ true, true, true, true, true, true };
+    auto read_back = [](const json& j, std::array<bool, owners::kCount>* req, std::optional<std::string>* sa) {
+        for (size_t i = 0; i < owners::kCount; ++i) {           // as common.cpp load_settings reads a file
+            auto it = j["owners"].find(owners::kNames[i]);
+            (*req)[i] = it != j["owners"].end() && it->is_string() && it->get<std::string>() == "native";
+        }
+        if (j.contains("standalone") && j["standalone"].is_string()) *sa = j["standalone"].get<std::string>();
+    };
+    const std::string no_lua = standalone::find_lua([](const std::string&) { return false; });
+    check(no_lua.empty(), "no CRSM Lua script: find_lua says none");
+    {
+        const std::array<bool, owners::kCount> req = owners::default_requested(!no_lua.empty());
+        check(req == all, "no CRSM Lua: the six owners asked native");
+        const owners::Result r = owners::resolve(req, all);
+        check(r.owns == all && r.notes.empty(), "no CRSM Lua: all six layers the DLL's, ui included, no note", join(r.notes));
+        const json j = owners::default_settings(false);
+        std::array<bool, owners::kCount> back{};
+        std::optional<std::string> sa;
+        read_back(j, &back, &sa);
+        check(back == req, "no CRSM Lua: the file written reads back as the owners used");
+        std::string note;
+        check(sa && standalone::parse_mode(sa, &note) == Mode::Auto && note.empty(), "no CRSM Lua: standalone auto written out");
+        bool all_native = j["owners"].size() == owners::kCount;
+        for (const auto& [k, v] : j["owners"].items()) all_native = all_native && v == "native";
+        check(all_native && j.size() == 2, "no CRSM Lua: owners (six, native) and standalone only", j.dump());
+        // a fresh install: the defaults hand the UI to the DLL, which claims it alone 2 s into training
+        const SimEnd e = simulate(cat({ outside(standalone::kGraceFrames), training(standalone::kTrainingFrames + 10) }), Mode::Auto,
+                                  false, r.owns[owners::kUi]);
+        check(e.d == Decision::Claim, "no CRSM Lua: the standalone claim follows (the mod is not inert)", standalone::decision_name(e.d));
+    }
+    for (const char* entry : standalone::kLuaEntries) {
+        const std::string want = entry;
+        const std::string lua = standalone::find_lua([&](const std::string& n) { return n == want; });
+        const std::array<bool, owners::kCount> req = owners::default_requested(!lua.empty());
+        const owners::Result r = owners::resolve(req, all);
+        check(std::none_of(req.begin(), req.end(), [](bool b) { return b; }) &&
+              std::none_of(r.owns.begin(), r.owns.end(), [](bool b) { return b; }) && r.notes.empty(),
+              want + " installed: the six owners lua (the Lua drives)");
+        const json j = owners::default_settings(!lua.empty());
+        std::array<bool, owners::kCount> back = all;
+        std::optional<std::string> sa;
+        read_back(j, &back, &sa);
+        check(back == req && sa && *sa == "auto", want + " installed: the file written reads back as the owners used");
+        const SimEnd e = simulate(cat({ outside(standalone::kGraceFrames), training(standalone::kTrainingFrames + 10) }), Mode::Auto,
+                                  true, r.owns[owners::kUi]);
+        check(e.d == Decision::NotNative, want + " installed: no standalone claim (ui lua)", standalone::decision_name(e.d));
+    }
+}
+
 // ---- the settings.json of the package (package/): what the owner rule and the standalone setting make of it ------------------
 void test_package_settings(const fs::path& repo) {
     begin("package: the settings.json it ships");
@@ -390,6 +448,11 @@ void test_package_settings(const fs::path& repo) {
         std::string note;
         check(sa && standalone::parse_mode(sa, &note) == standalone::Mode::Auto && note.empty(), "Native: standalone auto, written out");
     }
+    // the file a missing settings.json is replaced with (no CRSM Lua) is the package's, byte for byte
+    std::ifstream f(repo / "package" / "settings.json", std::ios::binary);
+    const std::string shipped((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const std::string written = owners::default_settings(false).dump(4);
+    check(written == shipped, "default_settings(no CRSM Lua) = package/settings.json byte for byte", written);
 }
 
 // ---- the name keys: one reader, one decision ----------------------------------------------------------------------------------
@@ -499,6 +562,7 @@ int main(int argc, char** argv) {
     std::printf("[P4 + P5] integration\n");
     test_owners();
     test_standalone();
+    test_settings_default();
     test_package_settings(repo);
     test_name_keys();
     test_rename_key();

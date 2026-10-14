@@ -23,6 +23,7 @@
 #include "community/community.hpp"
 #include "owners.hpp"
 #include "perf.hpp"
+#include "standalone.hpp"
 
 namespace cmn {
 namespace {
@@ -112,9 +113,10 @@ std::string now_text() {
 
 std::string g_started;
 
-// settings.json: { "owners": { "community": "lua", ... }, "standalone": "auto" }. A missing file = every layer "lua"; the
-// defaults are written once so the file can be edited by hand. "standalone" (P6, standalone.hpp): "auto" (default, also
-// when missing) or "off"; it matters only with every owner native.
+// settings.json: { "owners": { "community": "lua", ... }, "standalone": "auto" }. A missing file is written once with
+// owners::default_settings() and used at once: the six "native" when no CRSM Lua entry script is in reframework/autorun
+// (as the release package ships it), the six "lua" when one is; the file can then be edited by hand. "standalone" (P6,
+// standalone.hpp): "auto" (default, also when missing) or "off"; it matters only with every owner native.
 // A layer is the DLL's when this build implements it AND settings.json asks "native" (default "lua");
 // replay / reversal / record also need files native.
 void apply_owners() {
@@ -131,12 +133,15 @@ void load_settings() {
     const std::string path = std::string(kDataDir) + "/settings.json";
     std::ifstream f(path, std::ios::binary);
     if (!f) {
-        nlohmann::json owners = nlohmann::json::object();
-        for (size_t i = 0; i < kNames.size(); ++i) owners[kNames[i]] = "lua";
-        nlohmann::json j;
-        j["owners"] = owners;
-        j["standalone"] = "auto";
-        bgwriter::write(path.c_str(), j.dump(4));
+        const std::string lua = standalone::find_lua([](const std::string& n) {     // plugin start: as ui::start() does
+            std::error_code ec;
+            return std::filesystem::exists(std::filesystem::path("reframework/autorun") / n, ec);
+        });
+        bgwriter::write(path.c_str(), owners::default_settings(!lua.empty()).dump(4));
+        g_req = owners::default_requested(!lua.empty());
+        journal_line(lua.empty() ? std::string("settings.json missing, no CRSM Lua script: written with the six owners native, standalone auto")
+                                 : "settings.json missing, reframework/autorun/" + lua + " installed: written with the six owners lua");
+        apply_owners();
         return;
     }
     nlohmann::json j = nlohmann::json::parse(f, nullptr, false);

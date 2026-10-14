@@ -11,7 +11,7 @@
 namespace cmn {
 
 // Layers handed over from the Lua scripts one at a time. A layer is the DLL's only when this build
-// implements it (set_implemented) AND settings.json says "native"; the default is "lua" for every layer.
+// implements it (set_implemented) AND settings.json says "native" (a missing settings.json: owners.hpp).
 enum class Feature : int { Community = 0, Files, Replay, Reversal, Record, Ui, Count };
 
 const char* feature_name(Feature f);
@@ -46,7 +46,7 @@ extern void (*g_probe_frame)(uint64_t frame);
 extern std::string (*g_probe_status)();      // one-line summary for status.json / the Lua bridge
 
 // ---- layers (phase P3: files, replay, reversal, record) -------------------------------------------------------------
-// A layer module declares itself implemented before init(); settings.json then decides who owns it ("lua" by default).
+// A layer module declares itself implemented before init(); settings.json then decides who owns it (owners.hpp).
 // replay / reversal / record need files (their state lives in the DLL's model of the files).
 void set_implemented(Feature f);
 bool requested(Feature f);                   // settings.json asks "native" (whatever the build implements)

@@ -1,6 +1,6 @@
 // mech — the four non-UI layers of phase P3: files (P3a), replay (P3b), reversal
-// (P3c), record (P3d). Each is "lua" by default (settings.json); deploying the DLL changes nothing until a layer is
-// switched to "native". With a layer native, the Lua keeps its UI and calls the DLL through the bridge
+// (P3c), record (P3d). Each is "lua" unless settings.json says "native" (a missing settings.json: owners.hpp); a "lua"
+// layer changes nothing. With a layer native, the Lua keeps its UI and calls the DLL through the bridge
 // (reframework/autorun/crsm/CrsmNative.lua): the shims in MAIN, RMT and RSL.
 //
 // Threading: the Lua serialized everything on the script lock; here the bridge calls (Lua threads), the

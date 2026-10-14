@@ -118,7 +118,7 @@ void standalone_tick(uint64_t fr) {
     } else if (d == standalone::Decision::Foreign) {
         cmn::log_warn("[CRSMNative] standalone: reframework/autorun/%s is installed but never called the DLL (a CRSM Lua that does not "
                       "drive SF6_CRSMNative.dll: v1.x, the Training Suite, the REFramework display switch, or no core Lua bridge). One "
-                      "engine: the DLL gives its hooked layers back for this session. Remove that script, or use the Hybrid package",
+                      "engine: the DLL gives its hooked layers back for this session. Remove that script to let the DLL run the mod",
                       g_sa_lua_file.c_str());
         for (F f : { F::Ui, F::Record, F::Reversal, F::Replay, F::Files }) cmn::decline(f, "a CRSM Lua that does not drive the DLL is installed");
     }

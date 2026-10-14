@@ -1,7 +1,10 @@
 // owners — the rule that gives a layer to the DLL, pure (no game, no core), so the
 // offline benches test it (tests/integ_bench.cpp). common.cpp applies it to settings.json at the start.
 //
-//  * every layer is "lua" by default (a missing settings.json is written with six "lua");
+//  * every layer is "lua" unless settings.json says "native" (a key missing, a file unreadable: "lua");
+//  * a MISSING settings.json is written, and used at once, by default_settings(): the six "native" and "standalone":
+//    "auto" when no CRSM Lua entry script is installed (standalone.hpp kLuaEntries), as the release package ships it, so
+//    a deleted settings.json never leaves the mod inert; the six "lua" when one is (the Lua drives, a hybrid install);
 //  * a layer is the DLL's when this build implements it AND settings.json says "native";
 //  * replay / reversal / record also need files native (P3);
 //  * ui needs the five others native (P4: the DLL's screens drive every layer, the Lua UI is not loaded). On top of this
@@ -13,6 +16,8 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+
+#include "nlohmann/json.hpp"
 
 namespace owners {
 
@@ -47,6 +52,25 @@ inline Result resolve(const std::array<bool, kCount>& requested, const std::arra
         }
     }
     return r;
+}
+
+// The owners a missing settings.json gets (requested[i] = "native"): all six without a CRSM Lua entry script installed
+// (the DLL alone runs the mod, as the release package's settings.json), none with one (the Lua drives).
+inline std::array<bool, kCount> default_requested(bool crsm_lua_installed) {
+    std::array<bool, kCount> r{};
+    r.fill(!crsm_lua_installed);
+    return r;
+}
+
+// The settings.json written when it is missing (dump(4) gives the release package's file byte for byte without a Lua).
+inline nlohmann::json default_settings(bool crsm_lua_installed) {
+    const std::array<bool, kCount> req = default_requested(crsm_lua_installed);
+    nlohmann::json own = nlohmann::json::object();
+    for (size_t i = 0; i < kCount; ++i) own[kNames[i]] = req[i] ? "native" : "lua";
+    nlohmann::json j;
+    j["owners"] = own;
+    j["standalone"] = "auto";
+    return j;
 }
 
 }  // namespace owners
