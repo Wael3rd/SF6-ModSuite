@@ -31,11 +31,11 @@ CORE_README = CRLF.join([
     "===================",
     "",
     "The shared native-UI core of the SF6 mods of this release: reframework/plugins/sf6core_native.dll.",
-    "Install it once; the mods that need it (SF6 Color Mod) register with it at startup. On its own it",
+    "Install it once; the mods that need it (SF6 Color Mod, SF6 Recording Manager) register with it at startup. On its own it",
     "changes nothing in the game.",
     "",
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
-    "REQUIREMENTS: REFramework in dinput8.dll (plugin API 1.15 or newer).",
+    "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
     "LOG: reframework/data/sf6core/sf6core.log",
     "",
 ])
@@ -51,7 +51,7 @@ COLORMOD_README = CRLF.join([
     "Without it the mod stays inert; REFramework's log says: [ColorModNative] sf6core_native.dll not loaded: inert",
     "",
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
-    "REQUIREMENTS: REFramework in dinput8.dll (plugin API 1.15 or newer).",
+    "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
     "",
 ])
 

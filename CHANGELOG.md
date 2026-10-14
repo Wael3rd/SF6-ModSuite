@@ -1,8 +1,35 @@
 # Changelog
 
-## Unreleased
+## 1.11.0 (2026-10-14) — SF6 Mod Suite
 
-### SF6 Slots Loader
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.11.0 | extra slots only for the outfits you own; a clean-up tool for patch day; a game update adding a fighter or an outfit no longer needs a new release |
+| SF6 Color Mod | 0.19.12 | a fighter added by a game update is named from the game |
+| SF6 Native Core | 0.8.0 | the training pause menu for mods; runs on REFramework 1.5.8 |
+| SF6 Recording Manager | 2.0.0 | new in the suite: 30 recording slots per character, loadouts, reversal picker and sharing in the training pause menu |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version of each package first. The costume pak is
+built again once at the first start of the game (the loader's build changed).
+
+### SF6 Slots Loader 1.11.0
+- **Extra slots only for the outfits you own.** A slot made from a fighter's Outfit 2, 3 or 4 shows only when the game
+  lists that outfit as yours (default outfit, bought with in-game currency or in the shop, or given by a DLC the game
+  accepts). Slots made from Outfit 1 or the Drive Tech outfit always show. Whatever makes the game say yes counts, an
+  unlock-all script included: with one, every slot shows as before. The check is made offline and kept until the game
+  closes; nothing changes during an online session. A hidden slot stays in the costume pak: replays and saved settings
+  that name it still load. The plugin's log (`reframework\data\SF6_CostumeSlots_data\native_log.txt`) has one line per
+  hidden slot, e.g. `[F1] slot v05 (Outfit I, <mod>) hidden: made for Outfit 2, which the player does not own`.
+- **A game update that adds a fighter or an outfit no longer needs a new Slots Loader release.** The costume tables, the
+  version scenes and the outfit names of the costume pak are built from the game's own files at each pak build (1.10.6
+  shipped copies made before the update: they hid Arjun and C. Viper's Outfit 4). Outfits of the game missing from the
+  shipped vanilla costume index are read from the game too (mods made for them are recognised), and a new fighter gets
+  its `reframework\costume_mods\<Name>` folder named from the game. The shipped copies stay as a fallback (logged).
+- **Add-ons downloaded separately and grouped with their costume** (one archive or folder each, in one sub-folder of the
+  character) give one outfit wearing all of them, instead of one variant per add-on plus the complete one. Add-ons
+  that replace the same files, and the options of one archive, keep the old behaviour. A grouped costume with more than
+  three add-ons keeps the base alone again (it was dropped).
+
 - **`SF6_SlotsClean.exe`** (package root, next to `amd_ags_x64.dll`): removes what the loader made at runtime in the game
   folder, for the patch day. After a game update Fluffy Mod Manager re-reads the game archives and records every pak
   it finds as a game file, the loader's slot paks included; with the package turned off nothing removes them, and the
@@ -21,6 +48,70 @@
   Placeholders are never taken for the real pak (the "up to date" check and the move of the pak ignore them), and the
   audit script does not list them as mods.
 - Tests: `costumes/tools/slots_clean_test/`.
+
+### SF6 Color Mod 0.19.12
+- A fighter added by a game update gets its name in the colour packs and Drive settings (`<Name>_esfNNN`,
+  `<Name>.json`) from the game's own name file, read in the background at start, instead of waiting for a release.
+  The names of today's fighters do not change.
+
+### SF6 Native Core 0.8.0
+- **Training pause menu for mods** (ABI increment 8, appended: `pm_set_callbacks`, `pm_page`, `pm_row`, `pm_set_texts`,
+  `pm_set_options`, `pm_remove`, `pm_page_shown`, `pm_row_part`, `pm_status`, `pm_row_of`). A mod adds its own pages
+  to the training pause menu (a sub-page next to the game's ones, e.g. in Recording Settings) with buttons and spins;
+  the core builds them as the game's own menu data, answers the game for the mod's rows only, renders the spins (up to
+  64 options, labels changed in place, long labels shrunk on request) and adds the mods' key-guide hints to the bar at
+  the bottom. One engine for every mod; nothing is hooked until a mod uses it, and every method is first checked for
+  machine code it shares with other methods of the game: such a method is not hooked (logged), so the service cannot
+  slow the game down the way a shared hook does. The check runs on a thread of its own and its result is kept per game
+  version (`reframework\data\sf6core\pm_codecheck.txt`). See [core/docs/PAUSE_MENU.md](core/docs/PAUSE_MENU.md).
+- **The game's own dynamic rows of the training pause menu are kept**, such as "End Training Session" in the Battle Hub
+  training room: the clean-up at each build of the option window removed every row of that kind; it now removes only
+  rows the core built and no longer uses.
+- **Reference writes follow the game** (crash fix): `obj_set_ref` always released the field's old value, but the game
+  writes a local object (not reference-counted yet) with a plain store, and its fields own no reference. A value
+  written into such an object at each page build released one it never held, until it was freed while the menu still
+  pointed at it. `obj_set_ref` now follows the target's reference count as the game does, for every mod's writes.
+- **REFramework 1.5.8 (plugin API 1.10)**: element hiding (`set_element_hidden`) needs `on_pre_gui_draw_element`, which
+  only exists from plugin API 1.14 on. The core registered it on any REFramework, reading past an older one's function
+  table; it now checks the API version first and keeps element hiding off (one log line) below 1.14. No mod of this
+  suite uses element hiding.
+- **Method lookup on types with more than 64 methods** (bug): the core's by-name method lookup (used by every display
+  write: `get_Message`, `set_Message`, the style setters of `via.gui.Text`, `ui_clone_row`...) passed REFramework's
+  `get_methods` a buffer size in elements where it expects bytes, so room for 64 handles only. A type with more methods
+  answered "too small" and that level of the type chain was skipped silently. The buffer is now sized from the type's
+  method count, results (also "not found") are cached per object type and signature, and the log says once per type
+  and signature when a method is found only thanks to the fix or not found at all.
+- Diagnostics: the service's fault lines say where they happened (step, game call, address, thread);
+  `reframework\data\sf6core\pm_trace.txt` turns on a step-by-step log of its next install and page build,
+  `pm_bisect.txt` turns its behaviours off one by one. `docs/ABI.md` lists increments 6 to 8.
+- Tested in the game: several hundred very fast sub-page switches, spin changes, label and text changes, a deliberate
+  fault in a mod's callback (caught, the game went on) and the page's removal, without a crash.
+
+### SF6 Recording Manager 2.0.0
+- **New in the suite** (also known as CRSM, Community Recording Slot Manager): 30 recording slots per character in
+  Training (1-8 are the game's own, 9-30 extra), loadouts, slot names, a reversal picker and Community sharing of
+  loadouts, all in the game's own training pause menu (Recording Settings > Manager / Record / Replay).
+- **One native plugin, no Lua script**: `reframework/plugins/SF6_CRSMNative.dll` replaces the Lua Recording Manager 1.x.
+  Its pages are served by the SF6 Native Core's pause-menu service; at rest it makes no game call per frame.
+- **Your 1.x data is kept**: slots, loadouts and names stay in `reframework/data/SF6_RecordingSlotManager_data/`, the
+  Community settings in `SF6_Community_data/`, the same folders as 1.x. The package never holds them.
+- **Before installing, remove the Lua version (1.x)** from `reframework/autorun/` (the zip's README lists its files):
+  while one of its scripts is there the plugin stands down and leaves the menu to it.
+- The game's code is checked once per game version before the plugin hooks it (a hook on code the game shares between
+  several methods would fire for all of them); the result is kept in `reframework/data/SF6_CRSMNative_data/codecheck.txt`,
+  so the next starts skip the check and REFramework's log stays small.
+- Needs SF6 Native Core 0.8.0 (this release) and REFramework 1.5.8 or newer. Released as a binary; its source is not in
+  this repository.
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- Recording Manager: one hook is not found since the game update of 13/10: while the slot name box is open, L1 + R1
+  may change the menu's tab.
+- The select-screen prop of a slot (Slots Loader 1.10.5) is built and checked in the costume pak; its display on the
+  select screen has not been confirmed in game yet.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
 
 ## 1.10.6 (2026-10-13) — SF6 Mod Suite
 
@@ -52,62 +143,6 @@ Updating the Slots Loader in Fluffy Mod Manager: disable or remove the previous 
   select screen has not been confirmed in game yet.
 - Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
   cause is in the mod: see [stages/README.md](stages/README.md), Limits.
-### SF6 Native Core 0.8.0
-- A client-texts API (`txt_new`, `txt_set`, `txt_release`, `obj_set_guid`, `txt_status`) existed in earlier 0.8.0 builds as
-  increment 8; it had no client and was removed before release. The pause menu is increment 8 and its functions moved up
-  (`pm_set_callbacks` is now the 77th member of the table): **a client built against an earlier 0.8.0 header must be
-  rebuilt.** Increments 1-7 did not move.
-- **Training pause menu** (ABI increment 8, appended): `pm_set_callbacks`, `pm_page`, `pm_row`, `pm_set_texts`,
-  `pm_set_options`, `pm_remove`, `pm_page_shown`, `pm_row_part`, `pm_status`, `pm_row_of` (the client row a
-  `hints` callback's focused menu data belongs to, so a hint can show on a mod's own rows only). A mod adds its own pages to the training
-  pause menu (a sub-page next to the game's ones, e.g. in Recording Settings) with buttons and spins; the core builds
-  them as the game's own menu data, answers the game for the mod's rows only (the game's rows are left to the game),
-  renders the spins (up to 64 options, labels changed in place, the arrows set apart and long labels shrunk on request)
-  and adds the mods' key-guide hints to the bar at the bottom. One engine for every mod; nothing is hooked until a mod
-  uses it, and every method is checked first for machine code it shares with other methods of the game: such a method
-  is not hooked (logged), so the service cannot slow the game down the way a shared hook does. The check runs on a
-  thread of its own (the game never waits for it) and its result is kept per game version
-  (`reframework/data/sf6core/pm_codecheck.txt`): the next sessions skip it. See
-  [core/docs/PAUSE_MENU.md](core/docs/PAUSE_MENU.md).
-- **The game's own dynamic rows of the training pause menu are kept**, such as "End Training Session" in the Battle Hub
-  training room: the clean-up at each build of the option window removed every row of that kind; it now removes only
-  rows the core built and no longer uses.
-- `docs/ABI.md` lists the functions of increments 6 (option dialogs) and 7 (effective selection) too.
-- Tested in the game: the first test of the training pause menu found two faults, both fixed: its
-  pages were never built (the core called a function of REFramework's plugin interface that the REFramework most
-  players run does not have; the arrays are now made through the game itself), and the game froze about 6 seconds
-  when the first mod used the service (the method check, see above). The service's fault lines now say where they
-  happened (step, game call, address, thread), and `reframework/data/sf6core/pm_trace.txt` turns on a step-by-step
-  log of its next install and page build. The second test showed the test page, but its spin kept showing its first
-  option while its value changed, and the game crashed a few page switches later. Fixed since: the spin is repaired
-  after each of the game's layouts of it (nested ones included); it starts from its value at the first build of a menu
-  too; the page's answer to the game is no longer
-  overwritten by its rows' answers; a short option text keeps the game's font (written only to shrink a long one); the
-  option carousel is never grown. The third test (spin fine) crashed the game again while switching the Recording
-  Settings sub-pages very fast, and again with one hook at a time; never with the Lua engine this service was ported
-  from, nor without a page of ours. Since then the service also waits, as that engine did, on the menu's own navigation
-  and on the game's text lookup while a page is being built, and writes nothing into the game's view data beyond what
-  that engine wrote. `reframework/data/sf6core/pm_bisect.txt` turns its behaviours off one by one in the game.
-  The likely cause, found after the fifth test: the core's reference writes (`obj_set_ref`) always released the field's old
-  value, but the game writes a local object (not refcounted yet) with a plain store, its fields own no reference. The
-  spin's option written at each page build into such an object (the ViewData the game hands to `Function`) released
-  the option shown before, a reference it never held, until that option was freed while the menu still pointed at it.
-  `obj_set_ref` now follows the target's reference count as the game does (this also applies to the other mods' writes
-  through it). Confirmed by the sixth test: the view data is such a local object, and the test page went through
-  several hundred very fast sub-page switches, spin changes, label and text changes, a deliberate fault in its
-  callback (caught, the game went on) and its removal without a crash.
-- **REFramework 1.5.8 (plugin API 1.10)**: element hiding (`set_element_hidden`) needs `on_pre_gui_draw_element`, which
-  only exists from plugin API 1.14 on. The core registered it on any REFramework, reading past an older one's
-  function table; it now checks the API version first and keeps element hiding off (one log line) below 1.14. No mod
-  of this suite uses element hiding.
-- **Method lookup on types with more than 64 methods** (bug): the core's by-name method lookup (used by every display
-  write: `get_Message`, `set_Message`, the style setters of `via.gui.Text`, `ui_clone_row`...) passed REFramework's
-  `get_methods` a buffer size in elements where it expects bytes, so room for 64 handles only. A type with more
-  methods answered "too small" and that level of the type chain was skipped silently: a lookup that depended on such
-  a level failed. The buffer is now sized from the type's method count, results (also "not found") are cached per
-  object type and signature, and the log says once per type and signature when a method is found only thanks to the
-  fix (`[lookup] ... found by name in a type with N methods`) or not found at all (`[lookup] ... no method ... by
-  name`).
 
 ## 1.10.5 (2026-10-09) — SF6 Mod Suite
 

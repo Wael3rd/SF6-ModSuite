@@ -1,6 +1,6 @@
 # SF6 Mod Suite
 
-Street Fighter 6 mods by Wael, built and released together. Each release carries three Fluffy Mod Manager
+Street Fighter 6 mods by Wael, built and released together. Each release carries four Fluffy Mod Manager
 packages:
 
 | Package | What it does | Needs |
@@ -8,8 +8,10 @@ packages:
 | **SF6 Slots Loader** | costume mods become **extra** outfit slots, the original outfits stay; stage mods become variants of their stage (experimental) | REFramework |
 | **SF6 Color Mod** | extra costume colours, a colour editor, Drive colours per character and per player, all from the game's own menus: [colormod/README.md](colormod/README.md) | REFramework, SF6 Native Core |
 | **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
+| **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, loadouts, a reversal picker and online sharing of recordings, all in the game's training pause menu. Released as a binary (its source is not in this repository) | REFramework, SF6 Native Core |
 
-Install what you want: the Slots Loader works on its own; the Color Mod needs the Native Core of the same release.
+Install what you want: the Slots Loader works on its own; the Color Mod and the Recording Manager need the Native Core of the same
+release.
 
 This repository was named SF6-SlotsLoader until 07/10/2026 and SF6-CostumeSlotsLoader until 30/09/2026; the old
 links lead here. The rest of this page is about the Slots Loader.
@@ -213,8 +215,9 @@ loader loads nothing else.
 
 ## Requirements
 
-REFramework in `dinput8.dll`, official build 1.5.8 or newer. The Native Core and the Color Mod use REFramework's
-plugin API 1.15 (the headers in `core/third_party/reframework` come from REFramework commit 76520cac).
+REFramework in `dinput8.dll`, official build 1.5.8 or newer (plugin API 1.10). The Native Core and the Color Mod are
+built with REFramework's plugin API 1.15 headers (`core/third_party/reframework`, REFramework commit 76520cac) and
+run on REFramework 1.5.8 (the core checks the running version before using anything newer).
 
 ## Credits and licence
 
