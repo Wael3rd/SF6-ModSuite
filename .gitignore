@@ -14,3 +14,7 @@ obj/
 build/
 # downloaded mods used for tests, never published
 test_mods/
+# the Recording Manager's Community config with the API key: local only (crsm/package/config.example.json is the template)
+crsm/package/config.json
+# a player's Community token (written by the DLL in the game folder): never in git
+identity.json

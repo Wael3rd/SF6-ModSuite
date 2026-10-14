@@ -1,0 +1,4 @@
+{
+  "api_base": "https://sf6-community.wael-hadjmouldi.workers.dev",
+  "api_key": "<API_KEY of the Worker; the real config.json is local only (git-ignored) and goes into the release package>"
+}

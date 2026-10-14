@@ -1,0 +1,11 @@
+{
+    "owners": {
+        "community": "native",
+        "files": "native",
+        "record": "native",
+        "replay": "native",
+        "reversal": "native",
+        "ui": "native"
+    },
+    "standalone": "auto"
+}

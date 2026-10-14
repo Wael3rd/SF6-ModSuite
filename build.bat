@@ -5,6 +5,7 @@ cd /d "%~dp0"
 rem Builds everything into build\
 rem   core\sf6core_native.dll           the shared core (core\build.bat)
 rem   colormod\SF6_ColorModNative.dll   the Color Mod (colormod\build.bat)
+rem   crsm\SF6_CRSMNative.dll           the SF6 Recording Manager (crsm\build.bat)
 rem   amd_ags_x64.dll                  costume slots + stage slots: the DLL the game loads
 rem   costumes_only\amd_ags_x64.dll    the costume loader alone (what the releases ship so far)
 rem   SF6_CostumeSlotsNative.dll       REFramework plugin used during online matches
@@ -109,10 +110,13 @@ if errorlevel 1 goto :failed
 echo === Color Mod (SF6_ColorModNative.dll) ===
 call colormod\build.bat
 if errorlevel 1 goto :failed
+echo === Recording Manager (SF6_CRSMNative.dll) ===
+call crsm\build.bat
+if errorlevel 1 goto :failed
 
 echo.
 echo All OK: build\amd_ags_x64.dll, build\costumes_only\amd_ags_x64.dll, build\SF6_CostumeSlotsNative.dll,
-echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll and the tools
+echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll, build\crsm\SF6_CRSMNative.dll and the tools
 echo Replace the DLLs in the game folder only while the game is closed.
 exit /b 0
 
