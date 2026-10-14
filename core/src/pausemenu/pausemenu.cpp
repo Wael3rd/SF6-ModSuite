@@ -1812,10 +1812,21 @@ Check g_check;                                // written by the check's thread, 
 std::atomic<int> g_check_state{0};            // 0 not started, 1 running, 2 done
 
 constexpr const char* kCacheFile = "pm_codecheck.txt";
-constexpr const char* kCacheHeader = "sf6core pause-menu code check 1";
+constexpr const char* kCacheHeader = "sf6core pause-menu code check 2";   // 2: a code outside the exe is -1
 
 uintptr_t exe_base() { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); }
 long long rva(uintptr_t a) { return a ? (long long)(a - exe_base()) : 0; }
+// A target's code as kept in the cache: outside the exe it is another module's hook (a mod that hooked the method
+// before the check: its trampoline moves at each start), -1; the entry's RVA and the method index still pin it.
+long long code_rva(uintptr_t a) {
+    static const uintptr_t size = [] {
+        const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+        return (uintptr_t)nt->OptionalHeader.SizeOfImage;
+    }();
+    if (!a) return 0;
+    return a >= exe_base() && a - exe_base() < size ? (long long)(a - exe_base()) : -1;
+}
 
 void exe_key(char* out, size_t n, uint32_t methods) {
     const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
@@ -1867,7 +1878,7 @@ bool cache_read() {
         if (sscanf_s(line, "t %d %u %lld %lld %d %lld %d%n", &found, &index, &raw, &code, &shared, &other, &nsh, &pos) != 7 ||
             nsh < 0 || nsh > 16) { why = "unreadable target line"; break; }
         FoldTarget& t = got[i];
-        if ((found != 0) != (t.m != nullptr) || index != t.index || raw != rva(t.raw) || code != rva(t.code)) {
+        if ((found != 0) != (t.m != nullptr) || index != t.index || raw != rva(t.raw) || code != code_rva(t.code)) {
             why = "a hooked method's entry or code moved";
             break;
         }
@@ -1900,7 +1911,7 @@ bool cache_write() {
     for (size_t i = 0; i < g_specs.size() && i < g_check.targets.size(); ++i) {
         const FoldTarget& t = g_check.targets[i];
         const long long other = t.other ? (long long)t.other->get_index() : -1;
-        std::fprintf(f, "t %d %u %lld %lld %d %lld %d", t.m ? 1 : 0, t.index, rva(t.raw), rva(t.code), t.shared, other,
+        std::fprintf(f, "t %d %u %lld %lld %d %lld %d", t.m ? 1 : 0, t.index, rva(t.raw), code_rva(t.code), t.shared, other,
                      (int)t.sharers.size());
         for (uint32_t s : t.sharers) std::fprintf(f, " %u", s);
         std::fprintf(f, "|%s\n", spec_label(g_specs[i]).c_str());
