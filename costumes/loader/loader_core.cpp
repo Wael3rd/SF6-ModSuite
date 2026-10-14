@@ -2689,8 +2689,10 @@ static void add_slot_files(PakWriter& writer,
                         if (wc == 0) break;
                         ws += (char)tolower(wc & 0xFF);
                     }
-                    // Only toward a file the slot has: chain files in the model folder keep their name
-                    // (dir only, phase 1 and 2c), so renaming their stem named a file that exists nowhere
+                    // Only toward a file the slot has. The wind and pose chains the scene names
+                    // (weather/wind/mode/<NNN>/<fd>_<old>_01_chain.chain, Dev_Pose/..._NextChallenger_chain.chain)
+                    // have a copy under the slot's stem only when the mod ships one: renamed anyway, they
+                    // named a file that exists nowhere, which the slot check then filled with the original's
                     bool slot_has = false;
                     {
                         size_t s0 = wi;
