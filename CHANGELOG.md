@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.11.1 (2026-10-14) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Recording Manager | 2.0.1 | fixes: Replay page kept, recording keeps the slot's name and rate, menu tab under the mod's windows, Community messages |
+| SF6 Slots Loader | 1.11.0 | unchanged |
+| SF6 Native Core | 0.8.0 | unchanged |
+| SF6 Color Mod | 0.19.12 | unchanged |
+
+Only the Recording Manager zip and `SF6_ModSuite_AllInOne_v1.11.1.zip` changed. Updating in Fluffy Mod Manager: disable or
+remove the previous version first.
+
+### SF6 Recording Manager 2.0.1
+- **The Replay page is kept**: leaving the pause menu on Replay and coming back opened Record. The page you left (Record,
+  Replay or Manager) is the one you get back, also after leaving Training and coming back.
+- **Recording into a slot above 8 keeps that slot's name and random rate.** With a slot above 8 ticked for replay, the
+  new recording took that slot's name and slot 8's rate. Only the recording moves now; a new slot gets no name and rate 1.
+- **A recording above 8 that ends on its own** (without opening the menu) no longer leaves the replay playing slot 8's
+  recording under another slot's number.
+- **The menu's tab no longer changes under the mod's windows**: L1 + R1 (A + E on keyboard) in the Community list, the
+  slot name box or a confirmation box moved the game's tab bar behind them (the next E then jumped from the wrong tab).
+- **Community messages**: a share the server refuses says why ("Already shared: nothing changed", "Loadout too large to
+  share", "Share limit reached, try again later", "Share refused: <reason>") instead of "Loadout shared"; an answer with
+  no file or no list gives a clear message; un-liking moves the score down and shows "Unliked"; your CFN name is read
+  again at each list, like and share.
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- The select-screen prop of a slot (Slots Loader 1.10.5) is built and checked in the costume pak; its display on the
+  select screen has not been confirmed in game yet.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.11.0 (2026-10-14) — SF6 Mod Suite
 
 | Package | Version | |
