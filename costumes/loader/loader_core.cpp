@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-13-grouped-addons";
+static const char* LOADER_BUILD_ID = "2026-10-14-chainrefs";
 
 // ============================================================================
 // Utility
@@ -1782,6 +1782,41 @@ static void add_slot_files(PakWriter& writer,
         return r;
     };
 
+    // Chain, cloth and physics user files the slot wrote under another path: original -> slot's copy,
+    // as the scene and user files name them (lowercase, no natives/stm/, no version). Only files
+    // the pak holds, under the version the game asks for: a reference never moves to a file that
+    // is not there. private_users: the .user files the slot wrote, repaired once all are known.
+    std::unordered_map<std::string, std::string> physics_resources;
+    std::unordered_set<std::string> private_users;
+    auto record_relocation = [&](const std::string& source, const std::string& target) {
+        if (source == target || !writer.find(pak_path_hash(std::string_view(target)))) return;
+        std::string src = str_lower(source), dst = str_lower(target);
+        if (dst.find(".user.") != std::string::npos) private_users.insert(target);
+        const char* ext = nullptr;
+        for (const char* candidate : {".chain.", ".havokcloth."})
+            if (src.rfind(candidate) != std::string::npos) { ext = candidate; break; }
+        if (!ext && (src.find("_chain.user.") != std::string::npos
+                     || src.find("_havok.user.") != std::string::npos
+                     || src.find("_shape.user.") != std::string::npos
+                     || src.find("_jcs.user.") != std::string::npos
+                     || src.find("_aogeo.user.") != std::string::npos)) ext = ".user.";
+        if (!ext || src.compare(0, 12, "natives/stm/") != 0
+                 || dst.compare(0, 12, "natives/stm/") != 0) return;
+        auto a = src.rfind(ext), b = dst.rfind(ext);
+        if (b == std::string::npos) return;
+        // the name without its version, whatever its form (Havok cloth: .havokcloth.1.x64)
+        src = src.substr(12, a + strlen(ext) - 1 - 12);
+        dst = dst.substr(12, b + strlen(ext) - 1 - 12);
+        // A chain or user reference is loaded under the game's current version: a mod's chain of
+        // another version stays unused. (The cloth's version is missing from some indexes; the
+        // file itself was checked above.)
+        if (strcmp(ext, ".havokcloth.") != 0) {
+            const std::string resolved = scene_ref_pak_path(dst, inv.suffixes);
+            if (resolved.empty() || !writer.find(pak_path_hash(std::string_view(resolved)))) return;
+        }
+        if (src.size() == dst.size()) physics_resources[src] = dst;
+    };
+
     // Textures the mod ships, named the way material files reference them: "<part>/<file>.tex"
     // relative to <fighter>/<folder>/, lowercase.
     auto tex_keys_for = [&](const std::unordered_map<std::string, ModFileRef>& files,
@@ -1885,6 +1920,7 @@ static void add_slot_files(PakWriter& writer,
             writer.add_raw(h, std::move(raw), att, ds);
         }
         written_paths.insert(new_path);
+        record_relocation(path, new_path);
         g_relocated_mod_paths.insert(path);
         count++;
         if (low.find(".tex.") != std::string::npos && !is_streaming)
@@ -2133,7 +2169,7 @@ static void add_slot_files(PakWriter& writer,
         }
     }
 
-    // 2c. chain.52: from mod or vanilla (renamed prefix in filename)
+    // 2c. chain.52: from mod or vanilla (dir only, the file keeps its name)
     {
         std::string chain_orig = base_model + fd + "_" + old_f + "_01_chain.chain.52";
         // Dir-only relocation for chain.chain (keep filename prefix)
@@ -2158,6 +2194,7 @@ static void add_slot_files(PakWriter& writer,
                 }
             }
         }
+        record_relocation(chain_orig, chain_target);
     }
 
     // 2d. chain.user: for parts with mod chain.chain, relocate vanilla chain.user
@@ -2203,31 +2240,13 @@ static void add_slot_files(PakWriter& writer,
                 if (oe) cu_data = base_pak.read(*oe);
             }
             if (cu_data.empty()) continue;
-            // Point the copy at the chain files the slot relocated: fd/old_f/ -> fd/new_f/ (dir only,
-            // chain files keep their name), in the part folder or next to it, and only where the
-            // relocated file exists
-            std::string old_ds = fd + "/" + old_f + "/";
-            std::string new_ds = fd + "/" + new_f + "/";
-            std::vector<uint8_t> old_d16, new_d16;
-            for (char c : old_ds) { old_d16.push_back((uint8_t)c); old_d16.push_back(0); }
-            for (char c : new_ds) { new_d16.push_back((uint8_t)c); new_d16.push_back(0); }
-            for (size_t ci = 0; ci + old_d16.size() <= cu_data.size(); ) {
-                if (memcmp(cu_data.data()+ci, old_d16.data(), old_d16.size()) != 0) { ci += 2; continue; }
-                size_t s0 = ci;
-                while (s0 >= 2 && !(cu_data[s0 - 2] == 0 && cu_data[s0 - 1] == 0)) s0 -= 2;
-                std::string ref;
-                for (size_t j = s0; j + 1 < cu_data.size() && (cu_data[j] || cu_data[j + 1]); j += 2)
-                    ref += (char)cu_data[j];
-                ref.replace((ci - s0) / 2, old_ds.size(), new_ds);
-                while (!ref.empty() && (ref[0] == '@' || ref[0] == ' ')) ref.erase(0, 1);
-                std::string target = scene_ref_pak_path(ref, inv.suffixes);
-                if (!target.empty() && written_paths.count(target))
-                    memcpy(cu_data.data() + ci, new_d16.data(), new_d16.size());
-                ci += old_d16.size();
-            }
+            // Point the copy at the chain files the slot relocated (dir only, chain files keep their
+            // name), in the part folder or next to it, and only where the relocated file exists
+            patch_resource_references(cu_data, physics_resources);
             uint64_t th = pak_path_hash(std::string_view(cu_target));
             writer.add_uncompressed(th, std::move(cu_data));
             written_paths.insert(cu_target);
+            record_relocation(cu_orig, cu_target);
             count++; patched++;
         }
 
@@ -2248,14 +2267,6 @@ static void add_slot_files(PakWriter& writer,
             if (!parse_model_folder(path, mfd, mfolder) || mfolder != old_f) continue;
             havok_parts.insert(fn.substr(hpfx.size(), hc - hpfx.size()));
         }
-        // A reference of the copy points at the slot when the relocated file was written
-        auto relocated_written = [&](const std::string& ref) {
-            std::string target = scene_ref_pak_path(ref, inv.suffixes);
-            if (!target.empty()) return written_paths.count(target) > 0;
-            std::string pfx = "natives/stm/" + str_lower(ref) + ".";   // suffix not in the index (.havokcloth.1.x64)
-            for (auto& w : written_paths) if (w.compare(0, pfx.size(), pfx) == 0) return true;
-            return false;
-        };
         for (auto& part : havok_parts) {
             std::string hu_orig = base_model + hpfx + part + "_havok.user.2";
             std::string hu_target = hu_orig;
@@ -2267,29 +2278,11 @@ static void add_slot_files(PakWriter& writer,
             if (mfit != mc->files_in_folder.end()) hu_data = mfit->second.read_data();
             else if (auto* oe = base_pak.find(pak_path_hash(std::string_view(hu_orig)))) hu_data = base_pak.read(*oe);
             if (hu_data.empty()) continue;
-            std::string old_ds = fd + "/" + old_f + "/", new_ds = fd + "/" + new_f + "/";
-            std::vector<uint8_t> old_d16, new_d16;
-            for (char c : old_ds) { old_d16.push_back((uint8_t)c); old_d16.push_back(0); }
-            for (char c : new_ds) { new_d16.push_back((uint8_t)c); new_d16.push_back(0); }
-            size_t repointed = 0;
-            for (size_t ci = 0; ci + old_d16.size() <= hu_data.size(); ) {
-                bool eq = true;
-                for (size_t k = 0; k < old_d16.size(); k += 2)
-                    if (tolower(hu_data[ci + k]) != old_d16[k] || hu_data[ci + k + 1] != 0) { eq = false; break; }
-                if (!eq) { ci += 2; continue; }
-                size_t s0 = ci;
-                while (s0 >= 2 && !(hu_data[s0 - 2] == 0 && hu_data[s0 - 1] == 0)) s0 -= 2;
-                std::string ref;
-                for (size_t j = s0; j + 1 < hu_data.size() && (hu_data[j] || hu_data[j + 1]); j += 2)
-                    ref += (char)hu_data[j];
-                ref.replace((ci - s0) / 2, old_ds.size(), new_ds);
-                while (!ref.empty() && (ref[0] == '@' || ref[0] == ' ')) ref.erase(0, 1);
-                if (relocated_written(ref)) { memcpy(hu_data.data() + ci, new_d16.data(), new_d16.size()); repointed++; }
-                ci += old_d16.size();
-            }
+            size_t repointed = patch_resource_references(hu_data, physics_resources);
             if (!repointed) continue;   // the cloth did not follow: the game's file stays in use
             writer.add_uncompressed(pak_path_hash(std::string_view(hu_target)), std::move(hu_data));
             written_paths.insert(hu_target);
+            record_relocation(hu_orig, hu_target);
             count++; patched++;
             printf("      havok cloth of part %s: the mod's, through its own copy of %s_havok.user\n",
                    part.c_str(), (hpfx + part).c_str());
@@ -2331,6 +2324,7 @@ static void add_slot_files(PakWriter& writer,
             writer.add_raw(h, std::move(raw), att, ds);
         }
         written_paths.insert(new_path);
+        record_relocation(path, new_path);
         count++;
     }
     if (!shared_parts.empty()) {
@@ -2399,6 +2393,7 @@ static void add_slot_files(PakWriter& writer,
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_raw(h, std::move(raw), att, ds);
             written_paths.insert(new_path);
+            record_relocation(path, new_path);
             count++; ext_count++;
         }
         if (ext_count)
@@ -2467,6 +2462,7 @@ static void add_slot_files(PakWriter& writer,
                 size_t n = patch_mdf2_minimal(vd, fd, old_f, new_f, part_keys(old_f, mc->files_in_folder, true));
                 if (!shared_parts.empty())
                     n += patch_mdf2_minimal(vd, fd, "000", new_f, part_keys("000", mc->files_shared, false));
+                n += patch_resource_references(vd, physics_resources);   // and the chain files it names
                 if (n > 0 && new_f.size() == 3) {
                     std::string dst_rel = mp_rel;
                     auto bpos = dst_rel.find("/battle_ud/");
@@ -2634,6 +2630,25 @@ static void add_slot_files(PakWriter& writer,
         }
     }
 
+    // The slot's user files, the mod's own included: phase 1 copied those as they are, before the
+    // chain and cloth files they name had been written, and 2d then left them alone. They kept
+    // naming the original folder's files (a slot in folder 006 loaded the chain of folder 003). Every
+    // reference to a file the slot has under another path now points at it, user files that name
+    // other user files too (shape, jcs).
+    size_t physics_repointed = 0;
+    for (const auto& path : private_users) {
+        const uint64_t h = pak_path_hash(std::string_view(path));
+        auto data = writer.get(h);
+        const size_t n = patch_resource_references(data, physics_resources);
+        if (n) {
+            writer.replace(h, std::move(data));
+            physics_repointed += n;
+            patched++;
+        }
+    }
+    if (physics_repointed)
+        printf("      physics user files: %zu references repointed to the slot's chain and cloth files\n", physics_repointed);
+
     // Costume scene: targeted patching
     auto* orig_costume = inv.get_costume(slot.fighter, slot.original_costume_no);
     if (orig_costume && !orig_costume->scene.empty()) {
@@ -2651,9 +2666,9 @@ static void add_slot_files(PakWriter& writer,
             if (!shared_parts.empty() || shared_material_given)
                 patch_scene_minimal(vdata, fd, "000", new_f,
                                     &written_paths, &inv.suffixes);
-            // Third pass: weather/havok chain filename-prefix rename. Also, whatever its kind, a
-            // reference to a file the slot has under the renamed stem (phase 3: C. Viper Concept
-            // Outfit's weather/wind/.../esf030_001_01_chain_BattleSetting.chain) follows it.
+            // Third pass: filename-prefix rename. Whatever its kind, a reference to a file the slot
+            // has under the renamed stem (phase 3: C. Viper Concept Outfit's
+            // weather/wind/.../esf030_001_01_chain_BattleSetting.chain) follows it.
             {
                 std::string old_wpfx = fd + "_" + old_f + "_";
                 std::string new_wpfx = fd + "_" + new_f + "_";
@@ -2674,17 +2689,10 @@ static void add_slot_files(PakWriter& writer,
                         if (wc == 0) break;
                         ws += (char)tolower(wc & 0xFF);
                     }
-                    // The weather chain has no folder of its own, hence the renamed stem. A havok file
-                    // in the model folder keeps its name (dir-only, pass 1): renaming it here gave
-                    // <old>/<fd>_<new>_NN_havok.user, a file that exists nowhere.
-                    bool in_weather = false;
-                    if (ws.find("havok") != std::string::npos) {
-                        size_t s0 = wi;
-                        while (s0 >= 2 && !(vdata[s0 - 2] == 0 && vdata[s0 - 1] == 0)) s0 -= 2;
-                        std::string full;
-                        for (size_t wj = s0; wj < wi; wj += 2) full += (char)tolower(vdata[wj]);
-                        in_weather = full.find("weather/") != std::string::npos;
-                    }
+                    // Only toward a file the slot has. The wind and pose chains the scene names
+                    // (weather/wind/mode/<NNN>/<fd>_<old>_01_chain.chain, Dev_Pose/..._NextChallenger_chain.chain)
+                    // have a copy under the slot's stem only when the mod ships one: renamed anyway, they
+                    // named a file that exists nowhere, which the slot check then filled with the original's
                     bool slot_has = false;
                     {
                         size_t s0 = wi;
@@ -2695,13 +2703,16 @@ static void add_slot_files(PakWriter& writer,
                         std::string target = scene_ref_pak_path(head + new_wpfx + ws.substr(old_wpfx.size()), inv.suffixes);
                         slot_has = !target.empty() && written_paths.count(target);
                     }
-                    if (slot_has || (!mod_chain_parts.empty() && (ws.find("chain.chain") != std::string::npos || in_weather))) {
+                    if (slot_has) {
                         memcpy(vdata.data()+wi, nw16.data(), nw16.size());
                         patched++;
                     }
                     wi += ow16.size();
                 }
             }
+            // The chain and cloth files the scene names directly, and its physics user files: the
+            // slot's copy, every occurrence, as in the user files above
+            if (patch_resource_references(vdata, physics_resources)) patched++;
             // Fourth pass: point the scene at the slot's model_parts copy, every occurrence. Unlike
             // CCVD, the first one too: it sits in the scene's userdata table, which the game loads
             // with the scene. Left on battle_ud/, the copy (and the weapon meshes it names) loaded

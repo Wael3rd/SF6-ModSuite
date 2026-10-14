@@ -19,6 +19,13 @@ size_t patch_paths(std::vector<uint8_t>& data,
 #include <unordered_set>
 #include <unordered_map>
 
+// Repoints whole UTF-16LE references (scene, user files) to the slot's copy of a resource.
+// relocated_resources: original -> copy, lowercase, without natives/stm/ and version, same length.
+// Every occurrence; a leading '@', the case and the slashes of the reference are kept.
+// Returns the number of references changed.
+size_t patch_resource_references(std::vector<uint8_t>& data,
+    const std::unordered_map<std::string, std::string>& relocated_resources);
+
 // Minimal scene patching: only mesh/mdf2/CCVD references in UTF-16LE.
 // CCVD: patched only at 2nd occurrence (instance data, not userdata_infos).
 // relocated_paths: set of pak paths in output (for existence check). May be null.
