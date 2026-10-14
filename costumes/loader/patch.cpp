@@ -108,6 +108,39 @@ static std::string to_lower(const std::string& s) {
     return r;
 }
 
+size_t patch_resource_references(std::vector<uint8_t>& data,
+    const std::unordered_map<std::string, std::string>& relocated_resources) {
+    if (relocated_resources.empty()) return 0;
+    size_t changed = 0;
+    for (size_t i = 0; i + 1 < data.size(); ) {
+        const size_t start = i;
+        std::string ref;
+        while (i + 1 < data.size() && data[i + 1] == 0
+               && data[i] >= 0x20 && data[i] < 0x7f) {
+            ref += static_cast<char>(data[i]);
+            i += 2;
+        }
+        const bool terminated = i + 1 < data.size() && data[i] == 0 && data[i + 1] == 0;
+        i += 2;
+        if (!terminated || ref.empty()) continue;
+        size_t prefix = ref.find_first_not_of("@ ");
+        if (prefix == std::string::npos) continue;
+        std::string key = to_lower(ref.substr(prefix));
+        for (char& c : key) if (c == '\\') c = '/';
+        auto it = relocated_resources.find(key);
+        if (it == relocated_resources.end() || it->second.size() != key.size()) continue;
+        // only the characters that differ (the folder digits): the reference keeps its case and slashes
+        bool replaced = false;
+        for (size_t k = 0; k < key.size(); ++k) {
+            if (key[k] == it->second[k]) continue;
+            data[start + 2 * (prefix + k)] = static_cast<uint8_t>(it->second[k]);
+            replaced = true;
+        }
+        if (replaced) ++changed;
+    }
+    return changed;
+}
+
 // Read a null-terminated UTF-16LE string from buf starting at 'start'.
 // Returns end position (exclusive, at the null terminator start).
 static std::string read_u16_string(const uint8_t* buf, size_t len,
