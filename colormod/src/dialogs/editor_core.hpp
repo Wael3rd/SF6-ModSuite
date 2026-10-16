@@ -47,10 +47,18 @@ struct DiCfg {
 struct DiPreset { std::optional<std::string> name; std::optional<uint32_t> c1, c2; };
 enum DiList : int { kPresetsDI = 0, kPresetsDR = 1, kPresetsSP = 2 };
 
-// One slider row of the page on top, for the game side's row looks (dialogs/row_look, 0.20.0)
+// The colour pages' palette (0.21.0): the avatar editor's colour grid, five lines of ten, 0xRRGGBB
+constexpr int kPaletteLines = 5, kPaletteCols = 10;
+extern const uint32_t kPalette[kPaletteLines][kPaletteCols];
+
+// One slider / palette row of the page on top, for the game side's row looks (dialogs/row_look, 0.20.0)
 struct RowLook {
     int eid = -1;                         // the editor's entry id
-    int kind = 0;                         // 0 the option window's look, 1 hue slider (the rainbow)
+    int kind = 0;                         // 0 the option window's look, 1 hue slider (the rainbow), 2 palette row (0.21.0)
+    int line = 0;                         // palette row: its line of the grid (0-based)
+    int cursor = -1;                      // palette row: the cell under the cursor (0-based)
+    int checked = -1;                     // palette row: the cell equal to the colour edited, -1 = none
+    bool focused = false;                 // palette row: the cursor is on it
 };
 
 struct Backend {
@@ -152,6 +160,8 @@ struct Backend {
     bool (*di_special_enabled)() = nullptr;                      // func/SpecialVFXGate
     // ---- the rows' own look (0.20.0, dialogs/row_look) ----
     void (*row_looks)(Obj param, const std::vector<RowLook>& rows) = nullptr;   // every frame while the window is up
+    bool (*opt_set_value)(int eid, int value) = nullptr;         // a row's value in place (the unit's integer: a choice 0-based)
+    void (*select_lr)(bool& left, bool& right) = nullptr;        // the menus' LEFT / RIGHT held now (keyboard and pad, 0.21.0)
 };
 
 void set_backend(const Backend& b);

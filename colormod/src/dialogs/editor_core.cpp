@@ -21,6 +21,15 @@
 
 namespace dialogs::editor::core {
 
+// The avatar editor's colour grid (AvatarCreateColorPopUp, read live 16/10), line by line, left to right
+const uint32_t kPalette[kPaletteLines][kPaletteCols] = {
+    { 0xFF0000, 0xFF7700, 0xFAFF00, 0x33FF00, 0x00FFE7, 0x009AFF, 0x000EFF, 0x9D00FF, 0xFF00DD, 0xFFFFFF },
+    { 0xCC0000, 0xCC5F00, 0xC8CC00, 0x28CC00, 0x00CCB9, 0x007DCC, 0x000DCC, 0x7D00CC, 0xCC00B0, 0xBABABA },
+    { 0x990000, 0x994700, 0x969900, 0x1E9900, 0x00998A, 0x005E99, 0x000899, 0x5E0099, 0x990084, 0x777777 },
+    { 0x660000, 0x662F00, 0x646600, 0x146600, 0x00665C, 0x003E66, 0x000666, 0x3E0066, 0x660058, 0x3A3A3A },
+    { 0x330000, 0x331800, 0x323300, 0x0A3300, 0x00332E, 0x001F33, 0x000333, 0x1F0033, 0x33002C, 0x000000 },
+};
+
 namespace {
 
 using rsz::Node;
@@ -195,6 +204,7 @@ struct Marks {                                                  // edit.marks_fn
     int ncol = 0, nmat = 0;
     std::unordered_map<const Node*, NodeRef> saved_of;
 };
+struct Palette;
 struct Entry {
     int id = -1;
     std::string key;
@@ -211,7 +221,10 @@ struct Entry {
     std::function<int()> reset_value;
     TargetsRef targets;
     std::function<bool(const Marks&)> mark_fn;
-    int look = 0;                                               // RowLook::kind: 1 hue slider (the rainbow, 0.20.0)
+    int look = 0;                                               // RowLook::kind: 1 hue slider (the rainbow, 0.20.0), 2 palette row (0.21.0)
+    int line = 0;                                               // palette row: its line of the grid (0-based)
+    std::shared_ptr<Palette> pal;                               // palette row: the colour it sets
+    bool has_echo = false; int echo = 0;                        // a value set in place: the engine's read-back is not a move
 };
 using EntryRef = std::shared_ptr<Entry>;
 void note_entry(const EntryRef& e);
@@ -294,10 +307,12 @@ struct EditState {
     bool has_entry_values = false; std::map<std::string, std::optional<int>> entry_values;
     bool selected = false; bool has_selected_key = false; std::string selected_key; TargetsRef selected_targets;
     bool has_sel_index = false; int sel_index = 0;
+    bool lr_was_down = false; int64_t lr_since = 0;               // the palette cursor's LEFT / RIGHT (0.21.0)
     bool sliders_armed = false, validate_was_down = false, reset_was_down = false, copy_was_down = false, copy_color_was_down = false, paste_was_down = false;
     bool has_clip = false; int clip = 0;
     bool has_clip_kind = false; std::string clip_kind;
     bool has_clip_color = false; HSV3 clip_color;
+    std::weak_ptr<Entry> pal_focus;                             // the row under the cursor last frame (palette rows, 0.21.0)
     // pulse
     bool hl_on = false; TargetsRef hl_targets;
     bool has_hl_t = false; double hl_t = 0;
@@ -315,6 +330,7 @@ struct EditState {
 };
 EditState edit;
 bool g_reopen_now = false;                                      // fsm.reopen_now
+bool g_grid_page = false;                                       // the page on top holds the palette rows (0.21.0)
 bool ll_entry() { return false; }                               // edit.entry.ll: the LL entries are disabled (entries_for)
 
 // Every entry made while the window is up stays reachable by its id: a page under the current one still shows the
@@ -585,6 +601,8 @@ struct Cluster {
     NodeRef cl; std::vector<int> enabled; std::string id; int pi = 0, ci = 0, ptype = 0; std::string label;
 };
 std::string swatch(uint32_t col) { return fmt("<color %s>%s</color>", rgb_hex(col).c_str(), SQUARE); }
+// one square: a row that edits ONE colour (its H / S / V rows, the Drive page's Couleur 1 / Couleur 2)
+std::string swatch_one(uint32_t col) { return fmt("<color %s>\xE2\x96\xA0</color>", rgb_hex(col).c_str()); }
 std::string base_name(std::string n) {                          // quick edit: the cluster name without its decorations, lower case
     n = lower(n);
     strip_prefix(n, "unused_"); strip_esf(n);
@@ -665,6 +683,54 @@ void retitle_row(const EntryRef& e, const std::string& want) {  // the row's own
 }
 struct Row { std::weak_ptr<Entry> entry; char comp = 0; };
 
+// The palette rows of one colour (0.21.0): five choice rows of ten values under its three sliders, holders of the
+// navigation only (the game side hides them and draws the grid). The column under the cursor is shared by the five
+// rows, so that UP / DOWN keeps it: the game's own row navigation is the grid's second axis (no 2D input).
+struct Palette {
+    MemoKey mk; int col = 0;
+    std::shared_ptr<std::vector<Row>> rows;                     // the colour's H / S / V rows
+    std::function<uint32_t()> get_col;                          // the colour edited (a costume colour, a Drive colour slot)
+    std::function<void(uint32_t)> set_col;                      // set it, the way its sliders do (live preview included)
+    std::function<void(const EntryRef&, char, uint32_t)> retitle;   // one of its sliders' titles, for that colour
+};
+uint32_t rgb_of_col(uint32_t col) { int r, g, b, a; rgb_of(col, r, g, b, a); return (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b; }
+std::pair<int, int> palette_hit(uint32_t col) {                 // where the colour is in the palette (RGB, alpha aside); -1 none
+    const uint32_t rgb = rgb_of_col(col);
+    for (int l = 0; l < kPaletteLines; ++l) for (int c = 0; c < kPaletteCols; ++c) if (kPalette[l][c] == rgb) return { l, c };
+    return { -1, -1 };
+}
+void set_row_value(const EntryRef& e, int v) {                  // a row's value in place (choice 1-based); its read-back is not a move
+    if (!e || (e->has_value && e->value == v)) return;
+    e->value = v; e->has_value = true;
+    if (be.opt_set_value && be.opt_set_value(e->id, e->choice ? v - 1 : v)) { e->has_echo = true; e->echo = v; }
+}
+void pick_swatch(const std::shared_ptr<Palette>& p, int line, int col, const EntryRef& self) {   // the cell becomes the colour, live
+    if (!p || line < 0 || line >= kPaletteLines || col < 0 || col >= kPaletteCols) return;
+    if (self) set_selected(self);
+    const uint32_t rgb = kPalette[line][col];
+    int r, g, b, a; rgb_of(p->get_col(), r, g, b, a);
+    const uint32_t c = pack_rgba((int)(rgb >> 16), (int)((rgb >> 8) & 0xFF), (int)(rgb & 0xFF), a);
+    g_memo.erase(p->mk);                                        // the sliders show the cell's true values
+    p->set_col(c);
+    const HSV3 hv = hsv_raw(c);
+    for (auto& row : *p->rows) if (auto re = row.entry.lock()) { set_row_value(re, hv.get(row.comp)); p->retitle(re, row.comp, c); }
+}
+// the five palette rows of one colour page, after its three sliders (one colour per page: 8 rows); restore = Backspace
+void palette_rows(const GroupRef& g, const std::string& prefix, const std::shared_ptr<Palette>& pal, std::function<void()> restore, const TargetsRef& targets) {
+    const auto hit = palette_hit(pal->get_col());
+    pal->col = hit.second >= 0 ? hit.second : 0;
+    for (int line = 0; line < kPaletteLines; ++line) {
+        // ONE value: the row never moves on LEFT / RIGHT (the editor moves the cursor); its text is the line's colours,
+        // shown only without the grid
+        std::string line_text;
+        for (int c = 0; c < kPaletteCols; ++c) line_text += fmt("<color %06X>\xE2\x96\xA0</color>", kPalette[line][c]);
+        EntryRef e = g->choice_row(fmt("%s_p%d", prefix.c_str(), line + 1), std::string(), "", { line_text }, 1);
+        e->look = 2; e->line = line; e->pal = pal;
+        e->restore = restore;
+        e->targets = targets;
+    }
+}
+
 // colour sliders (H / S / V) of one colour, with the live swatch in the titles (:2824)
 void color_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& occ, const Marks& m0) {
     auto rows = std::make_shared<std::vector<Row>>();
@@ -672,7 +738,7 @@ void color_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& occ,
     NodeRef scc = sit == m0.saved_of.end() ? nullptr : sit->second;
     auto title_of = [k, cc](char comp, uint32_t col) {
         const std::string name = comp == 'H' ? L("slider.hue") : comp == 'S' ? L("slider.saturation") : L("slider.brightness");
-        return L("slider.color_row", { std::to_string(k), name, swatch(col) }) + (node_enable(cc) ? std::string() : ("  " + L("slider.texture")));
+        return L("slider.color_row", { std::to_string(k), name, swatch_one(col) }) + (node_enable(cc) ? std::string() : ("  " + L("slider.texture")));
     };
     auto set_col = [cc, occ](uint32_t v) {                      // a texture slot (Enable false) becomes ours when coloured
         cc_set_color(cc, v);
@@ -700,6 +766,14 @@ void color_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& occ,
         e->mark_fn = [cc, comp, mk, scc](const Marks&) { return !ll_entry() && (!scc || hsv3(cc_color(cc), mk).get(comp) != hsv_raw(cc_color(scc)).get(comp)); };
         rows->push_back({ e, comp });
     }
+    // the palette (0.21.0): five rows of ten values under the three sliders (one colour per page: 8 rows)
+    auto pal = std::make_shared<Palette>();
+    pal->mk = mk; pal->rows = rows;
+    pal->get_col = [cc]() { return cc_color(cc); };
+    pal->set_col = [set_col](uint32_t c) { set_col(c); editor_refresh(); };
+    pal->retitle = [title_of](const EntryRef& re, char comp, uint32_t c) { retitle_row(re, title_of(comp, c)); };
+    palette_rows(g, fmt("c%d", k), pal, [pal, scc]() { if (scc) { g_memo.erase(pal->mk); pal->set_col(cc_color(scc)); } },   // Backspace: the SAVED colour
+                 std::make_shared<std::vector<NodeRef>>(std::vector<NodeRef>{ cc }));
 }
 // material sliders (BlendRate / Roughness / Metalness, 0-1000 = 0.0-1.0) of one colour (:2859)
 void material_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& /*occ*/, const Marks& m0) {
@@ -1080,7 +1154,7 @@ void di_build_page(int mi, int fighter, int side, const std::string& who, const 
         auto rows = std::make_shared<std::vector<Row>>();
         auto title_of = [k](char comp, uint32_t col) {
             const std::string name = comp == 'H' ? L("slider.hue") : comp == 'S' ? L("slider.saturation") : L("slider.brightness");
-            return L("slider.color_row", { std::to_string(k), name, swatch(col) });
+            return L("slider.color_row", { std::to_string(k), name, swatch_one(col) });
         };
         const HSV3 init = hsv_get(col_or0(slot_of(cfg, k)), &mk);
         for (char comp : { 'H', 'S', 'V' }) {
@@ -1103,6 +1177,21 @@ void di_build_page(int mi, int fighter, int side, const std::string& who, const 
             };
             rows->push_back({ e, comp });
         }
+        // the palette (0.21.0), as on the costume colour pages: the cell goes into this slot as its sliders' values do
+        auto pal = std::make_shared<Palette>();
+        pal->mk = mk; pal->rows = rows;
+        pal->get_col = [cfg, k]() { return col_or0(k == 1 ? cfg->c1 : cfg->c2); };
+        pal->set_col = [cfg, k, mi, slot, touch](uint32_t c) {
+            std::optional<uint32_t>& cur = k == 1 ? cfg->c1 : cfg->c2;
+            cur = c;
+            di_set_col(mi, slot, cur);
+            touch();
+        };
+        pal->retitle = [title_of](const EntryRef& re, char comp, uint32_t c) { di_write_title(re, title_of(comp, c)); };
+        palette_rows(pg, fmt("di%d", k), pal, [pal, ref, k, mk]() {     // Backspace: the colour the page started from
+            const std::optional<uint32_t>& rv = k == 1 ? ref->c1 : ref->c2;
+            if (rv) { g_memo.erase(mk); pal->set_col(*rv); }
+        }, nullptr);
         return key;
     };
     const std::string k_c1 = color_page(1), k_c2 = color_page(2);
@@ -1230,7 +1319,7 @@ void di_build_page(int mi, int fighter, int side, const std::string& who, const 
         if (before != rows_shown()) { edit.focus_of[KEY] = 0; edit.has_di_refresh_at = true; edit.di_refresh_at = frame_now() + 20; edit.di_rebuild = true; }
     };
     if (!rows_shown()) return;
-    auto color_title = [cfg](int k) { return L("di.color_row", { std::to_string(k), swatch(col_or0(k == 1 ? cfg->c1 : cfg->c2)) }); };
+    auto color_title = [cfg](int k) { return L("di.color_row", { std::to_string(k), swatch_one(col_or0(k == 1 ? cfg->c1 : cfg->c2)) }); };
     auto root_rows = std::make_shared<DiRootRows>();
     // nav() rebuilds ALL the pages with edit.page already on the sub-page being opened: the sub-pages of this
     // mechanic are accepted too, or the swatch would not follow on the way back
@@ -1403,7 +1492,7 @@ void editor_build_pages() {
     build_quick(clusters, m0);
     const std::string colors_key = build_mode(clusters, "col", L("root.colors"), L("list.pick_cluster"), color_rows, [](const GroupRef& g) {
         EntryRef e = g->button("random", L("list.random"), L("list.random_colors_desc"), editor_random); e->has_verb = true; e->verb = "Generate";
-    }, 2, m0);
+    }, 1, m0);                                                  // one colour per page: its sliders and its palette (0.21.0)
     const std::string mats_key = build_mode(clusters, "mat", L("root.materials"), L("list.pick_cluster"), material_rows, [](const GroupRef& g) {
         EntryRef e = g->button("random", L("list.random"), L("list.random_materials_desc"), editor_random_materials); e->has_verb = true; e->verb = "Generate";
     }, 1, m0);                                                  // one colour per page
@@ -1649,7 +1738,7 @@ void editor_layout() {                                          // safety net (p
             const int rows = (edit.rows_cm == cm) ? edit.rows_n : 0;
             if (rows >= 8) {
                 if (Obj u7 = be.ui_find ? be.ui_find(cm, "p_OptionUnit_7_switch_show") : nullptr) {
-                    if (be.ui_force_invisible(u7)) be.ui_set_force_invisible(u7, false);
+                    if (!g_grid_page && be.ui_force_invisible(u7)) be.ui_set_force_invisible(u7, false);   // a palette row's lock stays
                     if (!be.ui_visible(u7)) be.ui_set_visible(u7, true);
                 }
             }
@@ -1690,6 +1779,10 @@ ButtonResult on_button(int eid) {
 void on_value(int eid, int value) {
     EntryRef e = entry_by_id(eid);
     if (!e) return;
+    if (e->has_echo) {                                          // the read-back of a value set in place: not a move
+        e->has_echo = false;
+        if (value == e->echo) { e->value = value; e->has_value = true; return; }
+    }
     e->value = value; e->has_value = true;
     if (e->cb_value) { auto cb = e->cb_value; cb(value); }
 }
@@ -1716,6 +1809,13 @@ void rebuild_same_page(int idx) {
 }
 // the three H / S / V sliders of the FOCUSED colour, by their keys (c3_H / di1_H / sq1_H)
 bool color_triple(const GroupRef& g, const EntryRef& e, EntryRef out[3]) {
+    if (e && e->pal) {                                          // a palette row: its colour's three sliders
+        EntryRef hsv[3];
+        for (auto& row : *e->pal->rows) if (auto re = row.entry.lock()) hsv[row.comp == 'H' ? 0 : row.comp == 'S' ? 1 : 2] = re;
+        if (!(hsv[0] && hsv[1] && hsv[2])) return false;
+        for (int i = 0; i < 3; ++i) out[i] = hsv[i];
+        return true;
+    }
     if (!e || !e->slider) return false;
     const std::string& k = e->key;
     if (k.size() < 2 || k[k.size() - 2] != '_' || (k.back() != 'H' && k.back() != 'S' && k.back() != 'V')) return false;
@@ -1839,6 +1939,10 @@ void frame() {
                     rebuild_same_page(idx);
                 }
             }
+            if (validate && !edit.validate_was_down) {                      // F / A on a palette row: the cell under the cursor is applied
+                EntryRef e = focused_entry();
+                if (e && e->pal) pick_swatch(e->pal, e->line, e->pal->col, e);
+            }
         }
         if (edit.sliders_armed) {
             if (copy_k && !edit.copy_was_down) {                            // the row's number
@@ -1896,6 +2000,7 @@ void frame() {
         EntryRef fe = focused_entry();
         if (on_sliders) {
             edit.has_guide_desc = true; edit.guide_desc = fe ? fe->desc : std::string();     // quick edit: the family's clusters
+            if (fe && fe->pal) edit.guide_desc = L("slider.palette_desc", { pad ? "<ICON BtnD>" : "<ICON KeyF>" });   // the decide key's own icon
             edit.guide_wanted = pad
                 ? ("<ICON BtnR> " + L("verb.back") + "   <ICON BtnR3> " + L("verb.reset_value") + "   <ICON BtnL> " + L("verb.copy_line") + "   <ICON BtnL3><ICON BtnL> " + L("verb.copy_color") + "   <ICON BtnU> " + L("verb.paste"))
                 : ("<ICON KeyEsc> " + L("verb.back") + "   <ICON KeyBS> " + L("verb.reset_value") + "   <ICON KeyC> " + L("verb.copy_line") + "   <ICON KeyX> " + L("verb.copy_color") + "   <ICON KeyV> " + L("verb.paste"));
@@ -1997,12 +2102,43 @@ void frame() {
     } else {
         edit.prev_was_down = false; edit.next_was_down = false;
     }
-    // the rows' own look (0.20.0, dialogs/row_look): the rainbow under the hue sliders
+    // the palette rows (0.21.0): the cursor keeps its column from one palette row to another; moving never changes the
+    // colour, F applies the cell under the cursor (above)
+    g_grid_page = false;
+    if (edit.active && window_open() && cur_group) for (auto& e : cur_group->entries) if (e->pal) { g_grid_page = true; break; }
+    // ONE cursor owned by the editor: its line is the palette row the game focuses (UP / DOWN = the game's own row
+    // navigation), its column moves on LEFT / RIGHT read here (pressed: one step, held: one step every 4 frames after
+    // 15), clamped at the ends like the avatar grid
+    EntryRef pal_fe;
+    if (g_grid_page) {
+        pal_fe = focused_entry();
+        edit.pal_focus = pal_fe;
+        bool left = false, right = false;
+        if (pal_fe && pal_fe->pal && be.select_lr) be.select_lr(left, right);
+        const bool lr = left != right;
+        if (lr) {
+            const bool step = !edit.lr_was_down || (now_f - edit.lr_since >= 15 && (now_f - edit.lr_since) % 4 == 3);
+            if (!edit.lr_was_down) edit.lr_since = now_f;
+            if (step) pal_fe->pal->col = std::max(0, std::min(kPaletteCols - 1, pal_fe->pal->col + (right ? 1 : -1)));
+        }
+        edit.lr_was_down = lr;
+    } else {
+        if (!edit.pal_focus.expired()) edit.pal_focus.reset();
+        edit.lr_was_down = false;
+    }
+    // the rows' own look (0.20.0, dialogs/row_look): the rainbow under the hue sliders, the palette's cells (0.21.0)
     if (edit.active && window_open() && cur_group && be.row_looks) {
         std::vector<RowLook> looks;
         for (auto& e : cur_group->entries) {
-            if (!e->slider) continue;
+            if (!e->slider && !e->pal) continue;
             RowLook r; r.eid = e->id; r.kind = e->look;
+            if (e->pal) {
+                r.line = e->line;
+                r.cursor = e->pal->col;
+                const auto hit = palette_hit(e->pal->get_col());
+                r.checked = hit.first == e->line ? hit.second : -1;
+                r.focused = pal_fe == e;
+            }
             looks.push_back(r);
         }
         be.row_looks(be.opt_current_param ? be.opt_current_param() : nullptr, looks);
