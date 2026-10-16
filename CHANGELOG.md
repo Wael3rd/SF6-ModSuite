@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.13.0 (2026-10-16) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.12.0 | slots for Arjun; stage thumbnails follow the variants; a stage mod no longer replaces menu pictures |
+| SF6 Native Core | 0.8.1 | two functions for the Slots Loader's stage thumbnails |
+| SF6 Color Mod | 0.19.12 | unchanged |
+| SF6 Recording Manager | 2.1.1 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. The stage pak is built again once at
+the first start (the stage loader's format changed).
+
+### SF6 Slots Loader 1.12.0
+- **Costume slots work for Arjun.** A slot chosen in Battle Settings is shown over one of the character's own
+  outfits, the one the save and the other players keep (the carrier). It was always DriveTech, which Arjun does not
+  have. The carrier is now read per character from the game's costume table: DriveTech when the character has it,
+  else Outfit 1. A save written with DriveTech for Arjun by 1.11.1 is moved to Outfit 1 by itself. A character with
+  neither is left out of the alias, the others go on. See [plugin/README.md](plugin/README.md).
+- **Stage thumbnails follow the variants.** On the stage select screen, each stage's thumbnail in the list at the
+  bottom shows the variant selected for it, focused or not; the original look gives the game's thumbnail back. The
+  thumbnail is the centre of the variant's preview. Needs SF6 Native Core 0.8.1: with an older core the list keeps
+  the game's thumbnails.
+- **A stage mod no longer replaces menu pictures.** A mod's files under `natives/stm/product/gui/` are not served
+  any more: a Dotonbori mod that shipped one replaced the Training Room's picture on the stage select screen.
+- The UP / DOWN hints of the stage select screen name the keys of the keyboard layout in use (Z / S on AZERTY).
+
+### SF6 Native Core 0.8.1
+- `ui_get_material_texture` / `ui_set_material_texture`, appended at the end of the API: read and replace the texture
+  of a named texture variable of a GUI material (game thread). Older clients are not affected; see
+  [core/docs/ABI.md](core/docs/ABI.md).
+
+### Build
+- `build.bat` compiles in parallel (about 2 min for everything instead of 8) and builds one module on demand:
+  `build.bat plugin`, `core`, `loader`, `colormod` or `crsm`.
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- The select-screen prop of a slot (Slots Loader 1.10.5) is built and checked in the costume pak; its display on the
+  select screen has not been confirmed in game yet.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.12.0 (2026-10-14) — SF6 Mod Suite
 
 | Package | Version | |
