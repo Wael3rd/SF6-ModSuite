@@ -24,17 +24,19 @@ if not exist "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" (
 )
 
 :: ---- Set up MSVC environment ----
-call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+where cl >nul 2>&1 || call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 
 :: ---- Create output directory ----
 if not exist ..\build\core mkdir ..\build\core
 
-set CFLAGS=/nologo /std:c++20 /EHa /O2 /LD /W4 /I include /I third_party\reframework\include /Fo..\build\core\
+set CFLAGS=/nologo /MP /std:c++20 /EHa /O2 /LD /W4 /I include /I third_party\reframework\include /Fo..\build\core\
 set ERRORS=0
 
 :: ---- Step 1: Build Lua 5.4.3 static library ----
 echo.
 echo === Building Lua 5.4.3 (lua.lib) ===
+rem Third-party and never edited: kept once built (delete build\core\lua.lib to rebuild it)
+if exist ..\build\core\lua.lib echo OK: ..\build\core\lua.lib (kept)& goto :lua_done
 set LUA_SRC=third_party\lua
 set LUA_OBJS=
 for %%f in (%LUA_SRC%\*.c) do (
@@ -56,6 +58,7 @@ if errorlevel 1 (
     echo OK: ..\build\core\lua.lib
 )
 
+:lua_done
 :: ---- Build sf6core_native.dll (core + display + lua_bridge + lua.lib) ----
 echo.
 echo === Building sf6core_native.dll ===
