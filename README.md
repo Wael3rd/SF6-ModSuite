@@ -183,11 +183,14 @@ materials no longer match) and fixes them in its own pak, without touching the m
 [COMPATIBILITY.md](COMPATIBILITY.md) lists what it fixes and the mods tested; [TESTING.md](TESTING.md)
 lists what still needs testing.
 
-Online, the extra slot is aliased to a DriveTech outfit for the other players, so matchmaking stays valid.
+Online, the extra slot is aliased to one of the character's own outfits for the other players (DriveTech, or
+Outfit 1 for a character without it, such as Arjun), so matchmaking stays valid.
 Since 1.9.0 everything in game is done by one native REFramework plugin (no Lua script), driven by the game's
 own events: menus shown or closed, an outfit folder mounted, the stage select screen. A fight triggers none of
 them, so the plugin does nothing during a fight. Official REFramework stops Lua scripts during online matches,
-not native plugins. See [plugin/README.md](plugin/README.md).
+not native plugins. See [plugin/README.md](plugin/README.md), and
+[docs/REFRAMEWORK_COMPATIBILITY.md](docs/REFRAMEWORK_COMPATIBILITY.md) for why every DLL of the suite works online
+and on every REFramework build.
 
 ## Repository layout
 
