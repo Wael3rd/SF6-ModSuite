@@ -26,6 +26,7 @@ struct StageVariant {
     std::string bundle;         // Fluffy bundle name (nameAsBundle), may be empty
     std::string source;         // where it came from, relative to stage_mods
     bool has_preview = false;
+    bool has_thumb = false;
     std::vector<std::pair<uint64_t, uint64_t>> redirects;   // vanilla hash -> hash in our pak
 };
 
@@ -34,3 +35,4 @@ void stage_loader_run(const wchar_t* game_dir, std::vector<StageVariant>& out);
 
 // Path of the preview texture of a variant as the engine's resource API takes it.
 std::string stage_preview_resource(const std::string& key);
+std::string stage_thumb_resource(const std::string& key);

@@ -3,8 +3,8 @@
 Street Fighter 6 stage mods replace a stage: install a Training Room mod and the original Training Room is
 gone until you uninstall it, and two mods for the same stage cannot live together. Stage Slots keeps the
 original and every mod side by side: on the stage select screen, **UP / DOWN** cycles the focused stage
-through its original look and each mod installed for it. The name and the preview image follow, the VS
-screen shows the choice, and the battle loads it.
+through its original look and each mod installed for it. The name, the preview image and the stage's
+thumbnail in the list follow, the VS screen shows the choice, and the battle loads it.
 
 Nothing is installed over the game's files: each mod's files are copied into a patch pak under names of
 their own, and served in place of the original files only while that mod is selected.
@@ -36,6 +36,10 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
 - Previews are made from the mod's screenshot (`screenshot=` in `modinfo.ini`, or the first image of the
   folder): a 4:1 band at 60% of the height, 2048x512, BC1 like the game's own. A mod without an image keeps
   the stage's original preview.
+- The stage's thumbnail in the list at the bottom of the screen is the centre of that band (1:2, 128x256, as the
+  game's own thumbnails). Every stage's thumbnail shows its selected variant, focused or not; the original look
+  gives the game's thumbnail back. It needs SF6 Native Core 0.8.1 or newer: without it, the list keeps the game's
+  thumbnails.
 - Variants can change from one battle to the next without restarting the game.
 - UP / DOWN works on the stage select screen of Fighting Ground > Versus.
 - To remove a mod, delete its archive or folder: the stage pak is rebuilt at the next launch. Archives are
@@ -56,6 +60,9 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
   theory; not seen.
 - The UP / DOWN hints were tested with a keyboard only.
 - The preview is a 4:1 band cut from the mod's screenshot, more zoomed in than the game's own pictures.
+- A mod's files under `natives/stm/product/gui/` (the game's menu pictures, such as the stage select images) are
+  not served: a stage mod that ships one would replace that picture for every stage. The loader makes its own
+  preview and thumbnail instead.
 - **Stage mods installed through Fluffy Mod Manager are not variants yet**: their pak replaces the stage for
   everyone, the loader does not restore the original under it.
 - A mod that hangs the game on its own hangs it here too (seen: *Aokigahara - no NPC* stays on the VS screen,
@@ -75,7 +82,8 @@ The game imports `amd_ags_x64.dll` from its own folder, before any engine code r
 1. **Stage pass** (`stages/loader/stage_loader.cpp`, DllMain). Reads `reframework/stage_mods`, unpacks archives once
    into `stage_mods/.cache`, and recognises the stage of every file with `stage_paths.txt` (every game path
    holding a stage code `essNNNN_NN`, hashed at startup). Each file of a variant is stored in our patch pak
-   under `pak_path_hash("natives/stm/_stageslots/<variant>/<vanilla hash>")`, next to its preview texture.
+   under `pak_path_hash("natives/stm/_stageslots/<variant>/<vanilla hash>")`, next to its preview and thumbnail
+   textures.
    The stage pak goes right above the mod paks and below the costume pak (marker
    `natives/stm/sf6_stage_slots.marker`). Every texture of a mod is checked first: a wrong level table is
    repaired (`texture_mip_check`, shared with the costume loader), a texture that cannot be repaired is left
@@ -91,8 +99,10 @@ The game imports `amd_ags_x64.dll` from its own folder, before any engine code r
    `state.json` when it changes.
 4. **Native plugin** (`plugin/src/stages.cpp`, in `SF6_CostumeSlotsNative.dll`). Hooks on the stage select
    screen (shown, hidden, focus and preview changed), on UP / DOWN of its UI agent and on the VS screen: the
-   variant's name between UP / DOWN hints and its preview, `state.json` written for the loader. Game thread
-   only, texts written only when they differ, nothing done between events.
+   variant's name between UP / DOWN hints and its preview, the thumbnail of each stage of the list (the
+   `tex` texture of each cell's `e_mat_thumb` material, through the core's `ui_set_material_texture`),
+   `state.json` written for the loader. Game thread only, texts written only when they differ, nothing done
+   between events.
 
 Outputs, in `reframework/data/SF6_StageSlots_Data`: `registry.json` (variants per stage, for the script),
 `loader/variants.tsv` (the same with every redirection), `state.json` (selection). Log:
@@ -109,7 +119,8 @@ build\stagepak.exe, stagetest.exe, textest.exe
 ```
 
 - `stagetest <folder>` runs the stage pass on a folder laid out like the game's (no game needed).
-- `textest <image> <out.tex>` makes a preview; `textest --dump <in.tex> <out.png>` decodes one.
+- `textest <image> <out.tex>` makes a preview, `textest --thumb <image> <out.tex>` a thumbnail;
+  `textest --dump <in.tex> <out.png>` decodes either.
 - `stages/tools/make_stage_index.py` rebuilds `stages/data/loader/stage_paths.txt` from REasy-parser's
   `SF6_STM.list` (point `REASY_PARSER` at your checkout).
 

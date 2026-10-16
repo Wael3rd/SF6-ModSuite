@@ -65,6 +65,8 @@ constexpr int32_t  TEX_FLAGS        = 0x800;     // matches vanilla ess0000_00 p
 constexpr int32_t  TEX_SWIZZLE_CTRL = -1;        // matches vanilla
 constexpr int      OUT_W = 2048;
 constexpr int      OUT_H = 512;                  // OUT_W / 4, matches vanilla exactly
+constexpr int      THUMB_W = 128;                // stage-strip cell thumbnail (vanilla tex_StageThumb: 128x256)
+constexpr int      THUMB_H = 256;
 
 // ---------------------------------------------------------------------------
 // File I/O (wide path, no CRT stdio file handle held by stb_image itself)
@@ -192,9 +194,9 @@ void resize_vertical(const uint8_t* src, int w, int src_h,
     }
 }
 
-// Resizes an RGBA8 image (src_w x src_h) to exactly OUT_W x OUT_H, writing interleaved RGBA into
-// out (already sized OUT_W*OUT_H*4). Alpha is forced to 255 regardless of source alpha.
-void resize_rgba(const uint8_t* src, int src_w, int src_h, uint8_t* out) {
+// Resizes an RGBA8 image (src_w x src_h) to exactly dst_w x dst_h, writing interleaved RGBA into
+// out (already sized dst_w*dst_h*4). Alpha is forced to 255 regardless of source alpha.
+void resize_rgba(const uint8_t* src, int src_w, int src_h, uint8_t* out, int dst_w, int dst_h) {
     // De-interleave into per-channel planes (RGB only; alpha is forced to 255 below).
     std::vector<uint8_t> plane_r((size_t)src_w * src_h), plane_g((size_t)src_w * src_h), plane_b((size_t)src_w * src_h);
     for (size_t i = 0, n = (size_t)src_w * src_h; i < n; i++) {
@@ -203,17 +205,17 @@ void resize_rgba(const uint8_t* src, int src_w, int src_h, uint8_t* out) {
         plane_b[i] = src[i * 4 + 2];
     }
 
-    std::vector<uint8_t> tmp_r, tmp_g, tmp_b;   // src_h rows x OUT_W cols, after horizontal pass
-    resize_horizontal(plane_r.data(), src_w, src_h, src_w, tmp_r, OUT_W);
-    resize_horizontal(plane_g.data(), src_w, src_h, src_w, tmp_g, OUT_W);
-    resize_horizontal(plane_b.data(), src_w, src_h, src_w, tmp_b, OUT_W);
+    std::vector<uint8_t> tmp_r, tmp_g, tmp_b;   // src_h rows x dst_w cols, after horizontal pass
+    resize_horizontal(plane_r.data(), src_w, src_h, src_w, tmp_r, dst_w);
+    resize_horizontal(plane_g.data(), src_w, src_h, src_w, tmp_g, dst_w);
+    resize_horizontal(plane_b.data(), src_w, src_h, src_w, tmp_b, dst_w);
 
-    std::vector<uint8_t> out_r, out_g, out_b;   // OUT_H rows x OUT_W cols
-    resize_vertical(tmp_r.data(), OUT_W, src_h, out_r, OUT_H);
-    resize_vertical(tmp_g.data(), OUT_W, src_h, out_g, OUT_H);
-    resize_vertical(tmp_b.data(), OUT_W, src_h, out_b, OUT_H);
+    std::vector<uint8_t> out_r, out_g, out_b;   // dst_h rows x dst_w cols
+    resize_vertical(tmp_r.data(), dst_w, src_h, out_r, dst_h);
+    resize_vertical(tmp_g.data(), dst_w, src_h, out_g, dst_h);
+    resize_vertical(tmp_b.data(), dst_w, src_h, out_b, dst_h);
 
-    for (int i = 0; i < OUT_W * OUT_H; i++) {
+    for (int i = 0; i < dst_w * dst_h; i++) {
         out[i * 4 + 0] = out_r[i];
         out[i * 4 + 1] = out_g[i];
         out[i * 4 + 2] = out_b[i];
@@ -277,9 +279,8 @@ void write_tex_header(std::vector<uint8_t>& out, int w, int h, uint32_t pitch, u
     put<int32_t>(out, 52, (int32_t)data_size);
 }
 
-} // namespace
-
-bool make_stage_preview_tex(const std::wstring& image_path, std::vector<uint8_t>& out_tex, std::string& err) {
+// Shared path: decode -> the 4:1 band (compute_crop) -> optional centre cut (thumb) -> resize -> BC1 -> .tex.
+bool build_tex(const std::wstring& image_path, bool thumb, std::vector<uint8_t>& out_tex, std::string& err) {
     out_tex.clear();
     try {
         std::vector<uint8_t> file_data;
@@ -314,28 +315,51 @@ bool make_stage_preview_tex(const std::wstring& image_path, std::vector<uint8_t>
             return false;
         }
 
+        const int out_w = thumb ? THUMB_W : OUT_W;
+        const int out_h = thumb ? THUMB_H : OUT_H;
         const uint8_t* crop_ptr = pixels + (size_t)crop_y * img_w * 4;
+        std::vector<uint8_t> centre;   // thumb only: contiguous copy of the band's centre
+        int src_w = img_w;
+        if (thumb) {
+            // Centre of the band with a 1:2 aspect: width = band height / 2.
+            src_w = std::max(1, std::min(img_w, crop_h / 2));
+            const int x0 = (img_w - src_w) / 2;
+            centre.resize((size_t)src_w * crop_h * 4);
+            for (int y = 0; y < crop_h; y++)
+                memcpy(centre.data() + (size_t)y * src_w * 4, crop_ptr + ((size_t)y * img_w + x0) * 4, (size_t)src_w * 4);
+            crop_ptr = centre.data();
+        }
 
-        std::vector<uint8_t> resized((size_t)OUT_W * OUT_H * 4);
-        resize_rgba(crop_ptr, img_w, crop_h, resized.data());
+        std::vector<uint8_t> resized((size_t)out_w * out_h * 4);
+        resize_rgba(crop_ptr, src_w, crop_h, resized.data(), out_w, out_h);
         stbi_image_free(pixels);
 
         std::vector<uint8_t> bc1;
-        encode_bc1(resized.data(), OUT_W, OUT_H, bc1);
+        encode_bc1(resized.data(), out_w, out_h, bc1);
 
-        const uint32_t pitch = (uint32_t)(OUT_W / 4) * 8;
-        const uint32_t data_size = pitch * (uint32_t)(OUT_H / 4);
+        const uint32_t pitch = (uint32_t)(out_w / 4) * 8;
+        const uint32_t data_size = pitch * (uint32_t)(out_h / 4);
         if (bc1.size() != data_size) {
             err = "internal size mismatch";
             return false;
         }
 
-        write_tex_header(out_tex, OUT_W, OUT_H, pitch, data_size);
+        write_tex_header(out_tex, out_w, out_h, pitch, data_size);
         out_tex.insert(out_tex.end(), bc1.begin(), bc1.end());
         return true;
     } catch (...) {
-        err = "unexpected error building preview texture";
+        err = "unexpected error building texture";
         out_tex.clear();
         return false;
     }
+}
+
+} // namespace
+
+bool make_stage_preview_tex(const std::wstring& image_path, std::vector<uint8_t>& out_tex, std::string& err) {
+    return build_tex(image_path, false, out_tex, err);
+}
+
+bool make_stage_thumb_tex(const std::wstring& image_path, std::vector<uint8_t>& out_tex, std::string& err) {
+    return build_tex(image_path, true, out_tex, err);
 }

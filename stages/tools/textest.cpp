@@ -1,6 +1,7 @@
 // textest: offline test harness for loader/preview_tex.{hpp,cpp}.
 //
 //   textest <in.png|in.jpg> <out.tex>     encode a stage screenshot into an SF6 preview .tex
+//   textest --thumb <in.png|in.jpg> <out.tex>  same, as the 128x256 stage-strip thumbnail
 //   textest --dump <in.tex> <out.png>     decode a .tex back to PNG for a visual check (BC1
 //                                         formats 71/72, or uncompressed RGBA8 formats 28/29;
 //                                         works on our own output AND on a vanilla .tex, since
@@ -40,10 +41,10 @@ std::wstring widen(const char* s) {
     return w;
 }
 
-int do_encode(const char* in_path, const char* out_path) {
+int do_encode(const char* in_path, const char* out_path, bool thumb) {
     std::vector<uint8_t> tex;
     std::string err;
-    if (!make_stage_preview_tex(widen(in_path), tex, err)) {
+    if (!(thumb ? make_stage_thumb_tex(widen(in_path), tex, err) : make_stage_preview_tex(widen(in_path), tex, err))) {
         fprintf(stderr, "encode failed: %s\n", err.c_str());
         return 1;
     }
@@ -154,9 +155,12 @@ int main(int argc, char** argv) {
     if (argc == 4 && strcmp(argv[1], "--cmphdr") == 0) {
         return do_cmphdr(argv[2], argv[3]);
     }
-    if (argc == 3) {
-        return do_encode(argv[1], argv[2]);
+    if (argc == 4 && strcmp(argv[1], "--thumb") == 0) {
+        return do_encode(argv[2], argv[3], true);
     }
-    fprintf(stderr, "usage:\n  textest <in.png|in.jpg> <out.tex>\n  textest --dump <in.tex> <out.png>\n  textest --cmphdr <a.tex> <b.tex>\n");
+    if (argc == 3) {
+        return do_encode(argv[1], argv[2], false);
+    }
+    fprintf(stderr, "usage:\n  textest <in.png|in.jpg> <out.tex>\n  textest --thumb <in.png|in.jpg> <out.tex>\n  textest --dump <in.tex> <out.png>\n  textest --cmphdr <a.tex> <b.tex>\n");
     return 2;
 }

@@ -61,6 +61,17 @@ bool set_tex(Obj* tex_obj, Obj* holder);
 // the other mods that read its costume / colour; real_costume < 0 clears.
 void set_effective(int fighter, int shown_costume, int real_costume, int real_colour);
 
+// ---- GUI material texture (core 0.8.1+, ADR-0019; nothing without it) ----
+// has_mat_tex: the core has ui_get/set_material_texture.
+bool has_mat_tex();
+// get_mat_tex: the holder the material's texture variable `param` shows now,
+// with one reference owned by the caller (release() it); nullptr if none
+// (*status: the core's SF6CoreStatus, -1 without the op).
+Obj* get_mat_tex(Obj* material, const char* param, int* status = nullptr);
+// set_mat_tex: the variable shows `holder` (from tex_load and ready, or from
+// get_mat_tex); compare-before-write in the core.
+bool set_mat_tex(Obj* material, const char* param, Obj* holder);
+
 } // namespace slots::ui
 
 // ---- legacy declarations (compiled only with SLOTS_LEGACY_UI_FALLBACK) ----

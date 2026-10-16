@@ -25,8 +25,10 @@ namespace {
 const char* STAGE_MARKER = STAGE_SLOTS_MARKER;
 const char* COSTUME_MARKER = COSTUME_SLOTS_MARKER;
 // Part of the fingerprint: bump it when the pak layout, the preview conversion or the checks of the
-// mods' files change.
-const char* FORMAT_VERSION = "stageslots-4";
+// mods' files change. 5: GUI files kept out of the redirection.
+const char* FORMAT_VERSION = "stageslots-6";
+// The game's menu pictures (stage select image and thumbnail, arcade images, their prefabs...)
+const char* GUI_PREFIX = "natives/stm/product/gui/";
 const char* TEX_SUFFIX = ".tex.241101895";
 
 // ---------------------------------------------------------------------------------------------
@@ -242,7 +244,9 @@ uint32_t stage_id_of(const std::string& ess) {
     return (uint32_t)atoi(ess.substr(3, 4).c_str()) * 100 + (uint32_t)atoi(ess.substr(8, 2).c_str());
 }
 
-bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std::string>& out) {
+// gui: the paths of the index under GUI_PREFIX, by hash (a pak entry has no path of its own)
+bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std::string>& out,
+                      std::unordered_map<uint64_t, std::string>& gui) {
     std::vector<uint8_t> data;
     if (!read_file(path, data)) return false;
     std::string text(data.begin(), data.end());
@@ -254,7 +258,10 @@ bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std
         pos = e + 1;
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
         std::string code;
-        if (!line.empty() && ess_code_in(line, code)) out[pak_path_hash(std::string_view(line))] = code;
+        if (line.empty() || !ess_code_in(line, code)) continue;
+        const uint64_t h = pak_path_hash(std::string_view(line));
+        out[h] = code;
+        if (lower_a(line).compare(0, strlen(GUI_PREFIX), GUI_PREFIX) == 0) gui[h] = line;
     }
     return !out.empty();
 }
@@ -263,7 +270,7 @@ bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std
 // Mods: sources (what sits in stage_mods) and options (what the game would install)
 // ---------------------------------------------------------------------------------------------
 
-struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; };
+struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; std::string path; };   // path: natives trees only
 struct Option {
     std::string name, author, bundle, rel;     // bundle: Fluffy's nameAsBundle
     std::wstring screenshot;
@@ -314,6 +321,7 @@ void add_natives(const std::wstring& dir, const std::string& rel, Option& opt) {
         f.hash = pak_path_hash(std::string_view(r));
         f.attrib = 0;
         f.dsize = (int64_t)f.data.size();
+        f.path = r;
         opt.files.push_back(std::move(f));
     }
 }
@@ -492,6 +500,7 @@ bool load_table(const std::wstring& path, std::string& fingerprint, size_t& pak_
             v.author = f[6];
             v.source = f[7];
             if (f.size() >= 9) v.bundle = f[8];
+            if (f.size() >= 10) v.has_thumb = f[9] == "1";
             by_key[v.key] = out.size();
             out.push_back(v);
         } else if (f[0] == "R" && f.size() >= 4) {
@@ -507,7 +516,7 @@ bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, 
     std::string tsv = "#fingerprint\t" + fingerprint + "\n#pak\t" + std::to_string(pak_entries) + "\n";
     for (auto& v : vars) {
         tsv += "V\t" + v.key + "\t" + std::to_string(v.stage_id) + "\t" + v.ess + "\t" + (v.has_preview ? "1" : "0") + "\t" +
-               tsv_clean(v.name) + "\t" + tsv_clean(v.author) + "\t" + tsv_clean(v.source) + "\t" + tsv_clean(v.bundle) + "\n";
+               tsv_clean(v.name) + "\t" + tsv_clean(v.author) + "\t" + tsv_clean(v.source) + "\t" + tsv_clean(v.bundle) + "\t" + (v.has_thumb ? "1" : "0") + "\n";
         for (auto& r : v.redirects) tsv += "R\t" + v.key + "\t" + hex16(r.first) + "\t" + hex16(r.second) + "\n";
     }
     std::map<uint32_t, std::vector<const StageVariant*>> by_stage;
@@ -523,7 +532,8 @@ bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, 
             js += i ? ",\n" : "\n";
             js += "      { \"key\": \"" + v->key + "\", \"name\": \"" + json_escape(v->name) + "\", \"author\": \"" +
                   json_escape(v->author) + "\", \"bundle\": \"" + json_escape(v->bundle) + "\", \"source\": \"" + json_escape(v->source) + "\", \"preview\": \"" +
-                  (v->has_preview ? stage_preview_resource(v->key) : std::string()) + "\", \"files\": " +
+                  (v->has_preview ? stage_preview_resource(v->key) : std::string()) + "\", \"thumb\": \"" +
+                  (v->has_thumb ? stage_thumb_resource(v->key) : std::string()) + "\", \"files\": " +
                   std::to_string(v->redirects.size()) + " }";
         }
         js += "\n    ] }";
@@ -612,8 +622,8 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
         }
     }
 
-    std::unordered_map<uint64_t, std::string> index;
-    if (!load_stage_index(index_path, index)) {
+    std::unordered_map<uint64_t, std::string> index, gui_index;
+    if (!load_stage_index(index_path, index, gui_index)) {
         slog("ERROR: %s missing or empty: stage mods cannot be recognised", narrow(index_path).c_str());
         return;
     }
@@ -636,22 +646,37 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
         }
     }
 
-    // One variant per option and per stage it changes
+    // One variant per option and per stage it changes.
+    // GUI files (natives/stm/product/gui/**) are never redirected: the menus load them once and the
+    // resource cache keeps them for the session, so a picture served while a variant was selected
+    // (the Fighting Ground menu loads Training Room's at boot) stayed on the vanilla stage whatever was
+    // selected later (Dotonbori At Night, 16/10). A battle loads none of them; the variant's name and
+    // preview on the menus are the plugin's. Known by their path (natives trees) or, for a pak's
+    // entries, by the stage index.
     PakWriter writer;
     std::vector<StageVariant> vars;
     for (auto& opt : options) {
         check_textures(opt);
-        std::map<std::string, std::vector<size_t>> by_ess;
-        std::vector<size_t> shared;
+        std::map<std::string, std::vector<size_t>> by_ess, gui_by_ess;
+        std::vector<size_t> shared, gui_shared;
         for (size_t i = 0; i < opt.files.size(); ++i) {
-            auto it = index.find(opt.files[i].hash);
-            if (it != index.end()) by_ess[it->second].push_back(i);
-            else shared.push_back(i);
+            const OptFile& f = opt.files[i];
+            auto it = index.find(f.hash);
+            const bool gui = lower_a(f.path).compare(0, strlen(GUI_PREFIX), GUI_PREFIX) == 0 || gui_index.count(f.hash);
+            if (it != index.end()) (gui ? gui_by_ess : by_ess)[it->second].push_back(i);
+            else (gui ? gui_shared : shared).push_back(i);
         }
         if (by_ess.empty()) {
-            slog("  %s: no stage file among %zu, skipped", opt.rel.c_str(), opt.files.size());
+            slog("  %s: no stage file among %zu%s, skipped", opt.rel.c_str(), opt.files.size(),
+                 gui_by_ess.empty() && gui_shared.empty() ? "" : " (GUI files are not redirected)");
             continue;
         }
+        auto gui_name = [&](size_t i) {
+            const OptFile& f = opt.files[i];
+            auto g = gui_index.find(f.hash);
+            const std::string& p = !f.path.empty() ? f.path : g != gui_index.end() ? g->second : std::string();
+            return p.empty() ? hex16(f.hash) : p.substr(p.find_last_of('/') + 1);
+        };
         for (auto& [ess, idx] : by_ess) {
             StageVariant v;
             v.ess = ess;
@@ -679,9 +704,25 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
                 } else {
                     slog("  %s: no preview (%s)", opt.rel.c_str(), err.c_str());
                 }
+                std::vector<uint8_t> thumb;
+                if (make_stage_thumb_tex(lp(opt.screenshot), thumb, err)) {
+                    std::string p = "natives/stm/_stageslots/" + v.key + "/thumb" + TEX_SUFFIX;
+                    writer.add_uncompressed(pak_path_hash(std::string_view(p)), std::move(thumb));
+                    v.has_thumb = true;
+                } else {
+                    slog("  %s: no thumb (%s)", opt.rel.c_str(), err.c_str());
+                }
             }
             slog("  variant %s: \"%s\" -> %s (stage %u), %zu files (%zu of the stage)%s", v.key.c_str(), v.name.c_str(),
-                 ess.c_str(), v.stage_id, all.size(), idx.size(), v.has_preview ? ", preview" : "");
+                 ess.c_str(), v.stage_id, all.size(), idx.size(), v.has_preview ? (v.has_thumb ? ", preview+thumb" : ", preview") : "");
+            std::vector<size_t> kept = gui_shared;
+            if (auto g = gui_by_ess.find(ess); g != gui_by_ess.end()) kept.insert(kept.begin(), g->second.begin(), g->second.end());
+            if (!kept.empty()) {
+                std::string names;
+                for (size_t i : kept) names += (names.empty() ? "" : ", ") + gui_name(i);
+                slog("  variant %s: %zu GUI file(s) not redirected (menus keep them for the session): %s",
+                     v.key.c_str(), kept.size(), names.c_str());
+            }
             vars.push_back(std::move(v));
         }
     }
@@ -729,6 +770,10 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
 }
 
 } // namespace
+
+std::string stage_thumb_resource(const std::string& key) {
+    return "_stageslots/" + key + "/thumb.tex";
+}
 
 std::string stage_preview_resource(const std::string& key) {
     return "_stageslots/" + key + "/preview.tex";

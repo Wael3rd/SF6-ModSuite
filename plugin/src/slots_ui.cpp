@@ -208,4 +208,24 @@ bool set_tex(Obj* tex_obj, Obj* holder) {
 #endif
 }
 
+// ---- GUI material texture (core only) -------------------------------------
+
+bool has_mat_tex() {
+    return core_ok() && SF6CORE_HAS(g_api, ui_get_material_texture);
+}
+
+Obj* get_mat_tex(Obj* material, const char* param, int* status) {
+    if (status) *status = -1;
+    if (!has_mat_tex()) return nullptr;
+    void* out = nullptr;
+    SF6CoreStatus st = g_api->ui_get_material_texture(g_client, material, param, &out);
+    if (status) *status = static_cast<int>(st);
+    return st == SF6CORE_OK ? reinterpret_cast<Obj*>(out) : nullptr;
+}
+
+bool set_mat_tex(Obj* material, const char* param, Obj* holder) {
+    if (!has_mat_tex()) return false;
+    return g_api->ui_set_material_texture(g_client, material, param, holder) == SF6CORE_OK;
+}
+
 } // namespace slots::ui
