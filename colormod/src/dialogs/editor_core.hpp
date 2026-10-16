@@ -47,6 +47,12 @@ struct DiCfg {
 struct DiPreset { std::optional<std::string> name; std::optional<uint32_t> c1, c2; };
 enum DiList : int { kPresetsDI = 0, kPresetsDR = 1, kPresetsSP = 2 };
 
+// One slider row of the page on top, for the game side's row looks (dialogs/row_look, 0.20.0)
+struct RowLook {
+    int eid = -1;                         // the editor's entry id
+    int kind = 0;                         // 0 the option window's look, 1 hue slider (the rainbow)
+};
+
 struct Backend {
     // ---- the option engine (func/NativeOptions as the editor calls it) ----
     int (*opt_group)(const std::string& key, const std::string& title, const std::string& desc) = nullptr;   // group id
@@ -144,6 +150,8 @@ struct Backend {
     void (*di_mark_dirty)() = nullptr;
     void (*drv_save_cfg)(int fighter) = nullptr;
     bool (*di_special_enabled)() = nullptr;                      // func/SpecialVFXGate
+    // ---- the rows' own look (0.20.0, dialogs/row_look) ----
+    void (*row_looks)(Obj param, const std::vector<RowLook>& rows) = nullptr;   // every frame while the window is up
 };
 
 void set_backend(const Backend& b);

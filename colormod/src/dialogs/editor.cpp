@@ -26,6 +26,7 @@
 #include "editor_core.hpp"
 #include "locale.hpp"
 #include "options_driver.hpp"
+#include "row_look.hpp"
 #include "../vfx/drive_cfg.hpp"
 #include "../vfx/feed.hpp"
 #include "../vfx/settings.hpp"
@@ -176,6 +177,7 @@ void be_ui_set_scale(core::Obj o, double x, double y, double z) { if (auto* a = 
 void be_ui_set_visible(core::Obj o, bool on) { if (auto* a = cmn::core()) a->ui_set_visible(cmn::client(), o, on ? 1 : 0); }
 void be_ui_set_force_invisible(core::Obj o, bool on) { if (auto* a = cmn::core()) a->ui_set_force_invisible(cmn::client(), o, on ? 1 : 0); }
 void be_ui_set_font_size(core::Obj o, double w, double h) { if (auto* a = cmn::core()) a->ui_set_font_size(cmn::client(), o, (float)w, (float)h); }
+void be_row_looks(core::Obj param, const std::vector<core::RowLook>& rows) { look::apply(param, rows, be_opt_row_control); }
 
 // ---- input, time, random, locale ---------------------------------------------------------------------------------
 bool be_key_down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }      // what reframework:is_key_down reads
@@ -364,6 +366,7 @@ void be_camera_open(bool pad, const std::string& mv, const std::string& zm) { ca
 void be_camera_close() { camera::close(); }
 void be_camera_hide_hints() { camera::hide_hints(S.agent); }
 void be_teardown_restore() {
+    look::forget();
     g_engine_of.clear(); g_core_of.clear();
     if (screens::colour::track::acting()) screens::colour::track::teardown();
     op({ "TD" });                                                               // the relay forgets its groups
@@ -567,7 +570,7 @@ void fault(const char* where) {
 
 int32_t SF6CORE_CALL lua_ed_status(void*, const SF6CoreValue*, uint32_t, SF6CoreValue* r, uint32_t max) try {
     if (max < 1) return 0;
-    t_ret = core::status() + " faults=" + std::to_string(g_faults) + " ops=" + std::to_string(g_nops) + " rows=" + std::to_string(g_engine_of.size());
+    t_ret = core::status() + " faults=" + std::to_string(g_faults) + " ops=" + std::to_string(g_nops) + " rows=" + std::to_string(g_engine_of.size()) + "; " + look::status();
     r[0].type = SF6CORE_VAL_STRING; r[0].s = t_ret.c_str();
     return 1;
 } catch (...) { return -1; }
@@ -598,6 +601,7 @@ bool install() {
     b.di_available = be_di_available; b.di_char_name = be_di_char_name; b.di_cfg = be_di_cfg; b.di_cfg_set = be_di_cfg_set; b.di_presets = be_di_presets;
     b.di_preset_set = be_di_preset_set; b.di_preset_add = be_di_preset_add; b.di_preset_remove = be_di_preset_remove; b.di_save_presets = be_di_save_presets;
     b.di_save_cfg = be_di_save_cfg; b.di_mark_dirty = be_di_mark_dirty; b.drv_save_cfg = be_drv_save_cfg; b.di_special_enabled = be_di_special_enabled;
+    b.row_looks = be_row_looks;
     core::set_backend(b);
     core::set_data_dir("reframework/data");
     g_installed = true;
@@ -638,12 +642,14 @@ void set_union(int fighter, int costume, std::vector<std::string> keys) try {
 } catch (...) { fault("set_union"); }
 State open() try {
     ED_BEGIN
+    look::preload();
     core::open();
     return state();
 } catch (...) { fault("open"); return {}; }
 State open_di(int fighter, int costume, bool simple, int side, const std::string& mech, bool at_select) try {
     ED_BEGIN
     di_fill(fighter, side);
+    look::preload();
     core::open_di(fighter, costume, simple, side, mech, at_select);
     return state();
 } catch (...) { fault("open_di"); return {}; }

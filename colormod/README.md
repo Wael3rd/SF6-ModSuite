@@ -12,7 +12,9 @@ Costume and Drive colours for Street Fighter 6, set from the game's own menus. O
     remembered. Other players see the game's colour. Arcade, Training, Versus and Team Battle use the colour picked
     on the character select.
 - **Colour editor**: in Fighter Settings > Edit Character, **F** (or a click) on the Color row opens an editor in the
-  game's option window: quick edit, colours per cluster, materials, squares, Save, Save As, Reset.
+  game's option window: quick edit, colours per cluster, materials, squares, Save, Save As, Reset. Since 0.20.0 every
+  Hue slider (colours, quick edit, squares, Drive colours) is drawn on the game's own rainbow, the avatar editor's;
+  it needs SF6 Native Core 0.8.2, with an older core the sliders keep the option window's look.
 - **Drive colours** per character and per player: Drive Impact, Drive Reversal, Drive Parry and Drive Rush.
   - on the character select: **X** (Edit Drive Colors) switches the panel to the four Drive rows;
   - in Training: pause menu > character settings popup, **X** as well;

@@ -211,6 +211,7 @@ struct Entry {
     std::function<int()> reset_value;
     TargetsRef targets;
     std::function<bool(const Marks&)> mark_fn;
+    int look = 0;                                               // RowLook::kind: 1 hue slider (the rainbow, 0.20.0)
 };
 using EntryRef = std::shared_ptr<Entry>;
 void note_entry(const EntryRef& e);
@@ -682,6 +683,7 @@ void color_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& occ,
     const HSV3 init = hsv_get(cc_color(cc), &mk);
     for (char comp : { 'H', 'S', 'V' }) {
         EntryRef e = g->slider(fmt("c%d_%c", k, comp), title_of(comp, cc_color(cc)), "", 0, 255, init.get(comp));
+        if (comp == 'H') e->look = 1;                           // the rainbow under it (dialogs/row_look)
         std::weak_ptr<Entry> we = e;
         e->cb_value = [we, cc, comp, mk, set_col, title_of, rows](int v) {
             if (auto self = we.lock()) set_selected(self);
@@ -916,6 +918,7 @@ void build_quick(const std::vector<Cluster>& clusters, const Marks& m0) {
             members += fmt("%s (%d)", human(cl_name(x->c->cl)).c_str(), (int)x->items.size());
         }
         EntryRef e = qe->slider(fmt("qe%d", gi), title_of(), L("quick.changes", { members }), 0, 360, center0);
+        e->look = 1;                                            // an absolute hue: the rainbow under it
         std::weak_ptr<Entry> we = e;
         e->cb_value = [we, shift, title_of](int v) {
             auto self = we.lock();
@@ -1082,6 +1085,7 @@ void di_build_page(int mi, int fighter, int side, const std::string& who, const 
         const HSV3 init = hsv_get(col_or0(slot_of(cfg, k)), &mk);
         for (char comp : { 'H', 'S', 'V' }) {
             EntryRef e = pg->slider(fmt("di%d_%c", k, comp), title_of(comp, col_or0(slot_of(cfg, k))), "", 0, 255, init.get(comp));
+            if (comp == 'H') e->look = 1;
             auto set = [cfg, k, comp, mk, mi, slot, touch](int v) {
                 std::optional<uint32_t>& c = k == 1 ? cfg->c1 : cfg->c2;
                 c = hsv_set(col_or0(c), comp, v, &mk);
@@ -1430,6 +1434,7 @@ void editor_build_pages() {
             auto take_chip = [pair]() { if (!edit.chip) edit.chip = std::make_shared<std::array<uint32_t, 2>>(*pair); };
             for (char comp : { 'H', 'S', 'V' }) {
                 EntryRef e = sq->slider(fmt("sq%d_%c", which, comp), title_of(comp, (*pair)[w]), "", 0, 255, init.get(comp));
+                if (comp == 'H') e->look = 1;
                 e->cb_value = [take_chip, w, comp, mk, rows, title_of](int v) {
                     take_chip();
                     (*edit.chip)[w] = hsv_set((*edit.chip)[w], comp, v, &mk);
@@ -1991,6 +1996,16 @@ void frame() {
         edit.prev_was_down = prev_down; edit.next_was_down = next_down;
     } else {
         edit.prev_was_down = false; edit.next_was_down = false;
+    }
+    // the rows' own look (0.20.0, dialogs/row_look): the rainbow under the hue sliders
+    if (edit.active && window_open() && cur_group && be.row_looks) {
+        std::vector<RowLook> looks;
+        for (auto& e : cur_group->entries) {
+            if (!e->slider) continue;
+            RowLook r; r.eid = e->id; r.kind = e->look;
+            looks.push_back(r);
+        }
+        be.row_looks(be.opt_current_param ? be.opt_current_param() : nullptr, looks);
     }
     // window closed (Esc or SAVE): drop the working copy, the preview goes back to the real selection
     if (edit.active && !window_open() && !edit.opened && edit.has_reopen_deadline && frame_now() > edit.reopen_deadline) {
