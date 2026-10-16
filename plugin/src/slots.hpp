@@ -1,8 +1,9 @@
 // SF6 Slots — native REFramework plugin, shared declarations.
 //
 // The game-side part of the slots, in one plugin: costume menus, save data, ownership, colours and
-// the select screen UI, the online alias of a slot on DriveTech (costumes.cpp), the stage select
-// screen and the VS screen of the stage slots (stages.cpp). It replaces the two Lua scripts.
+// the select screen UI, the online alias of a slot on its carrier outfit (costumes.cpp,
+// carrier.hpp), the stage select screen and the VS screen of the stage slots (stages.cpp). It
+// replaces the two Lua scripts.
 //
 // Driven by events, never by polling. Hooks on the game's own methods (a menu shown or closed, the
 // select screen started, a stage focused, an outfit folder mounted) record what happened in

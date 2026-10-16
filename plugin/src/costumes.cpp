@@ -2,22 +2,24 @@
 //
 // What the costume loader's pak cannot do by itself, done where the game needs it:
 //   - boot: the slots' colour records, their select screen data (with the colour squares the
-//     loader computed), DriveTech's colours and folders, once;
+//     loader computed), each character's carrier (carrier.hpp) with its colours and folder, once;
 //   - ownership: every slot is owned (AddDlcSaveData), slots of removed mods are not; the game
 //     clears DLC ownership at login, so it is given back after the title screen and whenever a
 //     screen that lists outfits opens. A slot made from an outfit the player does not own (the
 //     game's own list of the character's outfits says so, ownership.hpp) is not owned: the select
 //     screen and Battle Settings do not list it;
-//   - online alias: Battle Settings keeps DriveTech in the save, which is what other players see,
-//     and the slot chosen there as an intent; when the game mounts DriveTech's folder for a match,
-//     the slot's folder is mounted too and its visual manifest copied over DriveTech's, for the
-//     player's own fighter only (the battle description says which one). A mount is
+//   - online alias: Battle Settings keeps the character's carrier in the save (DriveTech, or Outfit 1
+//     for a character without DriveTech: carrier.hpp), which is what other players see, and the slot
+//     chosen there as an intent; when the game mounts the carrier's folder for a match, the slot's
+//     folder is mounted too and its visual manifest copied over the carrier's, for the player's own
+//     fighter only (the battle description says which one), never in a mirror on the carrier. A mount is
 //     seen through the manifest's constructor (FighterVisualHolder..ctor): via.Folder.activate is a
 //     native method the engine calls internally, its hook only saw our own calls (30/09).
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "ownership.hpp"
+#include "carrier.hpp"
 #include "perf.hpp"
 #include "wjournal.hpp"
 
@@ -28,7 +30,6 @@
 namespace slots::costumes {
 namespace {
 
-constexpr int BASE_COS = 4;   // DriveTech, costume 4 of every character
 const char* kRegistry = "reframework/data/SF6_Costumes_Data/registry.json";
 const char* kOutfits  = "reframework/data/SF6_Costumes_Data/outfits.json";
 const char* kState    = "reframework/data/SF6_CostumeSlots_data/state.json";
@@ -69,9 +70,12 @@ std::map<int, Intent> g_intent;
 
 // ---- per character ----
 struct Fighter {
-    std::string dst_path;            // DriveTech folder (fighterNNN/esfNNNv04)
+    int carrier = -1;                // the alias's outfit (carrier.hpp), -1 not decided or none
+    bool left_out = false;           // no carrier, or its folder not found: no alias for this character
+    std::set<int> costumes;          // the character's own outfits in the game's costume table
+    std::string dst_path;            // the carrier's folder (fighterNNN/esfNNNv04, ...v00)
     Obj* dst_folder = nullptr;
-    std::set<int> base_colors; int base_min = 0; bool base_known = false;
+    std::set<int> base_colors; int base_min = 0; bool base_known = false;   // the carrier's colours
     // alias
     Obj* src_folder = nullptr;
     uintptr_t swapped_addr = 0;
@@ -82,6 +86,40 @@ struct Fighter {
     std::string last_sig;
 };
 std::map<int, Fighter> g_f;
+
+// Carriers decided (g_carriers_done), from the game's costume table (g_table_ok) or, when the table
+// gives no answer, from the folders of the scene
+bool g_carriers_done = false, g_table_ok = false;
+
+int carrier_of(int fid) {
+    auto it = g_f.find(fid);
+    return it == g_f.end() ? -1 : it->second.carrier;
+}
+// What the save data holds while a slot is the intent: the carrier (DriveTech until it is decided)
+int save_cos_of(int fid) {
+    int c = carrier_of(fid);
+    return c >= 0 ? c : carrier::kDriveTech;
+}
+std::string carrier_name(int fid) { return ownership::outfit_label(save_cos_of(fid)); }
+
+// The carrier the save data was given in an earlier session (state.json "carrier"; DriveTech when
+// it names none), to move a save that still holds it (carrier::stale)
+std::map<int, int> g_saved_carrier;
+int saved_carrier_of(int fid) {
+    auto it = g_saved_carrier.find(fid);
+    return it == g_saved_carrier.end() ? carrier::kDriveTech : it->second;
+}
+
+// The carriers in log lines: "DriveTech" while every character has it, else the others named
+std::string carriers_text() {
+    std::string other;
+    for (int fid : g_fighters) {
+        int c = carrier_of(fid);
+        if (c < 0 || c == carrier::kDriveTech) continue;
+        other += (other.empty() ? "" : ", ") + ownership::outfit_label(c) + " for F" + std::to_string(fid);
+    }
+    return other.empty() ? std::string("DriveTech") : "DriveTech, " + other;
+}
 
 // Alias check after an outfit mount, until this frame (0: none). Each mount pushes it further.
 uint32_t g_mount_until = 0;
@@ -161,6 +199,7 @@ void load_state() {
         Intent in;
         if (const Json* s = v.get("slot"); s && s->kind == Json::Number) in.slot = static_cast<int>(s->num);
         if (const Json* c = v.get("color"); c && c->kind == Json::Number) in.color = static_cast<int>(c->num);
+        if (const Json* c = v.get("carrier"); c && c->kind == Json::Number) g_saved_carrier[fid] = static_cast<int>(c->num);
         if (in.slot && !is_slot(fid, in.slot)) in = Intent{};   // the slot's mod is gone
         g_intent[fid] = in;
     }
@@ -170,11 +209,13 @@ void save_state() {
     std::string o = "{\n    \"fighters\": {";
     bool first = true;
     for (auto& [fid, in] : g_intent) {
-        char b[128];
+        char b[128], car[32] = "";
+        // the carrier the save was given, when it is not DriveTech (what a file without it means)
+        if (int sc = saved_carrier_of(fid); sc != carrier::kDriveTech) snprintf(car, sizeof car, ", \"carrier\": %d", sc);
         if (in.slot) {
-            if (in.color >= 0) snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d, \"color\": %d }", first ? "" : ",", fid, in.slot, in.color);
-            else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d }", first ? "" : ",", fid, in.slot);
-        } else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": false }", first ? "" : ",", fid);
+            if (in.color >= 0) snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d, \"color\": %d%s }", first ? "" : ",", fid, in.slot, in.color, car);
+            else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d%s }", first ? "" : ",", fid, in.slot, car);
+        } else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": false%s }", first ? "" : ",", fid, car);
         o += b; first = false;
     }
     o += "\n    }\n}\n";
@@ -246,15 +287,22 @@ template <typename Fn> void walk_folders(Obj* f, int depth, Fn&& fn) {
     walk_folders(call_obj(m_f_next, f), depth, fn);
 }
 
+// Every character's carrier folder, once the carriers are decided. A folder still missing after
+// kDstWalks complete walks (one per boot pass: 10 s; every folder was found at the first one so far)
+// leaves its character out of the alias, the others go on.
+constexpr int kDstWalks = 20;
+int g_dst_walks = 0;
+
 void find_dst_all() {
-    if (g_dst_done || !cache_folder_methods()) return;
+    if (g_dst_done || !g_carriers_done || !cache_folder_methods()) return;
     auto* sc = current_scene();
     auto* root = sc ? call_obj(m_first_folder, sc) : nullptr;
     if (!root) return;
     std::map<std::string, int> want;
     for (int fid : g_fighters) {
-        if (!g_f[fid].dst_path.empty()) continue;
-        char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, BASE_COS);
+        auto& fr = g_f[fid];
+        if (fr.left_out || !fr.dst_path.empty()) continue;
+        char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, fr.carrier);
         want[b] = fid;
     }
     if (want.empty()) { g_dst_done = true; return; }
@@ -271,8 +319,15 @@ void find_dst_all() {
         }
         return true;
     });
+    if (!want.empty() && ++g_dst_walks >= kDstWalks) {
+        for (auto& [sfx, fid] : want) {
+            g_f[fid].left_out = true;
+            logf("[F%d] %s folder %s not found: left out of the alias", fid, carrier_name(fid).c_str(), sfx.c_str());
+        }
+        want.clear();
+    }
     g_dst_done = want.empty();
-    if (g_dst_done) logf("costumes: DriveTech folders found");
+    if (g_dst_done) logf("costumes: %s folders found", carriers_text().c_str());
 }
 
 Obj* find_folder(const std::string& suffix) {
@@ -322,46 +377,66 @@ void set_col(Obj* e, int v, int fid, const char* why) {
     logf("[F%d] save MatchingFighterColor -> %d (%s)", fid, v, why);
 }
 
-// Battle Settings opened: the menu shows the slot where the save has DriveTech (a hidden slot is not
-// in its list: the menu shows DriveTech)
+// Battle Settings opened: the menu shows the slot where the save has the carrier (a hidden slot is not
+// in its list: the menu shows the carrier)
 void on_menu_open() {
     logf("costumes: Battle Settings opened");
     for (auto& [fid, e] : save_entries()) {
         auto& in = g_intent[fid];
         if (!in.slot || !shown(fid, in.slot)) continue;
-        if (get_cos(e) == BASE_COS) set_cos(e, in.slot, fid, "so the menu shows the slot");
+        if (get_cos(e) == save_cos_of(fid)) set_cos(e, in.slot, fid, "so the menu shows the slot");
         if (in.color >= 0 && get_col(e) != in.color) set_col(e, in.color, fid, "so the menu shows the colour");
     }
 }
 
-// Battle Settings closed: a slot chosen there becomes the intent, the save gets DriveTech
+// Battle Settings closed: a slot chosen there becomes the intent, the save gets the carrier
 void on_menu_close() {
     logf("costumes: Battle Settings closed");
     for (auto& [fid, e] : save_entries()) {
         int v = get_cos(e);
-        // The menu showed DriveTech in place of a hidden slot: left so, the choice is kept for the
+        // The menu showed the carrier in place of a hidden slot: left so, the choice is kept for the
         // day the outfit is the player's again (until then the alias leaves it out)
-        if (v == BASE_COS && g_intent[fid].slot && !shown(fid, g_intent[fid].slot)) continue;
+        if (v == save_cos_of(fid) && g_intent[fid].slot && !shown(fid, g_intent[fid].slot)) continue;
         set_intent_slot(fid, is_slot(fid, v) ? v : 0, "chosen in the menu");
         if (is_slot(fid, v)) {
-            set_cos(e, BASE_COS, fid, "what the game and the network must see");
+            set_cos(e, save_cos_of(fid), fid, "what the game and the network must see");
             int c = get_col(e);
             set_intent_color(fid, c, "chosen in the menu");
             auto& fr = g_f[fid];
-            if (fr.base_known && !fr.base_colors.count(c)) set_col(e, fr.base_min, fid, "a colour DriveTech has");
+            if (fr.base_known && !fr.base_colors.count(c))
+                set_col(e, fr.base_min, fid, ("a colour " + carrier_name(fid) + " has").c_str());
         }
     }
 }
 
-// Outside the menu the save never keeps a slot number
+// Outside the menu the save never keeps a slot number, nor a former carrier
 void safety_net() {
+    bool carriers_saved = false;
     for (auto& [fid, e] : save_entries()) {
         int v = get_cos(e);
+        auto& fr = g_f[fid];
+        auto& in = g_intent[fid];
+        // The carrier changed since the save was given one (a DriveTech added by a game update, or
+        // DriveTech written for a character that has none by 1.11.1 and before): the save gets the
+        // carrier, in the colour the menu would have given it
+        if (g_table_ok) {
+            const int was = saved_carrier_of(fid);
+            if (carrier::stale(was, fr.carrier, v, in.slot != 0, fr.costumes.count(v) != 0)) {
+                std::string why = "carrier changed: " + ownership::outfit_label(was) + " -> " + carrier_name(fid);
+                set_cos(e, fr.carrier, fid, why.c_str());
+                v = fr.carrier;
+                if (fr.base_known) {
+                    int c = in.color >= 0 ? in.color : get_col(e);
+                    if (!fr.base_colors.count(c)) c = fr.base_min;
+                    set_col(e, c, fid, why.c_str());
+                }
+            }
+            if (fr.carrier >= 0 && was != fr.carrier) { g_saved_carrier[fid] = fr.carrier; carriers_saved = true; }
+        }
         if (is_slot(fid, v)) {
             set_intent_slot(fid, v, "slot found in the save outside the menu");
-            set_cos(e, BASE_COS, fid, "safety net");
+            set_cos(e, save_cos_of(fid), fid, "safety net");
         }
-        auto& fr = g_f[fid];
         if (g_intent[fid].slot && fr.base_known) {
             int c = get_col(e);
             if (!fr.base_colors.count(c)) {
@@ -370,6 +445,7 @@ void safety_net() {
             }
         }
     }
+    if (carriers_saved) save_state();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -445,11 +521,11 @@ void probe(Obj* ci, const char* why) {
          why, online_now() ? 1 : 0, av_ok ? (av ? "1" : "0") : "?", dlc ? "found" : "missing", category,
          m_list ? 1 : 0, m_has ? 1 : 0, m_rec ? 1 : 0, m_dlc ? 1 : 0);
     if (!m_rec) return;
-    std::map<int, std::map<int, int>> recs;          // fighter -> costume -> vanilla record id
+    std::map<int, std::map<int, int>> recs;          // fighter -> costume -> vanilla record id (the loader's are 5000+)
     for (int rid = 1; rid < 1000; ++rid) {
         int32_t fid = 0, cn = -1;
         auto* rec = call_obj(m_rec, ci, { arg_i32(rid) });
-        if (rec && get_i32(rec, "fighterId", fid) && get_i32(rec, "costumeNo", cn) && g_slot_of.count(fid) && cn >= 0 && cn <= BASE_COS)
+        if (rec && get_i32(rec, "fighterId", fid) && get_i32(rec, "costumeNo", cn) && g_slot_of.count(fid) && cn >= 0)
             recs[fid][cn] = rid;
     }
     auto yn = [](bool ok, bool v) { return ok ? (v ? "1" : "0") : "?"; };
@@ -597,25 +673,87 @@ void color_cleanup_slice() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Boot: DriveTech's colours, the slots' colour records, their select screen data
+// Boot: each character's carrier and its colours, the slots' colour records, their select screen data
 // ---------------------------------------------------------------------------------------------
 
-void read_base_colors() {
+// Boot passes without an answer from the costume table before the carriers are taken from the
+// scene's folders instead (30 s; the table answered at the first pass so far)
+constexpr int kTablePasses = 60;
+int g_table_passes = 0;
+
+// The carriers from the folders the scene has (fighterNNN/esfNNNv04, else ...v00), one walk: only
+// when the costume table gives no answer (a game update). false while the scene has no folder.
+bool carriers_from_folders() {
+    if (!cache_folder_methods()) return false;
+    auto* sc = current_scene();
+    auto* root = sc ? call_obj(m_first_folder, sc) : nullptr;
+    if (!root) return false;
+    std::map<std::string, std::pair<int, int>> want;   // folder suffix -> fighter, costume
+    for (int fid : g_fighters)
+        for (int c : { carrier::kDriveTech, carrier::kOutfit1 }) {
+            char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, c);
+            want[b] = { fid, c };
+        }
+    std::map<int, std::set<int>> has;
+    walk_folders(root, 0, [&](Obj* f) {
+        std::string p = fld_path(f);
+        for (auto& [sfx, fc] : want) if (ends_with(p, sfx)) { has[fc.first].insert(fc.second); break; }
+        return true;
+    });
+    for (int fid : g_fighters) g_f[fid].carrier = carrier::choose(has[fid]);
+    logf("costumes: the game's costume table gives no answer, carriers taken from the scene's folders");
+    return true;
+}
+
+// The carriers once (carrier.hpp), from the game's costume table: CostumeInventory.GetMasterDataRecord,
+// records 1.. (the loader's start at 5000) with fighterId and costumeNo, read until 100 ids in a row
+// have none (the game's ids run 1-148 on 13/10, no gap). Then the carrier's colours
+// (TableDataManager.GetFighterCostumeColors of its record), until every character's are known.
+void read_carriers() {
     if (g_bc_done) return;
     auto* tm = api().get_managed_singleton("app.TableDataManager");
     auto* ci = costume_inventory();
-    if (!tm || !ci) return;
-    Method* m_rec = method_of(ci->get_type_definition(), "GetMasterDataRecord", 1);
-    Method* m_cols = method_of(tm->get_type_definition(), "GetFighterCostumeColors", 2);
-    if (!m_rec || !m_cols) return;
-    for (int rid = 1; rid <= 250; ++rid) {
-        auto* rec = call_obj(m_rec, ci, { arg_i32(rid) });
-        int32_t fid = 0, cn = 0;
-        if (!rec || !get_i32(rec, "fighterId", fid) || !get_i32(rec, "costumeNo", cn)) continue;
-        if (cn != BASE_COS || !g_slot_of.count(fid) || g_f[fid].base_known) continue;
-        auto* cls = call_obj(m_cols, tm, { arg_i32(rid), arg_bool(false) });
-        if (!cls) continue;
+    Method* m_rec = ci ? method_of(ci->get_type_definition(), "GetMasterDataRecord", 1) : nullptr;
+    Method* m_cols = tm ? method_of(tm->get_type_definition(), "GetFighterCostumeColors", 2) : nullptr;
+    std::map<int, std::map<int, int>> rid_of;        // fighter -> costume -> record id
+    int hits = 0;
+    if (m_rec)
+        for (int rid = 1, last = 0; rid < kStaticMin && rid - last <= 100; ++rid) {
+            auto* rec = call_obj(m_rec, ci, { arg_i32(rid) });
+            int32_t fid = 0, cn = -1;
+            if (!rec || !get_i32(rec, "fighterId", fid) || !get_i32(rec, "costumeNo", cn)) continue;
+            last = rid; ++hits;
+            if (g_slot_of.count(fid) && cn >= 0) rid_of[fid].emplace(cn, rid);   // the first record of an outfit
+        }
+    if (!g_carriers_done) {
+        const char* src = "the game's costume table";
+        if (hits) {
+            g_table_ok = true;
+            for (int fid : g_fighters) {
+                auto& fr = g_f[fid];
+                for (auto& [cn, rid] : rid_of[fid]) fr.costumes.insert(cn);
+                fr.carrier = carrier::choose(fr.costumes);
+            }
+        } else if (++g_table_passes < kTablePasses || !carriers_from_folders()) return;
+        else src = "the scene's folders";
+        for (int fid : g_fighters) {
+            auto& fr = g_f[fid];
+            if (fr.carrier < 0) {
+                fr.left_out = true;
+                logf("[F%d] neither DriveTech nor Outfit 1 in %s: left out of the alias", fid, src);
+            } else if (fr.carrier != carrier::kDriveTech)
+                logf("[F%d] carrier: %s (no DriveTech in %s)", fid, carrier_name(fid).c_str(), src);
+        }
+        g_carriers_done = true;
+    }
+    if (!m_cols) return;
+    for (int fid : g_fighters) {
         auto& fr = g_f[fid];
+        if (fr.carrier < 0 || fr.base_known) continue;
+        auto r = rid_of[fid].find(fr.carrier);
+        if (r == rid_of[fid].end()) continue;
+        auto* cls = call_obj(m_cols, tm, { arg_i32(r->second), arg_bool(false) });
+        if (!cls) continue;
         int n = list_count(cls), mn = 999;
         for (int j = 0; j < n; ++j) {
             int32_t c = 0;
@@ -624,8 +762,8 @@ void read_base_colors() {
         fr.base_min = mn < 999 ? mn : 0;
         fr.base_known = true;
     }
-    g_bc_done = std::all_of(g_fighters.begin(), g_fighters.end(), [](int fid) { return g_f[fid].base_known; });
-    if (g_bc_done) logf("costumes: DriveTech colours read");
+    g_bc_done = std::all_of(g_fighters.begin(), g_fighters.end(), [](int fid) { return g_f[fid].carrier < 0 || g_f[fid].base_known; });
+    if (g_bc_done) logf("costumes: %s colours read", carriers_text().c_str());
 }
 
 // Colour records of the slots, cloned from the game's own (a record made from scratch is refused
@@ -748,7 +886,7 @@ void insert_select_ui() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Online alias: the slot's folder over DriveTech's
+// Online alias: the slot's folder over its carrier's (DriveTech, or Outfit 1: carrier.hpp)
 // ---------------------------------------------------------------------------------------------
 
 // The character select screen mounts and unmounts outfits itself: touching folders while it runs
@@ -802,8 +940,8 @@ bool swap_in_place(const Fighter& fr, Obj* ccvd) {
         && reinterpret_cast<uintptr_t>(get_obj(eb, "Data")) == fr.csw_da;
 }
 
-// DriveTech only has the colours of the master table; another colour announced to the network is a
-// communication error. The wanted colour's material data goes under DriveTech's first colour.
+// The carrier only has the colours of the master table; another colour announced to the network is a
+// communication error. The wanted colour's material data goes under the carrier's first colour.
 void apply_color(int fid, Obj* d_set) {
     auto& fr = g_f[fid];
     int want = g_intent[fid].color;
@@ -856,9 +994,9 @@ std::vector<Holder> read_holders() {
     return out;
 }
 
-// One pass of the mount: the slot's folder is mounted once the game has mounted DriveTech's
-// (never before: the game skips mounting DriveTech when a folder of the character is already
-// active, and the load hangs), then DriveTech's manifest is overwritten with the slot's.
+// One pass of the mount: the slot's folder is mounted once the game has mounted the carrier's
+// (never before: the game skips mounting the carrier when a folder of the character is already
+// active, and the load hangs), then the carrier's manifest is overwritten with the slot's.
 // true when done.
 bool mount_pass(int fid, const std::vector<Holder>& hs) {
     auto& fr = g_f[fid];
@@ -868,7 +1006,7 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
     Obj *src_h = nullptr, *dst_h = nullptr;
     for (auto& h : hs) {
         if (ends_with(h.path, sfx)) src_h = h.comp;
-        else if (h.path == fr.dst_path && !dst_h) dst_h = h.comp;   // the first DriveTech only (mirror match: known limit)
+        else if (h.path == fr.dst_path && !dst_h) dst_h = h.comp;   // the first carrier (a mirror on it is not aliased: own_fighters)
     }
     char sig[32]; snprintf(sig, sizeof sig, "src=%s dst=%s", src_h ? "y" : "-", dst_h ? "y" : "-");
     if (fr.last_sig != sig) { logf("[F%d] holders %s (n=%zu, v%d)", fid, sig, hs.size(), slot); fr.last_sig = sig; }
@@ -882,7 +1020,7 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
             fr.last_mount = g_frame;
             call(m_f_activate, fr.src_folder);
             if (wjournal::on()) wjournal::log("MOUNT folder.activate obj=%p F%d v%d", (void*)fr.src_folder, fid, slot);
-            logf("[F%d] slot v%d mounted (the game mounted DriveTech)", fid, slot);
+            logf("[F%d] slot v%d mounted (the game mounted %s)", fid, slot, carrier_name(fid).c_str());
         }
         return false;
     }
@@ -896,13 +1034,13 @@ bool mount_pass(int fid, const std::vector<Holder>& hs) {
         restore_color(fid, src_h);   // a swap left from the previous match, if its CCVD is still there
         auto ow = call(d_set, "overwrite", { arg_obj(s_set) });
         if (wjournal::on()) wjournal::log("MANIFEST overwrite dst=%p src=%p F%d v%d ok=%d", (void*)d_set, (void*)s_set, fid, slot, ow.exception_thrown ? 0 : 1);
-        logf("[F%d] manifest v%d -> v%d = %d", fid, slot, BASE_COS, ow.exception_thrown ? 0 : 1);
+        logf("[F%d] manifest v%d -> v%d = %d", fid, slot, fr.carrier, ow.exception_thrown ? 0 : 1);
         fr.swapped_addr = addr;
         if (!ow.exception_thrown) {
             apply_color(fid, d_set);
             // what the fighter really wears, for the other mods reading its costume / colour (through the core)
-            ui::set_effective(fid, BASE_COS, slot, fr.has_csw ? fr.csw_b : -1);
-            if (wjournal::on()) wjournal::log("EFFECTIVE F%d shown=%d real=%d color=%d", fid, BASE_COS, slot, fr.has_csw ? fr.csw_b : -1);
+            ui::set_effective(fid, fr.carrier, slot, fr.has_csw ? fr.csw_b : -1);
+            if (wjournal::on()) wjournal::log("EFFECTIVE F%d shown=%d real=%d color=%d", fid, fr.carrier, slot, fr.has_csw ? fr.csw_b : -1);
         }
         return true;
     }
@@ -914,7 +1052,8 @@ void restore_all() {
     bool any = false;
     for (auto& [fid, fr] : g_f) {
         fr.swapped_addr = 0; any |= fr.has_csw;
-        ui::set_effective(fid, BASE_COS, -1, -1);
+        if (fr.carrier < 0) continue;   // left out: never declared
+        ui::set_effective(fid, fr.carrier, -1, -1);
         if (wjournal::on()) wjournal::log("EFFECTIVE_CLR F%d", fid);
     }
     if (!any) return;
@@ -937,18 +1076,20 @@ bool any_intent() {
 
 // The characters the player controls in the match being loaded, from its battle description
 // (bFlowManager -> flow map -> m_desc): online, the fighter of our session member; offline, a
-// fighter on a pad (the training dummy and the CPU have PadId -1). Kept only if it wears DriveTech:
+// fighter on a pad (the training dummy and the CPU have PadId -1). Kept only if it wears its carrier:
 // an opponent in DriveTech is not ours to dress (03/10), and only in a mode that takes the costume
 // from Battle Settings (online, Battle Hub cabinets). false when no player can be told apart
 // (no description yet, a replay): then every intent applies, as before.
+// `mirror`: the characters two fighters of the battle wear in their carrier (carrier::mirror), never
+// aliased in that battle, whoever the player is.
 std::string g_own_sig;
-bool own_fighters(std::set<int>& out) {
-    out.clear();
+bool own_fighters(std::set<int>& out, std::set<int>& mirror) {
+    out.clear(); mirror.clear();
     auto* desc = battle_desc();
     if (!desc) return false;
     // A mode where the player picks the costume on a select screen (Arcade, Training, Versus, Team
-    // Battle): a slot is picked there as itself, so a fighter in DriveTech really wears DriveTech and
-    // is not ours to dress (Sagat's Drive Tech picked in Training wore his slot, 04/10). The rule's
+    // Battle): a slot is picked there as itself, so a fighter in its carrier really wears it and is
+    // not ours to dress (Sagat's Drive Tech picked in Training wore his slot, 04/10). The rule's
     // GameMode is app.EGameMode, one byte: 1 Arcade, 2 Training, 3 and 4 Versus, 19 Team Battle.
     uint8_t mode = 0;
     if (auto* rule = get_obj(desc, "Rule"))
@@ -958,6 +1099,7 @@ bool own_fighters(std::set<int>& out) {
     get_bool(desc, "IsNetwork", net);
     get_i32(desc, "SelfSessionMemberindex", self);
     bool found = false;
+    std::vector<std::pair<int, int>> worn;           // (fighter, costume) of every fighter of the battle
     auto* teams = get_obj(desc, "Teams");
     int nt = list_count(teams);
     for (int t = 0; t < nt; ++t) {
@@ -969,18 +1111,34 @@ bool own_fighters(std::set<int>& out) {
             int32_t fid = 0, cos = -1, pad = -1, member = -1;
             if (!f || !get_i32(f, "FighterId", fid)) continue;
             get_i32(f, "Costume", cos); get_i32(f, "PadId", pad); get_i32(f, "SessionMemberIndex", member);
+            worn.emplace_back(fid, cos);
             if (net ? (self < 0 || member != self) : pad < 0) continue;
             found = true;
-            if (cos == BASE_COS && !picked) out.insert(fid);
+            const int c = carrier_of(fid);
+            if (c >= 0 && cos == c && !picked) out.insert(fid);
         }
     }
+    for (int fid : g_fighters)
+        if (carrier::mirror(worn, fid, carrier_of(fid))) { mirror.insert(fid); out.erase(fid); }
+    bool all_dt = true;
+    for (int fid : out) all_dt &= carrier_of(fid) == carrier::kDriveTech;
     std::string sig = !found ? "none" : out.empty() ? "-" : "";
-    for (int fid : out) sig += "F" + std::to_string(fid) + " ";
+    for (int fid : out) sig += "F" + std::to_string(fid) + (all_dt ? std::string() : " (" + carrier_name(fid) + ")") + " ";
     if (picked) sig += "(picked)";
+    for (int fid : mirror) sig += " mirror F" + std::to_string(fid);
     if (sig != g_own_sig) {
         if (!found) logf("costumes: alias for every intent (no player in the battle description)");
         else if (picked) logf("costumes: no alias, game mode %d picks costumes on a select screen (%s)", mode, net ? "online" : "offline");
-        else logf("costumes: alias for the player's fighters in DriveTech: %s (%s, game mode %d)", sig.c_str(), net ? "online" : "offline", mode);
+        else logf("costumes: alias for the player's fighters in %s: %s (%s, game mode %d)",
+                  all_dt ? "DriveTech" : "their carrier", sig.substr(0, sig.find(" mirror")).c_str(), net ? "online" : "offline", mode);
+        // a mirror matters where an intent would apply: no player told apart, or a mode that aliases
+        if (!found || !picked)
+            for (int fid : mirror) {
+                auto in = g_intent.find(fid);
+                if (in == g_intent.end() || !in->second.slot || !shown(fid, in->second.slot)) continue;
+                logf("[F%d] alias skipped: mirror on the carrier (%s)", fid, carrier_name(fid).c_str());
+                ui::set_effective(fid, carrier_of(fid), -1, -1);   // a declaration left from the last match
+            }
         g_own_sig = sig;
     }
     return found;
@@ -1047,12 +1205,12 @@ void tick(uint32_t ev) {
     // ---- boot, once: every 30 frames until everything is in place (title screen, menus) ----
     if (!g_boot_done && g_frame - g_boot_last >= 30 && g_frame > 60) {
         g_boot_last = g_frame;
+        read_carriers();
         find_dst_all();
-        read_base_colors();
         insert_colors();
         insert_select_ui();
         bool owned = give_ownership("boot");
-        if (owned) safety_net();
+        if (owned && g_carriers_done) safety_net();   // the carriers first: the save gets the right one
         g_boot_done = (g_dst_done && g_bc_done && g_colors_done && g_ui_done && owned) || g_frame > 60 * 600;
         if (g_boot_done) logf("costumes: boot done (dst %d, colours %d, records %d, ui %d, owned %d)",
                               g_dst_done, g_bc_done, g_colors_done, g_ui_done, owned ? 1 : 0);
@@ -1113,10 +1271,11 @@ void tick(uint32_t ev) {
                 return;
             }
             auto hs = read_holders();
-            std::set<int> own;
-            bool known = own_fighters(own);
+            std::set<int> own, mirror;
+            bool known = own_fighters(own, mirror);
             if (wjournal::on()) wjournal::log("ALIAS_TICK frame=%u holders=%zu known=%d own=%zu", g_frame, hs.size(), known ? 1 : 0, own.size());
-            for (auto& [fid, in] : g_intent) if (in.slot && shown(fid, in.slot) && (!known || own.count(fid))) mount_pass(fid, hs);
+            for (auto& [fid, in] : g_intent)
+                if (in.slot && shown(fid, in.slot) && (!known || own.count(fid)) && !mirror.count(fid)) mount_pass(fid, hs);
         }
     }
 }
