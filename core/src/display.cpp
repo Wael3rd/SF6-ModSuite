@@ -182,6 +182,9 @@ static struct DisplayTypeCache {
     REFrameworkTypeDefinitionHandle t_ui_agent;      // app.UIAgent
     REFrameworkTypeDefinitionHandle t_texture;       // via.gui.Texture
     REFrameworkTypeDefinitionHandle t_game_object;   // via.GameObject
+    REFrameworkTypeDefinitionHandle t_gui_material;  // via.gui.Material (ADR-0019)
+    REFrameworkTypeDefinitionHandle t_tex_holder;    // via.render.TextureResourceHolder
+    REFrameworkTypeDefinitionHandle t_string;        // System.String
 
     // Methods
     REFrameworkMethodHandle m_text_get_message;
@@ -231,6 +234,7 @@ static struct DisplayTypeCache {
 } s_dtc = {};
 
 static REFrameworkMethodHandle find_method_ll(const REFrameworkSDKData* sdk, void* obj, const char* sig);
+static std::string flm_type_name(const REFrameworkSDKData* sdk, REFrameworkTypeDefinitionHandle td);
 
 static bool resolve_display_types() {
     if (s_dtc.resolved) return !s_dtc.failed;
@@ -255,6 +259,9 @@ static bool resolve_display_types() {
         s_dtc.t_ui_agent     = sdk->tdb->find_type(tdb, "app.UIAgent");
         s_dtc.t_texture      = sdk->tdb->find_type(tdb, "via.gui.Texture");
         s_dtc.t_game_object  = sdk->tdb->find_type(tdb, "via.GameObject");
+        s_dtc.t_gui_material = sdk->tdb->find_type(tdb, "via.gui.Material");
+        s_dtc.t_tex_holder   = sdk->tdb->find_type(tdb, "via.render.TextureResourceHolder");
+        s_dtc.t_string       = sdk->tdb->find_type(tdb, "System.String");
 
         if (s_dtc.t_text) {
             s_dtc.m_text_get_message = sdk->type_definition->find_method(s_dtc.t_text, "get_Message");
@@ -829,6 +836,197 @@ SF6CoreStatus SF6CORE_CALL api_ui_set_texture(SF6CoreClient* client, void* textu
     }
     DispatchCtx ctx = { client, texture_ctrl, "ui_set_texture", st, false };
     on_display_success(&ctx);
+    return SF6CORE_OK;
+}
+
+// ========================================================================
+// P3: texture variable of a GUI material (ADR-0019)
+// ========================================================================
+// A via.gui.Material keeps its textures as named material variables: getMaterialValueT(name) /
+// setMaterialValueT(name, holder) (e.g. the stage strip's cells: e_mat_thumb, "Stage_Image"). Both are
+// resolved by name on the object's type and their parameters checked once per method: the name a
+// System.String, the texture a TextureResourceHolder type. A method that does not match is never called
+// (logged once, ERR_NOT_FOUND). Game thread only (refused elsewhere, unlike the advisory of the other ops).
+
+static bool td_derives(REFrameworkTypeDefinitionHandle td, REFrameworkTypeDefinitionHandle base) {
+    for (; td; td = s_sdk->type_definition->get_parent_type(td)) if (td == base) return true;
+    return false;
+}
+
+static bool holder_like(REFrameworkTypeDefinitionHandle td) {
+    return td && s_dtc.t_tex_holder && (td_derives(td, s_dtc.t_tex_holder) || td_derives(s_dtc.t_tex_holder, td));
+}
+
+static SRWLOCK                                            s_mat_lock = SRWLOCK_INIT;
+static std::unordered_map<REFrameworkMethodHandle, bool> s_mat_checked;   // method -> signature as expected
+
+// Getter: (System.String) returning a holder type; setter: (System.String, holder type). Outside __try (C2712).
+static bool mat_method_ok(REFrameworkMethodHandle mh, bool setter) {
+    if (!mh) return false;
+    AcquireSRWLockShared(&s_mat_lock);
+    auto it = s_mat_checked.find(mh);
+    const bool known = it != s_mat_checked.end();
+    const bool cached = known && it->second;
+    ReleaseSRWLockShared(&s_mat_lock);
+    if (known) return cached;
+
+    auto* sdk = s_sdk;
+    const unsigned want = setter ? 2u : 1u;
+    REFrameworkMethodParameter prm[4] = {};
+    unsigned int n = 0;
+    bool ok = sdk->method->get_num_params(mh) == want &&
+              sdk->method->get_params(mh, prm, (unsigned int)sizeof prm, &n) == REFRAMEWORK_ERROR_NONE && n == want;
+    REFrameworkTypeDefinitionHandle tex = ok ? (setter ? prm[1].t : sdk->method->get_return_type(mh)) : nullptr;
+    const std::string name_t = (ok && prm[0].t) ? flm_type_name(sdk, prm[0].t) : std::string("-");
+    ok = ok && (prm[0].t == s_dtc.t_string || name_t == "System.String") && holder_like(tex);
+    const char* nm = sdk->method->get_name(mh);
+    core_log(ok ? SF6CORE_LOG_INFO : SF6CORE_LOG_WARN, nullptr,
+             "material texture: %s.%s(%s%s) -> %s: %s",
+             flm_type_name(sdk, sdk->method->get_declaring_type(mh)).c_str(), nm ? nm : "?", name_t.c_str(),
+             setter ? (std::string(", ") + (tex ? flm_type_name(sdk, tex) : "-")).c_str() : "",
+             setter ? "void" : (tex ? flm_type_name(sdk, tex).c_str() : "-"),
+             ok ? "used" : "not the expected signature, never called");
+    AcquireSRWLockExclusive(&s_mat_lock);
+    s_mat_checked[mh] = ok;
+    ReleaseSRWLockExclusive(&s_mat_lock);
+    return ok;
+}
+
+// -1 untracked, 0 loading, 1 loaded. Lock outside __try (C2712).
+static int texture_state(void* holder) {
+    std::lock_guard<std::mutex> lk(s_texture_mutex);
+    auto* te = find_texture(holder);
+    if (!te) return -1;
+    return (s_frame - te->created_frame >= TEXTURE_LOAD_FRAMES) ? 1 : 0;
+}
+
+// A holder read from a material is on screen, so loaded: a client may give it back (ui_set_material_texture)
+static void track_texture_loaded(void* holder) {
+    std::lock_guard<std::mutex> lk(s_texture_mutex);
+    if (find_texture(holder)) return;
+    if (s_texture_count < TEXTURE_MAX) {
+        auto& te = s_textures[s_texture_count++];
+        te.holder = holder;
+        te.created_frame = 0;
+        te.active = true;
+    }
+}
+
+// Proof that the variable exists: it holds a texture now (getMaterialValueT answers null for a name the
+// material does not have). Shared by get / set; SEH in the callers.
+static bool mat_read(const REFrameworkSDKData* sdk, REFrameworkMethodHandle m_get, void* material, void* name_str,
+                     void** out) {
+    RawInvokeRet ret;
+    void* args[] = { name_str };
+    *out = nullptr;
+    if (!invoke_c(sdk, m_get, material, args, 1, &ret)) return false;
+    *out = ret.ptr;
+    return true;
+}
+
+static bool same_texture(void* cur, void* holder) {
+    if (cur == holder) return true;
+    // two holders of one resource (pointer at +0x10, as ui_set_texture compares)
+    if (!check_is_type(cur, s_dtc.t_tex_holder) || !check_is_type(holder, s_dtc.t_tex_holder)) return false;
+    return *(uint64_t*)((uint8_t*)cur + 0x10) == *(uint64_t*)((uint8_t*)holder + 0x10);
+}
+
+SF6CoreStatus SF6CORE_CALL api_ui_set_material_texture(SF6CoreClient* client, void* material, const char* param, void* holder) {
+    if (!param || !param[0] || !holder) return SF6CORE_ERR_INVALID_ARG;
+    DisplayStatsInternal* st = nullptr;
+    auto rc = guard_prefix(client, material, "ui_set_material_texture", true, &st);
+    if (rc != SF6CORE_OK) return rc;
+    if (!on_recorded_game_thread()) { st->refused.fetch_add(1); return SF6CORE_ERR_WRONG_THREAD; }
+    if (!resolve_display_types()) return SF6CORE_ERR_NOT_READY;
+    if (!check_is_type(material, s_dtc.t_gui_material)) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+    const int ts = texture_state(holder);
+    if (ts < 0) {
+        st->refused.fetch_add(1);
+        rate_log_warn(client->client_id, "ui_set_material_texture refused: holder 0x%p is not from ui_texture_load / ui_get_material_texture", holder);
+        return SF6CORE_ERR_INVALID_ARG;
+    }
+    if (ts == 0) return SF6CORE_ERR_NOT_READY;                    // a texture handed to the GUI while it loads crashed the game
+    if (!check_is_type(holder, s_dtc.t_tex_holder)) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+
+    auto* sdk = s_sdk;
+    auto m_get = find_method_ll(sdk, material, "getMaterialValueT(System.String)");
+    auto m_set = find_method_ll(sdk, material, "setMaterialValueT(System.String,via.render.TextureResourceHolder)");
+    if (!mat_method_ok(m_get, false) || !mat_method_ok(m_set, true)) { st->refused.fetch_add(1); return SF6CORE_ERR_NOT_FOUND; }
+
+    DWORD exc = 0;
+    __try {
+        void* name_str = (void*)sdk->functions->create_managed_string_normal(param);
+        if (!name_str) return SF6CORE_ERR_FAULTED;
+        // Compare-before-write; a variable that holds no texture is not proven to exist: refused
+        void* cur = nullptr;
+        if (!mat_read(sdk, m_get, material, name_str, &cur)) {
+            DispatchCtx ctx = { client, material, "ui_set_material_texture", st, true };
+            on_display_fault(&ctx, 0);
+            return SF6CORE_ERR_FAULTED;
+        }
+        if (!cur) {
+            st->refused.fetch_add(1);
+            rate_log_warn(client->client_id, "ui_set_material_texture refused: material 0x%p holds no texture '%s'", material, param);
+            return SF6CORE_ERR_NOT_FOUND;
+        }
+        if (same_texture(cur, holder)) {
+            st->skipped_identical.fetch_add(1);
+            return SF6CORE_OK;
+        }
+        // Write: setMaterialValueT
+        RawInvokeRet ret;
+        void* args[] = { name_str, holder };
+        if (!invoke_c(sdk, m_set, material, args, 2, &ret)) {
+            DispatchCtx ctx = { client, material, "ui_set_material_texture", st, true };
+            on_display_fault(&ctx, 0);
+            return SF6CORE_ERR_FAULTED;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        exc = GetExceptionCode();
+        DispatchCtx ctx = { client, material, "ui_set_material_texture", st, false };
+        on_display_fault(&ctx, exc);
+        return SF6CORE_ERR_FAULTED;
+    }
+    DispatchCtx ctx = { client, material, "ui_set_material_texture", st, false };
+    on_display_success(&ctx);
+    return SF6CORE_OK;
+}
+
+SF6CoreStatus SF6CORE_CALL api_ui_get_material_texture(SF6CoreClient* client, void* material, const char* param, void** out_holder) {
+    if (!param || !param[0] || !out_holder) return SF6CORE_ERR_INVALID_ARG;
+    *out_holder = nullptr;
+    DisplayStatsInternal* st = nullptr;
+    auto rc = guard_prefix(client, material, "ui_get_material_texture", true, &st);
+    if (rc != SF6CORE_OK) return rc;
+    if (!on_recorded_game_thread()) { st->refused.fetch_add(1); return SF6CORE_ERR_WRONG_THREAD; }
+    if (!resolve_display_types()) return SF6CORE_ERR_NOT_READY;
+    if (!check_is_type(material, s_dtc.t_gui_material)) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+
+    auto* sdk = s_sdk;
+    auto m_get = find_method_ll(sdk, material, "getMaterialValueT(System.String)");
+    if (!mat_method_ok(m_get, false)) { st->refused.fetch_add(1); return SF6CORE_ERR_NOT_FOUND; }
+
+    DWORD exc = 0;
+    void* cur = nullptr;
+    __try {
+        void* name_str = (void*)sdk->functions->create_managed_string_normal(param);
+        if (!name_str) return SF6CORE_ERR_FAULTED;
+        if (!mat_read(sdk, m_get, material, name_str, &cur)) {
+            DispatchCtx ctx = { client, material, "ui_get_material_texture", st, true };
+            on_display_fault(&ctx, 0);
+            return SF6CORE_ERR_FAULTED;
+        }
+        if (cur) sdk->managed_object->add_ref((REFrameworkManagedObjectHandle)cur);   // the caller's reference
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        exc = GetExceptionCode();
+        DispatchCtx ctx = { client, material, "ui_get_material_texture", st, false };
+        on_display_fault(&ctx, exc);
+        return SF6CORE_ERR_FAULTED;
+    }
+    perf::end(perf::Api, tl_api_t0); tl_api_t0 = 0;                // a read: not counted as a write
+    if (!cur) return SF6CORE_ERR_NOT_FOUND;
+    track_texture_loaded(cur);
+    *out_holder = cur;
     return SF6CORE_OK;
 }
 

@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | ABI version | 1 |
-| Core version | 0.8.0 |
+| Core version | 0.8.1 |
 | Header | `include/sf6core/sf6core_api.h` |
 
 ## Versioning and the append-only rule
@@ -299,6 +299,21 @@ UI job threads**, inside the menu's own update, several threads at once: unlike 
 do not run in the core's `LateUpdateBehavior` (only `on_page_shown(page, 0)` at a menu close does). The client must be
 thread-safe and must never call the menu's update methods back (R4); any `pm_*` function may be called from them.
 They are SEH-guarded and a fault counts on the client's breaker; a disabled or unregistered client is skipped.
+
+## Function list (increment 9 -- GUI material texture, ADR-0019, appended, core 0.8.1)
+
+A `via.gui.Material` shows its textures through named material variables (the stage strip's cells: element
+`e_mat_thumb`, variable `Stage_Image`). The core calls the material's own `getMaterialValueT(System.String)` /
+`setMaterialValueT(System.String, holder)`, found by name on the object's type; their signatures are checked once per
+method (the name a `System.String`, the texture a `via.render.TextureResourceHolder` type) and logged once
+(`material texture: ... used`, or `... not the expected signature, never called` -> `ERR_NOT_FOUND`). Both run on the
+**game thread only** (`ERR_WRONG_THREAD` elsewhere: refused, unlike the advisory of the other display ops). Clients
+probe the increment with `SF6CORE_HAS(api, ui_get_material_texture)`.
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 87 | `ui_set_material_texture` | `SF6CoreStatus (client, void* material, const char* param, void* holder)` | **Game thread** | Display guards (kill switch, closing, breaker, quarantine, SEH), live `via.gui.Material` check. `holder`: from `ui_texture_load` and loaded (`ERR_NOT_READY` during its 60 frames), or from `ui_get_material_texture`; any other holder `ERR_INVALID_ARG`. The variable must hold a texture now (proof that it exists, `ERR_NOT_FOUND` otherwise). Same holder or same resource: nothing written, `OK` |
+| 88 | `ui_get_material_texture` | `SF6CoreStatus (client, void* material, const char* param, void** out_holder)` | **Game thread** | The holder the variable shows now, one reference owned by the caller (release it); accepted back by `ui_set_material_texture` (to put the game's texture back). `ERR_NOT_FOUND`, `*out_holder` NULL: no texture |
 
 ## Lua bridge API
 

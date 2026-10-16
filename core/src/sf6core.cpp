@@ -37,7 +37,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.8.0";
+static constexpr const char* CORE_VERSION = "0.8.1";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2013,6 +2013,9 @@ int32_t       SF6CORE_CALL api_pm_page_shown(int64_t);
 void*         SF6CORE_CALL api_pm_row_part(int64_t);
 uint32_t      SF6CORE_CALL api_pm_status(char*, uint32_t);
 int64_t       SF6CORE_CALL api_pm_row_of(SF6CoreClient*, void*);
+// Increment 9: GUI material texture (ADR-0019, display.cpp)
+SF6CoreStatus SF6CORE_CALL api_ui_set_material_texture(SF6CoreClient*, void*, const char*, void*);
+SF6CoreStatus SF6CORE_CALL api_ui_get_material_texture(SF6CoreClient*, void*, const char*, void**);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2625,7 +2628,10 @@ static const SF6CoreAPI s_api = {
     api_pm_page_shown,
     api_pm_row_part,
     api_pm_status,
-    api_pm_row_of
+    api_pm_row_of,
+    // Increment 9
+    api_ui_set_material_texture,
+    api_ui_get_material_texture
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)

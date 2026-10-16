@@ -708,6 +708,24 @@ typedef struct SF6CoreAPI {
     /* The client row id carried by a TrainingMenuData the core built, or -1 (game row, unknown, not the caller's). */
     int64_t       (SF6CORE_CALL *pm_row_of)(SF6CoreClient* client, void* menu_data);
 
+    /* -- Increment 9: GUI material texture (ADR-0019, append-only) ------------ */
+
+    /* The texture variable `param` of a via.gui.Material (getMaterialValueT /
+     * setMaterialValueT, by name). Game thread only: ERR_WRONG_THREAD elsewhere.
+     * Probe with SF6CORE_HAS(api, ui_get_material_texture) (core >= 0.8.1). */
+
+    /* Set the variable to `holder`, a holder from ui_texture_load (loaded:
+     * ERR_NOT_READY before its 60 frames) or from ui_get_material_texture
+     * (ERR_INVALID_ARG for any other holder). The variable must hold a texture
+     * now (its proof of existence; ERR_NOT_FOUND otherwise). Same texture:
+     * nothing written, SF6CORE_OK. Display guards: kill switch, closing,
+     * breaker, live via.gui.Material check, quarantine, SEH. */
+    SF6CoreStatus (SF6CORE_CALL *ui_set_material_texture)(SF6CoreClient* client, void* material, const char* param, void* holder);
+    /* The holder the variable shows now, with one reference owned by the caller
+     * (release it); the core accepts it back in ui_set_material_texture (to put
+     * the game's texture back). ERR_NOT_FOUND (*out_holder NULL): no texture. */
+    SF6CoreStatus (SF6CORE_CALL *ui_get_material_texture)(SF6CoreClient* client, void* material, const char* param, void** out_holder);
+
 } SF6CoreAPI;
 
 #ifdef __cplusplus
