@@ -214,6 +214,22 @@ typedef struct SF6CoreDisplayStats {
     uint64_t quarantined;         /* calls refused because the element faulted before */
 } SF6CoreDisplayStats;
 
+/* What a via.gui.Texture shows (ui_get_texture_state, increment 10, ADR-0020). struct_size: set by the caller; a later
+ * core fills only the fields the caller's size covers. */
+typedef struct SF6CoreTextureState {
+    uint32_t struct_size;
+    int32_t  asset_type;          /* via.gui.TextureAssetType: 0 UV sequence, 1 texture */
+    void*    texture_holder;      /* getTexture(): one reference owned by the caller (release it), NULL = none;
+                                     accepted back by ui_set_texture_rect */
+    void*    uv_sequence;         /* get_UVSequence(): identity only, no reference (compare it, never use it later) */
+    uint32_t uv_sequence_no;
+    uint32_t uv_pattern_no;
+    int32_t  uv_type;             /* via.gui.UVValueType: 0 Rect (pixels), 1 UV (ratio), 2 Legacy */
+    float    u, v, w, h;          /* get_UVU / UVV / UVW / UVH */
+    float    size_w, size_h;      /* get_Size */
+    uint32_t color;               /* get_Color: raw via.Color rgba, as ui_set_color takes it */
+} SF6CoreTextureState;
+
 /* ---- Option dialog types (increment 6, ADR-0013) ---------------------- */
 
 /* The game's own option window (app.Option units shown by
@@ -725,6 +741,31 @@ typedef struct SF6CoreAPI {
      * (release it); the core accepts it back in ui_set_material_texture (to put
      * the game's texture back). ERR_NOT_FOUND (*out_holder NULL): no texture. */
     SF6CoreStatus (SF6CORE_CALL *ui_get_material_texture)(SF6CoreClient* client, void* material, const char* param, void** out_holder);
+
+    /* -- Increment 10: texture rectangle, texture state, plain clone (ADR-0020 amendment 1, append-only) --
+     *
+     * Probe with SF6CORE_HAS(api, ui_clone_control) (core >= 0.8.2). Applied at once, like every display op. */
+
+    /* A via.gui.Texture in texture mode on a rectangle of `holder`'s texture: set_AssetType(Texture),
+     * setTexture(holder), set_UVType(UV), u / v / w / h in ratio units (0..1 of the texture). `holder`: from
+     * ui_texture_load and loaded (ERR_NOT_READY during its 60 frames) or from ui_get_texture_state; any other holder
+     * ERR_INVALID_ARG. What already matches is not written (all of it: SF6CORE_OK, nothing written). Size, colour and
+     * position stay the client's (ui_set_size / ui_set_color / ui_set_position). Game thread only
+     * (ERR_WRONG_THREAD elsewhere). Display guards: kill switch, closing, breaker, live via.gui.Texture check,
+     * quarantine, SEH. A method missing on the type: ERR_NOT_FOUND (logged once). */
+    SF6CoreStatus (SF6CORE_CALL *ui_set_texture_rect)(SF6CoreClient* client, void* texture_ctrl, void* holder,
+                                                      float u, float v, float w, float h);
+    /* What a via.gui.Texture shows now (SF6CoreTextureState; out->struct_size set by the caller), so that a client
+     * can put it back. Game thread only. */
+    SF6CoreStatus (SF6CORE_CALL *ui_get_texture_state)(SF6CoreClient* client, void* texture_ctrl, SF6CoreTextureState* out);
+    /* A copy of a plain element (a via.gui control without UIParts: Rect, Texture...; rows: ui_clone_row) named
+     * `name`, added as the last child of parent_ctrl: drawn over its siblings, under the parent's later siblings.
+     * The copy is not a managed object (R35): no reference to take or release (a reference count on it crashed the
+     * game, R19), it lives and dies with the parent's tree; find it again by name (ui_find_child). It is checked
+     * before it is attached (the template's type, the name asked: ERR_NOT_READY otherwise, nothing attached) and
+     * after (its parent: ERR_FAULTED otherwise). Advisory thread check, as ui_clone_row. */
+    SF6CoreStatus (SF6CORE_CALL *ui_clone_control)(SF6CoreClient* client, void* template_ctrl, void* parent_ctrl,
+                                                   const char* name, void** out_ctrl);
 
 } SF6CoreAPI;
 

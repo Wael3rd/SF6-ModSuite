@@ -1030,6 +1030,189 @@ SF6CoreStatus SF6CORE_CALL api_ui_get_material_texture(SF6CoreClient* client, vo
     return SF6CORE_OK;
 }
 
+// ========================================================================
+// P3: texture rectangle, texture state (ADR-0020 amendment 1, core 0.8.2)
+// ========================================================================
+// A via.gui.Texture draws a UV-sequence pattern (AssetType 0) or a texture (AssetType 1) cut by a UV rectangle
+// (UVType 0 pixels, 1 ratio, 2 legacy). The avatar editor's colour bar is drawn this way in the option window: its UV
+// sequence draws nothing outside the avatar editor, the texture loaded by ui_texture_load does. The methods are the
+// control's own, by name on its type chain (find_method_ll, a missing one logged once). System.Single goes through
+// the invoke wrappers as a double, both ways. Game thread only, like the material ops.
+
+struct TexMethods {
+    REFrameworkMethodHandle get_asset, set_asset, get_tex, set_tex, get_uvtype, set_uvtype, get_uvs, get_uvs_no,
+                            get_pattern_no, get_size, get_color;
+    REFrameworkMethodHandle get_uv[4], set_uv[4];
+};
+
+// Lookups outside __try (C2712). setters: the write op needs them too.
+static bool tex_methods(const REFrameworkSDKData* sdk, void* ctrl, TexMethods* m, bool setters) {
+    static const char* const kGet[4] = { "get_UVU", "get_UVV", "get_UVW", "get_UVH" };
+    static const char* const kSet[4] = { "set_UVU(System.Single)", "set_UVV(System.Single)", "set_UVW(System.Single)", "set_UVH(System.Single)" };
+    *m = TexMethods{};
+    m->get_asset  = find_method_ll(sdk, ctrl, "get_AssetType");
+    m->get_tex    = find_method_ll(sdk, ctrl, "getTexture()");
+    m->get_uvtype = find_method_ll(sdk, ctrl, "get_UVType");
+    bool ok = m->get_asset && m->get_tex && m->get_uvtype;
+    for (int i = 0; i < 4; i++) { m->get_uv[i] = find_method_ll(sdk, ctrl, kGet[i]); ok = ok && m->get_uv[i]; }
+    if (setters) {
+        m->set_asset  = find_method_ll(sdk, ctrl, "set_AssetType(via.gui.TextureAssetType)");
+        m->set_tex    = find_method_ll(sdk, ctrl, "setTexture(via.render.TextureResourceHolder)");
+        m->set_uvtype = find_method_ll(sdk, ctrl, "set_UVType(via.gui.UVValueType)");
+        ok = ok && m->set_asset && m->set_tex && m->set_uvtype;
+        for (int i = 0; i < 4; i++) { m->set_uv[i] = find_method_ll(sdk, ctrl, kSet[i]); ok = ok && m->set_uv[i]; }
+    } else {
+        m->get_uvs        = find_method_ll(sdk, ctrl, "get_UVSequence");
+        m->get_uvs_no     = find_method_ll(sdk, ctrl, "get_UVSequenceNo");
+        m->get_pattern_no = find_method_ll(sdk, ctrl, "get_UVPatternNo");
+        m->get_size       = find_method_ll(sdk, ctrl, "get_Size");
+        m->get_color      = find_method_ll(sdk, ctrl, "get_Color");
+        ok = ok && m->get_uvs && m->get_uvs_no && m->get_pattern_no && m->get_size && m->get_color;
+    }
+    return ok;
+}
+
+static void* single_arg(float f) { double d = f; void* a = nullptr; memcpy(&a, &d, sizeof a); return a; }
+static float single_ret(const RawInvokeRet& r) { double d = 0; memcpy(&d, r.bytes, sizeof d); return (float)d; }
+
+SF6CoreStatus SF6CORE_CALL api_ui_set_texture_rect(SF6CoreClient* client, void* texture_ctrl, void* holder,
+                                                   float u, float v, float w, float h) {
+    if (!holder) return SF6CORE_ERR_INVALID_ARG;
+    DisplayStatsInternal* st = nullptr;
+    auto rc = guard_prefix(client, texture_ctrl, "ui_set_texture_rect", true, &st);
+    if (rc != SF6CORE_OK) return rc;
+    if (!on_recorded_game_thread()) { st->refused.fetch_add(1); return SF6CORE_ERR_WRONG_THREAD; }
+    if (!resolve_display_types()) return SF6CORE_ERR_NOT_READY;
+    if (!check_is_type(texture_ctrl, s_dtc.t_texture)) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+    const int ts = texture_state(holder);
+    if (ts < 0) {
+        st->refused.fetch_add(1);
+        rate_log_warn(client->client_id, "ui_set_texture_rect refused: holder 0x%p is not from ui_texture_load / ui_get_texture_state", holder);
+        return SF6CORE_ERR_INVALID_ARG;
+    }
+    if (ts == 0) return SF6CORE_ERR_NOT_READY;                    // a texture handed to the GUI while it loads crashed the game
+    if (!check_is_type(holder, s_dtc.t_tex_holder)) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+
+    auto* sdk = s_sdk;
+    TexMethods m;
+    if (!tex_methods(sdk, texture_ctrl, &m, true)) { st->refused.fetch_add(1); return SF6CORE_ERR_NOT_FOUND; }
+
+    const float want[4] = { u, v, w, h };
+    DWORD exc = 0;
+    bool managed = false;
+    __try {
+        do {
+            // Compare-before-write: asset type, texture (same resource), UV type, rectangle
+            RawInvokeRet r;
+            if (!invoke_c(sdk, m.get_asset, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            const int32_t asset = (int32_t)r.dword;
+            if (!invoke_c(sdk, m.get_tex, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            const bool same_tex = r.ptr && same_texture(r.ptr, holder);
+            if (!invoke_c(sdk, m.get_uvtype, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            const int32_t uv_type = (int32_t)r.dword;
+            bool same_uv[4] = {};
+            bool all_uv = true;
+            for (int i = 0; i < 4; i++) {
+                if (!invoke_c(sdk, m.get_uv[i], texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+                const float d = single_ret(r) - want[i];
+                same_uv[i] = d > -1e-6f && d < 1e-6f;
+                all_uv = all_uv && same_uv[i];
+            }
+            if (managed) break;
+            if (asset == 1 && same_tex && uv_type == 1 && all_uv) {
+                st->skipped_identical.fetch_add(1);
+                return SF6CORE_OK;
+            }
+            // Write, in the order the in-game test used: texture mode, texture, ratio units, rectangle
+            void* a[1];
+            if (asset != 1) { a[0] = (void*)(uintptr_t)1; if (!invoke_c(sdk, m.set_asset, texture_ctrl, a, 1, &r)) { managed = true; break; } }
+            if (!same_tex) { a[0] = holder; if (!invoke_c(sdk, m.set_tex, texture_ctrl, a, 1, &r)) { managed = true; break; } }
+            if (uv_type != 1) { a[0] = (void*)(uintptr_t)1; if (!invoke_c(sdk, m.set_uvtype, texture_ctrl, a, 1, &r)) { managed = true; break; } }
+            for (int i = 0; i < 4; i++) {
+                if (same_uv[i]) continue;
+                a[0] = single_arg(want[i]);
+                if (!invoke_c(sdk, m.set_uv[i], texture_ctrl, a, 1, &r)) { managed = true; break; }
+            }
+        } while (false);
+        if (managed) {
+            DispatchCtx ctx = { client, texture_ctrl, "ui_set_texture_rect", st, true };
+            on_display_fault(&ctx, 0);
+            return SF6CORE_ERR_FAULTED;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        exc = GetExceptionCode();
+        DispatchCtx ctx = { client, texture_ctrl, "ui_set_texture_rect", st, false };
+        on_display_fault(&ctx, exc);
+        return SF6CORE_ERR_FAULTED;
+    }
+    DispatchCtx ctx = { client, texture_ctrl, "ui_set_texture_rect", st, false };
+    on_display_success(&ctx);
+    return SF6CORE_OK;
+}
+
+SF6CoreStatus SF6CORE_CALL api_ui_get_texture_state(SF6CoreClient* client, void* texture_ctrl, SF6CoreTextureState* out) {
+    if (!out || out->struct_size < sizeof(SF6CoreTextureState)) return SF6CORE_ERR_INVALID_ARG;
+    DisplayStatsInternal* st = nullptr;
+    auto rc = guard_prefix(client, texture_ctrl, "ui_get_texture_state", true, &st);
+    if (rc != SF6CORE_OK) return rc;
+    if (!on_recorded_game_thread()) { st->refused.fetch_add(1); return SF6CORE_ERR_WRONG_THREAD; }
+    if (!resolve_display_types()) return SF6CORE_ERR_NOT_READY;
+    if (!check_is_type(texture_ctrl, s_dtc.t_texture)) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+
+    auto* sdk = s_sdk;
+    TexMethods m;
+    if (!tex_methods(sdk, texture_ctrl, &m, false)) { st->refused.fetch_add(1); return SF6CORE_ERR_NOT_FOUND; }
+
+    SF6CoreTextureState s = {};
+    s.struct_size = out->struct_size;
+    DWORD exc = 0;
+    bool managed = false;
+    __try {
+        do {
+            RawInvokeRet r;
+            if (!invoke_c(sdk, m.get_asset, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            s.asset_type = (int32_t)r.dword;
+            if (!invoke_c(sdk, m.get_uvs, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            s.uv_sequence = r.ptr;
+            if (!invoke_c(sdk, m.get_uvs_no, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            s.uv_sequence_no = r.dword;
+            if (!invoke_c(sdk, m.get_pattern_no, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            s.uv_pattern_no = r.dword;
+            if (!invoke_c(sdk, m.get_uvtype, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            s.uv_type = (int32_t)r.dword;
+            float uv[4] = {};
+            for (int i = 0; i < 4; i++) {
+                if (!invoke_c(sdk, m.get_uv[i], texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+                uv[i] = single_ret(r);
+            }
+            if (managed) break;
+            s.u = uv[0]; s.v = uv[1]; s.w = uv[2]; s.h = uv[3];
+            if (!invoke_c(sdk, m.get_size, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            memcpy(&s.size_w, r.bytes, sizeof(float));                // via.Size {w, h}
+            memcpy(&s.size_h, r.bytes + 4, sizeof(float));
+            if (!invoke_c(sdk, m.get_color, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            memcpy(&s.color, r.bytes, sizeof(uint32_t));
+            if (!invoke_c(sdk, m.get_tex, texture_ctrl, nullptr, 0, &r)) { managed = true; break; }
+            s.texture_holder = r.ptr;                                 // last: the reference is taken only on success
+            if (s.texture_holder) sdk->managed_object->add_ref((REFrameworkManagedObjectHandle)s.texture_holder);
+        } while (false);
+        if (managed) {
+            DispatchCtx ctx = { client, texture_ctrl, "ui_get_texture_state", st, true };
+            on_display_fault(&ctx, 0);
+            return SF6CORE_ERR_FAULTED;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        exc = GetExceptionCode();
+        DispatchCtx ctx = { client, texture_ctrl, "ui_get_texture_state", st, false };
+        on_display_fault(&ctx, exc);
+        return SF6CORE_ERR_FAULTED;
+    }
+    perf::end(perf::Api, tl_api_t0); tl_api_t0 = 0;                // a read: not counted as a write
+    if (s.texture_holder) track_texture_loaded(s.texture_holder);   // on screen, so loaded: accepted back
+    memcpy(out, &s, sizeof s);
+    return SF6CORE_OK;
+}
+
 // P6: set_Visible
 SF6CoreStatus SF6CORE_CALL api_ui_set_visible_disp(SF6CoreClient* client, void* ctrl, int32_t visible) {
     DisplayStatsInternal* st = nullptr;
@@ -1443,6 +1626,87 @@ fail:
         return SF6CORE_ERR_FAULTED;
     }
     DispatchCtx ctx = { client, desc->template_ctrl, "ui_clone_row", st, false };
+    on_display_success(&ctx);
+    return SF6CORE_OK;
+}
+
+// P4: ui_clone_control -- a plain element (no UIParts): duplicate + addChild, the first two steps of ui_clone_row.
+// No reference on the copy: a duplicated element is not a managed object (R35), and a reference count on one killed
+// the VM (the C# wrapper's add_ref / release, R19). duplicate() called at the wrong time handed back an unfinished
+// object with an empty name (R19): the copy's type and name are checked before it is attached, its parent after
+// (an addChild refused without a word leaves it detached).
+// Outside the op (C2712: no C++ object next to its __try).
+static void log_clone_stop(const char* client_id, const char* name, int step, void* clone,
+                           REFrameworkTypeDefinitionHandle td_clone, REFrameworkTypeDefinitionHandle td_tmpl, const char* got) {
+    const std::string tc = td_clone ? flm_type_name(s_sdk, td_clone) : std::string("-");
+    const std::string tt = td_tmpl ? flm_type_name(s_sdk, td_tmpl) : std::string("-");
+    rate_log_warn(client_id, "ui_clone_control '%s' stopped at step %d (%s; copy %p type %s name '%s', template type %s)",
+                  name, step, step <= 3 ? "copy not made or unfinished: nothing attached" : "copy not attached",
+                  clone, tc.c_str(), got, tt.c_str());
+}
+
+SF6CoreStatus SF6CORE_CALL api_ui_clone_control(SF6CoreClient* client, void* template_ctrl, void* parent_ctrl,
+                                                const char* name, void** out_ctrl) {
+    if (!template_ctrl || !parent_ctrl || !name || !name[0] || !out_ctrl) return SF6CORE_ERR_INVALID_ARG;
+    *out_ctrl = nullptr;
+    DisplayStatsInternal* st = nullptr;
+    auto rc = guard_prefix(client, template_ctrl, "ui_clone_control", true, &st);
+    if (rc != SF6CORE_OK) return rc;
+    if (!resolve_display_types()) return SF6CORE_ERR_NOT_READY;
+    if (!is_control_like(template_ctrl) || !is_control_like(parent_ctrl)) { st->refused.fetch_add(1); return SF6CORE_ERR_TYPE; }
+
+    auto* sdk = s_sdk;
+    auto m_dup = find_method_ll(sdk, template_ctrl, "duplicate(System.String)");
+    auto m_add = find_method_ll(sdk, parent_ctrl, "addChild(via.gui.PlayObject)");
+    auto m_name = find_method_ll(sdk, template_ctrl, "get_Name");
+    auto m_parent = find_method_ll(sdk, template_ctrl, "get_Parent");
+    if (!m_dup || !m_add || !m_name) { st->refused.fetch_add(1); return SF6CORE_ERR_NOT_FOUND; }
+
+    DWORD exc = 0;
+    int step = 0;
+    void* clone = nullptr;
+    char got[128] = "";                                           // for the log: the copy's name, its type, the template's
+    REFrameworkTypeDefinitionHandle td_clone = nullptr, td_tmpl = nullptr;
+    __try {
+        do {
+            RawInvokeRet ret;
+            // clone = template.duplicate(name)
+            step = 1;
+            void* name_str = sdk->functions->create_managed_string_normal(name);
+            if (!name_str) break;
+            { void* a[] = { name_str };
+              if (!invoke_c(sdk, m_dup, template_ctrl, a, 1, &ret) || !ret.ptr) break; }
+            clone = ret.ptr;
+            // a finished copy: the template's type (step 2), the name asked (step 3)
+            step = 2;
+            td_clone = sdk->managed_object->get_type_definition((REFrameworkManagedObjectHandle)clone);
+            td_tmpl = sdk->managed_object->get_type_definition((REFrameworkManagedObjectHandle)template_ctrl);
+            if (td_clone != td_tmpl) break;
+            step = 3;
+            if (!invoke_c(sdk, m_name, clone, nullptr, 0, &ret) || !ret.ptr) break;
+            if (!managed_str_to_utf8(ret.ptr, got, sizeof got) || strcmp(got, name) != 0) break;
+            // parent.addChild(clone)
+            step = 4;
+            { void* a[] = { clone };
+              if (!invoke_c(sdk, m_add, parent_ctrl, a, 1, &ret)) break; }
+            // attached: its parent is parent_ctrl
+            step = 5;
+            if (m_parent && (!invoke_c(sdk, m_parent, clone, nullptr, 0, &ret) || ret.ptr != parent_ctrl)) break;
+            *out_ctrl = clone;
+            step = 0;
+        } while (false);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        exc = GetExceptionCode();
+        DispatchCtx ctx = { client, template_ctrl, "ui_clone_control", st, false };
+        on_display_fault(&ctx, exc);
+        return SF6CORE_ERR_FAULTED;
+    }
+    if (step != 0) {
+        st->refused.fetch_add(1);
+        log_clone_stop(client->client_id, name, step, clone, td_clone, td_tmpl, got);
+        return step <= 3 ? SF6CORE_ERR_NOT_READY : SF6CORE_ERR_FAULTED;
+    }
+    DispatchCtx ctx = { client, template_ctrl, "ui_clone_control", st, false };
     on_display_success(&ctx);
     return SF6CORE_OK;
 }

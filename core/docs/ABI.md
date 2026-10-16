@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | ABI version | 1 |
-| Core version | 0.8.1 |
+| Core version | 0.8.2 |
 | Header | `include/sf6core/sf6core_api.h` |
 
 ## Versioning and the append-only rule
@@ -314,6 +314,18 @@ probe the increment with `SF6CORE_HAS(api, ui_get_material_texture)`.
 |---|---|---|---|---|
 | 87 | `ui_set_material_texture` | `SF6CoreStatus (client, void* material, const char* param, void* holder)` | **Game thread** | Display guards (kill switch, closing, breaker, quarantine, SEH), live `via.gui.Material` check. `holder`: from `ui_texture_load` and loaded (`ERR_NOT_READY` during its 60 frames), or from `ui_get_material_texture`; any other holder `ERR_INVALID_ARG`. The variable must hold a texture now (proof that it exists, `ERR_NOT_FOUND` otherwise). Same holder or same resource: nothing written, `OK` |
 | 88 | `ui_get_material_texture` | `SF6CoreStatus (client, void* material, const char* param, void** out_holder)` | **Game thread** | The holder the variable shows now, one reference owned by the caller (release it); accepted back by `ui_set_material_texture` (to put the game's texture back). `ERR_NOT_FOUND`, `*out_holder` NULL: no texture |
+
+## Function list (increment 10 -- texture rectangle, texture state, plain clone, ADR-0020 amendment 1, appended, core 0.8.2)
+
+Probe the increment with `SF6CORE_HAS(api, ui_clone_control)`. The two texture ops run on the **game thread only**
+(`ERR_WRONG_THREAD` elsewhere); they call the control's own methods, found by name on its type (a missing one is logged
+once, `ERR_NOT_FOUND`). `System.Single` values travel through the invoke wrappers as doubles.
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 89 | `ui_set_texture_rect` | `SF6CoreStatus (client, void* texture_ctrl, void* holder, float u, float v, float w, float h)` | **Game thread** | Texture mode (`set_AssetType(1)`), `setTexture(holder)`, `set_UVType(1)` (ratio), the rectangle. `holder` from `ui_texture_load` and loaded (`ERR_NOT_READY` during its 60 frames) or from `ui_get_texture_state`, else `ERR_INVALID_ARG`. Only what differs is written; all of it equal: `OK`, nothing written. Display guards, live `via.gui.Texture` check |
+| 90 | `ui_get_texture_state` | `SF6CoreStatus (client, void* texture_ctrl, SF6CoreTextureState* out)` | **Game thread** | `out->struct_size` set by the caller. Asset type, texture holder (one reference owned by the caller: release it; accepted back by `ui_set_texture_rect`), UV-sequence holder (identity only, no reference), sequence and pattern numbers, UV type and rectangle, size, colour |
+| 91 | `ui_clone_control` | `SF6CoreStatus (client, void* template_ctrl, void* parent_ctrl, const char* name, void** out_ctrl)` | Advisory, as `ui_clone_row` | `duplicate(name)` of a plain element (no UIParts) added as the last child of `parent_ctrl` (drawn over its siblings). Checked before `addChild` (template's type, name asked: `ERR_NOT_READY`, nothing attached) and after (`get_Parent`: `ERR_FAULTED`). The copy is not a managed object: no reference to release, it lives with the parent's tree (find it again with `ui_find_child`). Call it from the screen's own update hook, as `ui_clone_row` (e.g. a post-hook of `app.UIFlowOptionBGDialog.Main.OnUpdate` for the option window): from REFramework's UpdateBehavior / LateUpdateBehavior the copy comes back unfinished (`ERR_NOT_READY`, "stopped at step 2" in the log) |
 
 ## Lua bridge API
 

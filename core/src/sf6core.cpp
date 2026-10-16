@@ -37,7 +37,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.8.1";
+static constexpr const char* CORE_VERSION = "0.8.2";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2016,6 +2016,10 @@ int64_t       SF6CORE_CALL api_pm_row_of(SF6CoreClient*, void*);
 // Increment 9: GUI material texture (ADR-0019, display.cpp)
 SF6CoreStatus SF6CORE_CALL api_ui_set_material_texture(SF6CoreClient*, void*, const char*, void*);
 SF6CoreStatus SF6CORE_CALL api_ui_get_material_texture(SF6CoreClient*, void*, const char*, void**);
+// Increment 10: texture rectangle, texture state, plain clone (ADR-0020 amendment 1, display.cpp)
+SF6CoreStatus SF6CORE_CALL api_ui_set_texture_rect(SF6CoreClient*, void*, void*, float, float, float, float);
+SF6CoreStatus SF6CORE_CALL api_ui_get_texture_state(SF6CoreClient*, void*, SF6CoreTextureState*);
+SF6CoreStatus SF6CORE_CALL api_ui_clone_control(SF6CoreClient*, void*, void*, const char*, void**);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2631,7 +2635,11 @@ static const SF6CoreAPI s_api = {
     api_pm_row_of,
     // Increment 9
     api_ui_set_material_texture,
-    api_ui_get_material_texture
+    api_ui_get_material_texture,
+    // Increment 10
+    api_ui_set_texture_rect,
+    api_ui_get_texture_state,
+    api_ui_clone_control
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)
