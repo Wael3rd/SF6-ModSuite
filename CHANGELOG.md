@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.14.0 (2026-10-16) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Color Mod | 0.20.0 | every Hue slider is drawn on the game's own rainbow |
+| SF6 Native Core | 0.8.2 | three display functions for it |
+| SF6 Slots Loader | 1.12.0 | unchanged |
+| SF6 Recording Manager | 2.1.1 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. The Color Mod's rainbow needs Native
+Core 0.8.2: install both.
+
+### SF6 Color Mod 0.20.0
+- **Every Hue slider shows the game's rainbow** on its track, the one of the avatar editor's colour window: the colour
+  editor's Hue rows, Quick Edit's family rows, the squares and the Drive colours. Saturation and Brightness keep their
+  look, values and keys are unchanged. With an older Native Core the sliders keep the option window's look.
+- The rainbow is the game's own picture: its hues are not evenly spaced (around the middle of the bar the colour drawn
+  can be up to about 25° away from the slider's value).
+
+### SF6 Native Core 0.8.2
+- `ui_set_texture_rect`, `ui_get_texture_state` and `ui_clone_control`, appended at the end of the API: a part of a
+  texture on a GUI texture control, its state read back, and a plain copy of a GUI element added under a parent. See
+  [core/docs/ABI.md](core/docs/ABI.md). Older clients are not affected.
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.13.0 (2026-10-16) — SF6 Mod Suite
 
 | Package | Version | |
