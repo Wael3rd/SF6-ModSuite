@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.15.0 (2026-10-16) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Color Mod | 0.21.0 | a colour grid in the colour editor and the Drive colour pages, one colour per page |
+| SF6 Native Core | 0.8.2 | unchanged |
+| SF6 Slots Loader | 1.12.0 | unchanged |
+| SF6 Recording Manager | 2.1.1 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. Needs SF6 Native Core 0.8.2.
+
+### SF6 Color Mod 0.21.0
+- **Colour grid**: under the Hue, Saturation and Brightness sliders, a 10 x 5 grid of the game's own cells with the
+  avatar editor's 50 colours. The arrows move the game's focus glow from cell to cell (the colour does not change
+  while moving); the decide key (F on keyboard, A on a pad) applies the cell; the game's check marks the cell equal
+  to the current colour; Backspace puts the saved colour back.
+- **One colour per page** in the colour editor (its three sliders and its grid). The Drive colour pages (Drive
+  Impact, Reversal, Parry, Rush) get the same grid.
+- The Hue rainbow is drawn above the slider's track (brighter than in 0.20.0).
+- Rows that edit one colour show one square in their title.
+- Opened from the character select, the Drive colour pages have no grid (the cells are copied from the Fighter
+  Settings screen): their sliders work as before.
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.14.0 (2026-10-16) — SF6 Mod Suite
 
 | Package | Version | |
