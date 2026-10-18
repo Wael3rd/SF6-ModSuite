@@ -16,11 +16,17 @@
 
 namespace vfx::feed {
 
+// Which settings a fight side reads. The settings have a P1 and a P2 page per fighter (character select DI mode,
+// Training popup); Fighter Settings edits the P1 page, the player's own. Where the match takes the costume from
+// Battle Settings (online, Battle Hub) the player's own side reads the P1 page and the opponent's the P2 page, whatever
+// side the game seats them on (swap = the player is P2 there; engine::decide::own_side()).
+inline int settings_side(int fight_side, bool swap) { return swap ? 3 - fight_side : fight_side; }
+
 // SF6_DIRecolor di_state_text for those fighters (fid[0] = P1, 0 = none); nullopt where the Lua raised (no push).
 // Parts are written in key order (the Lua's pairs order varied; the reader keeps a map).
-std::optional<std::string> di_state_text(const int fid[2]);
+std::optional<std::string> di_state_text(const int fid[2], bool swap = false);
 // SF6_DriveRecolor colors_for x 3 mechanics x 2 sides as vfx_dr_colors' twelve integers (-1 = nil)
-std::optional<std::array<int64_t, 12>> dr_colors(const int fid[2]);
+std::optional<std::array<int64_t, 12>> dr_colors(const int fid[2], bool swap = false);
 // SF6_DIRecolor parts_pull for one fighter, given vfx_parts' reply ("ok\n" + "key\tname\n" lines): true when the
 // file's parts_list changed (it is then saved)
 bool parts_merge(int fighter, const std::string& reply);

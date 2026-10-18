@@ -83,16 +83,17 @@ Two side_colors(int id, int side, const json& cfg) {
 
 }  // namespace
 
-std::optional<std::string> di_state_text(const int fid[2]) {
+std::optional<std::string> di_state_text(const int fid[2], bool swap) {
     std::lock_guard<std::recursive_mutex> lk(dc::lock());
     std::string out;
     for (int side = 1; side <= 2; ++side) {
         if (!out.empty()) out += "\n";
         const int f = fid[side - 1];
         if (f <= 0) { out += "S " + std::to_string(side) + " 0 0 0"; continue; }
-        json* cfg = dc::di_side(f, side);
+        const int ss = settings_side(side, swap);                       // the settings page; "S"/"C" stay the fight side
+        json* cfg = dc::di_side(f, ss);
         if (!cfg || !cfg->is_object()) return std::nullopt;             // mech_cfg on it: the Lua raised
-        json* rev = dc::cfg_of(dc::Mech::Reversal, f, side);
+        json* rev = dc::cfg_of(dc::Mech::Reversal, f, ss);
         if (!rev) return std::nullopt;
         const bool en = truthy(member(*cfg, "enabled")) || truthy(member(*rev, "enabled"));
         const bool fol = (truthy(member(*cfg, "enabled")) && truthy(member(*cfg, "follow"))) ||
@@ -130,7 +131,7 @@ std::optional<std::string> di_state_text(const int fid[2]) {
     return out;
 }
 
-std::optional<std::array<int64_t, 12>> dr_colors(const int fid[2]) {
+std::optional<std::array<int64_t, 12>> dr_colors(const int fid[2], bool swap) {
     std::lock_guard<std::recursive_mutex> lk(dc::lock());
     std::array<int64_t, 12> v{};
     auto arg_int = [](const json& x) -> int64_t {                       // the bridge's arg_int(..., -1)
@@ -146,7 +147,7 @@ std::optional<std::array<int64_t, 12>> dr_colors(const int fid[2]) {
             json c1, c2;
             const int id = fid[side - 1];
             if (id > 0) {
-                json* t = dc::dr_side(id, side);
+                json* t = dc::dr_side(id, settings_side(side, swap));
                 if (t && (t->is_number() || (t->is_boolean() && t->get<bool>()))) return std::nullopt;   // cfg[mech] on it: raised
                 static const json nil;
                 const json& cfg = (t && t->is_object()) ? member(*t, kMech[m]) : nil;

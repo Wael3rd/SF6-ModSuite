@@ -14,6 +14,7 @@
 
 #include "../common.hpp"
 #include "../perf.hpp"
+#include "../engine/decide.hpp"
 
 namespace vfx::feed {
 namespace {
@@ -63,9 +64,12 @@ void on_frame() {
             std::lock_guard<std::mutex> lk(g_mx);
             for (int s = 0; s < 2; ++s) { fid[s] = scene::side_char(s); if (!fid[s]) fid[s] = g_hint[s]; }
         }
+        // online / Battle Hub seated as P2: the own side reads the P1 page (read before the settings lock: own_side
+        // takes the decisions' lock)
+        const bool swap = ::engine::decide::own_side() == 2;
         {
             const int64_t t0 = perf::begin();
-            auto t = di_state_text(fid);
+            auto t = di_state_text(fid, swap);
             perf::end(perf::FeedDiState, t0);
             if (t) {
                 const int64_t t1 = perf::begin();
@@ -83,7 +87,7 @@ void on_frame() {
         const int dfid[2] = { scene::side_char(0), scene::side_char(1) };
         {
             perf::Scope s2(perf::FeedDrColors);
-            if (auto c = dr_colors(dfid)) tick::set_dr_colors(c->data());
+            if (auto c = dr_colors(dfid, swap)) tick::set_dr_colors(c->data());
         }
     }
     if (g_frame < 6) return;                                            // the scripts learnt they were owned on frame 6

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -64,7 +65,8 @@ constexpr int kMaxFaults = 5;
 bool g_hooked = false;
 bool g_gave_up = false;
 bool g_suppressed = false;                    // F6: Lua suppress flag (editor transitions)
-uint32_t g_tick = 0, g_retry = 0, g_check = 0;
+uint32_t g_tick = 0, g_retry = 0;
+std::atomic<uint32_t> g_check{0};             // OnUpdate calls (two flows, two job threads)
 
 // row creation tracking (same logic as SF6_MenuRowsNative)
 std::vector<void*> g_failed;                  // agents on which Create returned null: never retry
@@ -494,10 +496,8 @@ int update_pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long
 
 #pragma warning(push)
 #pragma warning(disable: 4733)
-void update_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    if (cmn::closing() || !g_on) return;
-    if ((++g_check % 10) != 0) return;            // check every 10 calls, same as SF6_MenuRowsNative
-    __try {
+void post_body() {
+    {
         ensure_rows();
         // periodic resolve + paint (every 10 post-hooks that fire, same as DriveRows.lua frame % 10)
         uint32_t gen = api()->ui_agents_gen("MatchingFighterSetting");
@@ -510,7 +510,18 @@ void update_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
         if (g_suppressed) return;              // F6: skip paint while Lua says the screen is transitioning
         paint_all();
     }
+}
+// Battle Hub runs the OnUpdate of MatchingSetting and of MatchingFighterSetting at the same time, on two job threads:
+// both created the Drive rows (two Drive Impact rows on top of each other, the second Drive Reversal refused, 18/10).
+// One pass at a time; a call that finds another one running skips (the next one comes 10 calls later).
+std::atomic<bool> g_in_post{false};
+void update_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (cmn::closing() || !g_on) return;
+    if ((g_check.fetch_add(1, std::memory_order_relaxed) + 1) % 10 != 0) return;   // check every 10 calls, same as SF6_MenuRowsNative
+    if (g_in_post.exchange(true, std::memory_order_acquire)) return;
+    __try { post_body(); }
     __except (EXCEPTION_EXECUTE_HANDLER) { fault("update_post"); }
+    g_in_post.store(false, std::memory_order_release);
 }
 #pragma warning(pop)
 

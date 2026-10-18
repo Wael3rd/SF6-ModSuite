@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.16.1 (2026-10-18) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Color Mod | 0.22.1 | Drive rows in Battle Hub, Drive colours when seated as P2 online |
+| SF6 Native Core | 0.8.2 | unchanged |
+| SF6 Slots Loader | 1.12.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. Needs SF6 Native Core 0.8.2.
+
+### SF6 Color Mod 0.22.1
+- Battle Hub, Fighter Settings: the Drive rows are made once. The game updates two setting screens at the same time
+  there, on two threads; both made the rows (two Drive Impact rows on top of each other, the second Drive Reversal
+  row did not respond).
+- Online and Battle Hub, seated as P2: your Drive colours are the ones of your own page (P1, the one Fighter Settings
+  edits) and your opponent's the P2 page, as when you are seated as P1. Before, the sides followed the seat.
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.16.0 (2026-10-18) — SF6 Mod Suite
 
 | Package | Version | |
