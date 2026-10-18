@@ -26,6 +26,7 @@
 #pragma warning(pop)
 
 #include "../common.hpp"
+#include "../perf_hook.hpp"
 
 namespace dialogs::editor::look {
 namespace {
@@ -120,7 +121,7 @@ void install_hook() {
     auto* td = API::get()->tdb()->find_type("app.UIFlowOptionBGDialog.Main");
     auto* m = td ? td->find_method("OnUpdate()") : nullptr;
     if (!m && td) m = ll::find_method_noargs(td, "OnUpdate");
-    if (m && m->get_function_raw() && m->add_hook(update_pre, update_post, false)) {
+    if (m && m->get_function_raw() && m->add_hook(update_pre, perf::timed_post<perf::HkLookOnUpdate, update_post>, false)) {
         g_hooked = true;
         cmn::log_info("[look] hook app.UIFlowOptionBGDialog.Main.OnUpdate installed (the copies are made there)");
     } else {

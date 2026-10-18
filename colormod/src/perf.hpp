@@ -72,6 +72,7 @@ enum Id : int {
     HkGuideNewItem,
     HkGuideOnLateUpdate,
     HkGuideUpdateInputGuide,
+    HkLookOnUpdate,         // dialogs/row_look: app.UIFlowOptionBGDialog.Main.OnUpdate post-hook (the hue copies)
     kTopCount,
     // parts of the entry points above (shown, not added again)
     FrameDecide = kTopCount, FrameVfxFeed, FrameDipanel, FrameTracker, FrameGuide, FrameLocale, FrameCamera, FrameScreens,
@@ -90,6 +91,8 @@ enum Id : int {
     ScreensEditorTick, ScreensFsRestore, ScreensTcsRestore, ScreensDecidePush, ScreensOptApply,
     DipanelTickAll,
     FeedDiState, FeedDrCol,
+    // vfx engine: relay reload slices, rolling page re-check of the relay blocks, background scan hand-off / commit
+    VfxRelayReload, VfxPageRefresh, ScanCommit,
     kCount
 };
 
@@ -97,6 +100,12 @@ bool on();
 int64_t begin();                  // 0 when off
 void end(Id id, int64_t t0);      // no-op when t0 == 0
 void frame();                     // once per game frame, from the core's frame callback
+// What the game shows, appended to perf_live.log lines (" | ctx menu", " | ctx fight m14", " | ctx training m2") so a
+// log can be split by context. ctx: 0 menu, 1 fight, 2 training; mode = app.EGameMode (-1 = unknown). Set by vfx feed.
+void set_context(int ctx, int mode);
+// vfx diagnostics (the per-label / per-parameter counters of vfx_body_probe / vfx_mech_probe): off unless
+// reframework/data/SF6_ColorModNative_data/vfx_debug_on.txt exists (looked at with perf_on.txt, every 2 s).
+bool vfx_debug();
 
 struct Scope {                    // for functions without __try (an object with a destructor is not allowed there)
     explicit Scope(Id id) : id_(id), t0_(begin()) {}

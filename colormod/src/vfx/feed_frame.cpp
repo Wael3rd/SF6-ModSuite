@@ -5,6 +5,8 @@
 
 #include <mutex>
 
+#include "ll_common.hpp"          // LL's helpers: fields
+
 #include "body.hpp"
 #include "feed.hpp"
 #include "scene.hpp"
@@ -24,6 +26,22 @@ bool g_in_fight = false;
 int64_t g_last_act[2] = { 0, 0 };
 bool g_has_act[2] = { false, false };
 uint64_t g_pushes = 0, g_raised = 0, g_parts_saved = 0;
+
+// perf_live.log context (only while perf is on): menu / fight / training, with the battle description's app.EGameMode
+// (bFlowManager.m_flow_work._FlowMap.m_desc.Rule.GameMode, as engine/decide reads it; 2 = TRAINING)
+void perf_context(bool in_fight) {
+    using MO = reframework::API::ManagedObject;
+    int mode = -1;
+    MO* bfm = reframework::API::get()->get_managed_singleton("app.bFlowManager");
+    MO* work = bfm ? ll::read_field_object(bfm, "m_flow_work") : nullptr;
+    MO* map = work ? ll::read_field_object(work, "_FlowMap") : nullptr;
+    MO* desc = map ? ll::read_field_object(map, "m_desc") : nullptr;
+    if (desc && reframework::API::get()->sdk()->managed_object->is_managed_object(desc)) {
+        uint8_t m = 0;
+        if (MO* rule = ll::read_field_object(desc, "Rule"); rule && ll::read_field_raw(rule, "GameMode", &m, 1)) mode = m;
+    }
+    perf::set_context(!in_fight ? 0 : (mode == 2 ? 2 : 1), mode);
+}
 
 }  // namespace
 
@@ -72,7 +90,10 @@ void on_frame() {
     bool dirty = false;
     { std::lock_guard<std::mutex> lk(g_mx); dirty = g_dirty; g_dirty = false; }
     if (dirty) tick::ui("di_dirty");
-    if (g_frame % 30 == 0) g_in_fight = scene::battle_char(0) != 0 || scene::battle_char(1) != 0;
+    if (g_frame % 30 == 0) {
+        g_in_fight = scene::battle_char(0) != 0 || scene::battle_char(1) != 0;
+        if (perf::on()) perf_context(g_in_fight);
+    }
     if (!g_in_fight) return;
     for (int i = 0; i < 2; ++i) {
         int64_t a = 0;
