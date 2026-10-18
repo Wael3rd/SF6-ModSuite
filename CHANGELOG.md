@@ -1,18 +1,48 @@
 # Changelog
 
-## Unreleased
+## 1.16.0 (2026-10-18) — SF6 Mod Suite
 
-### SF6 Color Mod
+| Package | Version | |
+|---|---|---|
+| SF6 Color Mod | 0.22.0 | colour mods folder `reframework/color_mods`, lighter fights, select-screen fixes |
+| SF6 Native Core | 0.8.2 | unchanged |
+| SF6 Slots Loader | 1.12.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | background threads start after the game's first frames |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. Needs SF6 Native Core 0.8.2.
+
+### SF6 Color Mod 0.22.0
 - **Colour mods folder**: `reframework/color_mods/<Character>/` takes colour mods as downloaded (`.zip`, `.7z`,
   `.rar`, an unpacked folder or the loose `esfNNN_CCC_cmd_KKK.user.2` files), like the costume mods folder. Archives
-  are unpacked once in the background after the first seconds of the game; the colours appear as `RW n` after the
-  existing ones. The folders and a `README.txt` come with the package. The mod never writes to this folder.
-  Remembered colour selections now also store the colour's identity (its file), so new colours never shift a selection;
-  edits (overrides) of a colour from an archive survive a new version of the archive.
-- **Startup**: the Color Mod's and the Recording Manager's background threads (file writer, fighter names, Community
-  client) now start after the game's first frames instead of at plugin load. REFramework's nightly 1.5.9.1 suspends every
-  thread at startup while holding the loader lock; a thread caught holding the heap lock froze one tester's game.
-  Writes made before are queued, not lost.
+  are unpacked once in the background after the first seconds of the game; their colours appear as `RW n`. The folders
+  and a `README.txt` come with the package. A mod's file is never changed or deleted.
+- **One colour folder**: the colours of the former folder `reframework/data/SF6_ColorSpinExtra_data/colors/` move to
+  `reframework/color_mods/<Character>/` at the first start, with your selections, squares and edits; the old folder is
+  then removed and no longer read. Colours made in the editor (SAVE AS, `MC n`) are saved in
+  `color_mods/<Character>/MANUALCOLORS_01`, `_02`...
+- Remembered colour selections store the colour's identity (its file): adding or removing colours never moves a
+  player to another colour. Edits of a colour from an archive survive a new version of the archive.
+- **Fights**: the Drive effect recolouring does less work during a fight (its scans run on a background thread, the
+  material hooks no longer look anything up per call).
+- **Startup**: the background threads (file writer, fighter names, colour mods) start after the game's first frames
+  instead of at plugin load. REFramework's nightly 1.5.9.1 suspends every thread at startup while holding the loader
+  lock; a thread caught holding the heap lock froze one tester's game. Writes made before are queued, not lost.
+- Character select: the colour row of each player reads that player's own colour list. Before, the other player's
+  list could make a game colour (JP's EX colours) show as `RW 1`.
+- Character select, DI mode: the Drive Reversal row no longer shows the selected costume colour (`MC 1`) and its value
+  changes again.
+- Character select: going from an `RW` / `MC` colour to a game colour no longer leaves the old label (`MC 23` on
+  colour 01).
+
+### SF6 Recording Manager 2.1.2
+- The background threads (file writer, Community client) start after the game's first frames instead of at plugin
+  load (same cause as the Color Mod's startup change). Requests made before wait in the queue.
+
+### Known issues
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
 
 ## 1.15.0 (2026-10-16) — SF6 Mod Suite
 
