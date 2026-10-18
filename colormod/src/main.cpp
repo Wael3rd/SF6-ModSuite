@@ -56,7 +56,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
     if (!param || !param->functions) return false;
     try { reframework::API::initialize(param); } catch (...) { return false; }
     try {
-        fighters::preload_async();                              // the game's fighter names, off the game's frames
+        // (the fighter names are read on a thread cmn::init starts after the first frames, not during REFramework's startup)
         cmn::g_bridge_editor.status = engine::live::status;
         cmn::g_bridge_editor.ready = engine::live::ready;
         cmn::g_bridge_decide.ready = engine::decide::ready;

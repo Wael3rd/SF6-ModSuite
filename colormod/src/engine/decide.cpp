@@ -19,6 +19,7 @@
 #include "../perf_hook.hpp"
 #include "catalog.hpp"
 #include "chips.hpp"
+#include "color_mods.hpp"
 #include "live.hpp"
 #include "live_internal.hpp"
 
@@ -60,6 +61,8 @@ struct {
     API::Method* tmp_col = nullptr;           // app.GuiManager.GuiEsportsManager.setTempColor
 } R;
 
+bool g_cm_pending = false;                    // reframework/color_mods changed: rebuild the catalogue at a quiet moment
+int g_cm_calm = 0;
 bool g_installed = false;
 bool g_disabled = false;
 int g_faults = 0;
@@ -1053,12 +1056,44 @@ std::string applied_sig(void* ctrl) {
     return it == g_applied.end() ? std::string() : it->second;
 }
 
+static int rebuild_locked() {                               // live::mx() held
+    // the selections are ranks in the list: a new RW entry shifts the MC ones, so each is followed by its label
+    std::string lab[3];
+    for (int i = 0; i < 3; ++i)
+        if (g_sel[i].rw > 0) if (const auto* l = g_cat.entries(g_sel[i].fighter, g_sel[i].costume))
+            if ((size_t)g_sel[i].rw <= l->size()) lab[i] = (*l)[(size_t)g_sel[i].rw - 1].label;
+    g_cat.build(kDataDir);
+    g_infos.clear();                                  // labels can change (MC n): new ColorInfo objects at the next list
+    for (int i = 0; i < 3; ++i)
+        if (!lab[i].empty()) g_sel[i].rw = g_cat.label_to_k(g_sel[i].fighter, g_sel[i].costume, lab[i]);
+    cmn::journal("catalogue rebuilt: %zu fighter/costume lists", g_cat.all().size());
+    return (int)g_cat.all().size();
+}
+
+// reframework/color_mods: the worker unpacked archives. The catalogue is rebuilt only where the game is not showing
+// or using a colour list: not in a fight / the hub (in_battle_flow), no colour menu live on the character select,
+// no Fighter Settings spin (the colour editor opens from it); and only after 2 calm checks in a row (about 1 s).
+// Anything else waits (the colours then appear at the next quiet moment, or at the next start).
+static void color_mods_tick() {
+    if (g_tick % 30 != 7) return;
+    if (color_mods::take_changed()) g_cm_pending = true;
+    if (!g_cm_pending) return;
+    const bool busy = in_battle_flow() || g_live[0] || g_live[1] || (g_fs_text && is_managed(g_fs_text));
+    if (busy) { g_cm_calm = 0; return; }
+    if (++g_cm_calm < 2) return;
+    g_cm_pending = false;
+    g_cm_calm = 0;
+    cmn::journal("color_mods: new colour mods unpacked, rebuilding the catalogue");
+    rebuild_locked();
+}
+
 void on_frame() {
     std::lock_guard lk(live::mx());
     if (!active()) return;
     try {
         ++g_tick;
         if (g_tick % 30 == 0) bs_state();             // journals the Battle Settings colours' state when it changes
+        color_mods_tick();
         if (g_tick % kTickEvery == 0) p2_poll();
         if (cmn::frame() % kBattlePassEvery == 0) battle_pass();
         for (int side = 1; side <= 2; ++side) {
@@ -1105,10 +1140,7 @@ Pull pull() {
 
 int rebuild_catalog() {
     std::lock_guard lk(live::mx());
-    g_cat.build(kDataDir);
-    g_infos.clear();                                  // labels can change (MC n): new ColorInfo objects at the next list
-    cmn::journal("catalogue rebuilt: %zu fighter/costume lists", g_cat.all().size());
-    return (int)g_cat.all().size();
+    return rebuild_locked();
 }
 
 std::optional<std::pair<uint32_t, uint32_t>> squares(int fighter_id, int only_side) {

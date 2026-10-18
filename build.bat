@@ -12,7 +12,7 @@ rem   SF6_CostumeSlotsNative.dll       REFramework plugin used during online mat
 rem   costume_loader.exe paktool.exe loadtest.exe    costume tools
 rem   SF6_SlotsClean.exe              removes the loader's runtime paks and state (shipped next to amd_ags_x64.dll)
 rem   stagepak.exe stagetest.exe textest.exe         stage tools
-rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first.
+rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first; "build.bat archive_deps" builds only them, when missing (the Color Mod needs them).
 rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm.
 rem Every compile runs on all cores (/MP). Build only what changed; the full build is for releases.
 
@@ -43,6 +43,7 @@ rem Archive decoders (7z: LZMA SDK, rar: UnRAR), built once into build\archive_d
 rem UnRAR is built single-threaded and without Crypt32: see common\third_party\unrar\SF6_PATCHES.txt.
 rem ---------------------------------------------------------------------------------------------
 if /i "%1"=="deps" if exist %B%\archive_deps.lib del %B%\archive_deps.lib
+if /i "%1"=="archive_deps" if exist %B%\archive_deps.lib exit /b 0
 if exist %B%\archive_deps.lib goto :objects
 
 echo === archive_deps.lib (LZMA SDK + UnRAR) ===
@@ -57,6 +58,7 @@ cl /nologo /MP /std:c++17 /O2 /MT /EHa /W1 %URDEF% /c /Fo%O%\deps\ %UR%\archive.
 if errorlevel 1 goto :failed
 lib /nologo /OUT:%B%\archive_deps.lib %O%\deps\*.obj
 if errorlevel 1 goto :failed
+if /i "%1"=="archive_deps" exit /b 0
 
 :objects
 rem ---------------------------------------------------------------------------------------------

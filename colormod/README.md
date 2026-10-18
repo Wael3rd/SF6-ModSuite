@@ -38,8 +38,32 @@ reframework/plugins/SF6_ColorModNative.dll
 reframework/data/SF6_NativeLocale_data/locale.json
 reframework/data/SF6_ColorSpinExtra_data/      settings and colour packs (colors/<Name>_esfNNN/<pack>/)
 reframework/data/SF6_DIRecolor_data/, SF6_DriveRecolor_data/, SF6_ColorModNative_data/   Drive settings, caches, log
+reframework/color_mods/                        colour mods dropped as downloaded (see below)
 ```
 
+## Colour mods folder (reframework/color_mods)
+
+Colour mods are handled like costume mods. Drop a colour mod, exactly as downloaded, in
+`reframework/color_mods/<Character>/` (or directly in `color_mods`): a `.zip`, `.7z` or `.rar` file, an
+unpacked folder (Nexus layout `natives/stm/product/model/esf/esfNNN/CCC/esfNNN_CCC_cmd_KKK.user.2` or the loose
+files), anywhere below the folder. The character folder is only for tidiness: the fighter and the costume come from the
+file names. The mod creates the folders and a `README.txt` when they are missing.
+
+- Archives are unpacked once, on a background thread started a few seconds after the game starts (never during the
+  game's startup, a fight frame or a hook), into the hidden `color_mods/.cache/<name>_<hash>/`; only the colour files
+  and `modinfo.ini` are kept. The cache follows the archive (size and date): removing or replacing the archive removes
+  its cache. Folders and files whose name starts with a dot are ignored. Zip, 7z and rar are supported (password
+  protected archives are refused).
+- The colours show as `RW n`, after the ones of `SF6_ColorSpinExtra_data/colors` (those keep their numbers). Colours
+  already unpacked by a previous start are there at launch. Newly unpacked ones are added to the character's colour list
+  as soon as the game is out of a fight or the hub, the character select and Fighter Settings (about 1 s later);
+  otherwise at the next launch.
+- The colour editor can edit them: SAVE keeps the edit apart (an override), RESET goes back to the original. Nothing in
+  `color_mods` is ever written, emptied or deleted by the mod, ERASE included (it only exists on the editor's own MC
+  colours). Adding colours to a character that already has MC colours moves those MC colours down the list; the mod
+  follows a selection made in the same session by its name.
+- Messages (`color_mods: ...`, one line per archive: unpacked in N ms / cannot be used and why) are in
+  `reframework/data/SF6_ColorModNative_data/debug_log.json`.
 ## During a fight
 
 The colours are decided in the menus; a fight recomputes nothing (since 0.19.7):

@@ -26,6 +26,8 @@ import argparse, hashlib, json, os, re, subprocess, sys, zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 CRLF = chr(13) + chr(10)
+sys.path.insert(0, HERE)
+from make_fluffy_package import CHARACTERS      # the 32 character folders of costume_mods, reused for color_mods
 CRSM = os.path.join(REPO, "crsm")
 CRSM_MIN_CORE = "0.8.0"       # the Native Core's training pause-menu service (pm_*), needed by the Recording Manager
 CRSM_OWNERS = ("community", "files", "replay", "reversal", "record", "ui")
@@ -78,10 +80,16 @@ COLORMOD_README = CRLF.join([
     "",
 ])
 
-def write_zip(out, modinfo, readme, files):
+def write_zip(out, modinfo, readme, files, dirs=(), texts=()):
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("modinfo.ini", modinfo)
         z.writestr("README.txt", readme)
+        for name, text in texts:                      # extra text files (name inside the zip, content)
+            z.writestr(name, text)
+        for d in dirs:                                # empty folders shipped as they are (like costume_mods/<Character>/)
+            zi = zipfile.ZipInfo(d if d.endswith("/") else d + "/")
+            zi.external_attr = (0o40755 << 16) | 0x10
+            z.writestr(zi, b"")
         for src, dst in files:
             if not os.path.exists(src): sys.exit("missing: " + src)
             z.write(src, dst)
@@ -215,7 +223,10 @@ def main():
               "name=SF6 Color Mod\nversion=%s\ndescription=Extra costume colours, a colour editor and Drive colours per character and player, from the game's own menus. Requires SF6 Native Core %s or newer.\nauthor=Wael\nNameAsBundle=SF6 Color Mod\n" % (cm_v, core_v),
               COLORMOD_README % (cm_v, core_v),
               [(os.path.join(REPO, "build", "colormod", "SF6_ColorModNative.dll"), "reframework/plugins/SF6_ColorModNative.dll"),
-               (os.path.join(REPO, "colormod", "data", "SF6_NativeLocale_data", "locale.json"), "reframework/data/SF6_NativeLocale_data/locale.json")])
+               (os.path.join(REPO, "colormod", "data", "SF6_NativeLocale_data", "locale.json"), "reframework/data/SF6_NativeLocale_data/locale.json")],
+              # reframework/color_mods: one folder per character + its usage text (the DLL creates them too if missing)
+              dirs=["reframework/color_mods/%s" % n for n in CHARACTERS],
+              texts=[("reframework/color_mods/README.txt", open(os.path.join(REPO, "colormod", "data", "color_mods_README.txt"), encoding="utf-8").read().replace("\r\n", "\n").replace("\n", CRLF))])
 
     print("== SF6 Slots Loader %s" % a.version)
     sl_zip = os.path.join(a.out, "SF6_SlotsLoader_v%s.zip" % a.version)

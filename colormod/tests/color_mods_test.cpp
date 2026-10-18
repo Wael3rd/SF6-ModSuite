@@ -1,0 +1,171 @@
+// Offline test of reframework/color_mods: scan, archive extraction + cache, stale purge, catalogue roots and order.
+// Build and run with build_color_mods_test.bat (needs build\archive_deps.lib from build.bat archive_deps).
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+#include "../src/engine/catalog.hpp"
+#include "../src/engine/color_mods.hpp"
+#include "miniz.h"
+
+namespace fs = std::filesystem;
+using namespace engine;
+
+static int g_fail = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL line %d: %s\n", __LINE__, #c); ++g_fail; } } while (0)
+
+static std::vector<std::string> g_log;
+static void logfn(const std::string& s) { g_log.push_back(s); std::printf("    log: %s\n", s.c_str()); }
+static bool logged(const char* part) { for (auto& l : g_log) if (l.find(part) != std::string::npos) return true; return false; }
+
+static void put(const fs::path& p, const std::string& data) {
+    fs::create_directories(p.parent_path());
+    std::ofstream(p, std::ios::binary) << data;
+}
+
+static void make_zip(const fs::path& out, const std::vector<std::pair<std::string, std::string>>& entries, bool encrypt = false) {
+    fs::create_directories(out.parent_path());
+    mz_zip_archive z{};
+    if (!mz_zip_writer_init_file(&z, out.string().c_str(), 0)) { std::printf("zip init failed\n"); std::exit(2); }
+    for (auto& [n, d] : entries) mz_zip_writer_add_mem(&z, n.c_str(), d.data(), d.size(), MZ_DEFAULT_COMPRESSION);
+    mz_zip_writer_finalize_archive(&z);
+    mz_zip_writer_end(&z);
+    if (encrypt) {                                   // set the "encrypted" bit of every local and central header
+        std::ifstream in(out, std::ios::binary);
+        std::string b((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+        for (size_t i = 0; i + 10 < b.size(); ++i) {
+            if (b.compare(i, 4, "PK\x03\x04", 4) == 0) b[i + 6] = (char)(b[i + 6] | 1);
+            if (b.compare(i, 4, "PK\x01\x02", 4) == 0) b[i + 8] = (char)(b[i + 8] | 1);
+        }
+        std::ofstream(out, std::ios::binary | std::ios::trunc) << b;
+    }
+}
+
+static int count_files(const fs::path& d) {
+    int n = 0;
+    std::error_code ec;
+    if (!fs::exists(d, ec)) return 0;
+    for (auto& e : fs::recursive_directory_iterator(d, ec)) if (e.is_regular_file()) ++n;
+    return n;
+}
+
+int main() {
+    const fs::path tmp = fs::temp_directory_path() / "color_mods_test";
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+    const fs::path data = tmp / "reframework" / "data";
+    const fs::path root = color_mods::root_of(data);
+    const std::string body = "USR2-not-parsed-here";
+
+    // the Color Mod's own colour folder: one pack and one editor colour
+    put(data / "SF6_ColorSpinExtra_data/colors/Ryu_esf001/packA/esf001_001_cmd_001.user.2", body);
+    put(data / "SF6_ColorSpinExtra_data/colors/Ryu_esf001/MANUALCOLORS/esf001_001_cmd_001.user.2", body);
+
+    // color_mods: nested natives layout (Nexus), flat layout, garbage, encrypted, unpacked folder, loose file, dot folder
+    make_zip(root / "Ryu/NexusMod.zip", { { "NexusMod/modinfo.ini", "name=x" },
+                                          { "NexusMod/preview.png", "png" },
+                                          { "NexusMod/natives/stm/product/model/esf/esf001/001/esf001_001_cmd_001.user.2", body },
+                                          { "NexusMod/natives/stm/product/model/esf/esf001/001/esf001_001_cmd_002.user.2", body },
+                                          { "NexusMod/natives/stm/product/model/esf/esf001/001/esf001_001_cmd_000.user.2", "" } });
+    make_zip(root / "Luke/Flat.zip", { { "esf002_001_cmd_001.user.2", body }, { "readme.txt", "hello" } });
+    put(root / "Ken/Garbage.zip", "this is not an archive at all");
+    make_zip(root / "Ken/Locked.zip", { { "esf010_001_cmd_001.user.2", body } }, true);
+    put(root / "Ken/Unpacked/esf010_001_cmd_005.user.2", body);
+    put(root / "esf011_001_cmd_001.user.2", body);                       // loose, directly in color_mods
+    put(root / ".hidden/esf003_001_cmd_001.user.2", body);               // dot folder: ignored
+    put(root / "Ryu/.esf001_001_cmd_009.user.2", body);                  // dot file: ignored
+    put(root / ".cache/old_deadbeef/.complete", "");                     // cache of no archive
+    put(root / ".cache/half_00000000.partial/esf001_001_cmd_007.user.2", body);   // interrupted extraction
+
+    // 1. cold start (nothing extracted yet): loose files only, dot things ignored
+    {
+        auto cand = color_mods::candidate_files(root);
+        CHECK(cand.size() == 2);                                         // Unpacked + loose
+        CHECK(color_mods::valid_cache_dirs(root).empty());
+        CHECK(color_mods::list_archives(root).size() == 4);              // NexusMod, Flat, Garbage, Locked
+    }
+
+    // 2. sync
+    auto rep = color_mods::sync(root, logfn);
+    CHECK(rep.extracted == 2);
+    CHECK(rep.failed == 2);                                              // garbage + encrypted
+    CHECK(rep.purged == 2);                                              // the orphan cache and the .partial
+    CHECK(rep.changed());
+    CHECK(logged("NexusMod.zip (zip) extracted in"));
+    CHECK(logged("Garbage.zip is not a zip, 7z or rar file"));
+    CHECK(logged("Locked.zip") && logged("CANNOT be used"));
+    CHECK(!fs::exists(root / ".cache/old_deadbeef"));
+    CHECK(!fs::exists(root / ".cache/half_00000000.partial"));
+    {
+        auto dirs = color_mods::valid_cache_dirs(root);
+        CHECK(dirs.size() == 2);
+        CHECK(count_files(root / ".cache") == 7);                        // Nexus: modinfo + cmd 000/001/002 + .complete; Flat: cmd + .complete (no png, no readme)
+    }
+
+    // 3. catalogue: colors\ pack = RW 1, color_mods after it, the editor colour last
+    Catalog cat;
+    cat.build(data);
+    {
+        auto* ryu = cat.entries(1, 0);
+        CHECK(ryu && ryu->size() == 4);                                  // packA, Nexus 001, Nexus 002 (000 is empty), MANUAL
+        if (ryu && ryu->size() == 4) {
+            CHECK((*ryu)[0].label == "RW 1" && (*ryu)[0].src == 0);
+            CHECK((*ryu)[1].label == "RW 2" && (*ryu)[1].src == 1 && (*ryu)[1].n == 1);
+            CHECK((*ryu)[2].label == "RW 3" && (*ryu)[2].src == 1 && (*ryu)[2].n == 2);
+            CHECK((*ryu)[3].label == "MC 1" && (*ryu)[3].manual);
+            CHECK((*ryu)[1].path.rfind("..\\color_mods\\.cache\\", 0) == 0);
+            CHECK(!(*ryu)[1].okey.empty());
+            CHECK(fs::exists(data / (*ryu)[1].path));                    // the stored path resolves from the data folder
+        }
+        CHECK(cat.entries(2, 0) && cat.entries(2, 0)->size() == 1);      // Luke: esf002_001 -> costume id 0 ... (001 - 1)
+        auto* ken = cat.entries(10, 0);
+        CHECK(ken && ken->size() == 1);                                  // Unpacked 005 (garbage/locked give nothing)
+        CHECK(cat.entries(11, 0) && cat.entries(11, 0)->size() == 1);    // loose file in color_mods itself
+        CHECK(!cat.entries(3, 0));                                       // the dot folder
+    }
+
+    // 4. warm start: a second sync extracts nothing, the catalogue is identical
+    g_log.clear();
+    rep = color_mods::sync(root, logfn);
+    CHECK(rep.extracted == 0 && rep.already == 2 && rep.failed == 2 && rep.purged == 0 && !rep.changed());
+
+    // 5. stale cache: the archive is deleted -> its cache goes, its colours too
+    fs::remove(root / "Ryu/NexusMod.zip");
+    {
+        Catalog warm;                                                    // before any purge: the cache of a deleted archive is not read
+        warm.build(data);
+        auto* r = warm.entries(1, 0);
+        CHECK(r && r->size() == 2);                                      // packA + MANUAL only
+    }
+    rep = color_mods::sync(root, logfn);
+    CHECK(rep.purged == 1 && rep.changed());
+    CHECK(color_mods::valid_cache_dirs(root).size() == 1);
+
+    // 6. a changed archive (new content/size) gets a new cache folder, the old one is purged
+    make_zip(root / "Luke/Flat.zip", { { "esf002_001_cmd_001.user.2", body + body }, { "esf002_001_cmd_002.user.2", body } });
+    rep = color_mods::sync(root, logfn);
+    CHECK(rep.extracted == 1 && rep.purged == 1);
+    cat.build(data);
+    CHECK(cat.entries(2, 0) && cat.entries(2, 0)->size() == 2);
+
+    // 7. layout and README
+    color_mods::ensure_layout(root);
+    CHECK(fs::is_directory(root / "A.K.I") && fs::is_directory(root / "Chun-Li") && fs::is_directory(root / "Arjun"));
+    {
+        std::ifstream f(root / "README.txt", std::ios::binary);
+        std::string shipped((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::string r; for (char c : shipped) if (c != '\r') r += c;
+        std::ifstream g(fs::path("..") / "data" / "color_mods_README.txt", std::ios::binary);
+        std::string packed((std::istreambuf_iterator<char>(g)), std::istreambuf_iterator<char>());
+        std::string p; for (char c : packed) if (c != '\r') p += c;
+        CHECK(!r.empty() && r == p);                                     // the DLL's text = the file the packages ship
+    }
+
+    fs::remove_all(tmp, ec);
+    std::printf(g_fail ? "FAILED (%d)\n" : "all ok\n", g_fail);
+    return g_fail ? 1 : 0;
+}

@@ -18,8 +18,10 @@
 #include <reframework/API.hpp>
 
 #include "nlohmann/json.hpp"
+#include "fighters.hpp"
 #include "perf.hpp"
 #include "write_journal.hpp"
+#include "engine/color_mods.hpp"
 
 namespace cmn {
 namespace {
@@ -144,8 +146,29 @@ bool on_message_cb(void*, unsigned int msg, unsigned long long wparam, long long
     }
     return true;
 }
+// Threads start only after the game's first frames (REFramework's startup suspends every thread while it holds the
+// loader lock: a thread of ours caught holding the heap / CRT lock there froze a tester's game). Until then the file
+// writes queue up (bgwriter) and are written when the writer starts. Triggered by the first of REFramework's present
+// callback (works without the core: kill switch, core missing) and the core's frame callback.
+constexpr uint64_t kThreadsAfterFrames = 300;
+std::atomic<bool> g_threads_started{false};
+std::atomic<uint64_t> g_present_count{0};
+void cm_log(const std::string& s) { journal("%s", s.c_str()); }
+void start_threads() {
+    if (g_threads_started.exchange(true)) return;
+    bgwriter::start();
+    if (g_active) {
+        fighters::preload_async();                                   // the game's fighter names, off the game's frames
+        engine::color_mods::start_worker(engine::color_mods::root_of("reframework/data"), cm_log);
+    }
+}
+void on_present_cb() {
+    if (g_present_count.fetch_add(1, std::memory_order_relaxed) + 1 == kThreadsAfterFrames) start_threads();
+}
+
 void SF6CORE_CALL on_frame(uint64_t, void*) {
     ++g_frame;
+    if (g_frame == kThreadsAfterFrames) start_threads();
     if (g_closing.load(std::memory_order_acquire)) {
         if (!g_closing_final.load(std::memory_order_relaxed)) {
             const uint64_t elapsed = GetTickCount64() - (uint64_t)g_closing_tick.load(std::memory_order_relaxed);
@@ -433,9 +456,9 @@ void journal(const char* fmt, ...) {
 }
 
 bool init() {
-    bgwriter::start();
     {
         auto* fns = reframework::API::get()->param()->functions;
+        if (fns->on_present) fns->on_present(on_present_cb);   // (the core's frame callback starts them too)
         if (fns->on_message) fns->on_message(on_message_cb);
         else log_info("[ColorModNative] on_message not available: no closing guard");
     }

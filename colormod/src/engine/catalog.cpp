@@ -1,5 +1,7 @@
 #include "catalog.hpp"
 
+#include "color_mods.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -39,30 +41,44 @@ void Catalog::build(const fs::path& data_dir) {
     trees_.clear();
     static const std::regex name_rx(R"(^esf(\d\d\d)_(\d\d\d)_cmd_(\d\d\d)\.user\.2$)");
     std::error_code ec;
-    const fs::path root = data_dir / kColorsRel;
-    if (!fs::exists(root, ec)) return;
-    for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
-         it != fs::recursive_directory_iterator(); it.increment(ec)) {
-        if (ec) break;
-        if (!it->is_regular_file(ec)) continue;
-        const std::string fname = it->path().filename().string();
+    auto add = [&](const fs::path& file, const std::string& rel, int src) {
+        const std::string fname = file.filename().string();
         std::smatch m;
-        if (!std::regex_match(fname, m, name_rx)) continue;
-        if (it->file_size(ec) == 0 || ec) continue;                    // an emptied file counts as deleted
-        const std::string rel = fs::relative(it->path(), data_dir, ec).string();   // backslashes, like fs.glob
+        if (!std::regex_match(fname, m, name_rx)) return;
+        std::error_code e2;
+        if (fs::file_size(file, e2) == 0 || e2) return;                // an emptied file counts as deleted
         const int f = std::stoi(m[1].str()), c = std::stoi(m[2].str()), n = std::stoi(m[3].str());
         const std::string key = std::to_string(f) + "_" + std::to_string(c - 1);   // costume folder 001 = id 0
         Entry e;
         e.n = n;
         e.path = rel;
-        e.manual = rel.find(kManualDir) != std::string::npos;
+        e.src = src;
+        e.manual = src == 0 && rel.find(kManualDir) != std::string::npos;
         e.okey = key + "_file_" + sanitize(rel);
         lists_[key].push_back(std::move(e));
+    };
+    const fs::path root = data_dir / kColorsRel;
+    if (fs::exists(root, ec)) {
+        for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+             it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) break;
+            if (!it->is_regular_file(ec)) continue;
+            add(it->path(), fs::relative(it->path(), data_dir, ec).string(), 0);   // backslashes, like fs.glob
+        }
+    }
+    // reframework/color_mods: colour mods as downloaded (folders, loose files, the cache of their archives).
+    // Paths stay relative to data_dir ("..\color_mods\..."), so read_tree and the override keys work unchanged.
+    const fs::path cm_root = color_mods::root_of(data_dir);
+    for (const fs::path& f : color_mods::candidate_files(cm_root)) {
+        std::string rel = "..\\color_mods\\" + fs::relative(f, cm_root, ec).string();
+        for (char& ch : rel) if (ch == '/') ch = '\\';
+        add(f, rel, 1);
     }
     // packs first (folder, then colour number) = RW 1..N, then the editor's colours = MC 1..M
     for (auto& [key, list] : lists_) {
         std::sort(list.begin(), list.end(), [](const Entry& a, const Entry& b) {
             if (a.manual != b.manual) return !a.manual;
+            if (a.src != b.src) return a.src < b.src;                   // colors\ packs keep their RW numbers, color_mods\ come after
             const std::string da = dir_of(a.path), db = dir_of(b.path);
             if (da != db) return da < db;
             return a.n < b.n;

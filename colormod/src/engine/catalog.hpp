@@ -17,7 +17,8 @@ namespace engine {
 struct Entry {
     int n = 0;                 // colour number in the file name (cmd_NNN)
     std::string path;          // "SF6_ColorSpinExtra_data\\colors\\...\\esfFFF_CCC_cmd_NNN.user.2"
-    bool manual = false;       // saved by the editor (a MANUALCOLORS folder): labelled MC, after the packs
+    int src = 0;               // 0 = SF6_ColorSpinExtra_data\colors, 1 = reframework\color_mods (the editor never writes there)
+    bool manual = false;      // saved by the editor (a MANUALCOLORS folder): labelled MC, after the packs
     std::string okey;          // override key "<fighter>_<costume>_file_<sanitised path>"
     int k = 0;                 // 1-based rank in its list (the "entry number" the menus use)
     std::string label;         // "RW n" / "MC n"

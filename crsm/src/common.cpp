@@ -224,6 +224,7 @@ bool on_message_cb(void*, unsigned int msg, unsigned long long wparam, long long
 
 struct PerfEndGuard { int64_t t0; int id; ~PerfEndGuard() { perf::end(id, t0); } };
 
+void start_writer();
 void SF6CORE_CALL on_frame(uint64_t, void*) {
     perf::frame();                                                   // the perf log (off: one branch every frame)
     const int64_t pt0 = perf::begin();
@@ -231,6 +232,7 @@ void SF6CORE_CALL on_frame(uint64_t, void*) {
     struct PerfEnd { int64_t t0; ~PerfEnd() { perf::end(pid_frame, t0); } } perf_end{ pt0 };
     const uint64_t fr = g_frame.fetch_add(1) + 1;
     g_frame_tid.store(GetCurrentThreadId(), std::memory_order_relaxed);
+    if (fr == 300) start_writer();
     if (g_closing.load(std::memory_order_acquire)) {
         if (!g_closing_final.load(std::memory_order_relaxed)) {
             const uint64_t elapsed = GetTickCount64() - (uint64_t)g_closing_tick.load(std::memory_order_relaxed);
@@ -448,11 +450,23 @@ bool key_down(int vk) { return vk >= 0 && vk < 256 && g_keys[(size_t)vk].load(st
 
 void refresh_status() { bgwriter::write((std::string(kDataDir) + "/status.json").c_str(), status_json().dump(4)); }
 
+// The writer thread starts only after the game's first frames: REFramework's startup suspends every thread while it
+// holds the loader lock, and a thread of ours caught holding the heap / CRT lock there froze a tester's game. Writes
+// queue up until then. Started by the first of REFramework's present callback (works with the kill switch / without
+// the core) and the core's frame callback.
+namespace {
+constexpr uint64_t kWriterAfterFrames = 300;
+std::atomic<bool> g_writer_started{false};
+std::atomic<uint64_t> g_present_count{0};
+void start_writer() { if (!g_writer_started.exchange(true)) bgwriter::start(); }
+void on_present_cb() { if (g_present_count.fetch_add(1, std::memory_order_relaxed) + 1 == kWriterAfterFrames) start_writer(); }
+}  // namespace
+
 bool init() {
-    bgwriter::start();
     g_started = now_text();
     {
         auto* fns = reframework::API::get()->param()->functions;
+        if (fns->on_present) fns->on_present(on_present_cb);
         if (fns->on_message) fns->on_message(on_message_cb);
         else log_info("[CRSMNative] on_message not available: no closing guard");
     }

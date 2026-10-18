@@ -190,13 +190,16 @@ void init() {
     g_probe_file = std::filesystem::exists(kProbeFile, ec);
     if (g_probe_file) cmn::journal("community: %s present: Steam ticket probe ~10 s after the first frame (logged, never sent)", kProbeFile);
     g_client.configure(kConfigPath, kResponsePath);
-    g_client.start();
+    // (the worker thread starts at frame 300, see on_frame: no thread of ours alive while REFramework starts up;
+    // requests sent before that wait in its queue)
     g_on = true;
-    cmn::journal("community: owner native, WinHTTP client started");
+    cmn::journal("community: owner native, WinHTTP client configured (worker starts after the first frames)");
 }
 
 void on_frame(uint64_t frame) {
     if (!g_on) return;
+    static bool worker_started = false;
+    if (!worker_started && frame >= 300) { worker_started = true; g_client.start(); }
     if (g_steam && !cmn::closing()) {
         if (g_probe_file) {
             if (!g_probe_at) g_probe_at = frame + kProbeDelayFrames;
