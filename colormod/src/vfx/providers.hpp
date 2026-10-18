@@ -38,6 +38,11 @@ void scan();                                                           // shadow
 
 // relay builders (SF6_DriveRecolor di_lines / di_container / di_key read these)
 bool lines(int side_fighter, const MechColors& mc, std::vector<WLine>& out);   // false = no provider of that fighter
+// lines() one step at a time (the parts list, then one provider per call, then the armour rim), so the static pass can
+// stop between two steps within its frame budget. Start with a fresh cursor and an empty out, call until it returns
+// true; c.present is then what lines() returns. Providers scanned again in between: the cursor starts over (out cleared).
+struct LinesCursor { int stage = 0; size_t idx = 0; uint64_t gen = 0, sig = 0; std::string parts; bool present = false; };
+bool lines_step(int side_fighter, const MechColors& mc, std::vector<WLine>& out, LinesCursor& c);
 int container(int side_fighter);                                       // the style provider's number, -1 = unknown
 std::string key(int side_fighter, const MechColors& mc);               // changes when a relay rewrite is needed
 // parts of a fighter (collect_parts): "key\tname" lines, recomputed when its providers move
