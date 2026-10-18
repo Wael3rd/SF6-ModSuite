@@ -515,6 +515,7 @@ std::string g_static_queue;                                         // phase 1-2
 struct CachedDiLines { bool present = false; int container = -1; std::vector<providers::WLine> wl; };
 CachedDiLines g_di_line_cache[3][2];                                // [side][mech], reused by the relay
 drive::ColorPair g_cached_parry, g_cached_rush;                     // computed in phase 2, used in phase 3
+drive::ColorPair g_cached_impact, g_cached_reversal;                // the common DI effects / Drive Reversal ring (phase 2)
 std::vector<uint32_t> g_cached_cands;                               // for phase 2 spot validation
 
 std::string static_key(int own) {
@@ -614,6 +615,10 @@ bool static_pass_step() {
             std::lock_guard<std::mutex> lk(g_in_mx);
             g_cached_parry = g_dr[own][0].c1 ? g_dr[own][0] : g_dr[other][0];
             g_cached_rush = g_dr[own][1].c1 ? g_dr[own][1] : g_dr[other][1];
+            const providers::MechColors& imp = g_di[own][0].has ? g_di[own][0] : g_di[other][0];   // the common DI effects
+            g_cached_impact = imp.has ? drive::ColorPair{ imp.c1, std::nullopt } : drive::ColorPair{};
+            const providers::MechColors& rev = g_di[own][1].has ? g_di[own][1] : g_di[other][1];   // the Drive Reversal ring
+            g_cached_reversal = rev.has ? drive::ColorPair{ rev.c1, std::nullopt } : drive::ColorPair{};
             g_cached_cands = cands_locked();
         }
         g_spot_queue_idx = 0;
@@ -632,7 +637,8 @@ bool static_pass_step() {
                 uint32_t now = 0;
                 const bool rd = scene::rd32(sp.addr, now);
                 if (drive::spot_ok(rd ? std::optional<uint32_t>(now) : std::nullopt, sp.r, sp.g, sp.b, sp.written, g_cached_cands)) {
-                    const drive::ColorPair& mc = fam == "parry" ? g_cached_parry : g_cached_rush;
+                    const drive::ColorPair& mc = fam == "parry" ? g_cached_parry : fam == "reversal" ? g_cached_reversal
+                                               : fam == "impact" ? g_cached_impact : g_cached_rush;
                     const uint32_t orig = data::pack(sp.r, sp.g, sp.b);
                     const uint32_t col = mc.c1 ? data::tint_with(*mc.c1, sp.r, sp.g, sp.b) : orig;
                     drive::remember(sp, col);

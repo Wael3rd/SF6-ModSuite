@@ -193,7 +193,7 @@ static const std::map<std::string, const char*>& etiq_inv() {
     static const std::map<std::string, const char*> m = {
         { "530/0/0", "parry" }, { "530/0/1", "parry" },
         { "530/0/10", "rush" }, { "530/0/20", "rush" }, { "530/0/21", "rush" }, { "530/0/50", "rush" }, { "530/0/51", "rush" }, { "530/0/61", "rush" },
-        { "201/2/2", "impact" }, { "201/2/100", "impact" },
+        { "201/2/2", "impact" },
         { "201/2/1", "reversal" },
     };
     return m;
@@ -201,6 +201,7 @@ static const std::map<std::string, const char*>& etiq_inv() {
 
 // SF6_DriveRecolor.lua:1150-1155 (requestEffect hook)
 const char* label_mech(uint32_t cont, uint32_t cat, uint32_t el, int64_t di_cont) {
+    if (cat == 2 && el == 100) return nullptr;                          // follows Impact (2) and Reversal (1): keeps the last one
     char lab[48];
     std::snprintf(lab, sizeof lab, "%u/%u/%u", cont, cat, el);
     const auto& m = etiq_inv();

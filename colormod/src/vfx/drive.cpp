@@ -20,7 +20,9 @@ struct Label { int cont, cat, el; };
 // ETIQUETTES (SF6_DriveRecolor.lua): what the game asks requestEffect for each mechanic
 const std::vector<Label> kParry = { { 530, 0, 0 }, { 530, 0, 1 } };
 const std::vector<Label> kRush = { { 530, 0, 10 }, { 530, 0, 20 }, { 530, 0, 21 }, { 530, 0, 50 }, { 530, 0, 51 }, { 530, 0, 61 } };
-const std::vector<Label> kImpact = { { 201, 2, 2 }, { 201, 2, 100 } };
+// element 100 follows both mechanics (Impact: 2 then 100, Reversal: 1 then 100, seen 18/10): no block of its own, it
+// keeps what element 2 or 1 just painted (as an Impact block it repainted every Drive Reversal with the Impact colours)
+const std::vector<Label> kImpact = { { 201, 2, 2 } };
 const std::vector<Label> kReversal = { { 201, 2, 1 } };
 
 std::string e_line(uint64_t mgr, int cont, int cat, int el) {
@@ -61,6 +63,10 @@ bool spot_ok(std::optional<uint32_t> cur, int r, int g, int b, const std::vector
 std::string famille(const std::string& file) {
     static const std::regex kEsf("esf\\d\\d\\d");
     if (file.find("parry") != std::string::npos) return "parry";
+    // the Drive Reversal ring behind the fighter (seen in game 18/10: it took the Drive Rush colour as a "drive" file)
+    if (file.find("drive_000_10") != std::string::npos) return "reversal";
+    // the Drive Impact's common effects: start (000_00) and hits (001_*); they took the Drive Rush colour too
+    if (file.find("drive_000_00") != std::string::npos || file.find("drive_001_") != std::string::npos) return "impact";
     if (file.find("drive") != std::string::npos) return "rush";
     if (std::regex_search(file, kEsf)) return "special";
     return "";
@@ -200,7 +206,9 @@ std::string handoff(const HandoffIn& in, std::vector<Spot>& spots, const std::ve
             std::vector<std::string> lignes;
             for (size_t idx : live) {
                 Spot& sp = spots[idx];
-                if ((famille(sp.file) == "special") != want_special) continue;
+                const std::string fam = famille(sp.file);
+                if (fam == "reversal" || fam == "impact") continue;     // painted by the light fight only
+                if ((fam == "special") != want_special) continue;
                 const uint32_t orig = data::pack(sp.r, sp.g, sp.b);
                 const uint32_t col = mc.c1 ? data::tint_with(*mc.c1, sp.r, sp.g, sp.b) : orig;
                 remember(sp, col);
