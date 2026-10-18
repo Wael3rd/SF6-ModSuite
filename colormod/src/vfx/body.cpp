@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -42,76 +43,127 @@ uint64_t g_calls = 0, g_body = 0, g_written = 0;
 std::map<std::string, uint64_t> g_cnt;       // "dr <side>/<mech>", "di <side>/<param>/<why>" (the DI module's body_note keys)
 std::string g_last;
 
+API::Field* g_pn_field = nullptr;            // VfxMPCFloat4.paramName, resolved with g_f4 (no lookup by name per call)
+API::TypeDefinition* g_not_f4[16] = {};      // types seen that are not VfxMPCFloat4 (no name compare per call)
+unsigned g_not_f4_n = 0;
+
 bool is_f4(API::TypeDefinition* td) {
     if (!td) return false;
     if (td == g_f4) return true;
+    for (auto* t : g_not_f4) if (t == td) return false;
     const char* n = td->get_name();
-    if (n && std::strcmp(n, "VfxMPCFloat4") == 0) { g_f4 = td; return true; }
+    if (n && std::strcmp(n, "VfxMPCFloat4") == 0) { g_pn_field = ll::find_field_walk(td, "paramName"); g_f4 = td; return true; }
+    g_not_f4[g_not_f4_n++ & 15] = td;
     return false;
+}
+
+// paramName compared as the managed string's UTF-16 chars (System.String: length @0x10, chars @0x14, see
+// ll::managed_string_to_utf8): 1 = Emit_Color, 2 = Emit_BaseColor, 0 = another parameter
+int slot_of(MO* p, const char*& pn) {
+    MO* s = nullptr;
+    if (g_pn_field) { void* raw = g_pn_field->get_data_raw(p, false); s = raw ? *reinterpret_cast<MO**>(raw) : nullptr; }
+    else s = ll::read_field_object(p, "paramName");
+    if (!s) return 0;
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(s);
+    const int32_t n = *reinterpret_cast<const int32_t*>(b + 0x10);
+    const wchar_t* w = reinterpret_cast<const wchar_t*>(b + 0x14);
+    if (n == 10 && std::wmemcmp(w, L"Emit_Color", 10) == 0) { pn = "Emit_Color"; return 1; }
+    if (n == 14 && std::wmemcmp(w, L"Emit_BaseColor", 14) == 0) { pn = "Emit_BaseColor"; return 2; }
+    return 0;
 }
 
 void count(const std::string& k) { ++g_cnt[k]; }
 
+// the DI mechanic on_param uses for a side: impact / reversal seen recently, else a Drive Impact action; -1 = none
+int di_mech_locked(int side, const char* m) {
+    if (m && std::strcmp(m, "impact") == 0) return 0;
+    if (m && std::strcmp(m, "reversal") == 0) return 1;
+    if (g_act[side] == 855 || g_act[side] == 857) return 0;      // DI_ACTIONS: the Drive Impact's two variants
+    return -1;
+}
+int dr_mech(const char* m) { return !m ? -1 : (std::strcmp(m, "parry") == 0 ? 0 : (std::strcmp(m, "rush") == 0 ? 1 : -1)); }
+
+// Whether on_param can change a parameter of this side now: a DI colour for its DI mechanic, or a recent parry / rush
+// with its Drive colour. False: on_param would leave every value as it is (the hooks return before the list walk).
+bool may_write_locked(int side, const char* m) {
+    if (side != 1 && side != 2) return false;
+    const int di = di_mech_locked(side, m);
+    if (di >= 0 && (g_di[side][di][0] >= 0 || g_di[side][di][1] >= 0)) return true;
+    const int dr = dr_mech(m);
+    return dr >= 0 && g_dr[side][dr] >= 0;
+}
+
 // One body material parameter: DI first, then DR on what DI left (the Lua runs SF6_DIRecolor's hook first).
-void on_param(MO* mgr, MO* p) {
+// side / m: the manager's side (mech::side_cached) and its recent mechanic, resolved once per hook call.
+// dbg (vfx_debug_on.txt): the per-key counters and the last change of vfx_body_probe.
+void on_param(int side, const char* m, MO* p, bool dbg) {
     if (!p || !is_f4(p->get_type_definition())) return;
-    MO* s = ll::read_field_object(p, "paramName");
-    if (!s) return;
-    const std::string pn = ll::managed_string_to_utf8(s);
-    const int slot = pn == "Emit_Color" ? 1 : (pn == "Emit_BaseColor" ? 2 : 0);
+    const char* pn = nullptr;
+    const int slot = slot_of(p, pn);
     if (!slot) return;
     float* f = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(p) + 0x20);
     const float in[3] = { f[0], f[1], f[2] };
     float out[3] = { in[0], in[1], in[2] };
-    const int side = mech::side_now(mgr);
-    const char* m = mech::recent(side);
     std::lock_guard<std::mutex> lk(g_mx);
     ++g_body;
     // ---- SF6_DIRecolor body_repaint ----
     if (side != 1 && side != 2) {
-        if (side == 0) count("di ?/" + pn + "/pas un joueur");
+        if (dbg && side == 0) count(std::string("di ?/") + pn + "/pas un joueur");
     } else {
-        int mi = -1;
-        if (m && std::strcmp(m, "impact") == 0) mi = 0;
-        else if (m && std::strcmp(m, "reversal") == 0) mi = 1;
-        else if (g_act[side] == 855 || g_act[side] == 857) mi = 0;   // DI_ACTIONS: the Drive Impact's two variants
-        const std::string k = "di " + std::to_string(side) + "/" + pn + "/";
-        if (mi < 0) count(k + "mecanique refusee");
-        else if (g_di[side][mi][slot - 1] < 0) count(k + "pas de couleur");
+        const int mi = di_mech_locked(side, m);
+        if (mi < 0) { if (dbg) count("di " + std::to_string(side) + "/" + pn + "/mecanique refusee"); }
+        else if (g_di[side][mi][slot - 1] < 0) { if (dbg) count("di " + std::to_string(side) + "/" + pn + "/pas de couleur"); }
         else {
             const uint32_t c = (uint32_t)g_di[side][mi][slot - 1];
             out[0] = (float)((c & 0xFF) / 255.0); out[1] = (float)(((c >> 8) & 0xFF) / 255.0); out[2] = (float)(((c >> 16) & 0xFF) / 255.0);
-            count(k + "ECRIT");
+            if (dbg) count("di " + std::to_string(side) + "/" + pn + "/ECRIT");
         }
     }
     // ---- SF6_DriveRecolor repaint_param (reads what DI wrote) ----
     const double x = out[0], y = out[1], z = out[2];
     if (vfx::data::is_drive_hue(x, y, z)) {
         if (side >= 1 && side <= 2) g_drive_until[side] = cmn::frame() + kDriveHold;
-        const int mi = !m ? -1 : (std::strcmp(m, "parry") == 0 ? 0 : (std::strcmp(m, "rush") == 0 ? 1 : -1));
+        const int mi = dr_mech(m);
         if (mi >= 0 && side >= 1 && side <= 2 && g_dr[side][mi] >= 0) {
             const uint32_t col = vfx::data::tint_with_d((uint32_t)g_dr[side][mi], x * 255, y * 255, z * 255);
             out[0] = (float)((col & 0xFF) / 255.0); out[1] = (float)(((col >> 8) & 0xFF) / 255.0); out[2] = (float)(((col >> 16) & 0xFF) / 255.0);
-            count("dr " + std::to_string(side) + "/" + m);
+            if (dbg) count("dr " + std::to_string(side) + "/" + m);
         }
     }
     if (out[0] == in[0] && out[1] == in[1] && out[2] == in[2]) return;
-    char b[96];
-    std::snprintf(b, sizeof b, "P%d %s %.3f,%.3f,%.3f -> %.3f,%.3f,%.3f", side, pn.c_str(), in[0], in[1], in[2], out[0], out[1], out[2]);
-    g_last = b;
+    if (dbg) {
+        char b[96];
+        std::snprintf(b, sizeof b, "P%d %s %.3f,%.3f,%.3f -> %.3f,%.3f,%.3f", side, pn, in[0], in[1], in[2], out[0], out[1], out[2]);
+        g_last = b;
+    }
     if (!g_write) return;
     f[0] = out[0]; f[1] = out[1]; f[2] = out[2];
     ++g_written;
 }
 
+// the side of the hooked manager and its recent mechanic; false = nothing can change (debug: always walk, for the counters)
+bool resolve(MO* mgr, int& side, const char*& m, bool dbg) {
+    side = mech::side_cached(mgr);
+    m = mech::recent(side);
+    if (dbg) return true;
+    std::lock_guard<std::mutex> lk(g_mx);
+    return may_write_locked(side, m);
+}
+
 int pre_add_inner(void** argv) {
     ++g_calls;
-    on_param(reinterpret_cast<MO*>(argv[1]), reinterpret_cast<MO*>(argv[3]));
+    const bool dbg = perf::vfx_debug();
+    int side = 0; const char* m = nullptr;
+    if (!resolve(reinterpret_cast<MO*>(argv[1]), side, m, dbg)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    on_param(side, m, reinterpret_cast<MO*>(argv[3]), dbg);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
 int pre_req_inner(void** argv) {
     ++g_calls;
+    const bool dbg = perf::vfx_debug();
+    int side = 0; const char* m = nullptr;
+    if (!resolve(reinterpret_cast<MO*>(argv[1]), side, m, dbg)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     MO* lst = reinterpret_cast<MO*>(argv[3]);
     if (!lst || !API::get()->sdk()->managed_object->is_managed_object(lst)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     auto* td = lst->get_type_definition();
@@ -123,7 +175,7 @@ int pre_req_inner(void** argv) {
     const int32_t n = (int32_t)rc.dword;
     for (int32_t i = 0; i < n && i < 64; ++i) {
         auto ri = it->second.item->invoke(lst, std::vector<void*>{ ll::arg_i32(i) });
-        if (!ri.exception_thrown && ri.ptr) on_param(reinterpret_cast<MO*>(argv[1]), reinterpret_cast<MO*>(ri.ptr));
+        if (!ri.exception_thrown && ri.ptr) on_param(side, m, reinterpret_cast<MO*>(ri.ptr), dbg);
     }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
