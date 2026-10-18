@@ -9,6 +9,7 @@
 #include "ll_common.hpp"          // LL's helpers: fields, invoke, managed strings
 
 #include "../common.hpp"
+#include "../perf.hpp"
 #include "data.hpp"
 
 namespace vfx::mech {
@@ -37,7 +38,12 @@ const char* g_last_mech[3] = {};
 uint64_t g_mech_at[3] = {};
 uint64_t g_req_all = 0, g_req_n = 0;
 std::string g_req_lab;
-std::map<std::string, uint64_t> g_seen[3];      // Lua req_seen[side]
+std::map<std::string, uint64_t> g_seen[3];      // Lua req_seen[side] (vfx_debug_on.txt only)
+constexpr uint64_t kSideTtl = 120;              // side_cached: a player's manager is resolved again after 2 s,
+constexpr uint64_t kNoSideTtl = 10;             // any other manager (or one not resolvable yet) after 10 frames
+constexpr size_t kSideMax = 256;
+struct SideAt { int side; uint64_t at; };
+std::unordered_map<uint64_t, SideAt> g_body_side;   // side_cached
 
 int side_of_manager(MO* mgr) {                  // Lua: this:get_GameObject() -> side_of(go)
     auto* td = mgr->get_type_definition();
@@ -87,11 +93,13 @@ void on_request(uint64_t mgr, uint32_t cat, uint32_t cont, uint32_t el) try {
         if (side != 1 && side != 2) return;
         g_mgr_addr[side] = mgr;                 // first effect of the side: its manager is known from now on
     }
-    char lab[48];
-    std::snprintf(lab, sizeof lab, "%u/%u/%u", cont, cat, el);
     ++g_req_n;
-    g_req_lab = lab;
-    ++g_seen[side][lab];
+    if (perf::vfx_debug()) {                    // the per-label counters of vfx_mech_probe: a string map, debug only
+        char lab[48];
+        std::snprintf(lab, sizeof lab, "%u/%u/%u", cont, cat, el);
+        g_req_lab = lab;
+        ++g_seen[side][lab];
+    }
     const char* m = vfx::data::label_mech(cont, cat, el, g_di_cont[side]);
     if (m) { g_last_mech[side] = m; g_mech_at[side] = cmn::frame(); }
 } catch (...) {}                                // never reaches the engine's SEH guard (it would blacklist the manager)
@@ -100,6 +108,18 @@ int side_now(void* mgr) try {                   // resolved at every call, like 
     if (!g_installed || !mgr || !API::get()->sdk()->managed_object->is_managed_object(mgr)) return 0;
     std::lock_guard<std::mutex> lk(g_mx);
     return side_of_manager(reinterpret_cast<MO*>(mgr));
+} catch (...) { return 0; }
+
+int side_cached(void* mgr) try {
+    if (!g_installed || !mgr) return 0;
+    const uint64_t key = reinterpret_cast<uint64_t>(mgr), now = cmn::frame();
+    std::lock_guard<std::mutex> lk(g_mx);
+    auto it = g_body_side.find(key);
+    if (it != g_body_side.end() && now - it->second.at <= (it->second.side ? kSideTtl : kNoSideTtl)) return it->second.side;
+    const int side = API::get()->sdk()->managed_object->is_managed_object(mgr) ? side_of_manager(reinterpret_cast<MO*>(mgr)) : 0;
+    if (g_body_side.size() >= kSideMax) g_body_side.clear();
+    g_body_side[key] = SideAt{ side, now };
+    return side;
 } catch (...) { return 0; }
 
 const char* recent(int side) {
@@ -158,6 +178,7 @@ int discover() try {
 void on_combat_exit() {                         // Lua combat exit: mgr_addr and mgr_vus emptied (last_mech kept)
     std::lock_guard<std::mutex> lk(g_mx);
     g_mgr_side.clear();
+    g_body_side.clear();
     g_mgr_addr[1] = g_mgr_addr[2] = 0;
 }
 

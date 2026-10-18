@@ -34,6 +34,9 @@ struct Env {
     std::string root = "reframework/data";
     std::function<std::string(const std::string&)> L;
     std::function<std::optional<std::pair<uint32_t, uint32_t>>(int fighter, int side)> squares;
+    // save_di's writer: (path, bytes) written off the game thread, in call order (the last save wins); unset = written
+    // at once (offline harness)
+    std::function<void(const std::string& path, std::string bytes)> write_async;
 };
 void set_env(Env env);
 void preload();                                                         // every fighter's files, once at start

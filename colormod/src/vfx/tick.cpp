@@ -345,7 +345,7 @@ bool enter_fight_step() {
                     g_spots.push_back(sp);
             }
             ++g_enter_st.spot_idx;
-            if ((g_enter_st.spot_idx & 31) == 0 && over_budget(t0)) return false;
+            if ((g_enter_st.spot_idx & 3) == 0 && over_budget(t0)) return false;   // a new page region costs a VirtualQuery
         }
         g_enter_st.phase = 1;
         if (over_budget(t0)) return false;
@@ -508,6 +508,9 @@ int g_static_work_own = 0;
 size_t g_validate_idx = 0;                                          // phase 0: how far we are in g_spots
 size_t g_spot_queue_idx = 0;                                        // phase 2: how far we are in g_live
 int g_static_provider_step = 0;                                     // phase 1: 0=scan, 1..4=lines per (side,mech)
+bool g_lines_started = false;                                       // phase 1: the current (side,mech) is under way
+providers::LinesCursor g_lines_cur;                                 // its cursor (one provider per step)
+providers::MechColors g_lines_mc;                                   // its colours, taken when it started
 std::string g_static_queue;                                         // phase 1-2: accumulated queue text
 struct CachedDiLines { bool present = false; int container = -1; std::vector<providers::WLine> wl; };
 CachedDiLines g_di_line_cache[3][2];                                // [side][mech], reused by the relay
@@ -541,6 +544,7 @@ void static_pass_start(int own) {
     g_validate_idx = 0;
     g_spot_queue_idx = 0;
     g_static_provider_step = 0;
+    g_lines_started = false;
     g_static_queue.clear();
     g_cached_cands.clear();
     for (int s = 0; s < 3; ++s) for (int m = 0; m < 2; ++m) g_di_line_cache[s][m] = CachedDiLines{};
@@ -565,7 +569,7 @@ bool static_pass_step() {
                                g_spots[g_validate_idx].written, cands))
                 g_live.push_back(g_validate_idx);
             ++g_validate_idx;
-            if ((g_validate_idx & 31) == 0 && over_budget(t0)) return false;
+            if ((g_validate_idx & 3) == 0 && over_budget(t0)) return false;
         }
         g_static_work_phase = 1;
         if (over_budget(t0)) return false;
@@ -584,15 +588,22 @@ bool static_pass_step() {
             g_static_provider_step = 1;
             if (over_budget(t0)) return false;
         }
-        // sub-steps 1..4: providers::lines for (other,0) (other,1) (own,0) (own,1)
+        // sub-steps 1..4: providers::lines for (other,0) (other,1) (own,0) (own,1), one provider per step within the
+        // budget (one lines() call took up to 3-6 ms in one frame, 16/10 perf logs)
         while (g_static_provider_step <= 4) {
             const int idx = g_static_provider_step - 1;
             const int s = (idx < 2) ? other : own;
             const int m = idx % 2;
-            providers::MechColors mc;
-            { std::lock_guard<std::mutex> lk(g_in_mx); mc = g_di[s][m]; }
             auto& dc = g_di_line_cache[s][m];
-            dc.present = providers::lines(fid[s], mc, dc.wl);
+            if (!g_lines_started) {
+                { std::lock_guard<std::mutex> lk(g_in_mx); g_lines_mc = g_di[s][m]; }
+                g_lines_cur = providers::LinesCursor{};
+                dc.wl.clear();
+                g_lines_started = true;
+            }
+            while (!providers::lines_step(fid[s], g_lines_mc, dc.wl, g_lines_cur)) if (over_budget(t0)) return false;
+            g_lines_started = false;
+            dc.present = g_lines_cur.present;
             dc.container = providers::container(fid[s]);
             if (dc.present) for (auto& w : dc.wl) queue_expect(g_static_queue, w.addr, w.val, w.orig);
             ++g_static_provider_step;
@@ -629,7 +640,7 @@ bool static_pass_step() {
                 }
             }
             ++g_spot_queue_idx;
-            if ((g_spot_queue_idx & 31) == 0 && over_budget(t0)) return false;
+            if ((g_spot_queue_idx & 3) == 0 && over_budget(t0)) return false;
         }
         g_static_work_phase = 3;
         if (over_budget(t0)) return false;

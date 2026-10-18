@@ -22,9 +22,10 @@ uint64_t g_frame = UINT64_MAX;
 ULONGLONG g_born = 0;
 uint64_t g_queries = 0;
 
-int query(uint64_t a) {                       // lock held
+// one VirtualQuery: the state of a's page and its region [base, end) (end = 0: no region to keep)
+int query_raw(uint64_t a, uint64_t& base, uint64_t& end) {
     MEMORY_BASIC_INFORMATION mbi{};
-    ++g_queries;
+    base = end = 0;
     if (VirtualQuery((LPCVOID)a, &mbi, sizeof mbi) != sizeof mbi) return 0;
     int st = 0;
     if (mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD) && mbi.Protect != PAGE_NOACCESS) {
@@ -32,8 +33,16 @@ int query(uint64_t a) {                       // lock held
         const DWORD p = mbi.Protect & 0xFF;
         if (p == PAGE_READWRITE || p == PAGE_WRITECOPY || p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY) st |= 2;
     }
-    const uint64_t base = (uint64_t)mbi.BaseAddress, end = base + (uint64_t)mbi.RegionSize;
-    if (end > base && a >= base && a < end) {
+    const uint64_t b = (uint64_t)mbi.BaseAddress, e = b + (uint64_t)mbi.RegionSize;
+    if (e > b && a >= b && a < e) { base = b; end = e; }
+    return st;
+}
+
+int query(uint64_t a) {                       // lock held
+    ++g_queries;
+    uint64_t base, end;
+    const int st = query_raw(a, base, end);
+    if (end) {
         if (g_regions.size() >= kMaxRegions) g_regions.clear();
         g_regions[base] = Region{ end, st };
     }
@@ -71,5 +80,24 @@ bool readable(uint64_t a, size_t n) {
 }
 
 uint64_t queries() { std::lock_guard<std::mutex> lk(g_mx); return g_queries; }
+
+int Local::state(uint64_t a) {
+    if ((n_++ & 63) == 0) {                   // wall time looked at every 64 checks, as state() does within a frame
+        const ULONGLONG now = GetTickCount64();
+        if (now - born_ > kMaxAgeMs) { regions_.clear(); born_ = now; }
+    }
+    auto it = regions_.upper_bound(a);
+    if (it != regions_.begin()) {
+        --it;
+        if (a < it->second.end) return it->second.st;
+    }
+    uint64_t base, end;
+    const int st = query_raw(a, base, end);
+    if (end) {
+        if (regions_.size() >= kMaxRegions) regions_.clear();
+        regions_[base] = Region{ end, st };
+    }
+    return st;
+}
 
 }  // namespace vfx::memguard

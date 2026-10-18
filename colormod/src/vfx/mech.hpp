@@ -21,6 +21,9 @@ void set_di_cont(int64_t c1, int64_t c2);                // the Lua's di_cont[1.
 std::string probe();                                     // "mech1=.. mech2=.. mgr1=.. mgr2=.. req_all=.. req_n=.. seen1=lab:n,... seen2=..."
 // for vfx::body (sub-step B)
 int side_now(void* mgr);                                 // Lua side_of(this:get_GameObject()): _PlayerID + 1, 0 = none
+// side_now, kept per manager address for kSideTtl frames (the material hooks run hundreds of times a second; the
+// getComponent / _PlayerID walk cost ~40 us a call). Forgotten when the fight ends (on_combat_exit).
+int side_cached(void* mgr);
 const char* recent(int side);                            // Lua recent_mech(side): the mechanic if seen within MECH_HOLD
 uint64_t manager(int side);                              // Lua mgr_addr[side] (0 = not seen yet in this fight)
 // the effect managers of the fighters found in the scene (PlayerBehavior -> its GameObject's VfxActorEffectManager),

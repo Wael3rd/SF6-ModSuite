@@ -74,6 +74,9 @@ struct PState {
 };
 
 std::map<int, std::vector<Provider>> g_found;            // last_found
+uint64_t g_found_gen = 0;                                // +1 each time g_found is replaced (LinesCursor)
+bool g_armor_seen = false;                               // the armour rim's entry at the last scan (armor_params)
+MO* g_armor_go = nullptr;
 std::map<std::string, PState> g_pstate;                  // pstate, by provider key
 std::map<int, std::vector<int>> g_side_map;              // side_map
 std::map<int, uint64_t> g_parts_seen;                    // parts_seen (sum of the provider addresses)
@@ -274,9 +277,14 @@ bool apply_provider(const Provider& p, const StaticCfg& cfg, bool in_fight, Queu
 }
 
 // ---- scan --------------------------------------------------------------------------------------------------------
+// also notes the armour rim's entry (epve_cmn_000_00), so armor_params does not walk DataInstanceMap again
 std::map<int, std::vector<Provider>> scan_providers() {
     std::map<int, std::vector<Provider>> found;
+    ++g_found_gen;
+    g_armor_seen = false;
+    g_armor_go = nullptr;
     for (auto& e : scene::entries()) {
+        if (!g_armor_seen && e.key.find("epve_cmn_000_00") != std::string::npos) { g_armor_seen = true; g_armor_go = e.go; }
         int fid = 0;
         std::string shortk;
         if (!parse_provider_path(e.key, fid, shortk)) continue;
@@ -316,59 +324,128 @@ std::string element_efx(const Provider& p, int idx) {    // the efx a part plays
     return name;
 }
 
-void collect_parts(int id, const std::vector<Provider>& list) {
-    uint64_t sig = 0;
-    for (auto& p : list) sig += p.addr;
-    auto seen = g_parts_seen.find(id);
-    if (seen != g_parts_seen.end() && seen->second == sig) return;
-    g_parts_seen[id] = sig;
-    std::string out;
-    for (auto& p : list) {
-        PState& st = provider_state(p);
-        if (st.is_target != 1) continue;
-        capture_originals(p, st);
-        refresh_mesh(p, st);
-        const auto& marks = st.drive_el ? *st.drive_el : mark_drive_elements(p, st);
-        std::map<int, bool> has_mesh;
-        for (auto& m : st.mesh) has_mesh[m.el] = true;
-        scene::each_element(p.go, [&](MO* el, int idx) {
-            if (!marked(marks, idx)) return;
-            if (!(scene::element_has_color(el) || st.originals->tints.count(idx) || has_mesh.count(idx))) return;
-            std::string base;
-            if (p.hit) base = "Hit";
-            else { const int sn = parse_style_number(p.key); base = sn >= 0 ? "Style " + std::to_string(sn) : "Style ?"; }
-            const std::string efx = element_efx(p, idx);
-            std::string name = efx.empty() ? base + " - el " + std::to_string(idx) : base.substr(0, base.find(' ')) + " " + efx;
-            out += part_key(p, idx) + "\t" + name + "\n";
-        });
-    }
-    g_parts[id] = out;
+// one provider's lines of the parts list ("key\tname"), collect_parts' loop body
+void collect_part(const Provider& p, std::string& out) {
+    PState& st = provider_state(p);
+    if (st.is_target != 1) return;
+    capture_originals(p, st);
+    refresh_mesh(p, st);
+    const auto& marks = st.drive_el ? *st.drive_el : mark_drive_elements(p, st);
+    std::map<int, bool> has_mesh;
+    for (auto& m : st.mesh) has_mesh[m.el] = true;
+    scene::each_element(p.go, [&](MO* el, int idx) {
+        if (!marked(marks, idx)) return;
+        if (!(scene::element_has_color(el) || st.originals->tints.count(idx) || has_mesh.count(idx))) return;
+        std::string base;
+        if (p.hit) base = "Hit";
+        else { const int sn = parse_style_number(p.key); base = sn >= 0 ? "Style " + std::to_string(sn) : "Style ?"; }
+        const std::string efx = element_efx(p, idx);
+        std::string name = efx.empty() ? base + " - el " + std::to_string(idx) : base.substr(0, base.find(' ')) + " " + efx;
+        out += part_key(p, idx) + "\t" + name + "\n";
+    });
 }
 
-// the armour rim (epve_cmn_000_00, shared): externs Color / Color2 whose resource is efd_10_armor_*
+uint64_t parts_sig(const std::vector<Provider>& list) { uint64_t sig = 0; for (auto& p : list) sig += p.addr; return sig; }
+
+// the armour rim (epve_cmn_000_00, shared): externs Color / Color2 whose resource is efd_10_armor_*. Its entry is the
+// one the last provider scan saw (was: DataInstanceMap walked again at each call, 4 times per static pass).
 const decltype(g_armor)* armor_params() {
-    for (auto& e : scene::entries()) {
-        if (e.key.find("epve_cmn_000_00") == std::string::npos) continue;
-        if (!e.go) return nullptr;
-        const uint64_t a = scene::addr(e.go);
-        if (g_armor.valid && g_armor.addr == a) return &g_armor;
-        g_armor.valid = true;
-        g_armor.addr = a;
-        g_armor.params.clear();
-        scene::each_extern(e.go, [&](MO* param, int, int, const std::string& name, const std::string& rn) {
-            const bool c1 = name == "Color", c2 = name == "Color2";
-            if (!(c1 || c2) || scene::lower(rn).find("efd_10_armor") == std::string::npos) return;
-            auto o = param_rgba(param);
-            g_armor.params.push_back(ArmorParam{ scene::addr(param) + kExternColorOff, c2, o.value_or(0), o.has_value() });
-        });
-        return &g_armor;
+    if (!g_armor_seen || !g_armor_go) return nullptr;
+    MO* go = g_armor_go;
+    const uint64_t a = scene::addr(go);
+    if (g_armor.valid && g_armor.addr == a) return &g_armor;
+    if (!reframework::API::get()->sdk()->managed_object->is_managed_object(go)) return nullptr;   // freed since the scan
+    g_armor.valid = true;
+    g_armor.addr = a;
+    g_armor.params.clear();
+    scene::each_extern(go, [&](MO* param, int, int, const std::string& name, const std::string& rn) {
+        const bool c1 = name == "Color", c2 = name == "Color2";
+        if (!(c1 || c2) || scene::lower(rn).find("efd_10_armor") == std::string::npos) return;
+        auto o = param_rgba(param);
+        g_armor.params.push_back(ArmorParam{ scene::addr(param) + kExternColorOff, c2, o.value_or(0), o.has_value() });
+    });
+    return &g_armor;
+}
+
+// one provider's relay lines (lines' loop body)
+void provider_lines(const Provider& p, const MechColors& mc, std::vector<WLine>& out) {
+    const bool c1 = mc.has;
+    const bool use_parts = c1 && !mc.follow && !mc.parts.empty();
+    auto el_col = [&](int idx, uint32_t& a, bool& has_b, uint32_t& b) {
+        if (use_parts) {
+            auto it = mc.parts.find(part_key(p, idx));
+            if (it != mc.parts.end()) { a = it->second; b = it->second; has_b = true; return; }
+        }
+        a = mc.c1; b = mc.c2; has_b = mc.has_c2;
+    };
+    PState& st = provider_state(p);
+    if (st.is_target != 1) return;
+    capture_originals(p, st);
+    const auto& marks = st.drive_el ? *st.drive_el : mark_drive_elements(p, st);
+    scene::each_extern(p.go, [&](MO* param, int el, int pi, const std::string& name, const std::string&) {
+        bool slot_c2;
+        if (!slot_of(name, slot_c2) || !marked(marks, el)) return;
+        auto o = st.originals->externs.find({ el, pi });
+        std::optional<uint32_t> orig = (o != st.originals->externs.end()) ? std::optional<uint32_t>(o->second) : std::nullopt;
+        std::optional<uint32_t> v;
+        if (c1) {
+            uint32_t a, b; bool hb;
+            el_col(el, a, hb, b);
+            if (!slot_c2) v = a; else if (hb) v = b;
+        } else v = orig;
+        if (!orig) orig = param_rgba(param);
+        if (!v || !orig) return;
+        uint64_t ti = 0;
+        scene::rd64(scene::addr(param), ti);
+        out.push_back(WLine{ scene::addr(param) + kExternColorOff, *v, *orig, scene::addr(param), ti });
+    });
+    scene::each_element(p.go, [&](MO* el, int idx) {
+        auto t = st.originals->tints.find(idx);
+        if (t == st.originals->tints.end()) return;
+        uint32_t v = t->second.rgba;
+        if (c1) {
+            if (t->second.white) v = 0xFFFFFFFF;
+            else { uint32_t a, b; bool hb; el_col(idx, a, hb, b); v = a; }
+        }
+        uint64_t ti = 0;
+        scene::rd64(scene::addr(el), ti);
+        out.push_back(WLine{ scene::addr(el) + scene::off_tint(), v, t->second.rgba, scene::addr(el), ti });
+    });
+    refresh_mesh(p, st);                                                // baked colours (relocated here, Follow too)
+    for (auto& m : st.mesh) {
+        std::optional<uint32_t> v;
+        if (!marked(marks, m.el)) v = std::nullopt;
+        else if (c1) {
+            uint32_t a, b; bool hb;
+            el_col(m.el, a, hb, b);
+            const bool c1slot = (m.kind == "main" || m.kind == "other");   // MESH_SLOT: accent / sub -> c2
+            if (c1slot) v = a; else if (hb) v = b;
+        } else v = m.o0;
+        if (!v) continue;
+        out.push_back(WLine{ m.addr, *v, m.o0 });
+        out.push_back(WLine{ m.addr + 4, c1 ? *v : m.o1, m.o1 });
     }
-    return nullptr;
+}
+
+void armor_lines(const MechColors& mc, std::vector<WLine>& out) {     // the armour rim: outside the fighter's providers
+    const bool c1 = mc.has;
+    if (const auto* armor = armor_params()) {
+        for (auto& pr : armor->params) {
+            // Lua: v = c1 and col[pr.slot] or pr.orig (a missing Color 2 falls back to the original)
+            std::optional<uint32_t> v;
+            if (c1 && !pr.c2) v = mc.c1;
+            else if (c1 && mc.has_c2) v = mc.c2;
+            else if (pr.has_orig) v = pr.orig;
+            if (v && pr.has_orig) out.push_back(WLine{ pr.addr, *v, pr.orig });
+        }
+    }
 }
 
 }  // namespace
 
 void reset() {
+    ++g_found_gen;
+    g_armor_seen = false; g_armor_go = nullptr;
     g_found.clear(); g_pstate.clear(); g_side_map.clear(); g_parts_seen.clear(); g_parts.clear();
     g_armor.valid = false; g_armor.params.clear();
 }
@@ -399,79 +476,42 @@ int tick(const StaticCfg statics[2], const int side_chars[2], bool dirty, bool i
 
 void scan() { g_found = scan_providers(); }
 
-bool lines(int fighter, const MechColors& mc, std::vector<WLine>& out) {
+bool lines_step(int fighter, const MechColors& mc, std::vector<WLine>& out, LinesCursor& c) {
+    if (c.stage != 0 && c.gen != g_found_gen) { c = LinesCursor{}; out.clear(); }   // scanned again: start over
     const auto* list = list_of(fighter);
-    if (!list) return false;
-    collect_parts(fighter, *list);
-    const bool c1 = mc.has;
-    const bool use_parts = c1 && !mc.follow && !mc.parts.empty();
-    auto el_col = [&](const Provider& p, int idx, uint32_t& a, bool& has_b, uint32_t& b) {
-        if (use_parts) {
-            auto it = mc.parts.find(part_key(p, idx));
-            if (it != mc.parts.end()) { a = it->second; b = it->second; has_b = true; return; }
-        }
-        a = mc.c1; b = mc.c2; has_b = mc.has_c2;
-    };
-    for (auto& p : *list) {
-        PState& st = provider_state(p);
-        if (st.is_target != 1) continue;
-        capture_originals(p, st);
-        const auto& marks = st.drive_el ? *st.drive_el : mark_drive_elements(p, st);
-        scene::each_extern(p.go, [&](MO* param, int el, int pi, const std::string& name, const std::string&) {
-            bool slot_c2;
-            if (!slot_of(name, slot_c2) || !marked(marks, el)) return;
-            auto o = st.originals->externs.find({ el, pi });
-            std::optional<uint32_t> orig = (o != st.originals->externs.end()) ? std::optional<uint32_t>(o->second) : std::nullopt;
-            std::optional<uint32_t> v;
-            if (c1) {
-                uint32_t a, b; bool hb;
-                el_col(p, el, a, hb, b);
-                if (!slot_c2) v = a; else if (hb) v = b;
-            } else v = orig;
-            if (!orig) orig = param_rgba(param);
-            if (!v || !orig) return;
-            uint64_t ti = 0;
-            scene::rd64(scene::addr(param), ti);
-            out.push_back(WLine{ scene::addr(param) + kExternColorOff, *v, *orig, scene::addr(param), ti });
-        });
-        scene::each_element(p.go, [&](MO* el, int idx) {
-            auto t = st.originals->tints.find(idx);
-            if (t == st.originals->tints.end()) return;
-            uint32_t v = t->second.rgba;
-            if (c1) {
-                if (t->second.white) v = 0xFFFFFFFF;
-                else { uint32_t a, b; bool hb; el_col(p, idx, a, hb, b); v = a; }
-            }
-            uint64_t ti = 0;
-            scene::rd64(scene::addr(el), ti);
-            out.push_back(WLine{ scene::addr(el) + scene::off_tint(), v, t->second.rgba, scene::addr(el), ti });
-        });
-        refresh_mesh(p, st);                                            // baked colours (relocated here, Follow too)
-        for (auto& m : st.mesh) {
-            std::optional<uint32_t> v;
-            if (!marked(marks, m.el)) v = std::nullopt;
-            else if (c1) {
-                uint32_t a, b; bool hb;
-                el_col(p, m.el, a, hb, b);
-                const bool c1slot = (m.kind == "main" || m.kind == "other");   // MESH_SLOT: accent / sub -> c2
-                if (c1slot) v = a; else if (hb) v = b;
-            } else v = m.o0;
-            if (!v) continue;
-            out.push_back(WLine{ m.addr, *v, m.o0 });
-            out.push_back(WLine{ m.addr + 4, c1 ? *v : m.o1, m.o1 });
-        }
+    if (c.stage == 0) {
+        c.gen = g_found_gen;
+        if (!list) { c.present = false; c.stage = 4; return true; }
+        // collect_parts: the parts list again only when the fighter's providers moved
+        c.sig = parts_sig(*list);
+        auto seen = g_parts_seen.find(fighter);
+        c.stage = (seen != g_parts_seen.end() && seen->second == c.sig) ? 2 : 1;
+        c.idx = 0;
+        c.parts.clear();
+        return false;
     }
-    if (const auto* armor = armor_params()) {                           // the armour rim: outside the fighter's providers
-        for (auto& pr : armor->params) {
-            // Lua: v = c1 and col[pr.slot] or pr.orig (a missing Color 2 falls back to the original)
-            std::optional<uint32_t> v;
-            if (c1 && !pr.c2) v = mc.c1;
-            else if (c1 && mc.has_c2) v = mc.c2;
-            else if (pr.has_orig) v = pr.orig;
-            if (v && pr.has_orig) out.push_back(WLine{ pr.addr, *v, pr.orig });
-        }
+    if (!list) { c = LinesCursor{}; out.clear(); return false; }
+    if (c.stage == 1) {
+        if (c.idx < list->size()) { collect_part((*list)[c.idx++], c.parts); return false; }
+        g_parts_seen[fighter] = c.sig;                                 // the list is complete: kept with its signature
+        g_parts[fighter] = std::move(c.parts);
+        c.parts.clear();
+        c.stage = 2; c.idx = 0;
+        return false;
     }
+    if (c.stage == 2) {
+        if (c.idx < list->size()) { provider_lines((*list)[c.idx++], mc, out); return false; }
+        c.stage = 3;
+        return false;
+    }
+    if (c.stage == 3) { armor_lines(mc, out); c.present = true; c.stage = 4; }
     return true;
+}
+
+bool lines(int fighter, const MechColors& mc, std::vector<WLine>& out) {
+    LinesCursor c;
+    while (!lines_step(fighter, mc, out, c)) {}
+    return c.present;
 }
 
 int container(int fighter) {

@@ -18,6 +18,7 @@ namespace {
 
 constexpr const char* kOnFile = "reframework/data/SF6_ColorModNative_data/perf_on.txt";
 constexpr const char* kLogFile = "reframework/data/SF6_ColorModNative_data/perf_live.log";
+constexpr const char* kVfxDebugFile = "reframework/data/SF6_ColorModNative_data/vfx_debug_on.txt";
 constexpr uint64_t kCheckEvery = 120;           // frames between two looks at perf_on.txt
 constexpr double kSlowFrameMs = 20.0;           // a SLOW frame is longer than this and than kSlowFactor x the average
 constexpr double kSlowFactor = 1.5;
@@ -25,7 +26,7 @@ constexpr double kSlowOursMs = 2.0;             // or the DLL alone took this lo
 const char* const kNames[kCount] = {
     "CoreFrame", "VfxEngineUpdate", "VfxEngineLate", "VfxTickUpdate", "HookSetupColor", "HookSetupParts",
     "HookGetColorList", "HookSetColor", "HookTempColor", "HookRequestEffect", "HookAddMaterial", "HookBodyAddMaterial",
-    "HookBodyRequestMaterial", "HkDiSpinAdd", "HkDiSpinAddNum", "HkDiSpinMouseAdd", "HkDiSpinSub", "HkDiSpinSubNum", "HkDiSpinMouseSub", "HkDiSpinInputRight", "HkDiSpinInputLeft", "HkDiSpinInputDirection", "HkDiParamSkip", "HkDiParamGate", "HkDiParamGetCostume", "HkDiParamGetColor", "HkDiMfsSkip", "HkDiMfsGetCostume", "HkDiMfsGetColor", "HkDiAgentInputLeft", "HkDiAgentInputRight", "HkDiAgentInputUp", "HkDiAgentInputDown", "HkDiAgentInputDirection", "HkDiAgentInputDecide", "HkDiAgentInputCancel", "HkDiGroupMoveFocus", "HkRowsOnUpdate", "HkRowsSpinAdd", "HkRowsSpinAddNum", "HkRowsSpinInputRight", "HkRowsSpinMouseAdd", "HkRowsSpinSub", "HkRowsSpinSubNum", "HkRowsSpinInputLeft", "HkRowsSpinMouseSub", "HkRowsSpinInputDirection", "HkRowsAgentInputLeft", "HkRowsAgentInputRight", "HkRowsAgentInputDirection", "HkRowsAgentInputDecide", "HkTrkAgentInputCancel", "HkTrkRequestCloseMenu", "HkTrkCloseMenuBool", "HkTrkCloseMenu3", "HkGuideNewItem", "HkGuideOnLateUpdate", "HkGuideUpdateInputGuide",
+    "HookBodyRequestMaterial", "HkDiSpinAdd", "HkDiSpinAddNum", "HkDiSpinMouseAdd", "HkDiSpinSub", "HkDiSpinSubNum", "HkDiSpinMouseSub", "HkDiSpinInputRight", "HkDiSpinInputLeft", "HkDiSpinInputDirection", "HkDiParamSkip", "HkDiParamGate", "HkDiParamGetCostume", "HkDiParamGetColor", "HkDiMfsSkip", "HkDiMfsGetCostume", "HkDiMfsGetColor", "HkDiAgentInputLeft", "HkDiAgentInputRight", "HkDiAgentInputUp", "HkDiAgentInputDown", "HkDiAgentInputDirection", "HkDiAgentInputDecide", "HkDiAgentInputCancel", "HkDiGroupMoveFocus", "HkRowsOnUpdate", "HkRowsSpinAdd", "HkRowsSpinAddNum", "HkRowsSpinInputRight", "HkRowsSpinMouseAdd", "HkRowsSpinSub", "HkRowsSpinSubNum", "HkRowsSpinInputLeft", "HkRowsSpinMouseSub", "HkRowsSpinInputDirection", "HkRowsAgentInputLeft", "HkRowsAgentInputRight", "HkRowsAgentInputDirection", "HkRowsAgentInputDecide", "HkTrkAgentInputCancel", "HkTrkRequestCloseMenu", "HkTrkCloseMenuBool", "HkTrkCloseMenu3", "HkGuideNewItem", "HkGuideOnLateUpdate", "HkGuideUpdateInputGuide", "HkLookOnUpdate",
     "FrameDecide", "FrameVfxFeed", "FrameDipanel", "FrameTracker", "FrameGuide", "FrameLocale", "FrameCamera",
     "FrameScreens", "VfxScan", "VfxApply",
     "FeedDiText", "FeedDrColors", "FeedPartsMerge",
@@ -39,9 +40,19 @@ const char* const kNames[kCount] = {
     "ScreensEditorTick", "ScreensFsRestore", "ScreensTcsRestore", "ScreensDecidePush", "ScreensOptApply",
     "DipanelTickAll",
     "FeedDiState", "FeedDrCol",
+    "VfxRelayReload", "VfxPageRefresh", "ScanCommit",
 };
 
 std::atomic<bool> g_on{ false };
+std::atomic<bool> g_vfx_debug{ false };
+std::atomic<int> g_ctx{ 0 }, g_mode{ -1 };
+
+std::string ctx_text() {
+    const int c = g_ctx.load(std::memory_order_relaxed), m = g_mode.load(std::memory_order_relaxed);
+    std::string s = c == 1 ? " | ctx fight" : (c == 2 ? " | ctx training" : " | ctx menu");
+    if (m >= 0) s += " m" + std::to_string(m);
+    return s;
+}
 double g_ms_per_tick = 0;
 
 struct Acc {                                    // since the last frame(): written by any thread
@@ -99,6 +110,8 @@ std::string fmt_ms(double ms) { char b[32]; std::snprintf(b, sizeof b, "%.2f", m
 }  // namespace
 
 bool on() { return g_on.load(std::memory_order_relaxed); }
+bool vfx_debug() { return g_vfx_debug.load(std::memory_order_relaxed); }
+void set_context(int ctx, int mode) { g_ctx.store(ctx, std::memory_order_relaxed); g_mode.store(mode, std::memory_order_relaxed); }
 
 int64_t begin() { return g_on.load(std::memory_order_relaxed) ? now() : 0; }
 
@@ -118,6 +131,11 @@ void frame() {
         // stat check only (no I/O content): small enough to stay on the game thread
         const DWORD a = GetFileAttributesA(kOnFile);
         set_on(a != INVALID_FILE_ATTRIBUTES);
+        const bool dbg = GetFileAttributesA(kVfxDebugFile) != INVALID_FILE_ATTRIBUTES;
+        if (dbg != g_vfx_debug.load(std::memory_order_relaxed)) {
+            g_vfx_debug.store(dbg, std::memory_order_relaxed);
+            cmn::journal("vfx debug counters %s (vfx_debug_on.txt)", dbg ? "on" : "off");
+        }
     }
     if (!g_on.load(std::memory_order_relaxed)) return;
     const int64_t t = now();
@@ -152,7 +170,7 @@ void frame() {
                 s += " " + std::string(kNames[i]) + " " + fmt_ms(ms) + "/" + std::to_string(part_calls[i]);
                 if (part_calls[i] > 1) s += " max " + fmt_ms(part_max[i]);
             }
-            write_line(s);
+            write_line(s + ctx_text());
         }
         g_avg = g_avg * 0.95 + dt * 0.05;
     }
@@ -171,7 +189,7 @@ void frame() {
             if (shown++ == 8) break;
             s += " " + std::string(kNames[i]) + " " + fmt_ms(ms) + "/" + std::to_string(g_win[i].calls) + " max " + fmt_ms(g_win[i].max_call);
         }
-        write_line(s);
+        write_line(s + ctx_text());
         for (auto& w : g_win) w = Win{};
         g_win_start = t;
         g_win_frames = 0; g_win_sum = g_win_worst = g_win_ours = g_win_ours_worst = 0; g_win_slow = 0;
