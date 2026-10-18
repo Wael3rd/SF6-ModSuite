@@ -36,9 +36,9 @@ Costume and Drive colours for Street Fighter 6, set from the game's own menus. O
 ```
 reframework/plugins/SF6_ColorModNative.dll
 reframework/data/SF6_NativeLocale_data/locale.json
-reframework/data/SF6_ColorSpinExtra_data/      settings and colour packs (colors/<Name>_esfNNN/<pack>/)
+reframework/data/SF6_ColorSpinExtra_data/      settings, edited copies (overrides/), game colour backups (pristine/)
 reframework/data/SF6_DIRecolor_data/, SF6_DriveRecolor_data/, SF6_ColorModNative_data/   Drive settings, caches, log
-reframework/color_mods/                        colour mods dropped as downloaded (see below)
+reframework/color_mods/                        colour mods dropped as downloaded and the editor's colours (see below)
 ```
 
 ## Colour mods folder (reframework/color_mods)
@@ -54,13 +54,15 @@ file names. The mod creates the folders and a `README.txt` when they are missing
   and `modinfo.ini` are kept. The cache follows the archive (size and date): removing or replacing the archive removes
   its cache. Folders and files whose name starts with a dot are ignored. Zip, 7z and rar are supported (password
   protected archives are refused).
-- The colours show as `RW n`, after the ones of `SF6_ColorSpinExtra_data/colors` (those keep their numbers). Colours
-  already unpacked by a previous start are there at launch. Newly unpacked ones are added to the character's colour list
+- The colours show as `RW n`, then the editor's colours as `MC n`. Colours already unpacked by a previous start are there at launch. Newly unpacked ones are added to the character's colour list
   as soon as the game is out of a fight or the hub, the character select and Fighter Settings (about 1 s later);
   otherwise at the next launch.
-- The colour editor can edit them: SAVE keeps the edit apart (an override), RESET goes back to the original. Nothing in
-  `color_mods` is ever written, emptied or deleted by the mod, ERASE included (it only exists on the editor's own MC
-  colours). Remembered colour selections (`state.json`) store the colour's identity next to its rank, so adding or removing colours
+- The colour editor can edit them: SAVE keeps the edit apart (an override), RESET goes back to the original. A mod's
+  file is never written, emptied or deleted. The editor's own colours (SAVE AS, `MC n`) are saved in
+  `color_mods/<Character>/MANUALCOLORS_NN/`; ERASE deletes those only.
+- The former colour folder `reframework/data/SF6_ColorSpinExtra_data/colors/<Name>_esfNNN/<pack>/` (versions up to
+  0.21) is moved into `color_mods/<Character>/<pack>/` at the first start, with the selections, squares and edited copies
+  that named its files; then it is removed and never read again. A file dropped there later moves at the next start. Remembered colour selections (`state.json`) store the colour's identity next to its rank, so adding or removing colours
   never changes which colour a player had selected (a state saved by an older version keeps its rank and gets the identity
   at the first start). An override of a colour from an archive survives the archive being replaced.
 - Messages (`color_mods: ...`, one line per archive: unpacked in N ms / cannot be used and why) are in

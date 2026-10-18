@@ -209,6 +209,7 @@ std::map<std::string, chips::Pair> g_entry_chip;       // entry.chip ("<fighter>
 Opt g_list_f, g_list_c;                                // list_args
 Opt g_extra_first;                                     // extra_first (nil until a GetColorList)
 int64_t g_extra_count = 0;
+std::map<std::pair<int, int>, std::pair<int, int>> g_extras;   // per fighter / costume (engine::decide::Pull::extras)
 uint64_t g_setups[4] = {};                             // dbg.setups[1..3]
 std::optional<uint64_t> g_clears;                      // dbg.decide_clears
 
@@ -267,13 +268,22 @@ int64_t label_to_k(const Opt& f, const Opt& c, const std::string& label) {
     if (!f || !c) return 0;
     return dd::catalog().label_to_k((int)*f, (int)*c, label);
 }
-Opt entry_at(int64_t idx) {                                        // list index -> entry number or nil
-    if (!g_extra_first || idx < *g_extra_first || idx >= *g_extra_first + g_extra_count) return std::nullopt;
-    return idx - *g_extra_first + 1;
+// A select menu reads the list of its own fighter / costume: the other side's list (asked last) can hold more game
+// colours, its first entry index then fell on a game colour of this side (P2's EX colour shown as RW 1).
+std::optional<std::pair<int64_t, int64_t>> extras_of(int64_t f, int64_t c) {   // (extra_first, extra_count)
+    const auto it = g_extras.find({ (int)f, (int)c });
+    if (it == g_extras.end()) return std::nullopt;
+    return std::make_pair((int64_t)it->second.first, (int64_t)it->second.second);
 }
-Opt index_of_entry(int64_t k) {
-    if (!g_extra_first || k < 1 || k > g_extra_count) return std::nullopt;
-    return *g_extra_first + k - 1;
+Opt entry_at(int64_t idx, int64_t f, int64_t c) {                  // list index -> entry number or nil
+    const auto x = extras_of(f, c);
+    if (!x || idx < x->first || idx >= x->first + x->second) return std::nullopt;
+    return idx - x->first + 1;
+}
+Opt index_of_entry(int64_t k, int64_t f, int64_t c) {
+    const auto x = extras_of(f, c);
+    if (!x || k < 1 || k > x->second) return std::nullopt;
+    return x->first + k - 1;
 }
 std::string fc_key(const Opt& f, const Opt& c) { return tostr(f) + "_" + tostr(c); }
 bool chip_known(const std::string& key) { return lj::truthy(lj::index(g_chip_cfg, key.c_str())); }   // chip_cfg[key]
@@ -320,9 +330,10 @@ void learn_chip_slots(MO* ctrl, const Opt& f, const Opt& c, std::optional<uint32
 void spin_call(MO* spin, const char* dir, const char* /*who*/) {
     call(spin, dir);
 }
-void paint(int side, const Ref& text, const Ref& r0, const Ref& r1, const std::string& label, int64_t c0, int64_t c1) {
+void paint(int side, const Ref& text, const Ref& r0, const Ref& r1, const std::string& label, int64_t c0, int64_t c1,
+           const Ref& param = Ref(), int64_t idx = -1) {
     const uint64_t a = text ? (uint64_t)(uintptr_t)text.get() : 0, b = r0 ? (uint64_t)(uintptr_t)r0.get() : 0, c = r1 ? (uint64_t)(uintptr_t)r1.get() : 0;
-    screens::tracker::push_menu(side, a, b, c, label, c0, c1);
+    screens::tracker::push_menu(side, a, b, c, label, c0, c1, param ? (uint64_t)(uintptr_t)param.get() : 0, idx);
 }
 void paint_rect(MO* rect, uint32_t rgba) {                         // paint_rect: compare, then the core
     if (rect_rgba(rect) == rgba) return;
@@ -444,7 +455,10 @@ void on_selection_changed(Menu& m, int64_t k, int64_t fighter, int64_t costume) 
 }
 
 void tick_menu(Menu& m) {
-    if (di_active(m.side)) return;                                 // the panel shows the DI rows
+    if (di_active(m.side)) {                                       // the panel shows the DI rows: the Color row is the
+        if (nb("screens_tracker")) screens::tracker::leave_menu(m.side);   // Drive Reversal row, no "MC 1" painted on it
+        return;
+    }
     if (!m.text) { m.active = false; return; }
     if (!alive(m.param.get()) || !alive(m.text.get())) { m.agent.set(nullptr); m.text.set(nullptr); m.active = false; return; }
     json& sel = sel_of(m.side);
@@ -469,9 +483,9 @@ void tick_menu(Menu& m) {
         if (const json& p = lj::index(sel, "path"); lj::truthy(p) && p.is_string())
             if (const auto* list = entries_for(fighter, costume))
                 for (size_t i = 0; i < list->size(); ++i) if ((*list)[i].ident == p.get<std::string>()) { lj::set(sel, "rw", (int64_t)i + 1); break; }
-        const Opt target = index_of_entry(rw_or0(sel));
+        const Opt target = index_of_entry(rw_or0(sel), fighter, costume);
         if (!eq(lj::index(sel, "fighter"), fighter) || !eq(lj::index(sel, "costume"), costume) || !target || g_F - m.opened_at > 300) {
-            m.restore_pending = false; m.selected = entry_at(idx).value_or(0);
+            m.restore_pending = false; m.selected = entry_at(idx, fighter, costume).value_or(0);
         } else if (g_F - m.opened_at > 30) {
             m.restore_pending = false; m.selected = rw_or0(sel);
             call(m.param.get(), "setColor(System.Int32)", { ll::arg_i32((int32_t)*target) });   // moves the cursor
@@ -482,7 +496,7 @@ void tick_menu(Menu& m) {
             return;
         }
     }
-    const int64_t k = entry_at(idx).value_or(0);
+    const int64_t k = entry_at(idx, fighter, costume).value_or(0);
     if (k != m.selected || (k > 0 && (!eq(lj::index(sel, "fighter"), fighter) || !eq(lj::index(sel, "costume"), costume)))) {
         m.selected = k;
         on_selection_changed(m, k, fighter, costume);              // k = 0: the user left the entries
@@ -497,7 +511,7 @@ void tick_menu(Menu& m) {
         std::optional<chips::Pair> chip;
         if (entry && m.rect0 && m.rect1) chip = entry_chip(fighter, costume, *entry);
         else if (entry) if (auto it = g_entry_chip.find(fc_key(fighter, costume) + "|" + entry->path); it != g_entry_chip.end()) chip = it->second;
-        if (nb("screens_tracker")) paint(m.side, m.text, m.rect0, m.rect1, label, chip ? (int64_t)chip->first : -1, chip ? (int64_t)chip->second : -1);
+        if (nb("screens_tracker")) paint(m.side, m.text, m.rect0, m.rect1, label, chip ? (int64_t)chip->first : -1, chip ? (int64_t)chip->second : -1, m.param, idx);
     } else if (nb("screens_tracker")) {
         paint(m.side, m.text, Ref(), Ref(), "", -1, -1);          // no entry: the game owns the text
     }
@@ -1181,6 +1195,7 @@ void decide_pull() {
     g_list_c = p.list_known ? Opt(p.list_costume) : std::nullopt;
     g_extra_first = p.extra_first >= 0 ? Opt(p.extra_first) : std::nullopt;
     g_extra_count = p.extra_count;
+    g_extras = p.extras;
     for (int i = 0; i < 3; ++i) g_setups[i + 1] = p.setups[i];
     if (g_clears && p.mirror_clears != *g_clears) {                 // mirror rule: P2 picked P1's entry, left to the game
         json& s = g_state["p2"];
@@ -1215,31 +1230,12 @@ void decide_push() {
     }
 }
 
-// the drop folders' READMEs (the file name decides the fighter, the folder is only for humans), once per session, once
-// the game's fighter names are read (fighters::preload_async)
-void write_readmes() {
-    static bool done = false;
-    if (done || !fighters::ready()) return;
-    done = true;
-    for (const auto& [id, name] : fighters::all_known()) {
-        char rel[160], text[400];
-        std::snprintf(rel, sizeof rel, "SF6_ColorSpinExtra_data/colors/%s_esf%03d/README.txt", name.c_str(), id);
-        std::snprintf(text, sizeof text, "Drop %s colour files here: esf%03d_<costume>_cmd_<n>.user.2 (costume 001 = Outfit 1, n = RW n). "
-                      "Sub-folders are fine; the file name decides everything.", name.c_str(), id);
-        const std::filesystem::path path = std::filesystem::path(kDataPrefix) / rel;
-        std::ifstream in(path, std::ios::binary);
-        const std::string cur((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        if (cur == text) continue;
-        in.close();
-        write_data(rel, std::vector<uint8_t>(text, text + std::strlen(text)));
-    }
-}
-
 // The remembered selections are ranks in a colour list, and a rank moves when RW colours are added (a new pack, a
 // colour mod from reframework/color_mods) or the MC ones are renumbered. Each one therefore also stores the colour's
 // stable identity ("path", Entry::ident) and the rank is re-derived from it: at load, and after every catalogue
 // rebuild. A state saved without "path" (older versions) keeps its rank as it is and gets its "path" now (first save).
-// A colour whose file is not there now leaves the selection empty (default colour) but its identity is kept\n// (colour_state resolve_selection): it comes back when the colour does. Does nothing while the catalogue is
+// A colour whose file is not there now leaves the selection empty (default colour) but its identity is kept
+// (colour_state resolve_selection): it comes back when the colour does. Does nothing while the catalogue is
 // empty (not built yet, or every colour folder removed): the ranks then stay as they were.
 void resolve_state() {
     if (dd::catalog().all().empty()) return;
@@ -1311,7 +1307,6 @@ void frame(uint64_t lua_frame) {
     std::lock_guard lk(engine::live::mx());
     if (!boot()) return;
     g_F = lua_frame;
-    write_readmes();
     { const int64_t t = perf::begin(); decide_pull(); perf::end(perf::ScreensDecidePull, t); }
     { const int64_t t = perf::begin(); tick(); perf::end(perf::ScreensTick, t); }
     { const int64_t t = perf::begin(); refresh_fn(); perf::end(perf::ScreensRefreshFn, t); }

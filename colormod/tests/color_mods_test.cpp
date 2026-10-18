@@ -62,9 +62,47 @@ int main() {
     const fs::path root = color_mods::root_of(data);
     const std::string body = "USR2-not-parsed-here";
 
-    // the Color Mod's own colour folder: one pack and one editor colour
+    // the Color Mod's former colour folder: one pack, one editor colour, its READMEs; what names them by path
+    const std::string old_mc = "SF6_ColorSpinExtra_data\\colors\\Ryu_esf001\\MANUALCOLORS\\esf001_001_cmd_001.user.2";
+    const std::string new_mc = "..\\color_mods\\Ryu\\MANUALCOLORS\\esf001_001_cmd_001.user.2";
     put(data / "SF6_ColorSpinExtra_data/colors/Ryu_esf001/packA/esf001_001_cmd_001.user.2", body);
     put(data / "SF6_ColorSpinExtra_data/colors/Ryu_esf001/MANUALCOLORS/esf001_001_cmd_001.user.2", body);
+    put(data / "SF6_ColorSpinExtra_data/colors/Ryu_esf001/README.txt", "Drop Ryu colour files here");
+    put(data / "SF6_ColorSpinExtra_data/colors/Ken_esf010/README.txt", "Drop Ken colour files here");
+    put(data / "SF6_ColorSpinExtra_data/colors/Zed_esf099/p/esf099_001_cmd_001.user.2", body);   // an id not in the list
+    put(data / "SF6_ColorSpinExtra_data/state.json",
+        "{\n    \"p1\": {\n        \"costume\": 0,\n        \"fighter\": 1,\n        \"path\": \"SF6_ColorSpinExtra_data\\\\colors\\\\Ryu_esf001\\\\MANUALCOLORS\\\\esf001_001_cmd_001.user.2\",\n        \"rw\": 2\n    }\n}");
+    put(data / "SF6_ColorSpinExtra_data/chip_slots.json",
+        "{\"SF6_ColorSpinExtra_data\\\\colors\\\\Ryu_esf001\\\\MANUALCOLORS\\\\esf001_001_cmd_001.user.2\":[1,2],\"1_0\":{}}");
+    const std::string old_okey = "1_0_file_" + Catalog::sanitize("SF6_ColorSpinExtra_data\\colors\\Ryu_esf001\\packA\\esf001_001_cmd_001.user.2");
+    const std::string new_okey = "1_0_file_" + Catalog::sanitize("..\\color_mods\\Ryu\\packA\\esf001_001_cmd_001.user.2");
+    put(data / "SF6_ColorSpinExtra_data/overrides" / (old_okey + ".user.2"), body);
+
+    // 0. the former folder moves into color_mods, once; the paths that named its files follow them
+    {
+        auto m = color_mods::migrate_legacy(data, logfn);
+        CHECK(m.moved == 3 && m.failed == 0 && m.duplicates == 0 && m.renamed_overrides == 1 && m.removed);
+        CHECK(!fs::exists(data / "SF6_ColorSpinExtra_data/colors"));
+        CHECK(fs::exists(root / "Ryu/packA/esf001_001_cmd_001.user.2") && fs::exists(root / "Ryu/MANUALCOLORS/esf001_001_cmd_001.user.2"));
+        CHECK(fs::exists(root / "Zed/p/esf099_001_cmd_001.user.2"));                 // unknown id: the old folder's name
+        CHECK(!fs::exists(root / "Ryu/README.txt"));                                  // the old drop notes are not carried over
+        std::ifstream s(data / "SF6_ColorSpinExtra_data/state.json", std::ios::binary);
+        const std::string st((std::istreambuf_iterator<char>(s)), std::istreambuf_iterator<char>());
+        s.close();
+        CHECK(st.find("..\\\\color_mods\\\\Ryu\\\\MANUALCOLORS\\\\esf001_001_cmd_001.user.2") != std::string::npos && st.find("colors") == std::string::npos);
+        std::ifstream c(data / "SF6_ColorSpinExtra_data/chip_slots.json", std::ios::binary);
+        const std::string ch((std::istreambuf_iterator<char>(c)), std::istreambuf_iterator<char>());
+        c.close();
+        CHECK(ch == "{\"..\\\\color_mods\\\\Ryu\\\\MANUALCOLORS\\\\esf001_001_cmd_001.user.2\":[1,2],\"1_0\":{}}");
+        CHECK(!fs::exists(data / "SF6_ColorSpinExtra_data/overrides" / (old_okey + ".user.2")));
+        CHECK(fs::exists(data / "SF6_ColorSpinExtra_data/overrides" / (new_okey + ".user.2")));
+        CHECK(logged("files moved to color_mods") && logged("folder removed"));
+        // nothing there any more: a second run does nothing
+        auto again = color_mods::migrate_legacy(data, logfn);
+        CHECK(again.moved == 0 && !again.removed);
+        fs::remove_all(root / "Zed");
+        (void)new_mc;
+    }
 
     // color_mods: nested natives layout (Nexus), flat layout, garbage, encrypted, unpacked folder, loose file, dot folder
     make_zip(root / "Ryu/NexusMod.zip", { { "NexusMod/modinfo.ini", "name=x" },
@@ -85,7 +123,7 @@ int main() {
     // 1. cold start (nothing extracted yet): loose files only, dot things ignored
     {
         auto cand = color_mods::candidate_files(root);
-        CHECK(cand.size() == 2);                                         // Unpacked + loose
+        CHECK(cand.size() == 4);                                         // packA + MANUALCOLORS (moved), Unpacked, loose
         CHECK(color_mods::valid_cache_dirs(root).empty());
         CHECK(color_mods::list_archives(root).size() == 4);              // NexusMod, Flat, Garbage, Locked
     }
@@ -107,20 +145,21 @@ int main() {
         CHECK(count_files(root / ".cache") == 7);                        // Nexus: modinfo + cmd 000/001/002 + .complete; Flat: cmd + .complete (no png, no readme)
     }
 
-    // 3. catalogue: colors\ pack = RW 1, color_mods after it, the editor colour last
+    // 3. catalogue: the packs by folder (the archive cache, then Ryu\packA), the editor colour last
     Catalog cat;
     cat.build(data);
     {
         auto* ryu = cat.entries(1, 0);
-        CHECK(ryu && ryu->size() == 4);                                  // packA, Nexus 001, Nexus 002 (000 is empty), MANUAL
+        CHECK(ryu && ryu->size() == 4);                                  // Nexus 001, Nexus 002 (000 is empty), packA, MANUAL
         if (ryu && ryu->size() == 4) {
-            CHECK((*ryu)[0].label == "RW 1" && (*ryu)[0].src == 0);
-            CHECK((*ryu)[1].label == "RW 2" && (*ryu)[1].src == 1 && (*ryu)[1].n == 1);
-            CHECK((*ryu)[2].label == "RW 3" && (*ryu)[2].src == 1 && (*ryu)[2].n == 2);
-            CHECK((*ryu)[3].label == "MC 1" && (*ryu)[3].manual);
-            CHECK((*ryu)[1].path.rfind("..\\color_mods\\.cache\\", 0) == 0);
-            CHECK(!(*ryu)[1].okey.empty());
-            CHECK(fs::exists(data / (*ryu)[1].path));                    // the stored path resolves from the data folder
+            CHECK((*ryu)[0].label == "RW 1" && (*ryu)[0].n == 1 && !(*ryu)[0].manual);
+            CHECK((*ryu)[1].label == "RW 2" && (*ryu)[1].n == 2);
+            CHECK((*ryu)[2].label == "RW 3" && (*ryu)[2].path == "..\\color_mods\\Ryu\\packA\\esf001_001_cmd_001.user.2");
+            CHECK((*ryu)[3].label == "MC 1" && (*ryu)[3].manual && (*ryu)[3].path == new_mc);
+            CHECK((*ryu)[0].path.rfind("..\\color_mods\\.cache\\", 0) == 0);
+            CHECK(!(*ryu)[0].okey.empty());
+            CHECK((*ryu)[2].okey == new_okey);                           // the edited copy renamed by the move is found
+            CHECK(fs::exists(data / (*ryu)[0].path));                    // the stored path resolves from the data folder
         }
         CHECK(cat.entries(2, 0) && cat.entries(2, 0)->size() == 1);      // Luke: esf002_001 -> costume id 0 ... (001 - 1)
         auto* ken = cat.entries(10, 0);
@@ -163,8 +202,8 @@ int main() {
     // 6b. remembered selections follow the colour, not its rank (state.json keeps the identity next to the rank)
     {
         const fs::path d2 = tmp / "r2" / "reframework" / "data";
-        put(d2 / "SF6_ColorSpinExtra_data/colors/Ken_esf010/MANUALCOLORS/esf010_001_cmd_001.user.2", body);   // MC 1
-        put(d2 / "SF6_ColorSpinExtra_data/colors/Ken_esf010/packA/esf010_001_cmd_001.user.2", body);           // RW 1
+        put(color_mods::root_of(d2) / "Ken/MANUALCOLORS/esf010_001_cmd_001.user.2", body);   // MC 1
+        put(color_mods::root_of(d2) / "Ken/packA/esf010_001_cmd_001.user.2", body);           // RW 1
         Catalog a;
         a.build(d2);
         const std::string mc_ident = a.entries(10, 0)->at(1).ident;
@@ -175,10 +214,10 @@ int main() {
         b.build(d2);
         CHECK(b.entries(10, 0)->size() == 3);
         CHECK(b.entries(10, 0)->at(2).label == "MC 1");                                       // MC 1 moved from rank 2 to 3 ...
-        CHECK(b.find_ident(10, 0, mc_ident) == 3 && b.find_ident(10, 0, rw_ident) == 1);        // ... and its identity finds it
-        CHECK(b.entries(10, 0)->at(1).src == 1 && b.entries(10, 0)->at(1).label == "RW 2");   // the rank 2 of a legacy state would now be the mod
+        CHECK(b.find_ident(10, 0, mc_ident) == 3 && b.find_ident(10, 0, rw_ident) == 2);        // ... and the identities find them
+        CHECK(b.entries(10, 0)->at(0).label == "RW 1" && b.entries(10, 0)->at(0).ident.find("Ken\\Mod\\") != std::string::npos);   // the rank 1 of a legacy state would now be the mod
         fs::remove(color_mods::root_of(d2) / "Ken/Mod/esf010_001_cmd_001.user.2");
-        fs::remove(d2 / "SF6_ColorSpinExtra_data/colors/Ken_esf010/packA/esf010_001_cmd_001.user.2");
+        fs::remove(color_mods::root_of(d2) / "Ken/packA/esf010_001_cmd_001.user.2");
         Catalog c;
         c.build(d2);
         CHECK(c.find_ident(10, 0, rw_ident) == 0 && c.find_ident(10, 0, mc_ident) == 1);        // a colour whose file is gone: 0 = default
@@ -189,7 +228,7 @@ int main() {
         using screens::colour::json;
         const fs::path d3 = tmp / "r3" / "reframework" / "data";
         const fs::path r3 = color_mods::root_of(d3);
-        put(d3 / "SF6_ColorSpinExtra_data/colors/Ryu_esf001/packA/esf001_001_cmd_001.user.2", body);        // a pack, so the catalogue is not empty
+        put(r3 / "Ryu/packA/esf001_001_cmd_001.user.2", body);                                    // a pack, so the catalogue is not empty
         make_zip(r3 / "Luke/Upd.zip", { { "esf002_001_cmd_001.user.2", body }, { "esf002_001_cmd_002.user.2", body } });
         color_mods::sync(r3, logfn);
         Catalog a;

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -40,6 +41,9 @@ void push_sels(const int v[9]);
 struct Pull {
     bool list_known = false; uint32_t list_fighter = 0, list_costume = 0;   // list_args (nil until a GetColorList)
     int extra_first = -1; int extra_count = 0;                             // extra_first -1 = nil
+    // (fighter, costume) -> (extra_first, extra_count) of that pair's last list; absent = no entries. The select
+    // screen's two menus ask for two lists: each menu reads its own pair, never the other side's last list.
+    std::map<std::pair<int, int>, std::pair<int, int>> extras;
     uint64_t setups[3] = {};                                               // dbg.setups[1..3]
     uint64_t mirror_clears = 0;                                            // P2's selection cleared by the mirror rule
 };

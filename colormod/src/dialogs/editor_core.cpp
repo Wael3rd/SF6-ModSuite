@@ -17,6 +17,7 @@
 
 #include "../fighters.hpp"
 #include "../engine/catalog.hpp"
+#include "../engine/color_mods.hpp"
 #include "../engine/chips.hpp"
 
 namespace dialogs::editor::core {
@@ -404,10 +405,12 @@ std::string edit_okey() {                                       // :2212
 std::string pristine_path(int fighter, int costume, int id) { return fmt("%spristine/%d_%d_game_%d.user.2", DATA_DIR, fighter, costume, id); }
 // the fixed name, else the game's (fighters.hpp); "" when unknown
 std::string fighter_name(int id) { return fighters::name_or_empty(id); }
-// next free MANUALCOLORS_NN/esfXXX_YYY_cmd_NNN.user.2 for a fighter / costume (:2153)
+// next free color_mods/<Character>/MANUALCOLORS_NN/esfXXX_YYY_cmd_NNN.user.2 for a fighter / costume (:2153), relative
+// to reframework/data like the catalogue's paths
 bool manual_path(int fighter, int costume, std::string& rel) {
-    const std::string nm = fighter_name(fighter);
-    const std::string folder = fmt("%scolors/%s_esf%03d/", DATA_DIR, (nm.empty() ? fmt("Fighter%d", fighter) : nm).c_str(), fighter);
+    std::string nm = engine::color_mods::character_folder(fighter);
+    if (nm.empty()) nm = fighter_name(fighter);
+    const std::string folder = fmt("../color_mods/%s/", (nm.empty() ? fmt("Fighter%d", fighter) : nm).c_str());
     std::unordered_set<std::string> existing;
     if (auto* list = entries_for(fighter, costume)) for (auto& e : *list) existing.insert(backslashes(e.path));
     for (int pack = 1; pack <= 99; ++pack) {

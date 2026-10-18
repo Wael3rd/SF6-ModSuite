@@ -1,5 +1,5 @@
 // Fighter id -> name, one function for the whole mod. These names end up in file and folder names on users' disks
-// (colors/<Name>_esfNNN/, SF6_DIRecolor_data/<Name>.json, ...), so the spellings of today's fighters are fixed here.
+// (SF6_DIRecolor_data/<Name>.json, ...), so the spellings of today's fighters are fixed here.
 // A fighter a game update adds is named from the game's own message file (its English name reduced to [A-Za-z0-9]),
 // so no code change is needed; the file is read once, in the background from the plugin's start (preload_async).
 #pragma once

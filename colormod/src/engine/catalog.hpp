@@ -16,8 +16,7 @@ namespace engine {
 
 struct Entry {
     int n = 0;                 // colour number in the file name (cmd_NNN)
-    std::string path;          // "SF6_ColorSpinExtra_data\\colors\\...\\esfFFF_CCC_cmd_NNN.user.2"
-    int src = 0;               // 0 = SF6_ColorSpinExtra_data\colors, 1 = reframework\color_mods (the editor never writes there)
+    std::string path;          // "..\\color_mods\\<Character>\\...\\esfFFF_CCC_cmd_NNN.user.2" (from reframework/data)
     bool manual = false;      // saved by the editor (a MANUALCOLORS folder): labelled MC, after the packs
     std::string ident;         // stable identity: path, with the archive cache hash left out (what state.json and the overrides key on)
     std::string okey;          // override key "<fighter>_<costume>_file_<sanitised path>"

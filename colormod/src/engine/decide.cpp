@@ -77,7 +77,8 @@ MO* g_fs_text = nullptr;                      // Fighter Settings colour spin te
 // ---- decisions state (Lua locals of the same names) ---------------------------------------------------------------
 bool g_list_known = false;                    // list_args (nil until the first GetColorList)
 uint32_t g_list_f = 0, g_list_c = 0;
-int g_extra_first = -1, g_extra_count = 0;    // extra_first (-1 = nil), extra_count
+int g_extra_first = -1, g_extra_count = 0;    // extra_first (-1 = nil), extra_count: the last list
+std::map<std::pair<int, int>, std::pair<int, int>> g_extras;   // (fighter, costume) -> (extra_first, extra_count)
 std::unordered_set<uintptr_t> g_p2_ctrls;     // controllers whose last SetColor carried P2_VIRTUAL_ID
 uintptr_t g_side_data[3] = {};                // [1], [2]: ColorData address seen on that side's preview
 std::unordered_map<uintptr_t, std::string> g_applied;   // controller -> signature of what it wears
@@ -292,9 +293,12 @@ std::pair<int, int> battle_identity(const std::string& name) {   // "^esf(%d%d%d
 }
 
 // ---- which entry, which tree ---------------------------------------------------------------------------------------
-int entry_at(int idx) {                               // list index -> entry number (0 = none)
-    if (g_extra_first < 0 || idx < g_extra_first || idx >= g_extra_first + g_extra_count) return 0;
-    return idx - g_extra_first + 1;
+int entry_at(int idx, int fighter, int costume) {     // index in that pair's list -> entry number (0 = none)
+    const auto it = g_extras.find({ fighter, costume });
+    if (it == g_extras.end()) return 0;
+    const auto [first, count] = it->second;
+    if (idx < first || idx >= first + count) return 0;
+    return idx - first + 1;
 }
 
 const std::vector<Entry>* entries_for(int fighter, int costume) {
@@ -319,7 +323,10 @@ int wanted_entry(int side) {                          // the RW entry a side sho
     if (g_live[side - 1]) {                           // player on the menu: live cursor
         MO* prm = g_param[side - 1];
         auto r = call(prm, "get__cacheColorIndex");
-        return entry_at(r.exception_thrown ? -1 : (int32_t)r.dword);
+        auto rf = call(prm, "get_FighterId");
+        auto rc = call(prm, "GetCostumeId");
+        if (r.exception_thrown || rf.exception_thrown || rc.exception_thrown) return 0;
+        return entry_at((int32_t)r.dword, (int32_t)rf.dword, (int32_t)rc.dword);
     }
     return g_sel[side - 1].rw;                        // menu inactive / battle: remembered
 }
@@ -739,6 +746,11 @@ void post_get_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsign
         MO* list = reinterpret_cast<MO*>(*ret_val);
         const auto* entries = g_cat.entries((int)g_list_f, (int)g_list_c);
         const SF6CoreAPI* core = cmn::core();
+        const std::pair<int, int> key{ (int)g_list_f, (int)g_list_c };
+        if (list && (!entries || entries->empty())) {                // no entries for this pair: nothing of ours in it
+            g_extras.erase(key);                                     // (a list with more game colours than the previous
+            g_extra_first = -1; g_extra_count = 0;                   // one showed RW 1 on the game's own EX colour)
+        }
         if (!list || !entries || entries->empty() || !core) return;
         auto rc = call(list, "get_Count");
         const int32_t n = rc.exception_thrown ? 0 : (int32_t)rc.dword;
@@ -766,6 +778,7 @@ void post_get_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsign
             core->list_add(cmn::client(), list, ci);
             ++g_extra_count;                                         // (counted whatever list_add says, as the Lua)
         }
+        g_extras[key] = { g_extra_first, g_extra_count };
         ++g_n.lists;
         g_n.entries += (uint64_t)g_extra_count;
     } catch (...) { fault("GetColorList"); }
@@ -1139,6 +1152,7 @@ Pull pull() {
     Pull p;
     p.list_known = g_list_known; p.list_fighter = g_list_f; p.list_costume = g_list_c;
     p.extra_first = g_extra_first; p.extra_count = g_extra_count;
+    p.extras = g_extras;
     for (int i = 0; i < 3; ++i) p.setups[i] = g_setups[i + 1];
     p.mirror_clears = g_mirror_clears;
     return p;
@@ -1245,6 +1259,9 @@ bool install() {
         return false;
     }
     if (!R.game_chips) cmn::journal("decisions: hGUI.GetFighterCostumeColorData missing, squares fall back to the materials");
+    // the former colour folder (SF6_ColorSpinExtra_data\colors) moves into reframework/color_mods before anything reads
+    // a colour path (the catalogue, state.json, chip_slots.json): a few file moves, once
+    color_mods::migrate_legacy(kDataDir, [](const std::string& s) { cmn::journal("%s", s.c_str()); });
     {
         std::lock_guard lk(live::mx());
         g_cat.build(kDataDir);

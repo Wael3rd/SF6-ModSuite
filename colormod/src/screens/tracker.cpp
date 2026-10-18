@@ -61,6 +61,8 @@ struct MenuDisplay {
     uint64_t rect1_addr = 0;
     std::string label;            // "" = game owns the text (no custom entry)
     int64_t chip1 = -1, chip2 = -1;  // RGBA or -1 = no chips
+    uint64_t param_addr = 0;      // the menu's Param, and the colour index the label belongs to (-1 = no check)
+    int64_t index = -1;
     bool active = false;
 };
 
@@ -137,9 +139,25 @@ static float to_float(const std::string& s, float dflt = 0) {
 
 // ---- paint: per-side menu label + chips ----------------------------------
 
+// The menu's cursor right now (-1 = unreadable).
+int64_t cursor_of(uint64_t param_addr) {
+    auto* prm = reinterpret_cast<MO*>(param_addr);
+    if (!API::get()->sdk()->managed_object->is_managed_object(prm)) return -1;
+    static API::TypeDefinition* td = nullptr;
+    static API::Method* m = nullptr;
+    if (prm->get_type_definition() != td) { td = prm->get_type_definition(); m = ll::find_method_noargs(td, "get__cacheColorIndex"); }
+    if (!m) return -1;
+    auto r = m->invoke(prm, std::vector<void*>{});
+    return r.exception_thrown ? -1 : (int64_t)(int32_t)r.dword;
+}
+
 void paint_menu(int side) {
     auto& d = g_menu[side];
     if (!d.active || !d.text_addr) return;
+    // The screens push the label every 3 frames, this paints every frame: when the cursor leaves one of our entries
+    // for a game colour, the game writes its own text ("01") once, and the old label painted over it in the frames
+    // before the next push stayed on screen ("MC 23" on colour 01). Paint only while the cursor is where it was.
+    if (d.index >= 0 && cursor_of(d.param_addr) != d.index) return;
 
     // label: write only when non-empty (game colour = game owns the text)
     if (!d.label.empty()) {
@@ -382,10 +400,12 @@ bool install() {
 bool ready() { return g_on; }
 
 void push_menu(int side, uint64_t text_addr, uint64_t rect0_addr, uint64_t rect1_addr,
-               const std::string& label, int64_t chip1, int64_t chip2) {
+               const std::string& label, int64_t chip1, int64_t chip2, uint64_t param_addr, int64_t colour_index) {
     if (!menu_side(side)) return;
     std::lock_guard lk(g_mx);
     auto& d = g_menu[side];
+    d.param_addr = param_addr;
+    d.index = param_addr ? colour_index : -1;
     d.text_addr = text_addr;
     d.rect0_addr = rect0_addr;
     d.rect1_addr = rect1_addr;

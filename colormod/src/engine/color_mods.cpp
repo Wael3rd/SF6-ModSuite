@@ -7,11 +7,17 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <set>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "archive.hpp"
+#include "catalog.hpp"
 
 namespace engine::color_mods {
 namespace fs = std::filesystem;
@@ -21,11 +27,14 @@ namespace {
 constexpr const char* kCacheDir = ".cache";
 constexpr const char* kComplete = ".complete";
 
-// Same list and spelling as the costume_mods folders (Windows drops a trailing dot: "A.K.I").
-const char* const kCharacters[] = {
-    "Ryu", "Luke", "Kimberly", "Chun-Li", "Manon", "Zangief", "JP", "Dhalsim", "Cammy", "Ken", "Dee Jay", "Lily",
-    "A.K.I", "Rashid", "Blanka", "Juri", "Marisa", "Guile", "Ed", "E. Honda", "Jamie", "Akuma", "Sagat", "M. Bison",
-    "Terry", "Mai", "Elena", "C. Viper", "Alex", "Ingrid", "Yasmine", "Arjun",
+// Same list and spelling as the costume_mods folders (Windows drops a trailing dot: "A.K.I"), with the esf number.
+struct Character { int id; const char* name; };
+const Character kCharacters[] = {
+    { 1, "Ryu" }, { 2, "Luke" }, { 3, "Kimberly" }, { 4, "Chun-Li" }, { 5, "Manon" }, { 6, "Zangief" }, { 7, "JP" },
+    { 8, "Dhalsim" }, { 9, "Cammy" }, { 10, "Ken" }, { 11, "Dee Jay" }, { 12, "Lily" }, { 13, "A.K.I" }, { 14, "Rashid" },
+    { 15, "Blanka" }, { 16, "Juri" }, { 17, "Marisa" }, { 18, "Guile" }, { 19, "Ed" }, { 20, "E. Honda" }, { 21, "Jamie" },
+    { 22, "Akuma" }, { 25, "Sagat" }, { 26, "M. Bison" }, { 27, "Terry" }, { 28, "Mai" }, { 29, "Elena" },
+    { 30, "C. Viper" }, { 31, "Alex" }, { 32, "Ingrid" }, { 33, "Yasmine" }, { 34, "Arjun" },
 };
 
 bool is_dot(const fs::path& p) {
@@ -104,9 +113,12 @@ hidden folder .cache (only the colour files are kept). The new colours appear in
 of the character as soon as you are out of a fight, the character select and the colour editor;
 otherwise at the next launch. Delete the archive or the folder to remove its colours.
 
-Colours from this folder are listed as RW n, after the colours of the Color Mod's own colour
-folder. The colour editor can edit them (SAVE keeps your change apart, RESET goes back to the
-original) but never changes or deletes a file in this folder.
+Colours from this folder are listed as RW n. The colour editor can edit them (SAVE keeps your
+change apart, RESET goes back to the original) but never changes or deletes a mod's file.
+The colours you make in the editor (SAVE AS, listed as MC n) are saved here too, in
+<Character>/MANUALCOLORS_01, _02...; ERASE deletes them.
+Colours of older versions (reframework/data/SF6_ColorSpinExtra_data/colors) were moved here
+by the Color Mod; that folder is no longer read.
 Folders and files whose name starts with a dot are ignored.
 Messages are in reframework/data/SF6_ColorModNative_data/debug_log.json ("color_mods:").
 )README";
@@ -165,16 +177,172 @@ std::vector<fs::path> candidate_files(const fs::path& root) {
 void ensure_layout(const fs::path& root) {
     std::error_code ec;
     fs::create_directories(root, ec);
-    for (const char* c : kCharacters) fs::create_directories(root / c, ec);
+    for (const Character& c : kCharacters) fs::create_directories(root / c.name, ec);
     const fs::path readme = root / "README.txt";
-    if (!has(readme)) {
-        std::ofstream f(readme, std::ios::binary);
-        if (f) {
-            std::string t = readme_text(), crlf;
-            for (char c : t) { if (c == '\n') crlf += '\r'; crlf += c; }
-            f << crlf;
+    std::string t = readme_text(), crlf;
+    for (char c : t) { if (c == '\n') crlf += '\r'; crlf += c; }
+    std::ifstream in(readme, std::ios::binary);
+    const std::string cur((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    if (cur != crlf) {                                    // missing, or the text of an older version
+        std::ofstream f(readme, std::ios::binary | std::ios::trunc);
+        if (f) f << crlf;
+    }
+}
+
+std::string character_folder(int fighter_id) {
+    for (const Character& c : kCharacters) if (c.id == fighter_id) return c.name;
+    return {};
+}
+
+namespace {
+
+std::string read_text(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+bool write_text(const fs::path& p, const std::string& s) {      // through a temporary file and a rename
+    std::error_code ec;
+    const fs::path tmp = fs::path(p.wstring() + L".tmp");
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) return false;
+        f.write(s.data(), (std::streamsize)s.size());
+        if (!f) return false;
+    }
+    fs::rename(tmp, p, ec);
+    if (ec) { fs::remove(tmp, ec); return false; }
+    return true;
+}
+
+bool same_bytes(const fs::path& a, const fs::path& b) {
+    std::error_code ec;
+    if (fs::file_size(a, ec) != fs::file_size(b, ec) || ec) return false;
+    return read_text(a) == read_text(b);
+}
+
+// "a\\b" as it is written inside a JSON string
+std::string json_escaped(const std::string& s) {
+    std::string out;
+    for (char c : s) { if (c == '\\') out += "\\\\"; else out += c; }
+    return out;
+}
+
+// Every quoted occurrence of an old path (as JSON writes it, or with forward slashes) -> the new path.
+int replace_paths(std::string& text, const std::vector<std::pair<std::string, std::string>>& moves) {
+    int n = 0;
+    for (const auto& [from, to] : moves) {
+        std::string fwd = from;
+        for (char& c : fwd) if (c == '\\') c = '/';
+        for (const std::string& f : { json_escaped(from), fwd }) {
+            const std::string needle = "\"" + f + "\"", repl = "\"" + json_escaped(to) + "\"";
+            for (size_t i = text.find(needle); i != std::string::npos; i = text.find(needle, i + repl.size())) {
+                text.replace(i, needle.size(), repl);
+                ++n;
+            }
         }
     }
+    return n;
+}
+
+// The override key of a colour file at `rel` (catalog.cpp: "<fighter>_<costume id>_file_<sanitised identity>").
+std::string override_key(const std::string& rel, const std::string& fname) {
+    if (!is_colour_name(fname)) return {};
+    const int f = std::atoi(fname.substr(3, 3).c_str()), c = std::atoi(fname.substr(7, 3).c_str());
+    return std::to_string(f) + "_" + std::to_string(c - 1) + "_file_" + Catalog::sanitize(Catalog::ident_of(rel));
+}
+
+}  // namespace
+
+MigrateReport migrate_legacy(const fs::path& data_dir, void (*log)(const std::string&)) {
+    MigrateReport rep;
+    auto say = [&](const std::string& s) { if (log) log(s); };
+    std::error_code ec;
+    const fs::path legacy = data_dir / "SF6_ColorSpinExtra_data" / "colors";
+    if (!fs::is_directory(legacy, ec)) return rep;
+    const fs::path root = root_of(data_dir);
+    const fs::path overrides = data_dir / "SF6_ColorSpinExtra_data" / "overrides";
+    std::vector<std::pair<std::string, std::string>> moves;           // relative to data_dir, backslashes
+    std::vector<fs::path> files;
+    for (auto it = fs::recursive_directory_iterator(legacy, fs::directory_options::skip_permission_denied, ec);
+         it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) { say("color_mods: former colour folder not fully read (" + ec.message() + "): the rest moves at a later start"); break; }
+        if (it->is_regular_file(ec)) files.push_back(it->path());
+    }
+    for (const fs::path& src : files) {
+        const fs::path rel_in = fs::relative(src, legacy, ec);         // <Name>_esfNNN\<pack>\...\file
+        auto part = rel_in.begin();
+        if (part == rel_in.end()) continue;
+        const std::string top = part->string();
+        if (std::next(part) == rel_in.end()) {                           // a file directly in colors\: kept at the top
+            if (lower(top) == "readme.txt") { fs::remove(src, ec); continue; }
+        } else if (lower(src.filename().string()) == "readme.txt" && std::next(std::next(part)) == rel_in.end()) {
+            fs::remove(src, ec);                                         // <Name>_esfNNN\README.txt: the old drop note
+            continue;
+        }
+        // <Name>_esfNNN -> the color_mods folder of fighter NNN (else <Name>, as it was)
+        fs::path dest_dir = root;
+        fs::path rest;
+        if (std::next(part) != rel_in.end()) {
+            std::string folder = top;
+            const size_t at = lower(top).rfind("_esf");
+            if (at != std::string::npos && top.size() == at + 7) {
+                const std::string name = character_folder(std::atoi(top.substr(at + 4).c_str()));
+                folder = name.empty() ? top.substr(0, at) : name;
+            }
+            dest_dir = root / folder;
+            for (auto p = std::next(part); p != rel_in.end(); ++p) rest /= *p;
+        } else {
+            rest = rel_in;
+        }
+        fs::path dest = dest_dir / rest;
+        if (has(dest)) {
+            if (same_bytes(src, dest)) {                                 // already there (an earlier, cut-short run)
+                fs::remove(src, ec);
+                ++rep.duplicates;
+            } else {
+                dest = dest_dir / "_from_old_colors_folder" / rest;      // never overwrite a file of color_mods
+            }
+        }
+        if (has(src)) {
+            fs::create_directories(dest.parent_path(), ec);
+            fs::rename(src, dest, ec);
+            if (ec) { say("color_mods: cannot move " + src.string() + ": " + ec.message()); ++rep.failed; continue; }
+            ++rep.moved;
+        }
+        std::string from = fs::relative(src, data_dir, ec).string(), to = "..\\color_mods\\" + fs::relative(dest, root, ec).string();
+        for (char& c : from) if (c == '/') c = '\\';
+        for (char& c : to) if (c == '/') c = '\\';
+        moves.emplace_back(from, to);
+        // an edited copy of that colour: its file name carries the colour's path
+        const std::string fname = dest.filename().string(), ok_from = override_key(from, fname), ok_to = override_key(to, fname);
+        if (!ok_from.empty() && ok_from != ok_to) {
+            const fs::path a = overrides / (ok_from + ".user.2"), b = overrides / (ok_to + ".user.2");
+            if (has(a) && !has(b)) { fs::rename(a, b, ec); if (!ec) ++rep.renamed_overrides; }
+        }
+    }
+    // what names a colour by its path: the remembered selections, the squares of the editor's colours
+    for (const char* name : { "state.json", "chip_slots.json" }) {
+        const fs::path p = data_dir / "SF6_ColorSpinExtra_data" / name;
+        if (!has(p)) continue;
+        std::string text = read_text(p);
+        const int n = replace_paths(text, moves);
+        if (n > 0 && !write_text(p, text)) say(std::string("color_mods: cannot rewrite ") + name + " after the move");
+    }
+    // the former folder goes once nothing is left in it (empty folders only)
+    size_t left = 0;
+    std::error_code wec;
+    for (auto it = fs::recursive_directory_iterator(legacy, fs::directory_options::skip_permission_denied, wec);
+         it != fs::recursive_directory_iterator(); it.increment(wec)) {
+        if (wec) break;
+        if (!it->is_directory(wec)) ++left;
+    }
+    if (left == 0 && !wec) { fs::remove_all(legacy, ec); rep.removed = !has(legacy); }
+    say("color_mods: former colour folder SF6_ColorSpinExtra_data\\colors: " + std::to_string(rep.moved) + " files moved to color_mods, " +
+        std::to_string(rep.duplicates) + " already there, " + std::to_string(rep.failed) + " failed, " +
+        std::to_string(rep.renamed_overrides) + " edited copies renamed; folder " + (rep.removed ? "removed" : "KEPT (files left in it)"));
+    return rep;
 }
 
 SyncReport sync(const fs::path& root, void (*log)(const std::string&)) {

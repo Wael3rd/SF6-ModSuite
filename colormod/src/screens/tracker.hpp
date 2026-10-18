@@ -31,8 +31,10 @@ bool ready();                           // installed and not switched off by fau
 // text_addr = address of the spin's e_text control (0 = not resolved).
 // label = UTF-8 label to display ("RW 1", "MC 3", etc.), "" = game owns the text.
 // chip1/chip2 = RGBA uint32, or -1 = no chips.
+// param_addr / colour_index: the menu's Param and its _cacheColorIndex when the label was computed (0 / -1 = no
+// check): the paint stops as soon as the cursor is elsewhere.
 void push_menu(int side, uint64_t text_addr, uint64_t rect0_addr, uint64_t rect1_addr,
-               const std::string& label, int64_t chip1, int64_t chip2);
+               const std::string& label, int64_t chip1, int64_t chip2, uint64_t param_addr = 0, int64_t colour_index = -1);
 
 // Side deactivated (no more paint for this side).
 void leave_menu(int side);

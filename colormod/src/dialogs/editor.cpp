@@ -310,7 +310,11 @@ bool be_file_write(const std::string& rel, const std::vector<uint8_t>& bytes) {
 bool be_file_delete(const std::string& rel) {
     std::string r = rel;
     for (auto& c : r) if (c == '\\') c = '/';
-    if (r.rfind("SF6_ColorSpinExtra_data/", 0) != 0 || r.find("..") != std::string::npos) return false;   // the mod's own colour files only
+    // the mod's own files only: its data folder, and the editor's colours in color_mods (MANUALCOLORS, never a mod's)
+    const bool own = r.rfind("SF6_ColorSpinExtra_data/", 0) == 0 && r.find("..") == std::string::npos;
+    const bool manual = r.rfind("../color_mods/", 0) == 0 && r.find("..", 3) == std::string::npos &&
+                        r.find("/MANUALCOLORS") != std::string::npos && r.find("/.cache/") == std::string::npos;
+    if (!own && !manual) return false;
     std::error_code ec;
     const fs::path p = fs::path(kData) / r;
     const bool ok = fs::is_regular_file(p, ec) && fs::remove(p, ec);
@@ -319,15 +323,18 @@ bool be_file_delete(const std::string& rel) {
 }
 void be_purge_empty_files() {                                                   // the files emptied before the DLL could delete
     int removed = 0;
-    for (const char* sub : { "colors", "overrides" }) {
+    // the edited copies, and the editor's colours in color_mods (MANUALCOLORS folders: never a mod's file)
+    for (const fs::path& root : { fs::path(kData) / "SF6_ColorSpinExtra_data" / "overrides", fs::path(kData) / ".." / "color_mods" }) {
         std::error_code ec;
-        const fs::path root = fs::path(kData) / "SF6_ColorSpinExtra_data" / sub;
         if (!fs::exists(root, ec)) continue;
+        const bool mods = root.filename() == "color_mods";
         std::vector<fs::path> gone;
         for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
             if (ec) break;
+            if (mods && it->is_directory(ec) && it->path().filename() == ".cache") { it.disable_recursion_pending(); continue; }
             if (!it->is_regular_file(ec) || it->file_size(ec) != 0 || ec) continue;
             const std::string nm = it->path().filename().string();
+            if (mods && it->path().parent_path().filename().string().rfind("MANUALCOLORS", 0) != 0) continue;
             if (nm.size() > 7 && nm.compare(nm.size() - 7, 7, ".user.2") == 0) gone.push_back(it->path());
         }
         for (auto& p : gone) if (fs::remove(p, ec)) ++removed;

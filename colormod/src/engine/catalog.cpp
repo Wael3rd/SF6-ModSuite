@@ -13,9 +13,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char* kColorsRel = "SF6_ColorSpinExtra_data\\colors";
 constexpr const char* kOverridesRel = "SF6_ColorSpinExtra_data/overrides/";
-constexpr const char* kManualDir = "MANUALCOLORS";
 
 std::vector<uint8_t> read_all(const fs::path& p) {
     std::ifstream f(p, std::ios::binary);
@@ -57,7 +55,7 @@ void Catalog::build(const fs::path& data_dir) {
     trees_.clear();
     static const std::regex name_rx(R"(^esf(\d\d\d)_(\d\d\d)_cmd_(\d\d\d)\.user\.2$)");
     std::error_code ec;
-    auto add = [&](const fs::path& file, const std::string& rel, int src) {
+    auto add = [&](const fs::path& file, const std::string& rel) {
         const std::string fname = file.filename().string();
         std::smatch m;
         if (!std::regex_match(fname, m, name_rx)) return;
@@ -68,34 +66,25 @@ void Catalog::build(const fs::path& data_dir) {
         Entry e;
         e.n = n;
         e.path = rel;
-        e.src = src;
-        e.manual = src == 0 && rel.find(kManualDir) != std::string::npos;
+        // the editor's colours: color_mods\<Character>\MANUALCOLORS_NN (an archive's cache never holds one)
+        e.manual = rel.find(color_mods::kManualDir) != std::string::npos && rel.find("\\.cache\\") == std::string::npos;
         e.ident = ident_of(rel);
         e.okey = key + "_file_" + sanitize(e.ident);
         lists_[key].push_back(std::move(e));
     };
-    const fs::path root = data_dir / kColorsRel;
-    if (fs::exists(root, ec)) {
-        for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
-             it != fs::recursive_directory_iterator(); it.increment(ec)) {
-            if (ec) break;
-            if (!it->is_regular_file(ec)) continue;
-            add(it->path(), fs::relative(it->path(), data_dir, ec).string(), 0);   // backslashes, like fs.glob
-        }
-    }
-    // reframework/color_mods: colour mods as downloaded (folders, loose files, the cache of their archives).
-    // Paths stay relative to data_dir ("..\color_mods\..."), so read_tree and the override keys work unchanged.
+    // reframework/color_mods: colour mods as downloaded (folders, loose files, the cache of their archives) and the
+    // editor's colours. Paths stay relative to data_dir ("..\color_mods\..."), as the former colour folder's were
+    // ("SF6_ColorSpinExtra_data\colors\...", moved here by color_mods::migrate_legacy), so read_tree works unchanged.
     const fs::path cm_root = color_mods::root_of(data_dir);
     for (const fs::path& f : color_mods::candidate_files(cm_root)) {
         std::string rel = "..\\color_mods\\" + fs::relative(f, cm_root, ec).string();
         for (char& ch : rel) if (ch == '/') ch = '\\';
-        add(f, rel, 1);
+        add(f, rel);
     }
     // packs first (folder, then colour number) = RW 1..N, then the editor's colours = MC 1..M
     for (auto& [key, list] : lists_) {
         std::sort(list.begin(), list.end(), [](const Entry& a, const Entry& b) {
             if (a.manual != b.manual) return !a.manual;
-            if (a.src != b.src) return a.src < b.src;                   // colors\ packs keep their RW numbers, color_mods\ come after
             const std::string da = dir_of(a.path), db = dir_of(b.path);
             if (da != db) return da < db;
             return a.n < b.n;

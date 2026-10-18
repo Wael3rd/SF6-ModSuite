@@ -12,8 +12,11 @@ hidden folder .cache (only the colour files are kept). The new colours appear in
 of the character as soon as you are out of a fight, the character select and the colour editor;
 otherwise at the next launch. Delete the archive or the folder to remove its colours.
 
-Colours from this folder are listed as RW n, after the colours of the Color Mod's own colour
-folder. The colour editor can edit them (SAVE keeps your change apart, RESET goes back to the
-original) but never changes or deletes a file in this folder.
+Colours from this folder are listed as RW n. The colour editor can edit them (SAVE keeps your
+change apart, RESET goes back to the original) but never changes or deletes a mod's file.
+The colours you make in the editor (SAVE AS, listed as MC n) are saved here too, in
+<Character>/MANUALCOLORS_01, _02...; ERASE deletes them.
+Colours of older versions (reframework/data/SF6_ColorSpinExtra_data/colors) were moved here
+by the Color Mod; that folder is no longer read.
 Folders and files whose name starts with a dot are ignored.
 Messages are in reframework/data/SF6_ColorModNative_data/debug_log.json ("color_mods:").

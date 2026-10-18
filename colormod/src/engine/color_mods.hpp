@@ -35,6 +35,22 @@ std::vector<std::filesystem::path> candidate_files(const std::filesystem::path& 
 // Creates color_mods, the <Character> folders and README.txt when missing (worker thread).
 void ensure_layout(const std::filesystem::path& root);
 
+// The <Character> folder of a fighter id (esf001 -> "Ryu"); "" for an id not in the list.
+std::string character_folder(int fighter_id);
+
+// The editor's colours (MC n) live in color_mods/<Character>/MANUALCOLORS_NN/.
+constexpr const char* kManualDir = "MANUALCOLORS";
+
+// The Color Mod's former colour folder, reframework/data/SF6_ColorSpinExtra_data/colors/<Name>_esfNNN/<pack>/...:
+// every file goes to color_mods/<Character>/<pack>/... (the same sub-folders), and what names a moved colour by its
+// path follows it (state.json "path", chip_slots.json keys, the overrides' file names). The folder is removed once
+// empty; nothing reads or writes it afterwards. Runs before the first catalogue build; a no-op when it is gone.
+struct MigrateReport {
+    int moved = 0, duplicates = 0, failed = 0, renamed_overrides = 0;
+    bool removed = false;                               // the former folder is gone
+};
+MigrateReport migrate_legacy(const std::filesystem::path& data_dir, void (*log)(const std::string&));
+
 struct SyncReport {
     int extracted = 0, failed = 0, purged = 0, already = 0;
     bool changed() const { return extracted > 0 || purged > 0; }
