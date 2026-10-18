@@ -54,4 +54,46 @@ bool learn_chip_slots(json& chip_cfg, const std::string& key, const std::string&
     return dump_file(file, chip_cfg, err);
 }
 
+namespace {
+bool num_of(const json& v, int64_t& out) { if (!v.is_number()) return false; out = (int64_t)v.get<double>(); return true; }
+}
+
+bool resolve_selection(json& s, const engine::Catalog& cat, std::string* note) {
+    if (!is_table(s)) return false;
+    int64_t f = 0, c = 0, rw = 0;
+    if (!num_of(index(s, "fighter"), f) || !num_of(index(s, "costume"), c)) return false;
+    num_of(index(s, "rw"), rw);
+    bool changed = false;
+    auto say = [&](const std::string& t) { if (note) *note += (note->empty() ? "" : "; ") + t; };
+    // 1. a parked identity: the colour may be back now
+    if (const json pend = index(s, "path_pending"); truthy(pend) && is_table(pend)) {
+        int64_t pf = 0, pc = 0;
+        const json pp = index(pend, "path");
+        num_of(index(pend, "fighter"), pf); num_of(index(pend, "costume"), pc);
+        if (rw > 0 || pf != f || pc != c || !pp.is_string()) { set(s, "path_pending", json()); changed = true; }   // the player chose elsewhere
+        else if (int k = cat.find_ident((int)pf, (int)pc, pp.get<std::string>()); k > 0) {
+            set(s, "rw", (int64_t)k); set(s, "path", pp); set(s, "path_pending", json());
+            rw = k; changed = true;
+            say("colour " + pp.get<std::string>() + " is back at rank " + std::to_string(k));
+        }
+    }
+    // 2. the stored identity
+    const json p = index(s, "path");
+    if (truthy(p) && p.is_string() && !p.get<std::string>().empty()) {
+        const int64_t k = cat.find_ident((int)f, (int)c, p.get<std::string>());
+        if (k != rw) {
+            set(s, "rw", k);
+            changed = true;
+            if (k == 0) {
+                set(s, "path_pending", json{ { "path", p }, { "fighter", f }, { "costume", c } });
+                set(s, "path", json());
+                say("colour " + p.get<std::string>() + " not found now (kept for later)");
+            } else say("colour " + p.get<std::string>() + " moved from rank " + std::to_string(rw) + " to " + std::to_string(k));
+        }
+    } else if (rw > 0) {
+        if (auto* l = cat.entries((int)f, (int)c); l && (size_t)rw <= l->size()) { set(s, "path", (*l)[(size_t)rw - 1].ident); changed = true; }   // migration
+    }
+    return changed;
+}
+
 }  // namespace screens::colour

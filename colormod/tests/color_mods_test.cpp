@@ -9,6 +9,7 @@
 
 #include "../src/engine/catalog.hpp"
 #include "../src/engine/color_mods.hpp"
+#include "../src/screens/colour_state.hpp"
 #include "miniz.h"
 
 namespace fs = std::filesystem;
@@ -183,6 +184,56 @@ int main() {
         CHECK(c.find_ident(10, 0, rw_ident) == 0 && c.find_ident(10, 0, mc_ident) == 1);        // a colour whose file is gone: 0 = default
     }
 
+    // 6c. a remembered colour of an archive that is updated: rank 0 at boot but the identity is kept, the colour comes back
+    {
+        using screens::colour::json;
+        const fs::path d3 = tmp / "r3" / "reframework" / "data";
+        const fs::path r3 = color_mods::root_of(d3);
+        put(d3 / "SF6_ColorSpinExtra_data/colors/Ryu_esf001/packA/esf001_001_cmd_001.user.2", body);        // a pack, so the catalogue is not empty
+        make_zip(r3 / "Luke/Upd.zip", { { "esf002_001_cmd_001.user.2", body }, { "esf002_001_cmd_002.user.2", body } });
+        color_mods::sync(r3, logfn);
+        Catalog a;
+        a.build(d3);
+        const std::string ident = a.entries(2, 0)->at(1).ident;
+        json sel = { { "rw", 2 }, { "path", ident }, { "fighter", 2 }, { "costume", 0 } };         // remembered: colour 2 of the archive
+        CHECK(!screens::colour::resolve_selection(sel, a));                                       // consistent: nothing to change
+        // the archive is updated (date changes -> new cache hash): at boot its old cache is not read
+        fs::last_write_time(r3 / "Luke/Upd.zip", fs::last_write_time(r3 / "Luke/Upd.zip") + std::chrono::hours(1));
+        Catalog boot;
+        boot.build(d3);
+        CHECK(!boot.entries(2, 0));
+        std::string note;
+        CHECK(screens::colour::resolve_selection(sel, boot, &note));
+        CHECK(sel["rw"] == 0 && sel.value("path_pending", json::object()).value("path", "") == ident && !sel.contains("path"));
+        CHECK(note.find("kept for later") != std::string::npos);
+        CHECK(!screens::colour::resolve_selection(sel, boot));                                    // a second look changes nothing
+        CHECK(sel["path_pending"]["path"] == ident);
+        // a legacy-style save in between (fighter / costume rewritten) must not lose it either
+        sel["fighter"] = 2;
+        // the worker extracts the new version, the catalogue is rebuilt: the colour is back at its rank
+        color_mods::sync(r3, logfn);
+        Catalog after;
+        after.build(d3);
+        CHECK(screens::colour::resolve_selection(sel, after, &note));
+        CHECK(sel["rw"] == 2 && sel["path"] == ident && !sel.contains("path_pending"));
+        // the player picks another colour while the first is parked -> parked identity dropped
+        json sel2 = { { "rw", 0 }, { "fighter", 2 }, { "costume", 0 },
+                      { "path_pending", { { "path", ident }, { "fighter", 2 }, { "costume", 0 } } } };
+        sel2["rw"] = 1; sel2["path"] = after.entries(2, 0)->at(0).ident;
+        CHECK(screens::colour::resolve_selection(sel2, after) && !sel2.contains("path_pending") && sel2["rw"] == 1);
+        // another fighter: dropped too
+        json sel3 = { { "rw", 0 }, { "fighter", 1 }, { "costume", 0 }, { "path_pending", { { "path", ident }, { "fighter", 2 }, { "costume", 0 } } } };
+        CHECK(screens::colour::resolve_selection(sel3, after) && !sel3.contains("path_pending"));
+        // a colour that never comes back stays parked (no loss, no harm)
+        json sel4 = { { "rw", 0 }, { "fighter", 2 }, { "costume", 0 }, { "path_pending", { { "path", "..\\color_mods\\gone.user.2" }, { "fighter", 2 }, { "costume", 0 } } } };
+        CHECK(!screens::colour::resolve_selection(sel4, after) && sel4.contains("path_pending"));
+        // legacy state (rank only): the rank is kept, the identity is added
+        json legacy = { { "rw", 1 }, { "fighter", 2 }, { "costume", 0 } };
+        CHECK(screens::colour::resolve_selection(legacy, after) && legacy["rw"] == 1 && legacy["path"] == after.entries(2, 0)->at(0).ident);
+        // a selection of "no colour" stays so
+        json none = { { "rw", 0 }, { "fighter", 2 }, { "costume", 0 } };
+        CHECK(!screens::colour::resolve_selection(none, after));
+    }
     // 7. layout and README
     color_mods::ensure_layout(root);
     CHECK(fs::is_directory(root / "A.K.I") && fs::is_directory(root / "Chun-Li") && fs::is_directory(root / "Arjun"));

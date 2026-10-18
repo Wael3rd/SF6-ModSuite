@@ -12,6 +12,7 @@
 #include <string>
 
 #include "nlohmann/json.hpp"
+#include "../engine/catalog.hpp"
 
 namespace screens::colour {
 
@@ -27,5 +28,15 @@ std::optional<json> load_chip_cfg(const std::filesystem::path& file);
 // learn_chip_slots' write: chip_cfg[key] = { s0, s1 }; json.dump_file(CHIP_FILE, chip_cfg)
 bool learn_chip_slots(json& chip_cfg, const std::string& key, const std::string& s0, const std::string& s1,
                       const std::filesystem::path& file, std::string* err = nullptr);
+
+// Re-derives a remembered selection's rank (sel.rw) from the colour's identity (sel.path = Entry::ident), after the
+// colour lists changed (load, catalogue rebuild). Returns true when `sel` was modified (the caller saves it).
+//  - no path, rank > 0 (state of an older version): the rank stays, the path is filled in (migration)
+//  - path found: rank = its current rank
+//  - path not found (the file is not there NOW: an archive whose cache is being unpacked again, a first start after
+//    .cache was deleted, or a removed mod): rank 0 (default colour) and the identity is parked in sel.path_pending
+//    with its fighter / costume, out of the way of the code that rewrites path. Every later call looks for it again and
+//    puts the colour back as soon as it exists. It is dropped only when the player chose another colour or fighter.
+bool resolve_selection(json& sel, const engine::Catalog& cat, std::string* note = nullptr);
 
 }  // namespace screens::colour

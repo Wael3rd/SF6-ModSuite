@@ -10,6 +10,6 @@ if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -pro
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 
 if not exist obj mkdir obj
-cl /nologo /std:c++20 /O2 /MT /EHa /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I..\..\common /I..\..\common\third_party /Fo"obj\\" /Fe"color_mods_test.exe" color_mods_test.cpp ..\src\engine\color_mods.cpp ..\src\engine\catalog.cpp ..\src\engine\rsz.cpp ..\..\common\archive.cpp ..\..\build\colormod\miniz.obj ..\..\build\archive_deps.lib bcrypt.lib advapi32.lib shell32.lib ole32.lib user32.lib
+cl /nologo /std:c++20 /O2 /MT /EHa /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I..\..\common /I..\..\common\third_party /I..\third_party /Fo"obj\\" /Fe"color_mods_test.exe" color_mods_test.cpp ..\src\engine\color_mods.cpp ..\src\engine\catalog.cpp ..\src\engine\rsz.cpp ..\src\engine\luajson.cpp ..\src\screens\colour_state.cpp ..\..\common\archive.cpp ..\..\build\colormod\miniz.obj ..\..\build\archive_deps.lib bcrypt.lib advapi32.lib shell32.lib ole32.lib user32.lib
 if errorlevel 1 exit /b 1
 .\color_mods_test.exe

@@ -1239,28 +1239,15 @@ void write_readmes() {
 // colour mod from reframework/color_mods) or the MC ones are renumbered. Each one therefore also stores the colour's
 // stable identity ("path", Entry::ident) and the rank is re-derived from it: at load, and after every catalogue
 // rebuild. A state saved without "path" (older versions) keeps its rank as it is and gets its "path" now (first save).
-// A colour whose file is gone leaves the selection empty (the default colour). Does nothing while the catalogue is
+// A colour whose file is not there now leaves the selection empty (default colour) but its identity is kept\n// (colour_state resolve_selection): it comes back when the colour does. Does nothing while the catalogue is
 // empty (not built yet, or every colour folder removed): the ranks then stay as they were.
 void resolve_state() {
     if (dd::catalog().all().empty()) return;
     bool changed = false;
     for (const char* key : { "p1", "p2", "fs" }) {
-        json& s = g_state[key];
-        const Opt f = num(lj::index(s, "fighter")), c = num(lj::index(s, "costume"));
-        if (!f || !c) continue;
-        const int64_t rw = rw_or0(s);
-        const json& p = lj::index(s, "path");
-        if (lj::truthy(p) && p.is_string() && !p.get<std::string>().empty()) {
-            const int64_t k = dd::catalog().find_ident((int)*f, (int)*c, p.get<std::string>());
-            if (k != rw) {
-                cmn::journal("state %s: colour %s moved from rank %lld to %lld", key, p.get<std::string>().c_str(), (long long)rw, (long long)k);
-                lj::set(s, "rw", k);
-                if (k == 0) lj::set(s, "path", json());
-                changed = true;
-            }
-        } else if (rw > 0) {
-            if (const Entry* e = entry_k(entries_for(f, c), rw)) { lj::set(s, "path", e->ident); changed = true; }   // migrate
-        }
+        std::string note;
+        if (colour::resolve_selection(g_state[key], dd::catalog(), &note)) changed = true;
+        if (!note.empty()) cmn::journal("state %s: %s", key, note.c_str());
     }
     if (changed) { save_state(); g_sent.sels.clear(); }               // (the decisions get the new ranks at the next push)
 }
