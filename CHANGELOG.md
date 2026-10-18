@@ -7,6 +7,8 @@
   `.rar`, an unpacked folder or the loose `esfNNN_CCC_cmd_KKK.user.2` files), like the costume mods folder. Archives
   are unpacked once in the background after the first seconds of the game; the colours appear as `RW n` after the
   existing ones. The folders and a `README.txt` come with the package. The mod never writes to this folder.
+  Remembered colour selections now also store the colour's identity (its file), so new colours never shift a selection;
+  edits (overrides) of a colour from an archive survive a new version of the archive.
 - **Startup**: the Color Mod's and the Recording Manager's background threads (file writer, fighter names, Community
   client) now start after the game's first frames instead of at plugin load. REFramework's nightly 1.5.9.1 suspends every
   thread at startup while holding the loader lock; a thread caught holding the heap lock froze one tester's game.

@@ -1004,6 +1004,8 @@ void load_state_file() {                              // state.json as the Lua r
         auto it = j.find(keys[i]);
         if (it == j.end() || !it->is_object()) continue;
         g_sel[i] = { num(*it, "rw", 0), num(*it, "fighter", -2), num(*it, "costume", -2) };
+        if (auto p = it->find("path"); p != it->end() && p->is_string() && !p->get<std::string>().empty() && !g_cat.all().empty())
+            g_sel[i].rw = g_cat.find_ident(g_sel[i].fighter, g_sel[i].costume, p->get<std::string>());   // the colour itself, wherever its rank is now (0 = gone)
     }
 }
 
@@ -1056,6 +1058,9 @@ std::string applied_sig(void* ctrl) {
     return it == g_applied.end() ? std::string() : it->second;
 }
 
+static void (*g_rebuilt_cb)() = nullptr;
+void set_rebuilt_callback(void (*fn)()) { g_rebuilt_cb = fn; }
+
 static int rebuild_locked() {                               // live::mx() held
     // the selections are ranks in the list: a new RW entry shifts the MC ones, so each is followed by its label
     std::string lab[3];
@@ -1066,6 +1071,7 @@ static int rebuild_locked() {                               // live::mx() held
     g_infos.clear();                                  // labels can change (MC n): new ColorInfo objects at the next list
     for (int i = 0; i < 3; ++i)
         if (!lab[i].empty()) g_sel[i].rw = g_cat.label_to_k(g_sel[i].fighter, g_sel[i].costume, lab[i]);
+    if (g_rebuilt_cb) g_rebuilt_cb();
     cmn::journal("catalogue rebuilt: %zu fighter/costume lists", g_cat.all().size());
     return (int)g_cat.all().size();
 }

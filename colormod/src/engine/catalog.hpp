@@ -19,6 +19,7 @@ struct Entry {
     std::string path;          // "SF6_ColorSpinExtra_data\\colors\\...\\esfFFF_CCC_cmd_NNN.user.2"
     int src = 0;               // 0 = SF6_ColorSpinExtra_data\colors, 1 = reframework\color_mods (the editor never writes there)
     bool manual = false;      // saved by the editor (a MANUALCOLORS folder): labelled MC, after the packs
+    std::string ident;         // stable identity: path, with the archive cache hash left out (what state.json and the overrides key on)
     std::string okey;          // override key "<fighter>_<costume>_file_<sanitised path>"
     int k = 0;                 // 1-based rank in its list (the "entry number" the menus use)
     std::string label;         // "RW n" / "MC n"
@@ -37,6 +38,8 @@ public:
     rsz::NodeRef override_tree(const std::string& key);        // empty / missing override file = none
     bool set_override(const std::string& key, const rsz::NodeRef& tree);   // null tree = clear (empty file)
 
+    static std::string ident_of(const std::string& rel);       // see Entry::ident
+    int find_ident(int fighter, int costume, const std::string& ident) const;   // rank k of that colour, 0 = gone
     static std::string sanitize(const std::string& path);      // every non-alphanumeric byte -> '_'
 
 private:

@@ -60,8 +60,9 @@ file names. The mod creates the folders and a `README.txt` when they are missing
   otherwise at the next launch.
 - The colour editor can edit them: SAVE keeps the edit apart (an override), RESET goes back to the original. Nothing in
   `color_mods` is ever written, emptied or deleted by the mod, ERASE included (it only exists on the editor's own MC
-  colours). Adding colours to a character that already has MC colours moves those MC colours down the list; the mod
-  follows a selection made in the same session by its name.
+  colours). Remembered colour selections (`state.json`) store the colour's identity next to its rank, so adding or removing colours
+  never changes which colour a player had selected (a state saved by an older version keeps its rank and gets the identity
+  at the first start). An override of a colour from an archive survives the archive being replaced.
 - Messages (`color_mods: ...`, one line per archive: unpacked in N ms / cannot be used and why) are in
   `reframework/data/SF6_ColorModNative_data/debug_log.json`.
 ## During a fight

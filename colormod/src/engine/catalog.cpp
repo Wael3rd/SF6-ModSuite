@@ -29,6 +29,22 @@ std::string dir_of(const std::string& path) {          // Lua: path:match("^(.*)
 
 }  // namespace
 
+std::string Catalog::ident_of(const std::string& rel) {
+    // "..\color_mods\.cache\<name24>_<8 hex>\rest" -> "..\color_mods\.cache\<name24>\rest": the cache folder name carries
+    // a hash of the archive's size and date, which changes whenever the archive is replaced
+    static const std::string pre = "..\\color_mods\\.cache\\";
+    if (rel.compare(0, pre.size(), pre) != 0) return rel;
+    const size_t end = rel.find('\\', pre.size());
+    if (end == std::string::npos || end < pre.size() + 9 || rel[end - 9] != '_') return rel;
+    for (size_t i = end - 8; i < end; ++i) if (!std::isxdigit((unsigned char)rel[i])) return rel;
+    return rel.substr(0, end - 9) + rel.substr(end);
+}
+
+int Catalog::find_ident(int fighter, int costume, const std::string& ident) const {
+    if (auto* l = entries(fighter, costume)) for (auto& e : *l) if (e.ident == ident) return e.k;
+    return 0;
+}
+
 std::string Catalog::sanitize(const std::string& path) {
     std::string s = path;
     for (char& c : s) if (!std::isalnum((unsigned char)c)) c = '_';
@@ -54,7 +70,8 @@ void Catalog::build(const fs::path& data_dir) {
         e.path = rel;
         e.src = src;
         e.manual = src == 0 && rel.find(kManualDir) != std::string::npos;
-        e.okey = key + "_file_" + sanitize(rel);
+        e.ident = ident_of(rel);
+        e.okey = key + "_file_" + sanitize(e.ident);
         lists_[key].push_back(std::move(e));
     };
     const fs::path root = data_dir / kColorsRel;

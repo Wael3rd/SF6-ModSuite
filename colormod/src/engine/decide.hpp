@@ -44,6 +44,7 @@ struct Pull {
     uint64_t mirror_clears = 0;                                            // P2's selection cleared by the mirror rule
 };
 Pull pull();
+void set_rebuilt_callback(void (*fn)());   // called (live::mx() held) after every catalogue rebuild: the screens re-derive their remembered ranks
 int rebuild_catalog();           // after the Lua rebuilt its own (SAVE AS, ERASE, script load): lists count
 std::optional<std::pair<uint32_t, uint32_t>> squares(int fighter_id, int only_side);   // only_side 0 = any
 std::string follow_debug(int fighter_id);                                  // lines, '\n'-separated

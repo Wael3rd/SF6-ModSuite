@@ -436,7 +436,7 @@ void on_selection_changed(Menu& m, int64_t k, int64_t fighter, int64_t costume) 
     json& sel = sel_of(m.side);
     lj::set(sel, "rw", k); lj::set(sel, "fighter", fighter); lj::set(sel, "costume", costume);
     const Entry* e = k > 0 ? entry_k(entries_for(fighter, costume), k) : nullptr;
-    lj::set(sel, "path", e ? json(e->path) : json());
+    lj::set(sel, "path", e ? json(e->ident) : json());
     save_state();
     MO* ctrl = dd::find_visual_ctrl(m.side);
     if (!ctrl) return;
@@ -468,7 +468,7 @@ void tick_menu(Menu& m) {
     if (m.restore_pending) {                                       // menu (re)activated with an entry remembered
         if (const json& p = lj::index(sel, "path"); lj::truthy(p) && p.is_string())
             if (const auto* list = entries_for(fighter, costume))
-                for (size_t i = 0; i < list->size(); ++i) if ((*list)[i].path == p.get<std::string>()) { lj::set(sel, "rw", (int64_t)i + 1); break; }
+                for (size_t i = 0; i < list->size(); ++i) if ((*list)[i].ident == p.get<std::string>()) { lj::set(sel, "rw", (int64_t)i + 1); break; }
         const Opt target = index_of_entry(rw_or0(sel));
         if (!eq(lj::index(sel, "fighter"), fighter) || !eq(lj::index(sel, "costume"), costume) || !target || g_F - m.opened_at > 300) {
             m.restore_pending = false; m.selected = entry_at(idx).value_or(0);
@@ -570,7 +570,7 @@ void tick_fighter_settings() {
         json& s = g_state["fs"];
         lj::set(s, "rw", k); lj::set(s, "fighter", jv(g_list_f)); lj::set(s, "costume", jv(g_list_c));
         const Entry* e = k > 0 ? entry_k(entries_for(num(lj::index(s, "fighter")), num(lj::index(s, "costume"))), k) : nullptr;
-        lj::set(s, "path", e ? json(e->path) : json());
+        lj::set(s, "path", e ? json(e->ident) : json());
         save_state();
     }
     if (k != fsm.last_k) fs_shown(k, "fighter settings");
@@ -632,7 +632,7 @@ void tick_training_settings() {
         json& s = sel_of(side);
         lj::set(s, "rw", k); lj::set(s, "fighter", jv(g_list_f)); lj::set(s, "costume", jv(g_list_c));
         const Entry* e = k > 0 ? entry_k(entries_for(g_list_f, g_list_c), k) : nullptr;
-        lj::set(s, "path", e ? json(e->path) : json());
+        lj::set(s, "path", e ? json(e->ident) : json());
         save_state();
         Tcs::LiveRefresh r;
         r.side = side; r.at = g_F + 15; r.setups = g_setups[side];
@@ -719,9 +719,9 @@ void fs_refresh_step() {                                           // SAVE follo
         fsm.refresh.reset();
         if (const auto* list = entries_for(g_list_f, g_list_c))
             for (size_t i = 0; i < list->size(); ++i) {
-                if (path && (*list)[i].path == *path) {
+                if (path && (*list)[i].ident == *path) {
                     json& s = g_state["fs"];
-                    lj::set(s, "rw", (int64_t)i + 1); lj::set(s, "path", (*list)[i].path);
+                    lj::set(s, "rw", (int64_t)i + 1); lj::set(s, "path", (*list)[i].ident);
                     lj::set(s, "fighter", jv(g_list_f)); lj::set(s, "costume", jv(g_list_c));
                     save_state();
                     fsm.opened_at = g_F - 30; fsm.restore_steps = g_extra_count + 30; fsm.last_k = 0;
@@ -1138,7 +1138,7 @@ void track_path(json& s) {                                         // packs may 
     const json& p = lj::index(s, "path");
     if (!(lj::truthy(p) && p.is_string())) return;
     if (const auto* list = entries_for(num(lj::index(s, "fighter")), num(lj::index(s, "costume"))))
-        for (size_t i = 0; i < list->size(); ++i) if ((*list)[i].path == p.get<std::string>()) { lj::set(s, "rw", (int64_t)i + 1); break; }
+        for (size_t i = 0; i < list->size(); ++i) if ((*list)[i].ident == p.get<std::string>()) { lj::set(s, "rw", (int64_t)i + 1); break; }
 }
 void fs_restore_step() {
     if (fsm.restore_steps <= 0 || !fsm.spin) return;
@@ -1235,11 +1235,44 @@ void write_readmes() {
     }
 }
 
+// The remembered selections are ranks in a colour list, and a rank moves when RW colours are added (a new pack, a
+// colour mod from reframework/color_mods) or the MC ones are renumbered. Each one therefore also stores the colour's
+// stable identity ("path", Entry::ident) and the rank is re-derived from it: at load, and after every catalogue
+// rebuild. A state saved without "path" (older versions) keeps its rank as it is and gets its "path" now (first save).
+// A colour whose file is gone leaves the selection empty (the default colour). Does nothing while the catalogue is
+// empty (not built yet, or every colour folder removed): the ranks then stay as they were.
+void resolve_state() {
+    if (dd::catalog().all().empty()) return;
+    bool changed = false;
+    for (const char* key : { "p1", "p2", "fs" }) {
+        json& s = g_state[key];
+        const Opt f = num(lj::index(s, "fighter")), c = num(lj::index(s, "costume"));
+        if (!f || !c) continue;
+        const int64_t rw = rw_or0(s);
+        const json& p = lj::index(s, "path");
+        if (lj::truthy(p) && p.is_string() && !p.get<std::string>().empty()) {
+            const int64_t k = dd::catalog().find_ident((int)*f, (int)*c, p.get<std::string>());
+            if (k != rw) {
+                cmn::journal("state %s: colour %s moved from rank %lld to %lld", key, p.get<std::string>().c_str(), (long long)rw, (long long)k);
+                lj::set(s, "rw", k);
+                if (k == 0) lj::set(s, "path", json());
+                changed = true;
+            }
+        } else if (rw > 0) {
+            if (const Entry* e = entry_k(entries_for(f, c), rw)) { lj::set(s, "path", e->ident); changed = true; }   // migrate
+        }
+    }
+    if (changed) { save_state(); g_sent.sels.clear(); }               // (the decisions get the new ranks at the next push)
+}
+void on_catalog_rebuilt() { if (g_state_ok) resolve_state(); }       // (live::mx() held by the rebuild)
+
 bool boot() {                                                      // the main chunk: state and chip_cfg read once
     if (g_state_ok) return true;
     auto st = colour::load_state(kStateFile);
     if (!st) return false;
     g_state = std::move(*st);
+    resolve_state();
+    engine::decide::set_rebuilt_callback(on_catalog_rebuilt);
     if (auto cc = colour::load_chip_cfg(kChipFile)) g_chip_cfg = std::move(*cc);
     g_state_ok = true;
     return true;

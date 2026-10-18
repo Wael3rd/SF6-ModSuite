@@ -145,12 +145,43 @@ int main() {
     CHECK(rep.purged == 1 && rep.changed());
     CHECK(color_mods::valid_cache_dirs(root).size() == 1);
 
+    const std::string luke_okey = cat.entries(2, 0)->front().okey, luke_ident = cat.entries(2, 0)->front().ident;
+
     // 6. a changed archive (new content/size) gets a new cache folder, the old one is purged
     make_zip(root / "Luke/Flat.zip", { { "esf002_001_cmd_001.user.2", body + body }, { "esf002_001_cmd_002.user.2", body } });
     rep = color_mods::sync(root, logfn);
     CHECK(rep.extracted == 1 && rep.purged == 1);
     cat.build(data);
     CHECK(cat.entries(2, 0) && cat.entries(2, 0)->size() == 2);
+    // the archive changed: its cache folder (and path) changed, its identity and its override key did not
+    CHECK(cat.entries(2, 0)->front().okey == luke_okey && cat.entries(2, 0)->front().ident == luke_ident);
+    CHECK(cat.entries(2, 0)->front().path != luke_ident);
+    CHECK(luke_ident.find(".cache\\Flat_zip\\esf002") != std::string::npos && luke_ident.find("60edb32d") == std::string::npos);
+    CHECK(cat.find_ident(2, 0, luke_ident) == 1 && cat.find_ident(2, 0, "nope") == 0);
+
+    // 6b. remembered selections follow the colour, not its rank (state.json keeps the identity next to the rank)
+    {
+        const fs::path d2 = tmp / "r2" / "reframework" / "data";
+        put(d2 / "SF6_ColorSpinExtra_data/colors/Ken_esf010/MANUALCOLORS/esf010_001_cmd_001.user.2", body);   // MC 1
+        put(d2 / "SF6_ColorSpinExtra_data/colors/Ken_esf010/packA/esf010_001_cmd_001.user.2", body);           // RW 1
+        Catalog a;
+        a.build(d2);
+        const std::string mc_ident = a.entries(10, 0)->at(1).ident;
+        CHECK(a.entries(10, 0)->at(1).label == "MC 1" && a.find_ident(10, 0, mc_ident) == 2);   // remembered: rank 2 + identity
+        const std::string rw_ident = a.entries(10, 0)->at(0).ident;
+        put(color_mods::root_of(d2) / "Ken/Mod/esf010_001_cmd_001.user.2", body);              // a colour mod is added
+        Catalog b;
+        b.build(d2);
+        CHECK(b.entries(10, 0)->size() == 3);
+        CHECK(b.entries(10, 0)->at(2).label == "MC 1");                                       // MC 1 moved from rank 2 to 3 ...
+        CHECK(b.find_ident(10, 0, mc_ident) == 3 && b.find_ident(10, 0, rw_ident) == 1);        // ... and its identity finds it
+        CHECK(b.entries(10, 0)->at(1).src == 1 && b.entries(10, 0)->at(1).label == "RW 2");   // the rank 2 of a legacy state would now be the mod
+        fs::remove(color_mods::root_of(d2) / "Ken/Mod/esf010_001_cmd_001.user.2");
+        fs::remove(d2 / "SF6_ColorSpinExtra_data/colors/Ken_esf010/packA/esf010_001_cmd_001.user.2");
+        Catalog c;
+        c.build(d2);
+        CHECK(c.find_ident(10, 0, rw_ident) == 0 && c.find_ident(10, 0, mc_ident) == 1);        // a colour whose file is gone: 0 = default
+    }
 
     // 7. layout and README
     color_mods::ensure_layout(root);
