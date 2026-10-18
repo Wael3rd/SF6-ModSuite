@@ -28,6 +28,9 @@ bool save(const std::string& root, const std::string& kind, int id, const std::s
 // (null + err on a Lua error), save_table writes it as json.dump_file wrote the Lua table (an empty table = null).
 nlohmann::json load_table(const std::string& root, const std::string& kind, int id, std::string* err = nullptr);
 bool save_table(const std::string& root, const std::string& kind, int id, const nlohmann::json& table, std::string* err = nullptr);
+// save_table's file and bytes, without writing (the caller hands them to a writer thread); false = nothing to write
+bool save_table_bytes(const std::string& root, const std::string& kind, int id, const nlohmann::json& table, std::string& path,
+                      std::string& bytes, std::string* err = nullptr);
 
 // "Ryu", ... or "esf0NN" (the two scripts' NAMES table)
 std::string char_name(int id);

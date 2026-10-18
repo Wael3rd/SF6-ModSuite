@@ -147,7 +147,12 @@ json* cfg_of(Mech m, int fighter, int side) {
 void save_di(int fighter) {
     std::lock_guard<std::recursive_mutex> lk(g_mx);
     auto it = g_di.find(fighter);
-    if (it != g_di.end()) settings::save_table(g_env.root, "di", fighter, it->second);
+    if (it == g_di.end()) return;
+    if (!g_env.write_async) { settings::save_table(g_env.root, "di", fighter, it->second); return; }
+    // the bytes are made here (under the lock: the table as it is now), the file is written by the background writer:
+    // 4-15 ms on the game thread every 60 frames in a fight when the parts list changed (16/10 perf logs)
+    std::string path, bytes;
+    if (settings::save_table_bytes(g_env.root, "di", fighter, it->second, path, bytes)) g_env.write_async(path, std::move(bytes));
 }
 void save_dr(int fighter) {
     std::lock_guard<std::recursive_mutex> lk(g_mx);

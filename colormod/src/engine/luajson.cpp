@@ -58,13 +58,20 @@ json load_file(const fs::path& p) {
     catch (const json::exception&) { return json(); }
 }
 
+namespace {
+std::string to_crlf(const std::string& lf) {                        // the text-mode LF -> CRLF of json.dump_file
+    std::string crlf;
+    crlf.reserve(lf.size() + lf.size() / 8);
+    for (char ch : lf) { if (ch == '\n') crlf += '\r'; crlf += ch; }
+    return crlf;
+}
+}  // namespace
+
 // json.dump_file's bytes, written to a temporary file then moved over the old one (a crash never leaves half a file)
 bool write_text(const fs::path& p, const std::string& lf, std::string* err) {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
-    std::string crlf;
-    crlf.reserve(lf.size() + lf.size() / 8);
-    for (char ch : lf) { if (ch == '\n') crlf += '\r'; crlf += ch; }
+    const std::string crlf = to_crlf(lf);
     fs::path tmp = p;
     tmp += ".tmp";
     {
@@ -75,6 +82,12 @@ bool write_text(const fs::path& p, const std::string& lf, std::string* err) {
     }
     fs::rename(tmp, p, ec);
     if (ec) { fs::remove(tmp, ec); if (err) *err = "cannot replace " + p.string(); return false; }
+    return true;
+}
+
+bool dump_bytes(const json& v, std::string& out, std::string* err) {
+    try { out = to_crlf(encode(v).dump(4)); }
+    catch (const json::exception& e) { if (err) *err = e.what(); return false; }
     return true;
 }
 

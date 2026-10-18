@@ -27,6 +27,8 @@ json encode(const json& v);
 json load_file(const std::filesystem::path& p);                 // missing or invalid file: null (nil)
 bool write_text(const std::filesystem::path& p, const std::string& lf, std::string* err);
 bool dump_file(const std::filesystem::path& p, const json& v, std::string* err);
+// the exact bytes dump_file writes (encode + dump(4) + CRLF), for a writer off the game thread; false + err on failure
+bool dump_bytes(const json& v, std::string& out, std::string* err);
 
 bool truthy(const json& v);
 bool is_table(const json& v);

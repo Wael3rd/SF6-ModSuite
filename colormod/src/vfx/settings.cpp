@@ -227,6 +227,15 @@ bool save_table(const std::string& root, const std::string& kind, int id, const 
     return dump_file(p, table, err);
 }
 
+bool save_table_bytes(const std::string& root, const std::string& kind, int id, const json& table, std::string& path, std::string& bytes,
+                      std::string* err) {
+    const fs::path p = file_of(root, kind, id);
+    if (p.empty()) { if (err) *err = "unknown kind " + kind; return false; }
+    if (!engine::luajson::dump_bytes(table, bytes, err)) return false;
+    path = p.string();
+    return true;
+}
+
 bool save(const std::string& root, const std::string& kind, int id, const std::string& text, std::string* err) {
     const fs::path p = file_of(root, kind, id);
     if (p.empty()) { if (err) *err = "unknown kind " + kind; return false; }

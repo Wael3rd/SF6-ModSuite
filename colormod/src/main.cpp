@@ -78,6 +78,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
             env.root = "reframework/data";
             env.L = [](const std::string& k) { return dialogs::locale::get(k, {}); };
             env.squares = [](int f, int side) { return engine::decide::squares(f, side); };
+            env.write_async = [](const std::string& path, std::string bytes) { cmn::bgwriter::write(path.c_str(), std::move(bytes)); };
             vfx::drive_cfg::set_env(env);
             vfx::drive_cfg::preload();
             cmn::g_bridge_vfx.feed_frame = vfx::feed::on_frame;
