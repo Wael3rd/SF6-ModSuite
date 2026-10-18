@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.16.2 (2026-10-18) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Color Mod | 0.22.2 | Drive Reversal colours, Drive Impact / Reversal effects no longer follow Drive Rush |
+| SF6 Native Core | 0.8.2 | unchanged |
+| SF6 Slots Loader | 1.12.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. Needs SF6 Native Core 0.8.2.
+
+### SF6 Color Mod 0.22.2
+- Drive Reversal keeps its own colours. The game plays one more effect after both Drive Impact and Drive Reversal;
+  it was painted with the Drive Impact colours, so a Drive Reversal took the Drive Impact colours, even when set to Off.
+- The ring behind the fighter during a Drive Reversal takes the Drive Reversal colour, and the common Drive Impact
+  effects the Drive Impact colour. Both took the Drive Rush colour before.
+
+### Known issues
+- The pencil-like outline around the fighter during Drive Impact, Drive Reversal (red) and Drive Rush (green) keeps
+  the game's colours: it is drawn by the game's camera filter, not by an effect.
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.16.1 (2026-10-18) — SF6 Mod Suite
 
 | Package | Version | |
