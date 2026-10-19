@@ -45,6 +45,9 @@ void init() {
     }
 }
 
+const SF6CoreAPI* core() { return core_ok() ? g_api : nullptr; }
+SF6CoreClient* client() { return core_ok() ? g_client : nullptr; }
+
 void log_path() {
     if (g_logged) return;
     g_logged = true;

@@ -21,6 +21,10 @@ namespace slots::ui {
 // display path is active on the first LateUpdateBehavior frame.
 void init();
 void log_path();
+// The core and this plugin's client, for the modules that use its services directly (the option
+// service: rto_menu.cpp). nullptr without the core.
+const SF6CoreAPI* core();
+SF6CoreClient* client();
 
 // ---- P1: data injection (SL-07, SL-08, SL-09) ----
 // clone: MemberwiseClone.  Returns an object with one caller-owned ref

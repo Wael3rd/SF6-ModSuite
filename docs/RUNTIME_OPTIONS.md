@@ -1,7 +1,8 @@
 # Runtime costume options (design, in progress)
 
-Status: lot A (this document + the loader part) is built behind a setting that is **off by default**. The plugin
-part (menu, runtime swaps) is not built yet. Nothing changes for a user who does not set `RuntimeOptions`.
+Status: lot A (the loader part) and lot B (the plugin: runtime swaps, the Battle Settings menu, the `former`
+migration) are built, behind a setting that is **off by default**. Lot B is not tested in game yet. Nothing changes
+for a user who does not set `RuntimeOptions` (no manifest: the plugin's runtime-options code stays idle).
 
 ## Goal
 
@@ -33,8 +34,9 @@ On a fighter's model (Training) and on the Battle Settings preview, per model:
   `set_Material`, for 30 frames and more): options must be **preloaded** and applied once ready. Already loaded,
   the swap is ready at frame 0.
 - A body mesh and its material file belong together: swap them as a pair when an option ships both.
-- Open anomaly: after a texture swap and its restore, both P1 and P2 dresses looked different. A texture binding may
-  live in a material instance shared by both models. See [Textures](#textures-and-the-shared-material-question).
+- Texture bindings are per model: during the probe's texture phases on P1, P2's binding kept its own path in every
+  sample (`rto2_result_p1.json`, `other.tex`). The visual anomaly seen after a swap and its restore (P2's dress
+  looked different) is not explained by the bindings; see [Textures](#textures-and-the-shared-material-question).
 
 ## Settings
 
@@ -68,7 +70,11 @@ names a group, groups whose `AddonFor` names the root.
   Mod) or `other` (user files, cloth, scenes: only at the next launch). Per option, `apply` sums it up: `live`,
   `colour` or `relaunch`.
 - Options of different groups can ship the same file (Mai: the NSFW, SFW and Skimpy groups all ship the body mesh).
-  They exclude each other: the menu turns off any chosen option that ships a file of the option just chosen.
+  When an option is chosen, the menu turns off the chosen options of other groups that come **later** in the
+  layering and ship one of its files (they would hide it). Earlier ones stay: the new option wins the shared file and
+  their other files still apply, as in the variants the loader builds (Mai "Regular - Barefoot" = an SFW option for
+  its dress texture + a Skimpy option for the body mesh). (Lot B narrowed the first rule, "any option sharing a
+  file", which turned off the SFW option's texture and left a set no variant has.)
 - **Defaults** of an outfit = the options its combination is made of, minus those whose every file a later option
   replaces (they are not worn).
 
@@ -168,6 +174,7 @@ Written by the plugin only, read at runtime. Per mod key, per player side:
 ```json
 {
   "format": "sf6-costume-choices-1",
+  "former_done": "2026-10-19 21:45 re_chunk_000.pak.patch_001.pak",
   "mods": {
     "esf028/mini dress mai c1 swap": {
       "p1": {"changed": true, "options": ["0e0a734f", "3d8bf169", "4989efb2", "cc13098f"], "names": ["..."]},
@@ -182,7 +189,9 @@ Written by the plugin only, read at runtime. Per mod key, per player side:
   wins, until "Restore defaults".
 - Ids plus names: an option renamed or removed by a mod update is dropped (log line), the others stay.
 - Keyed by mod, not by slot number: the choices survive slot renumbering.
-- "Side" = the player side of the local user in Battle Settings (P1 / P2 there), the side seated in a fight.
+- "Side" = the menu's Player side row (P1 by default): offline, the fighter seated on that side wears that side's
+  options (Training dummy, Versus); online, the player's own fighter wears P1's (the opponent never wears a slot).
+- `former_done`: the manifest (`generated` + `pak`) whose `former` slots were migrated.
 
 ## Runtime (plugin, lot B)
 
@@ -205,6 +214,38 @@ none -> the `base` copy if listed; else the slot's own file (nothing to do).
    the files.
 6. **Online**: options are visual and local: the opponent sees the default outfit (no network data), as for colours.
 
+### Built (lot B): `plugin/src/rto.cpp`, `rto_data.cpp`
+
+- **Load**: at plugin start (synchronously, before the costume module: the `former` migration needs it; Mai's
+  manifest is 20 KB). A manifest of another format, or one whose `pak` is not `outfits.json`'s, is ignored (one log
+  line). The loader now also renames the pak in `costume_options.json` when it only moves the pak (same "pak" key as
+  `outfits.json`), else the plugin would take the manifest for stale.
+- **Models**: the preview (`CaptureRoomFighter.FighterObj` once `IsSetUpEnd`) and each fighter (`PlayerBehavior`,
+  `_PlayerID` 0 / 1, once `IsAppliedResource`). Its components are walked once (transform tree, 400 nodes at most):
+  `via.render.Mesh`, `via.motion.Chain`, `app.PlayerColorController`. Its **slot is found from the paths its
+  meshes load** (`product/model/esf/<fighter>/<folder>/`), so the online alias (a slot over its carrier) needs
+  nothing more. Game objects are never `add_ref`'d (R21): checked alive (`is_managed_object` + type) before use.
+- **Pass** (per model, what differs from the manifest's desired state): verify the parts swapped on the frame
+  before; meshes and materials (a pair in the same frame when both change); `SetColor(ColorNum)` on the model's
+  colour controllers after a material change; textures on parts whose material is settled (the bindings of a
+  material that name a target are found once per material file); chains (`set_ChainAsset` + `restart`).
+- **Never half loaded**: every file is created ahead (`create_resource` + holder, kept by the plugin) and given to a
+  model only 30 frames later (textures 60); then the model's own flags must say drawable **in the same frame**
+  (`MeshReady`; `MaterialReady` and `MaterialNum` > 0) and again **on the next frame**, else the part goes back at
+  once to what it wore (a holder of that file made before the swap) and is tried again later (1 s, 2 s, 4 s...;
+  left out after 6 tries, one log line). The probe's not-resident body stayed `MeshReady` 0 for 50+ frames.
+- **Chains**: the body's chain is not loaded from the slot's folder (Mai: `esf028/002/esf028_002_01_chain.chain`),
+  so an option's `..._01_chain.chain` stands for the chain of the part with the same number (the GameObject whose
+  mesh is `..._01.mesh`); the way back is the file that part wore when first seen.
+- **When**: the preview while Battle Settings is up (every 10 frames: a menu screen; a model the game rebuilt, e.g.
+  outfit or colour change, is found by its paths and done again). Fighters only after an event: an outfit mounted
+  for a fight (`FighterVisualHolder..ctor`) or a model built (`PlayerBehavior.SetupAppearance`) opens a 10 s watch
+  (every 10 frames), then nothing: no read in a fight (R38). If `SetupAppearance` kept the watch open for 30 s it is
+  ignored for the session (not a build event). Nothing while the character select is open.
+- **Ahead**: 30 s after start, the files of the choices made in the menu (both sides, 64 at most) are loaded and
+  kept, so a fight shows them at once; other holders are given back 10 s after their last use.
+- 5 exceptions: the runtime options stop for the session (one log line).
+
 ### Textures and the shared material question
 
 The probe saw a texture change leak to the other player (or not revert). Before relying on `setMaterialTexture`:
@@ -214,6 +255,15 @@ its binding pointed at the option's texture (`mdf2_rebind_textures`, already use
 textures), and the plugin swaps that material per model (`set_Material` is proven per model). Skin options that are
 materials themselves then combine with a texture option only through such copies; the loader would build them for
 the pairs actually chosen (lot B decides).
+
+Lot B, from the probe's results: P2's binding (`getMaterialTexture` path, same slot, same material) stayed
+`mini/mini1_ATOS.tex` through P1's swap to `royalb1_ATOS.tex`, its hold and its restore, and the screenshot during
+the swap shows P2 unchanged (`results_v2/p1_tex_atos_2on.png`). **Bindings are per model**: lot B uses
+`setMaterialTexture` per model and does not build the material copies. The difference seen after the restore is not
+explained by the bindings (the probe restored through a fresh holder of the original path). Lot B never keeps the
+game's holders (R21) either: a way back is a holder the plugin creates for that file. **To check in game**: P1 and
+P2 in the same outfit, a dress option on P2 only: P1's dress must not change, before and after going back. If it
+does, the fallback above is the next step.
 
 ## Menu (Battle Settings, lot B)
 
@@ -225,6 +275,27 @@ the pairs actually chosen (lot B decides).
 - Live preview: each change is applied to the preview model at once (steps 2-3), and saved.
 - No new core capability is expected. If the option service cannot give a page whose rows change with the costume
   without closing it, that is a core change and needs an ADR (Proposed, then accepted by the user) before code.
+
+### Built (lot B): `plugin/src/rto_menu.cpp` (no new core capability)
+
+- **Where**: Battle Settings > character (Fighter Settings, agent `MatchingFighterSetting`). When the preview wears
+  a slot with options, the costume row's text ends with the decide key (`<ICON KeyF>`, `<ICON BtnD>` after a pad
+  input). The hint is on the row itself, not in the guide bar: the Color Mod rewrites the guide bar's text every
+  frame (its own hints), two writers there would fight. If the game rewrote the row's text all the time, the hint
+  stops for that visit (one log line).
+- **Key**: `F` (or the pad's A / Cross) with the costume row focused opens the menu. The Color Mod's keys are
+  elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
+  never open together (both need the option window closed).
+- **Pages** (7 rows at most, the dialog's pool): page 1 = Player side (P1 / P2), Preset (Custom + the mod's
+  variants), the first option rows, More options (pushes page 2), Restore defaults; later pages = option rows (+
+  More options). A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
+  split in rows "Group (1/2)"...). A toggle = an Off / On row. Options that change nothing on the model (colour or
+  cloth files only, e.g. the tan) are not offered; one that also ships such files is marked `*` (its description
+  says so). Texts are English only for now.
+- **A change**: saved at once (`costume_choices.json`), applied to the preview by the runtime (a not-yet-loaded
+  file shows within a second); the page is rebuilt on the next frame when other values changed (an option turned
+  off, the preset row), a page under it is rebuilt when it comes back on top. The window docks left (x -430, as the
+  Color Mod's editor on this screen) so the preview stays visible. Esc goes back / closes, as the game's dialogs.
 
 ## Saved choices and slot numbers
 
@@ -245,6 +316,12 @@ layout**. On that launch the plugin (lot B):
 `former` is only known while the old registry is read: if the game does not reach the plugin on that launch, the
 next rebuild no longer lists it (improvement: carry `former` over from the previous manifest).
 
+Built (lot B): `costumes.cpp` `load_state` asks `rto::migrate_former` for every Battle Settings choice whose costume
+number the registry no longer has; with layout `one` and the number in a slot's `former`, the choice moves to the kept
+slot (its colour kept) and that variant's options become the mod's P1 choice (`changed: true`); `state.json` and
+`costume_choices.json` are written, `former_done` notes the manifest. Layout `variants` never migrates (the variant
+slots still exist). Not done: Color Mod colours made for a former folder.
+
 ## Presets and "Save as"
 
 - The `variants` of a mod are built-in presets.
@@ -261,6 +338,11 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
 
 ## Not covered yet
 
+- Lot B limits: a model the game rebuilds in a fight without one of the two events (round reload, replay seek...) is
+  not seen until the next one (the probes saw no rebuild on Training resets); the Training pause menu's Character
+  Settings popup has no menu (its preview is not handled); menu texts are English only; no mouse click on the
+  costume row; whether the pad's A on the costume row does something in the game was not checked.
+
 - **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
   are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as
   defaults (`defaults_from: "fluffy"`).
@@ -274,7 +356,7 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
 
 - **A (done, setting off by default)**: options stored per slot, base copies, material rebinding,
   `costume_options.json` (options, defaults, presets, former slots), `RuntimeOptions=off|on|variants`.
-- **B**: plugin runtime (load, preload, apply per model, rebuild moments), the texture-sharing test and its
-  fallback, choices file, Battle Settings menu, migration of `state.json`, Fluffy unchecked options, add-on
-  archives as option groups.
+- **B (built, to test in game)**: plugin runtime (load, preload, apply per model, rebuild moments), the
+  texture-sharing check (offline: per model; the fallback is not built), choices file, Battle Settings menu,
+  migration of `state.json`. Left for later: Fluffy unchecked options, add-on archives as option groups.
 - **C**: tan and colour options through the Color Mod; presets and "Save as"; default `RuntimeOptions=on`.

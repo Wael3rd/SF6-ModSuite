@@ -1,0 +1,258 @@
+// Unit test of plugin/src/rto_data.cpp: the options manifest, the choices file, what a model loads for a
+// set of options, the menu rows, the rules between options, the former variant slots.
+// Build and run: build_rto_test.bat [costume_options.json] (prints "all ok" and exits 0 when every check
+// passes; with a manifest written by the loader, it is parsed and its rows listed too).
+#include "../src/rto_data.hpp"
+
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+
+using namespace slots::rto;
+
+static int fails = 0;
+static void check(bool ok, const char* what) {
+    std::printf("  %-78s %s\n", what, ok ? "ok" : "FAIL");
+    if (!ok) ++fails;
+}
+
+// One modular mod of fighter 28, one slot (folder 006): a root group (base + 3 toggles: chain, colour
+// only, texture), a skin group (materials), a dress group (textures), two body groups shipping the
+// same mesh (the first one also a texture), 2 variants, 1 former slot.
+static const char* kManifest = R"JSON({
+  "format": "sf6-costume-options-1", "generated": "2026-10-19 21:45", "loader": "test", "pak": "re_chunk_000.pak.patch_001.pak",
+  "layout": "one",
+  "mods": [
+    {"key": "esf028/test dress", "name": "Test Dress", "source": "x", "defaults_from": "loader", "groups": [
+      {"name": "(Test Dress)", "options": [
+        {"id": "base0001", "name": "1) Main", "folder": "a", "mode": "base", "apply": "relaunch"},
+        {"id": "jigl0001", "name": "more jiggle", "folder": "b", "mode": "toggle", "apply": "live"},
+        {"id": "tan00001", "name": "tan", "folder": "c", "mode": "toggle", "apply": "colour"},
+        {"id": "pony0001", "name": "hide ponytail", "folder": "d", "mode": "toggle", "apply": "live"}]},
+      {"name": "2! Skin", "options": [
+        {"id": "skin0001", "name": "damaged", "folder": "e", "mode": "pick", "apply": "live"},
+        {"id": "skin0002", "name": "oily", "folder": "f", "mode": "pick", "apply": "relaunch"}]},
+      {"name": "3! Dress", "options": [
+        {"id": "drss0001", "name": "opaque", "folder": "g", "mode": "pick", "apply": "live"},
+        {"id": "drss0002", "name": "fishnet", "folder": "h", "mode": "pick", "apply": "live"}]},
+      {"name": "4! Body A", "options": [
+        {"id": "bdya0001", "name": "A regular", "folder": "i", "mode": "pick", "apply": "live"},
+        {"id": "bdya0002", "name": "A thick", "folder": "j", "mode": "pick", "apply": "live"}]},
+      {"name": "4! Body B", "options": [
+        {"id": "bdyb0001", "name": "B regular", "folder": "k", "mode": "pick", "apply": "live"},
+        {"id": "bdyb0002", "name": "B thick", "folder": "l", "mode": "pick", "apply": "live"}]}
+     ], "variants": [
+      {"label": "Test Dress - regular", "options": ["base0001", "skin0001", "drss0001", "bdya0001", "bdyb0001"]},
+      {"label": "Test Dress - thick", "options": ["base0001", "skin0001", "drss0001", "bdya0001", "bdyb0002"]}]}],
+  "slots": [
+    {"fighter": 28, "fighter_dir": "esf028", "costume_no": 5, "folder": "006", "name": "Outfit I", "label": "Test Dress",
+     "mod": "esf028/test dress",
+     "defaults": ["base0001", "skin0001", "drss0001", "bdya0001", "bdyb0001"],
+     "options": {
+       "jigl0001": [{"kind": "chain", "target": "product/model/esf/esf028/006/esf028_001_01_chain.chain", "path": "product/model/esf/esf028/006/rto/jigl0001/esf028_001_01_chain.chain"}],
+       "tan00001": [{"kind": "colour", "target": "product/model/esf/esf028/006/esf028_001_cmd_001.user", "path": "product/model/esf/esf028/006/rto/tan00001/esf028_001_cmd_001.user"}],
+       "pony0001": [{"kind": "texture", "target": "product/model/esf/esf028/006/02/tail_atos.tex", "path": "product/model/esf/esf028/006/rto/pony0001/02/tail_atos.tex"}],
+       "skin0001": [{"kind": "material", "target": "product/model/esf/esf028/006/01/esf028_006_01_v00.mdf2", "path": "product/model/esf/esf028/006/rto/skin0001/01/esf028_006_01_v00.mdf2"}],
+       "skin0002": [{"kind": "material", "target": "product/model/esf/esf028/006/01/esf028_006_01_v00.mdf2", "path": "product/model/esf/esf028/006/rto/skin0002/01/esf028_006_01_v00.mdf2"},
+                    {"kind": "other", "target": "product/model/esf/esf028/006/01/esf028_006_01.clsp", "path": "product/model/esf/esf028/006/rto/skin0002/01/esf028_006_01.clsp"}],
+       "drss0001": [{"kind": "texture", "target": "product/model/esf/esf028/mini/mini1_atos.tex", "path": "product/model/esf/esf028/006/rto/drss0001/_/mini/mini1_atos.tex"}],
+       "drss0002": [{"kind": "texture", "target": "product/model/esf/esf028/mini/mini1_atos.tex", "path": "product/model/esf/esf028/006/rto/drss0002/_/mini/mini1_atos.tex"}],
+       "bdya0001": [{"kind": "mesh", "target": "product/model/esf/esf028/006/01/esf028_006_01.mesh", "path": "product/model/esf/esf028/006/rto/bdya0001/01/esf028_006_01.mesh"},
+                    {"kind": "texture", "target": "product/model/esf/esf028/mini/royal_atos.tex", "path": "product/model/esf/esf028/006/rto/bdya0001/_/mini/royal_atos.tex"}],
+       "bdya0002": [{"kind": "mesh", "target": "product/model/esf/esf028/006/01/esf028_006_01.mesh", "path": "product/model/esf/esf028/006/rto/bdya0002/01/esf028_006_01.mesh"}],
+       "bdyb0001": [{"kind": "mesh", "target": "product/model/esf/esf028/006/01/esf028_006_01.mesh", "path": "product/model/esf/esf028/006/rto/bdyb0001/01/esf028_006_01.mesh"}],
+       "bdyb0002": [{"kind": "mesh", "target": "Product/Model/esf/esf028/006/01/esf028_006_01.mesh", "path": "natives/stm/product/model/esf/esf028/006/rto/bdyb0002/01/esf028_006_01.mesh"}]
+     },
+     "base": [{"kind": "mesh", "target": "product/model/esf/esf028/006/01/esf028_006_01.mesh", "path": "product/model/esf/esf028/006/rto/base/01/esf028_006_01.mesh"},
+              {"kind": "material", "target": "product/model/esf/esf028/006/01/esf028_006_01_v00.mdf2", "path": "product/model/esf/esf028/006/rto/base/01/esf028_006_01_v00.mdf2"},
+              {"kind": "texture", "target": "product/model/esf/esf028/mini/mini1_atos.tex", "path": "product/model/esf/esf028/006/rto/base/_/mini/mini1_atos.tex"},
+              {"kind": "texture", "target": "product/model/esf/esf028/mini/royal_atos.tex", "path": "product/model/esf/esf028/006/rto/base/_/mini/royal_atos.tex"}],
+     "former": [{"costume_no": 6, "folder": "007", "label": "Test Dress - thick", "options": ["base0001", "skin0001", "drss0001", "bdya0001", "bdyb0002"]}]}
+  ]
+})JSON";
+
+static const char* T_MESH = "product/model/esf/esf028/006/01/esf028_006_01.mesh";
+static const char* T_MDF2 = "product/model/esf/esf028/006/01/esf028_006_01_v00.mdf2";
+static const char* T_DRESS = "product/model/esf/esf028/mini/mini1_atos.tex";
+static const char* T_ROYAL = "product/model/esf/esf028/mini/royal_atos.tex";
+static const char* T_TAIL = "product/model/esf/esf028/006/02/tail_atos.tex";
+static const char* T_CHAIN = "product/model/esf/esf028/006/esf028_001_01_chain.chain";
+
+static bool has(const std::vector<std::string>& v, const char* id) {
+    for (auto& s : v) if (s == id) return true;
+    return false;
+}
+static bool is_orig(const std::map<std::string, Want>& d, const char* t) { auto it = d.find(t); return it != d.end() && it->second.orig; }
+static std::string path_of(const std::map<std::string, Want>& d, const char* t) {
+    auto it = d.find(t);
+    return (it == d.end() || it->second.orig) ? std::string() : it->second.path;
+}
+
+static int real_manifest(const char* file) {
+    std::ifstream f(file, std::ios::binary);
+    std::stringstream ss; ss << f.rdbuf();
+    Manifest m; std::string err;
+    if (!parse_manifest(ss.str(), m, err)) { std::printf("%s: %s\n", file, err.c_str()); return 1; }
+    std::printf("%s: layout %s, %zu mods, %zu slots\n", file, m.layout.c_str(), m.mods.size(), m.slots.size());
+    for (auto& s : m.slots) {
+        auto d = desired(m, s, s.defaults);
+        size_t changed = 0;
+        for (auto& [t, w] : d) if (!w.orig) ++changed;
+        std::printf("  slot %s/%s (costume %d) %s: %zu targets, %zu not as built with its defaults, %zu former\n",
+                    s.fighter_dir.c_str(), s.folder.c_str(), s.costume_no, s.label.c_str(), d.size(), changed, s.former.size());
+        for (auto& r : rows(m, s, s.defaults))
+            std::printf("    %-6s %-48s %zu labels, value %d%s\n", r.kind == Row::Pick ? "pick" : "toggle", r.title.c_str(),
+                        r.labels.size(), r.value, r.partial ? " (partial)" : "");
+    }
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    Manifest m; std::string err;
+    check(parse_manifest(kManifest, m, err), "manifest parsed");
+    check(m.mods.size() == 1 && m.slots.size() == 1, "1 mod, 1 slot");
+    const Slot& s = m.slots[0];
+    const Mod& mod = *m.mod_of(s);
+    check(s.prefix == "product/model/esf/esf028/006/", "slot folder prefix");
+    check(m.slot_of_path("product/model/esf/esf028/006/01/esf028_006_01.mesh") == &s, "slot found from a model path");
+    check(m.slot_of_path("product/model/esf/esf028/007/01/esf028_007_01.mesh") == nullptr, "another folder: no slot");
+    check(m.slot_of(28, 5) == &s && m.slot_of(28, 6) == nullptr, "slot by fighter and costume number");
+    check(s.rev.count("product/model/esf/esf028/006/rto/bdyb0002/01/esf028_006_01.mesh") == 1
+          && s.rev.at("product/model/esf/esf028/006/rto/bdyb0002/01/esf028_006_01.mesh") == T_MESH,
+          "paths normalised (case, natives/stm/), stored path -> target");
+    check(mod.options[static_cast<size_t>(mod.find("bdyb0002"))].rank > mod.options[static_cast<size_t>(mod.find("bdya0001"))].rank,
+          "layering rank follows the groups");
+    check(norm_path("Natives\\STM\\Product/Model/A.mesh") == "product/model/a.mesh", "norm_path");
+
+    {
+        auto d = desired(m, s, s.defaults);
+        bool all = true;
+        for (auto& [t, w] : d) all = all && w.orig;
+        check(all && d.size() == 6, "defaults: every target is the slot's own file (6 live targets)");
+        check(d.count("product/model/esf/esf028/006/esf028_001_cmd_001.user") == 0, "colour files are not model targets");
+    }
+    {
+        auto c = s.defaults;
+        choose(m, s, c, 2, "drss0002");
+        check(!has(c, "drss0001") && has(c, "drss0002"), "pick: the group's other option goes");
+        auto d = desired(m, s, c);
+        check(path_of(d, T_DRESS) == "product/model/esf/esf028/006/rto/drss0002/_/mini/mini1_atos.tex", "dress texture -> the option's copy");
+        check(is_orig(d, T_MESH) && is_orig(d, T_MDF2), "the rest unchanged");
+        choose(m, s, c, 2, "");
+        d = desired(m, s, c);
+        check(path_of(d, T_DRESS) == "product/model/esf/esf028/006/rto/base/_/mini/mini1_atos.tex", "dress None -> base copy");
+    }
+    {
+        auto c = s.defaults;
+        choose(m, s, c, 4, "bdyb0002");                     // the later body group
+        check(has(c, "bdya0001") && has(c, "bdyb0002") && !has(c, "bdyb0001"), "later group picked: the earlier one stays");
+        auto d = desired(m, s, c);
+        check(path_of(d, T_MESH) == "product/model/esf/esf028/006/rto/bdyb0002/01/esf028_006_01.mesh", "its mesh wins");
+        check(is_orig(d, T_ROYAL), "the earlier option's texture stays as built");
+        check(preset_of(mod, c) == 2, "this set is the preset 'thick'");
+        choose(m, s, c, 3, "bdya0002");                     // the earlier body group
+        check(!has(c, "bdyb0002") && has(c, "bdya0002"), "earlier group picked: the later option shipping its mesh goes");
+        d = desired(m, s, c);
+        check(path_of(d, T_MESH) == "product/model/esf/esf028/006/rto/bdya0002/01/esf028_006_01.mesh", "its mesh shows");
+        check(path_of(d, T_ROYAL) == "product/model/esf/esf028/006/rto/base/_/mini/royal_atos.tex", "texture of the option left -> base copy");
+        check(preset_of(mod, c) == 0, "no preset matches");
+    }
+    {
+        auto c = s.defaults;
+        toggle(m, s, c, "jigl0001", true);
+        toggle(m, s, c, "pony0001", true);
+        auto d = desired(m, s, c);
+        check(path_of(d, T_CHAIN) == "product/model/esf/esf028/006/rto/jigl0001/esf028_001_01_chain.chain", "toggle on: chain");
+        check(path_of(d, T_TAIL) == "product/model/esf/esf028/006/rto/pony0001/02/tail_atos.tex", "toggle on: texture");
+        toggle(m, s, c, "pony0001", false);
+        std::vector<std::string> notes;
+        d = desired(m, s, c, &notes);
+        check(is_orig(d, T_TAIL), "toggle off (not a default): the slot's own file");
+    }
+    {
+        auto c = s.defaults;
+        auto r = rows(m, s, c);
+        // root: jiggle, ponytail (tan is colour only); skin; dress; body A; body B
+        check(r.size() == 6, "6 rows (the colour-only toggle is not offered)");
+        check(r.size() == 6 && r[0].kind == Row::Toggle && r[0].title == "more jiggle" && r[0].value == 1, "toggle row, off");
+        check(r.size() == 6 && r[2].kind == Row::Pick && r[2].labels.size() == 3 && r[2].value == 2, "skin row: None + 2, 'damaged' chosen");
+        check(r.size() == 6 && r[2].labels[2] == "oily *" && r[2].partial, "an option with files the model cannot swap is marked");
+        check(!offered(s, "tan00001") && !offered(s, "base0001"), "colour-only and base options not offered");
+        apply_row(m, s, c, r[2], 3);
+        check(has(c, "skin0002") && !has(c, "skin0001"), "row value -> pick");
+        apply_row(m, s, c, r[0], 2);
+        check(has(c, "jigl0001"), "row value -> toggle on");
+        apply_row(m, s, c, r[2], 1);
+        check(!has(c, "skin0001") && !has(c, "skin0002"), "row None -> no option of the group");
+        check(has(c, "base0001"), "base option kept");
+    }
+    {   // a group of 20 options is split in rows of at most 15 labels
+        Manifest big; std::string e2;
+        std::string j = R"({"format": "sf6-costume-options-1", "layout": "one", "mods": [{"key": "k", "name": "N", "groups": [{"name": "G", "options": [)";
+        std::string files;
+        for (int i = 0; i < 20; ++i) {
+            char id[16]; std::snprintf(id, sizeof id, "o%07d", i);
+            j += std::string(i ? "," : "") + "{\"id\": \"" + id + "\", \"name\": \"n" + std::to_string(i) + "\", \"mode\": \"pick\"}";
+            files += std::string(i ? "," : "") + "\"" + id + "\": [{\"kind\": \"texture\", \"target\": \"product/model/esf/esf001/005/t.tex\", \"path\": \"product/model/esf/esf001/005/rto/" + id + "/t.tex\"}]";
+        }
+        j += R"(]}], "variants": []}], "slots": [{"fighter": 1, "fighter_dir": "esf001", "costume_no": 4, "folder": "005", "mod": "k", "defaults": ["o0000017"], "options": {)" + files + "}}]}";
+        check(parse_manifest(j, big, e2), "manifest with a 20-option group");
+        auto r = rows(big, big.slots[0], big.slots[0].defaults);
+        check(r.size() == 2 && r[0].labels.size() == 15 && r[1].labels.size() == 7, "split in 2 rows (15 + 7 labels)");
+        check(r.size() == 2 && r[0].value == 1 && r[1].value == 5, "the choice shows on the second row only");
+        auto c = big.slots[0].defaults;
+        apply_row(big, big.slots[0], c, r[0], 1);
+        check(has(c, "o0000017"), "None on the other row keeps the choice");
+        apply_row(big, big.slots[0], c, r[1], 1);
+        check(c.empty(), "None on its own row clears it");
+    }
+    {
+        check(preset_label(mod, 0) == "regular" && preset_label(mod, 1) == "thick", "preset labels without the mod's name");
+        check(preset_of(mod, s.defaults) == 1, "defaults = preset 'regular'");
+    }
+    {
+        Choices c;
+        auto& sd = c.mods["esf028/test dress"][1];
+        sd.changed = true;
+        sd.ids = { "base0001", "skin0002", "gone0001", "xxxxxxxx" };
+        sd.names = { "1) Main", "oily", "gone", "fishnet" };
+        c.former_done = "2026-10-19 21:45 re_chunk_000.pak.patch_001.pak";
+        std::vector<std::string> notes;
+        sanitize(c, m, notes);
+        check(sd.ids.size() == 3 && sd.ids[2] == "drss0002", "sanitize: unknown id found by its name, the other dropped");
+        check(notes.size() == 2, "sanitize: one note each");
+        std::string text = write_choices(c, m);
+        Choices back;
+        check(parse_choices(text, back), "choices written then read");
+        check(back.former_done == c.former_done, "former_done kept");
+        check(!back.mods["esf028/test dress"][0].changed && back.mods["esf028/test dress"][1].changed, "P1 untouched, P2 changed");
+        check(back.mods["esf028/test dress"][1].ids == sd.ids && back.mods["esf028/test dress"][1].names[1] == "oily", "ids and names");
+        check(same_set(chosen_of(m, s, back, 0), s.defaults), "P1 wears the defaults");
+        auto p2 = chosen_of(m, s, back, 1);
+        check(has(p2, "skin0002") && has(p2, "drss0002") && has(p2, "base0001") && p2.size() == 3, "P2 wears its choice");
+        back.mods["esf028/test dress"][1].ids = { "skin0002" };
+        check(has(chosen_of(m, s, back, 1), "base0001"), "the base option is always worn");
+        Choices bad;
+        check(!parse_choices("{\"format\": \"other\"}", bad), "another format is refused");
+    }
+    {
+        const Former* f = nullptr;
+        const Slot* k = former_of(m, 28, 6, &f);
+        check(k == &s && f && f->folder == "007", "former slot 6 -> kept slot 5");
+        check(f && same_set(f->ids, m.mods[0].variants[1].ids), "with the options of its variant");
+        check(former_of(m, 28, 5, &f) == nullptr && former_of(m, 1, 6, &f) == nullptr, "no former for the kept slot or another fighter");
+        Manifest v = m; v.layout = "variants";
+        check(former_of(v, 28, 6, &f) == nullptr, "layout 'variants': no migration");
+    }
+    {
+        Manifest x; std::string e3;
+        check(!parse_manifest("{\"format\": \"sf6-costume-options-0\"}", x, e3), "another manifest format is refused");
+        check(!parse_manifest("", x, e3), "no manifest");
+    }
+
+    int rc = 0;
+    if (argc > 1) rc = real_manifest(argv[1]);
+    if (fails) { std::printf("%d FAILED\n", fails); return 1; }
+    std::printf("all ok\n");
+    return rc;
+}

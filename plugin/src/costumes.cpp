@@ -18,6 +18,7 @@
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
 #include "slots.hpp"
 #include "slots_ui.hpp"
+#include "rto.hpp"
 #include "ownership.hpp"
 #include "carrier.hpp"
 #include "perf.hpp"
@@ -188,11 +189,13 @@ void load_registry() {
     logf("costumes: %zu slots, %zu characters", g_slots.size(), g_fighters.size());
 }
 
+void save_state();
 void load_state() {
     Json j;
     if (!json_parse(read_file(kState), j)) return;
     const Json* fs = j.get("fighters");
     if (!fs || fs->kind != Json::Object) return;
+    bool migrated = false;
     for (auto& [k, v] : fs->obj) {
         int fid = atoi(k.c_str());
         if (fid <= 0) continue;
@@ -200,9 +203,17 @@ void load_state() {
         if (const Json* s = v.get("slot"); s && s->kind == Json::Number) in.slot = static_cast<int>(s->num);
         if (const Json* c = v.get("color"); c && c->kind == Json::Number) in.color = static_cast<int>(c->num);
         if (const Json* c = v.get("carrier"); c && c->kind == Json::Number) g_saved_carrier[fid] = static_cast<int>(c->num);
+        // A variant slot of a modular mod folded into one outfit with options (RuntimeOptions=on): the
+        // choice moves to the kept slot, the variant's options become the P1 choice (rto.cpp)
+        if (in.slot && !is_slot(fid, in.slot)) {
+            int kept = rto::migrate_former(fid, in.slot);
+            if (kept > 0 && is_slot(fid, kept)) { in.slot = kept; migrated = true; }
+        }
         if (in.slot && !is_slot(fid, in.slot)) in = Intent{};   // the slot's mod is gone
         g_intent[fid] = in;
     }
+    rto::migration_done();
+    if (migrated) save_state();
 }
 
 void save_state() {
@@ -1279,5 +1290,8 @@ void tick(uint32_t ev) {
         }
     }
 }
+
+bool online() { return online_now(); }
+bool select_active() { return select_screen_active(); }
 
 } // namespace slots::costumes

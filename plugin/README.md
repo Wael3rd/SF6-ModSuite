@@ -92,3 +92,13 @@ Copy it into `reframework\plugins\` **with the game closed**. Headers: REFramewo
   `[F34] alias skipped: mirror on the carrier (Outfit 1)`.
 - `via.Folder.activate` / `deactivate` are not usable as events: the engine mounts folders without going through
   them (a hook on them sees only the plugin's own calls). The manifest's constructor is.
+
+## Runtime costume options (`rto*.cpp`, off unless the loader writes `costume_options.json`)
+
+With `RuntimeOptions=on` (or `variants`) in `costume_mods\settings.ini`, the loader stores every option of a modular
+mod and lists them in `SF6_Costumes_Data\costume_options.json`. The plugin then shows, on the costume row of Battle
+Settings > character, the key that opens the outfit's options (F / A), applies the choices to the preview at once and
+to each fighter when its model is built (an outfit mounted for a fight, `PlayerBehavior.SetupAppearance`: a 10 s
+watch, nothing during the fight), per player side, and saves them in `SF6_CostumeSlots_data\costume_choices.json`.
+Without the manifest none of it runs. Design, rules and limits: `docs/RUNTIME_OPTIONS.md`. Offline test of the data
+side: `tests\build_rto_test.bat [costume_options.json]`.

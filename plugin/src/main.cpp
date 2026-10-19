@@ -4,6 +4,7 @@
 // and no work in progress it returns at once, having read nothing but this plugin's own memory.
 #include "slots.hpp"
 #include "slots_ui.hpp"
+#include "rto.hpp"
 #include "perf.hpp"
 #include "wjournal.hpp"
 
@@ -14,7 +15,7 @@ std::atomic<bool> g_closing{false};
 namespace {
 
 bool g_hooks = false;
-bool g_costumes_busy = true, g_stages_busy = true;   // checked on the first frames
+bool g_costumes_busy = true, g_stages_busy = true, g_rto_busy = true;   // checked on the first frames
 
 // Closing guard state (not cancellable for WM_DESTROY / WM_NCDESTROY / WM_ENDSESSION)
 uint32_t s_close_frame = 0;
@@ -63,7 +64,7 @@ void on_late_update() {
     }
 
     uint32_t ev = g_events.exchange(0, std::memory_order_acq_rel);
-    if (!ev && !g_costumes_busy && !g_stages_busy) {
+    if (!ev && !g_costumes_busy && !g_stages_busy && !g_rto_busy) {
         perf::end(perf::OnLateUpdate, pt_outer);
         return;
     }
@@ -73,6 +74,7 @@ void on_late_update() {
             ui::log_path();
             costumes::install_hooks();
             stages::install_hooks();
+            rto::install_hooks();
         }
         if (ev & EV_DIAG) diag_flush();
         {
@@ -85,8 +87,10 @@ void on_late_update() {
             stages::tick(ev);
             perf::end(perf::StagesTick, pt);
         }
+        rto::tick(ev);                      // runtime costume options (after the costume work of the frame)
         g_costumes_busy = costumes::busy();
         g_stages_busy = stages::busy();
+        g_rto_busy = rto::busy();
     } catch (const std::exception& e) {
         logf("EXCEPTION: %s", e.what());
     } catch (...) {
@@ -124,6 +128,7 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
         slots::logf("old script %s %s", name, ok ? "renamed to .lua.old (replaced by this plugin)" : "could not be renamed");
     }
     try {
+        slots::rto::init();          // before the costumes: a Battle Settings choice of a former variant slot moves
         slots::costumes::init();
         slots::stages::init();
     } catch (...) {

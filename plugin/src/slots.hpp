@@ -22,7 +22,12 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#pragma warning(push)
+#pragma warning(disable: 4267 4189)   // REFramework's header: size_t -> unsigned, an unused local
 #include <reframework/API.hpp>
+#pragma warning(pop)
+
+#include "json.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -66,6 +71,7 @@ enum Event : uint32_t {
     EV_STAGE_INPUT   = 1u << 8,   // UP / DOWN on the stage select screen
     EV_VS            = 1u << 9,   // VS screen shown or rewritten by the game
     EV_TITLE_END     = 1u << 10,  // title screen left (the game clears DLC ownership at login)
+    EV_RTO_MODEL     = 1u << 11,  // a fighter's model was built (runtime costume options, rto.cpp)
     EV_DIAG          = 1u << 31,  // a method watched for the log was called
 };
 // Methods watched for the log only: which of them the game calls, and when
@@ -132,20 +138,7 @@ int hook_all(TD* td, const char* method, REFPreHookFn pre, REFPostHookFn post);
 std::string read_file(const char* path, size_t max_size = 4u << 20);
 bool write_file(const char* path, const std::string& data);   // through a temporary file
 
-// ---- JSON (the files the loader and this plugin write) ----
-struct Json {
-    enum Kind { Null, Bool, Number, String, Array, Object } kind = Null;
-    bool b = false;
-    double num = 0;
-    std::string s;
-    std::vector<Json> arr;
-    std::vector<std::pair<std::string, Json>> obj;
-    const Json* get(const char* key) const;
-    int64_t as_int(int64_t def = 0) const { return kind == Number ? static_cast<int64_t>(num) : def; }
-    const std::string& as_str() const { static const std::string e; return kind == String ? s : e; }
-};
-bool json_parse(const std::string& text, Json& out);
-std::string json_escape(const std::string& s);
+// ---- JSON: json.hpp ----
 
 // ---- modules: install their hooks once, then work on events ----
 namespace costumes {
@@ -153,6 +146,8 @@ namespace costumes {
     void install_hooks();             // first frame (the type database is ready)
     bool busy();                      // work left without a new event (boot, a mount in progress)
     void tick(uint32_t events);
+    bool online();                    // an online battle is loaded or played (its description says so)
+    bool select_active();             // the character select screen is open (read now, not watched)
 }
 namespace stages {
     void init();

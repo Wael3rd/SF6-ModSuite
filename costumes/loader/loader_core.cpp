@@ -5923,6 +5923,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             uint32_t target_entries = 0;
             if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);   // the stage loader may have moved it
+                if (g_rto_layout != RtoLayout::Off) sync_outfits_pak(registry_dir + "\\" + RTO_FILE, target_name);   // same "pak" key
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match, %s exists) in %.1f ms\n",
                      target_name, std::chrono::duration<double,std::milli>(t1-t0).count());
@@ -5935,6 +5936,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 if (our_paks[0].num < top_foreign)
                     write_marker_pak(our_paks[0].path.c_str(), PatchPakKind::Costume);
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);
+                if (g_rto_layout != RtoLayout::Off) sync_outfits_pak(registry_dir + "\\" + RTO_FILE, target_name);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match), %s moved to %s in %.1f ms\n",
                      our_paks[0].path.c_str(), target_name,
