@@ -4220,20 +4220,32 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     std::vector<std::pair<std::string, std::vector<size_t>>> axes; // groups giving one costume per option
     int optional_left = 0, skins_left = 0;
     std::string root;
+    // One log line per group that does not vary: "<group> -> <kept option>; left out: <options>"
+    struct Frozen { std::string group, why; size_t kept; std::vector<size_t> left; };
+    std::vector<Frozen> frozen;
+    std::vector<std::string> optional_names;
     for (auto& [key, members] : groups) {
         std::vector<size_t> m;
         for (auto i : members) {
-            if (contains_ci(key, "optional") || contains_ci(g_units[i].name, "optional")) { optional_left++; continue; }
+            if (contains_ci(key, "optional") || contains_ci(g_units[i].name, "optional")) {
+                optional_left++;
+                if (!g_units[i].files.empty()) optional_names.push_back(unit_label(g_units[i]));
+                continue;
+            }
             if (!g_units[i].files.empty()) m.push_back(i);
         }
         if (m.empty()) continue;
         std::sort(m.begin(), m.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
         if (root.empty() && !key.empty() && key[0] == '(') root = trim_ws(g_units[m[0]].addonfor);
+        std::string gname = trim_ws(g_units[m[0]].addonfor);
         if (m.size() == 1) { fixed.push_back({key, m[0]}); continue; }
         bool shape = false;
         for (auto i : m) if (unit_has_mesh(g_units[i])) shape = true;
         if (shape) axes.push_back({key, m});
-        else { fixed.push_back({key, m[0]}); skins_left += int(m.size()) - 1; }
+        else {
+            fixed.push_back({key, m[0]}); skins_left += int(m.size()) - 1;
+            frozen.push_back({gname, "texture group", m[0], std::vector<size_t>(m.begin() + 1, m.end())});
+        }
     }
     if (root.size() > 2 && root.front() == '(' && root.back() == ')') root = trim_ws(root.substr(1, root.size() - 2));
     if (root.empty()) root = g_units[tree[0]].u.rel;
@@ -4242,7 +4254,12 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     for (auto& a : axes) total *= a.second.size();
     if (total > 24 && axes.size() > 1) {
         std::sort(axes.begin(), axes.end(), [](auto& a, auto& b) { return a.second.size() > b.second.size(); });
-        for (size_t k = 1; k < axes.size(); ++k) fixed.push_back({axes[k].first, axes[k].second[0]});
+        for (size_t k = 1; k < axes.size(); ++k) {
+            fixed.push_back({axes[k].first, axes[k].second[0]});
+            frozen.push_back({trim_ws(g_units[axes[k].second[0]].addonfor), "past the 24-costume cap",
+                              axes[k].second[0],
+                              std::vector<size_t>(axes[k].second.begin() + 1, axes[k].second.end())});
+        }
         axes.resize(1);
         total = axes[0].second.size();
     }
@@ -4250,6 +4267,40 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     if (skins_left) printf(", first option of each texture group (%d others left out)", skins_left);
     if (optional_left) printf(", %d optional part%s left out", optional_left, optional_left > 1 ? "s" : "");
     printf("\n");
+    if (axes.size() == 1)
+        printf("    varies: %s (%zu options)\n", trim_ws(g_units[axes[0].second[0]].addonfor).c_str(), axes[0].second.size());
+    {   // which later group's files replace a frozen option's files (same path: the last group wins)
+        std::vector<std::pair<std::string, size_t>> first = fixed;
+        for (auto& a : axes) first.push_back({a.first, a.second[0]});
+        std::stable_sort(first.begin(), first.end(), [](auto& x, auto& y) { return x.first < y.first; });
+        for (auto& f : frozen) {
+            std::string names;
+            for (size_t k = 0; k < f.left.size(); ++k) names += (k ? ", " : "") + unit_label(g_units[f.left[k]]);
+            printf("    frozen (%s): %s -> %s; left out: %s\n", f.why.c_str(), f.group.c_str(),
+                   unit_label(g_units[f.kept]).c_str(), names.c_str());
+            size_t lost = 0;
+            std::string by;
+            for (auto& [pth, mf] : g_units[f.kept].files) {
+                bool hit = false, after = false;
+                for (auto& q : first) {
+                    if (q.second == f.kept) { after = true; continue; }
+                    if (after && g_units[q.second].files.count(pth)) {
+                        hit = true;
+                        if (by.empty()) by = trim_ws(g_units[q.second].addonfor);
+                    }
+                }
+                if (hit) lost++;
+            }
+            if (lost)
+                printf("      note: %zu of %zu files of that option are replaced by files of group %s\n",
+                       lost, g_units[f.kept].files.size(), by.c_str());
+        }
+        if (!optional_names.empty()) {
+            std::string names;
+            for (size_t k = 0; k < optional_names.size(); ++k) names += (k ? ", " : "") + optional_names[k];
+            printf("    optional, left out: %s\n", names.c_str());
+        }
+    }
     std::vector<size_t> pick(axes.size(), 0);
     for (size_t n = 0; n < total; ++n) {
         std::vector<std::pair<std::string, size_t>> parts = fixed;
