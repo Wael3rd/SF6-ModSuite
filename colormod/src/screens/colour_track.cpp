@@ -782,7 +782,7 @@ std::optional<reframework::InvokeRet> call_named(MO* o, const char* name, const 
 
 // ---- the editor relay's screen half (edit.ned: push / prepare / open / open_di / frame), owner screens_colour ---------
 struct EditMirror {                                    // edit.* as the relay kept them (updated from what the editor answers)
-    bool active = false, di = false, di_simple = false, di_at_select = false, reopen = false, bits = false;
+    bool active = false, di = false, di_simple = false, di_at_select = false, bits = false;
     bool has_closed_at = false; int64_t closed_at = 0;
     bool key_was_down = false, di_was_down = false, drv_was_down = false;
     bool di_side_was[3] = {};
@@ -790,7 +790,6 @@ struct EditMirror {                                    // edit.* as the relay ke
     Ref ctrl;                                          // edit.ctrl
     std::vector<Ref> blocked;                          // edit.blocked_agents
     bool tm_input_off = false;
-    int64_t reopen_wait_from = -1;                     // SAVE AS: the frame the reopen started waiting for the preview
 };
 EditMirror& edit = *new EditMirror();
 bool ed_active() { return edit.active; }
@@ -975,26 +974,14 @@ void ned_prepare() {                                   // edit.ned.prepare: what
     const auto g = cid ? dd::game_chips((int)f, (int)c, *cid) : std::nullopt;
     dialogs::editor::set_open_args((int)f, (int)c, (int)cid.value_or(0), (int)k, true, has_live, g.has_value(), g ? g->first : 0, g ? g->second : 0);
 }
-// SAVE AS reopens the editor once the list is reloaded and walked; the preview model is still being rebuilt then
-// (costume +1 / -1, new colour) and the single try gave up on "no preview controller". The screen stays busy while
-// the reopen waits for the preview's controller, 3 s at most (then the try happens as before).
-bool reopen_waits_for_preview() {
-    if (!(edit.reopen && !edit.active && !window_open() && fsm.visible && !fsm.refresh && fsm.restore_steps <= 0) || editor_ctrl()) {
-        edit.reopen_wait_from = -1;
-        return false;
-    }
-    if (edit.reopen_wait_from < 0) edit.reopen_wait_from = dbg_frame();
-    return dbg_frame() - edit.reopen_wait_from < 180;
-}
 void ned_push() {                                      // edit.ned.push: what the editor reads from the screens
     if (!edit.bits) { edit.bits = true; resolve_pad(); dialogs::editor::set_pad_bits(g_pad.btn, g_pad.a, g_pad.y, g_pad.b, g_pad.l1, g_pad.r1, g_pad.r3, g_pad.l3); }
-    const bool busy = fsm.refresh.has_value() || fsm.restore_steps > 0 || reopen_waits_for_preview();
+    const bool busy = fsm.refresh.has_value() || fsm.restore_steps > 0;
     dialogs::editor::set_screen(fsm.visible, fsm.pad == true, busy, addr(fsm.agent));
 }
 void take(const dialogs::editor::State& st) {
     edit.active = st.active; edit.di = st.di;
     if (st.has_closed_at) { edit.has_closed_at = true; edit.closed_at = st.closed_at; }
-    edit.reopen = st.reopen;
 }
 bool settled_since_close() { return dbg_frame() - (edit.has_closed_at ? edit.closed_at : -1000) > 30; }
 void ned_open() {
@@ -1012,8 +999,7 @@ void ned_open_di(const Opt& f, const Opt& c, bool simple, int side, const std::s
     edit.di_simple = st.active && simple;
 }
 void ned_frame() {                                     // the loop: once per frame while a screen or the editor is up
-    if (!(fsm.visible || edit.active || edit.reopen)) return;
-    if (edit.reopen && !edit.active && !window_open() && fsm.visible && !fsm.refresh && fsm.restore_steps <= 0) ned_prepare();
+    if (!(fsm.visible || edit.active)) return;
     ned_push();
     if (edit.active) {
         double x = 0, y = 0, w = 1920, h = 1080;

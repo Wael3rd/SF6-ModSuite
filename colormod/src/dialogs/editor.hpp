@@ -30,7 +30,7 @@ const std::vector<LuaFn>& bridge_fns();      // the relay's entry points ("ed_*"
 // ---- the same entry points for the DLL's own screens (phase 5c-2: screens/colour_track) -------------------------------
 // What edit.ned pushed and called: the screen (ed_screen), the input (ed_input), the open arguments (ed_open_args),
 // a costume's slot union (ed_union), the opens and the frame loop. State = what the relay read back.
-struct State { bool active = false, di = false; int nops = 0; bool has_closed_at = false; int64_t closed_at = 0; bool reopen = false; };
+struct State { bool active = false, di = false; int nops = 0; bool has_closed_at = false; int64_t closed_at = 0; };
 void set_screen(bool visible, bool pad, bool busy, uint64_t agent);
 void set_input(uint32_t pad_mask, bool has_mouse, double x, double y, double w, double h);
 void set_pad_bits(uint32_t btn, uint32_t a, uint32_t y, uint32_t b, uint32_t l1, uint32_t r1, uint32_t r3, uint32_t l3);

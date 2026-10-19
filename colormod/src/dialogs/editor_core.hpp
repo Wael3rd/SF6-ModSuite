@@ -160,7 +160,6 @@ struct Backend {
     bool (*di_special_enabled)() = nullptr;                      // func/SpecialVFXGate
     // ---- the rows' own look (0.20.0, dialogs/row_look) ----
     void (*row_looks)(Obj param, const std::vector<RowLook>& rows) = nullptr;   // every frame while the window is up
-    bool (*opt_set_value)(int eid, int value) = nullptr;         // a row's value in place (the unit's integer: a choice 0-based)
     void (*select_lr)(bool& left, bool& right) = nullptr;        // the menus' LEFT / RIGHT held now (keyboard and pad, 0.21.0)
 };
 
@@ -183,7 +182,6 @@ bool closed_at(int64_t& frame);                                  // edit.closed_
 // the working copy and its pulse, for the preview: false = nothing to show (closed, or the DI menu)
 bool preview(rsz::NodeRef& tree, bool& hl_on, double& hl_k, std::vector<const rsz::Node*>& hl_targets);
 void set_pad_bits(uint32_t btn, uint32_t a, uint32_t y, uint32_t b, uint32_t l1, uint32_t r1, uint32_t r3, uint32_t l3);   // via.hid.GamePadButton, read from the live enum
-bool reopen_now();                                               // fsm.reopen_now
 void reset();                                                    // script reset / tests
 
 // ---- diagnostics and the harness' trace (same text as tools/editor_harness/ref.lua) ----

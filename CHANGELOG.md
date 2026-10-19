@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.16.3 (2026-10-19) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Color Mod | 0.22.3 | colour grid: the sliders follow, the focused square stands out; SAVE AS closes the editor |
+| SF6 Native Core | 0.8.2 | unchanged |
+| SF6 Slots Loader | 1.12.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove the previous version first. Needs SF6 Native Core 0.8.2.
+
+### SF6 Color Mod 0.22.3
+- Colour editor, colour grid: picking a square moves the Hue, Saturation and Brightness sliders to that colour (they
+  kept their old values before).
+- The square under the cursor is drawn larger and above its neighbours, so the game's focus frame around it is easy
+  to see (it was very thin at the grid's size).
+- SAVE AS: the editor closes and the screen ends on the new colour (`MC n`). It no longer opens the editor again.
+
+### Known issues
+- The pencil-like outline around the fighter during Drive Impact, Drive Reversal (red) and Drive Rush (green) keeps
+  the game's colours: it is drawn by the game's camera filter, not by an effect.
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.16.2 (2026-10-18) — SF6 Mod Suite
 
 | Package | Version | |

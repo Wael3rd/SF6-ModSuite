@@ -225,7 +225,6 @@ struct Entry {
     int look = 0;                                               // RowLook::kind: 1 hue slider (the rainbow, 0.20.0), 2 palette row (0.21.0)
     int line = 0;                                               // palette row: its line of the grid (0-based)
     std::shared_ptr<Palette> pal;                               // palette row: the colour it sets
-    bool has_echo = false; int echo = 0;                        // a value set in place: the engine's read-back is not a move
 };
 using EntryRef = std::shared_ptr<Entry>;
 void note_entry(const EntryRef& e);
@@ -330,7 +329,6 @@ struct EditState {
     bool empty_purged = false;
 };
 EditState edit;
-bool g_reopen_now = false;                                      // fsm.reopen_now
 bool g_grid_page = false;                                       // the page on top holds the palette rows (0.21.0)
 bool ll_entry() { return false; }                               // edit.entry.ll: the LL entries are disabled (entries_for)
 
@@ -506,10 +504,10 @@ ButtonResult editor_save_as() {                                 // :2400
     std::string label; bool has_label = false;
     const std::string want = backslashes(rel);
     if (auto* list = g_catalog.entries(edit.fighter, edit.costume)) for (auto& e : *list) if (backslashes(e.path) == want) { label = e.label; has_label = true; }
-    // title: "SAVED AS MC n" for 1.5 s, then the window closes (the list reload needs it closed) and reopens on the new colour
+    // title: "SAVED AS MC n" for 1.5 s, then the window closes (the list reload needs it closed): the screen ends on the
+    // new colour, the editor stays closed (Wael 19/10: no reopen)
     mark_saved();
     set_status(L("status.saved_as", { has_label ? label : std::string("MC") }), 90, true, false);
-    g_reopen_now = true;
     back_to_root_page();
     return {};
 }
@@ -694,7 +692,6 @@ struct Palette {
     std::shared_ptr<std::vector<Row>> rows;                     // the colour's H / S / V rows
     std::function<uint32_t()> get_col;                          // the colour edited (a costume colour, a Drive colour slot)
     std::function<void(uint32_t)> set_col;                      // set it, the way its sliders do (live preview included)
-    std::function<void(const EntryRef&, char, uint32_t)> retitle;   // one of its sliders' titles, for that colour
 };
 uint32_t rgb_of_col(uint32_t col) { int r, g, b, a; rgb_of(col, r, g, b, a); return (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b; }
 std::pair<int, int> palette_hit(uint32_t col) {                 // where the colour is in the palette (RGB, alpha aside); -1 none
@@ -702,12 +699,8 @@ std::pair<int, int> palette_hit(uint32_t col) {                 // where the col
     for (int l = 0; l < kPaletteLines; ++l) for (int c = 0; c < kPaletteCols; ++c) if (kPalette[l][c] == rgb) return { l, c };
     return { -1, -1 };
 }
-void set_row_value(const EntryRef& e, int v) {                  // a row's value in place (choice 1-based); its read-back is not a move
-    if (!e || (e->has_value && e->value == v)) return;
-    e->value = v; e->has_value = true;
-    if (be.opt_set_value && be.opt_set_value(e->id, e->choice ? v - 1 : v)) { e->has_echo = true; e->echo = v; }
-}
-void pick_swatch(const std::shared_ptr<Palette>& p, int line, int col, const EntryRef& self) {   // the cell becomes the colour, live
+// the cell becomes the colour, live; the caller rebuilds the page so that the sliders show it
+void pick_swatch(const std::shared_ptr<Palette>& p, int line, int col, const EntryRef& self) {
     if (!p || line < 0 || line >= kPaletteLines || col < 0 || col >= kPaletteCols) return;
     if (self) set_selected(self);
     const uint32_t rgb = kPalette[line][col];
@@ -715,8 +708,6 @@ void pick_swatch(const std::shared_ptr<Palette>& p, int line, int col, const Ent
     const uint32_t c = pack_rgba((int)(rgb >> 16), (int)((rgb >> 8) & 0xFF), (int)(rgb & 0xFF), a);
     g_memo.erase(p->mk);                                        // the sliders show the cell's true values
     p->set_col(c);
-    const HSV3 hv = hsv_raw(c);
-    for (auto& row : *p->rows) if (auto re = row.entry.lock()) { set_row_value(re, hv.get(row.comp)); p->retitle(re, row.comp, c); }
 }
 // the five palette rows of one colour page, after its three sliders (one colour per page: 8 rows); restore = Backspace
 void palette_rows(const GroupRef& g, const std::string& prefix, const std::shared_ptr<Palette>& pal, std::function<void()> restore, const TargetsRef& targets) {
@@ -774,7 +765,6 @@ void color_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& occ,
     pal->mk = mk; pal->rows = rows;
     pal->get_col = [cc]() { return cc_color(cc); };
     pal->set_col = [set_col](uint32_t c) { set_col(c); editor_refresh(); };
-    pal->retitle = [title_of](const EntryRef& re, char comp, uint32_t c) { retitle_row(re, title_of(comp, c)); };
     palette_rows(g, fmt("c%d", k), pal, [pal, scc]() { if (scc) { g_memo.erase(pal->mk); pal->set_col(cc_color(scc)); } },   // Backspace: the SAVED colour
                  std::make_shared<std::vector<NodeRef>>(std::vector<NodeRef>{ cc }));
 }
@@ -1190,7 +1180,6 @@ void di_build_page(int mi, int fighter, int side, const std::string& who, const 
             di_set_col(mi, slot, cur);
             touch();
         };
-        pal->retitle = [title_of](const EntryRef& re, char comp, uint32_t c) { di_write_title(re, title_of(comp, c)); };
         palette_rows(pg, fmt("di%d", k), pal, [pal, ref, k, mk]() {     // Backspace: the colour the page started from
             const std::optional<uint32_t>& rv = k == 1 ? ref->c1 : ref->c2;
             if (rv) { g_memo.erase(mk); pal->set_col(*rv); }
@@ -1610,12 +1599,11 @@ bool preview(rsz::NodeRef& tree, bool& hl_on, double& hl_k, std::vector<const rs
 void set_pad_bits(uint32_t btn, uint32_t a, uint32_t y, uint32_t b, uint32_t l1, uint32_t r1, uint32_t r3, uint32_t l3) {
     PAD.BTN = btn; PAD.A = a; PAD.Y = y; PAD.B = b; PAD.L1 = l1; PAD.R1 = r1; PAD.R3 = r3; PAD.L3 = l3;
 }
-bool reopen_now() { return g_reopen_now; }
 void reset() {
     edit = EditState{};
     g_by_id.clear();
     g_memo.clear(); g_memo_keep.clear();
-    g_reopen_now = false; g_catalog_built = false;
+    g_catalog_built = false;
 }
 
 void open() {
@@ -1782,10 +1770,6 @@ ButtonResult on_button(int eid) {
 void on_value(int eid, int value) {
     EntryRef e = entry_by_id(eid);
     if (!e) return;
-    if (e->has_echo) {                                          // the read-back of a value set in place: not a move
-        e->has_echo = false;
-        if (value == e->echo) { e->value = value; e->has_value = true; return; }
-    }
     e->value = value; e->has_value = true;
     if (e->cb_value) { auto cb = e->cb_value; cb(value); }
 }
@@ -1944,7 +1928,11 @@ void frame() {
             }
             if (validate && !edit.validate_was_down) {                      // F / A on a palette row: the cell under the cursor is applied
                 EntryRef e = focused_entry();
-                if (e && e->pal) pick_swatch(e->pal, e->line, e->pal->col, e);
+                if (e && e->pal) {
+                    const int idx = index_in(cur_group, e);
+                    pick_swatch(e->pal, e->line, e->pal->col, e);
+                    rebuild_same_page(idx);                                 // the sliders show the cell (a value set in place does not move them)
+                }
             }
         }
         if (edit.sliders_armed) {
@@ -2041,10 +2029,6 @@ void frame() {
     if (edit.active && window_open() && now_f % 5 == 0 && now_f > (edit.has_title_hold ? edit.title_hold : 0) && cur_group && edit.marks_on)
         dots_update(cur_group, be.opt_current_param ? be.opt_current_param() : nullptr);
     const bool visible = be.screen_visible && be.screen_visible();
-    if (g_reopen_now && !edit.active && !window_open() && visible && !(be.screen_busy && be.screen_busy())) {
-        g_reopen_now = false;                                   // SAVE AS: list reloaded, cursor on the new colour
-        open();
-    }
     // the camera gate (owner "dialogs_camera"): the gate state every 5 frames while it holds
     const bool hints_on = edit.active && window_open() && visible;
     if (hints_on) {

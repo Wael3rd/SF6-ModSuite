@@ -186,20 +186,6 @@ void be_select_lr(bool& left, bool& right) {
     right = (GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0 || (vr && (GetAsyncKeyState(vr) & 0x8000) != 0) || (S.pad_mask & (8u | 2097152u)) != 0;
 }
 void be_row_looks(core::Obj param, const std::vector<core::RowLook>& rows) { look::apply(param, rows, be_opt_row_control); }
-// a row's value in place (0.21.0: the sliders follow a palette cell): the unit's own SetValue through the core's guarded
-// invoke; the engine reads it back at its next poll and the editor takes that echo for its own
-bool be_opt_set_value(int eid, int value) {
-    auto it = g_engine_of.find(eid);
-    const SF6CoreAPI* a = cmn::core();
-    if (it == g_engine_of.end() || !a || !SF6CORE_HAS(a, opt_row_part)) return false;
-    void* part = a->opt_row_part(it->second);
-    MO* unit = alive(part) ? ll::read_field_object(reinterpret_cast<MO*>(part), "UnitData") : nullptr;
-    if (!unit) return false;
-    SF6CoreArg args[2] = {};
-    args[0].type = SF6CORE_ARG_I64; args[0].v.i = value;
-    args[1].type = SF6CORE_ARG_BOOL; args[1].v.i = 1;
-    return a->obj_invoke(cmn::client(), unit, "SetValue(System.Int32, System.Boolean)", args, 2, nullptr) == SF6CORE_OK;
-}
 
 // ---- input, time, random, locale ---------------------------------------------------------------------------------
 bool be_key_down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }      // what reframework:is_key_down reads
@@ -630,7 +616,7 @@ bool install() {
     b.di_available = be_di_available; b.di_char_name = be_di_char_name; b.di_cfg = be_di_cfg; b.di_cfg_set = be_di_cfg_set; b.di_presets = be_di_presets;
     b.di_preset_set = be_di_preset_set; b.di_preset_add = be_di_preset_add; b.di_preset_remove = be_di_preset_remove; b.di_save_presets = be_di_save_presets;
     b.di_save_cfg = be_di_save_cfg; b.di_mark_dirty = be_di_mark_dirty; b.drv_save_cfg = be_drv_save_cfg; b.di_special_enabled = be_di_special_enabled;
-    b.row_looks = be_row_looks; b.opt_set_value = be_opt_set_value; b.select_lr = be_select_lr;
+    b.row_looks = be_row_looks; b.select_lr = be_select_lr;
     core::set_backend(b);
     core::set_data_dir("reframework/data");
     g_installed = true;
@@ -644,7 +630,6 @@ State state() {
     State st;
     st.active = core::active(); st.di = core::di_active(); st.nops = g_nops;
     st.has_closed_at = core::closed_at(st.closed_at);
-    st.reopen = core::reopen_now();
     return st;
 }
 void set_screen(bool visible, bool pad, bool busy, uint64_t agent) try {

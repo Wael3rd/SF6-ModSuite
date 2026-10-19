@@ -278,6 +278,10 @@ constexpr float kCellScale = 0.35f, kCellPitch = 184.0f * kCellScale;   // the t
 constexpr float kWhiteU = 873.0f / 1024, kWhiteV = 10.0f / 1024, kWhiteW = 20.0f / 1024, kWhiteH = 20.0f / 1024;
 constexpr int kCells = core::kPaletteLines * core::kPaletteCols;
 constexpr uint16_t kAbove = 10;                                // Priority of our copies
+// the cell under the cursor: drawn larger and above its neighbours, so that the game's focus glow (14 px around the
+// picture at full size, 5 px at kCellScale) reads at a glance
+constexpr float kFocusScale = 0.45f;
+constexpr uint16_t kFocusAbove = 11;
 const char* const* cell_names() {
     static std::string s[kCells];
     static const char* p[kCells] = {};
@@ -289,6 +293,8 @@ struct GridState {
     int tries = 0;
     uint64_t next_try = 0, recheck = 0;
     int glow = -2, check = -2;                                 // the cells showing the focus glow / the check now
+    float cx = 0, cy[core::kPaletteLines] = {}, ox = 0, oy = 0, z = 0;   // the layout: the rows' centre x, each line's y,
+                                                               // the picture's centre in a cell, the template's z
 };
 GridState g_grid;
 
@@ -355,6 +361,23 @@ void cell_part(void* body, int cell, const char* part, const char* inner, bool o
     if (inner) c = sub(c, inner);
     if (c) api()->ui_set_visible(cl(), c, on ? 1 : 0);
 }
+// a cell at its scale, its picture centred on its grid spot whatever the scale
+bool cell_place(void* cell, int i, float scale) {
+    const SF6CoreAPI* a = api();
+    const int line = i / core::kPaletteCols, col = i % core::kPaletteCols;
+    return cell && a->ui_set_scale(cl(), cell, scale, scale, 1.0f) == SF6CORE_OK &&
+           a->ui_set_position(cl(), cell, g_grid.cx + ((float)col - 4.5f) * kCellPitch - scale * g_grid.ox,
+                              g_grid.cy[line] - scale * g_grid.oy, g_grid.z) == SF6CORE_OK;
+}
+void cell_focus(void* body, int cell, bool on) {               // the cell under the cursor: larger, above its neighbours
+    if (cell < 0 || cell >= kCells) return;
+    void* c = copy(body, cell_names()[cell]);
+    if (!c) return;
+    cell_place(c, cell, on ? kFocusScale : kCellScale);
+    SF6CoreArg p{}; p.type = SF6CORE_ARG_I64; p.v.i = on ? kFocusAbove : kAbove;
+    api()->obj_invoke(cl(), c, "set_Priority(System.UInt16)", &p, 1, nullptr);
+    cell_part(body, cell, "c_outline", "c_inner", on);
+}
 void grid_step(void* param, const std::vector<const core::RowLook*>& rows, RowControlFn rc) {
     const SF6CoreAPI* a = api();
     const uint64_t f = cmn::frame();
@@ -376,11 +399,12 @@ void grid_step(void* param, const std::vector<const core::RowLook*>& rows, RowCo
             retry("the cells were not made (see sf6core.log)", true);
             return;
         }
-        float ox, oy, cx = 0, cy[core::kPaletteLines] = {};
+        float& ox = g_grid.ox; float& oy = g_grid.oy; float& cx = g_grid.cx; float* cy = g_grid.cy;
         bool have[core::kPaletteLines] = {};
         cell_centre(tmpl, ox, oy);
         Geo tg;
         pos_scale(tmpl, tg);
+        g_grid.z = tg.z;
         for (const core::RowLook* r : rows) {
             void* unit = rc(r->eid, param);
             float x = 0, y = 0;
@@ -396,8 +420,7 @@ void grid_step(void* param, const std::vector<const core::RowLook*>& rows, RowCo
             void* tex = sub(sub(sub(cell, "c_bg_s"), "c_bg"), "e_texture_theme");
             const uint32_t rgb = core::kPalette[line][col];
             const uint32_t rgba = 0xFF000000u | ((rgb & 0xFFu) << 16) | (rgb & 0xFF00u) | ((rgb >> 16) & 0xFFu);   // via.Color: r in the low byte
-            ok = cell && tex && a->ui_set_scale(cl(), cell, kCellScale, kCellScale, 1.0f) == SF6CORE_OK &&
-                 a->ui_set_position(cl(), cell, cx + ((float)col - 4.5f) * kCellPitch - kCellScale * ox, cy[line] - kCellScale * oy, tg.z) == SF6CORE_OK &&
+            ok = cell && tex && cell_place(cell, i, kCellScale) &&
                  a->ui_set_texture_rect(cl(), tex, g_holder, kWhiteU, kWhiteV, kWhiteW, kWhiteH) == SF6CORE_OK &&
                  a->ui_set_color(cl(), tex, rgba) == SF6CORE_OK;
             if (!ok) break;
@@ -440,7 +463,7 @@ void grid_step(void* param, const std::vector<const core::RowLook*>& rows, RowCo
         if (r->focused && r->cursor >= 0) glow = r->line * core::kPaletteCols + r->cursor;
         if (r->checked >= 0) check = r->line * core::kPaletteCols + r->checked;
     }
-    if (glow != g_grid.glow) { cell_part(body, g_grid.glow, "c_outline", "c_inner", false); cell_part(body, glow, "c_outline", "c_inner", true); g_grid.glow = glow; }
+    if (glow != g_grid.glow) { cell_focus(body, g_grid.glow, false); cell_focus(body, glow, true); g_grid.glow = glow; }
     if (check != g_grid.check) { cell_part(body, g_grid.check, "c_check", nullptr, false); cell_part(body, check, "c_check", nullptr, true); g_grid.check = check; }
     if (f >= g_grid.recheck) {                                 // the rows stay hidden (the game's own focus handling)
         g_grid.recheck = f + 30;
