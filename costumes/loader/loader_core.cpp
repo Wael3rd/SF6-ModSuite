@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-14-chainrefs";
+static const char* LOADER_BUILD_ID = "2026-10-20-rtobase";
 
 // ============================================================================
 // Utility
@@ -1821,7 +1821,8 @@ static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8
 }
 
 namespace slotcheck {
-static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
+static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out, std::vector<std::string>* all = nullptr);
+static bool mesh_joint_names(const std::vector<uint8_t>& b, std::set<std::string>& out);
 static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
 }
 // Meshes taken over by donate_parts(): the slot check does not pair them with a material file (the mod's
@@ -3068,6 +3069,33 @@ static void add_slot_files(PakWriter& writer,
                 for (auto oi : g.options)
                     if (rm.options[oi].mode == "base" && rm.options[oi].files.count(p)) src = &rm.options[oi];
             if (!src && !base_pak.find(pak_path_hash(std::string_view(p)))) continue;   // nothing under it
+            // A mesh is swapped on a model that keeps its chains and its other parts: the copy must have every
+            // joint of the slot's mesh, which they move. The game's Outfit 1 body as the base copy of Swimsuit
+            // C. Viper (no body in its main files), without the 18 joints the swimsuit's chain moves, stopped the
+            // game in a chain job half a second after the swap (19/10). Without a copy, the slot's own mesh stays.
+            if (str_lower(p).find(".mesh.") != std::string::npos) {
+                const RtoOption* own = nullptr;      // the option the slot's mesh comes from (the last one wins)
+                for (auto& g : rm.groups)
+                    for (auto oi : g.options)
+                        if (rm.options[oi].mode != "base" && rm.options[oi].files.count(p)
+                            && std::find(out.selected.begin(), out.selected.end(), oi) != out.selected.end()) own = &rm.options[oi];
+                std::set<std::string> need, have;
+                std::string why;
+                if (!own || !slotcheck::mesh_joint_names(own->files.at(p).read_data(), need)) why = "the slot's mesh is not readable";
+                else if (!slotcheck::mesh_joint_names(src ? src->files.at(p).read_data()
+                                                          : base_pak.read(*base_pak.find(pak_path_hash(std::string_view(p)))), have))
+                    why = "it is not readable";
+                else {
+                    std::vector<std::string> miss;
+                    for (auto& n : need) if (!have.count(n)) miss.push_back(n);
+                    if (!miss.empty()) why = std::to_string(miss.size()) + " joints of the slot's mesh missing, " + miss[0] + "...";
+                }
+                if (!why.empty()) {
+                    printf("      runtime options: no base copy of %s (%s, %s): no option of its group = the slot's own mesh\n",
+                           p.c_str(), src ? "the mod's base files" : "the game's file", why.c_str());
+                    continue;
+                }
+            }
             const ModFileMaps twins = {src ? &src->files : &mc->files_in_folder};
             out.base.push_back(store("base", p, src ? &src->files.at(p) : nullptr, {}, src ? &twins : nullptr));
         }
@@ -3187,8 +3215,8 @@ static std::vector<std::string> utf16_strings(const std::vector<uint8_t>& d, siz
     return out;
 }
 
-// Materials a mesh uses (SF6 mesh header: name table + material index table)
-static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out) {
+// Materials a mesh uses (SF6 mesh header: name table + material index table); all: the whole name table
+static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out, std::vector<std::string>* all) {
     if (b.size() < 152 || memcmp(b.data(), "MESH", 4) != 0) return false;
     auto r16 = [&](size_t o) { int16_t v; memcpy(&v, b.data() + o, 2); return v; };
     auto r64 = [&](size_t o) { int64_t v; memcpy(&v, b.data() + o, 8); return v; };
@@ -3211,6 +3239,17 @@ static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::strin
         if (idx < 0 || idx >= name_count) return false;
         out.push_back(names[idx]);
     }
+    if (all) *all = std::move(names);
+    return true;
+}
+
+// The names of a mesh's name table that are not materials: its joints (and blend shapes). Read the same
+// way for the game's meshes and for meshes exported by the modding tools (their headers differ elsewhere).
+static bool mesh_joint_names(const std::vector<uint8_t>& b, std::set<std::string>& out) {
+    std::vector<std::string> mats, names;
+    if (!mesh_materials(b, mats, &names)) return false;
+    const std::set<std::string> m(mats.begin(), mats.end());
+    for (auto& n : names) if (!m.count(n)) out.insert(n);
     return true;
 }
 

@@ -100,6 +100,10 @@ natives/stm/product/model/esf/<fighter>/<slot folder>/rto/<option id>/_/<path in
 - **Base copies** (`rto/base/`): for every file of an option the outfit is made of, what that file is without the
   option: the mod's base files, else the game's file (patched like the slot's). They let the runtime go back to "no
   option of this group" exactly as Fluffy would show it.
+  A mesh gets a base copy only if it has every joint of the slot's mesh (its name table, materials aside): the
+  model keeps its chains and other parts while the mesh is swapped, and they move those joints. Swimsuit C. Viper
+  ships no body in its main files: the game's Outfit 1 body, without the 18 joints the swimsuit's chain moves,
+  stopped the game in a chain job half a second after the swap (19/10). Without a copy, None keeps the slot's mesh.
 - The pak builder already stores identical data once: the copies of a file shared by the slot and by its options,
   or by several slots, cost an entry (48 bytes), not their size.
 
