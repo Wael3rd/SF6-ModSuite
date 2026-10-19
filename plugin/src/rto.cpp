@@ -41,8 +41,10 @@ bool g_migrated = false;
 
 // ---- screens and events ----
 bool g_select = false;              // character select open: nothing at all
-bool g_bs = false;                  // Battle Settings opened (until its screens are gone)
+bool g_bs = false;                  // Battle Settings opened, until it is closed (its sub-screens included)
+bool g_bs_closed = false;           // the close event came: g_bs ends once Fighter Settings is not seen for 3 s
 uint32_t g_bs_seen = 0;
+bool g_fs_was = false;              // Fighter Settings visible on the last frame (log on change)
 uint32_t g_watch_until = 0;         // fighters watched after an event, until this frame
 uint32_t g_watch_next = 0;
 uint32_t g_watch_start = 0;
@@ -219,6 +221,7 @@ void reset(Model& md) {
     md.name = nm;
 }
 
+void tell_once(Model& md, const std::string& line);
 Obj* comp_of(Obj* go, Obj* type) { return call_obj(T.get_comp, go, { arg_obj(type) }); }
 
 void visit(Model& md, Obj* go) {
@@ -253,6 +256,11 @@ void walk(Model& md) {
         if ((found = g_m.slot_of_path(holder_path(call_obj(T.get_mat, mc.c))))) break;
     }
     if (found) md.since = g_frame;
+    else {
+        std::string first;
+        for (auto& mc : md.meshes) { first = holder_path(call_obj(T.get_mesh, mc.c)); if (!first.empty()) break; }
+        tell_once(md, "has no outfit with options: " + std::to_string(md.meshes.size()) + " meshes, first " + (first.empty() ? std::string("none") : short_path(first)));
+    }
     if (found != md.slot) {
         md.slot = found;
         md.orig.clear();
@@ -466,6 +474,7 @@ void process(Model& md, int side, bool light) {
 Obj* g_crf = nullptr;                // the preview's CaptureRoomFighter, checked alive before each use
 uint32_t g_crf_scan = 0, g_prev_next = 0;
 
+std::string g_crf_log;               // the last preview search result logged (logged on change)
 void preview_tick() {
     if (g_frame < g_prev_next) return;
     g_prev_next = g_frame + 10;
@@ -473,15 +482,29 @@ void preview_tick() {
         g_crf_scan = g_frame;
         g_crf = nullptr;
         Obj* list = find_components(T.crf);
-        for (int i = 0, n = list_count(list); i < n; ++i) {
+        const int n = list_count(list);
+        Obj* any = nullptr;                          // one with a model, set up or not
+        int with_obj = 0;
+        for (int i = 0; i < n; ++i) {
             Obj* c = list_item(list, i);
-            if (c && call_obj(T.crf_obj, c)) { g_crf = c; break; }
+            if (!c || !call_obj(T.crf_obj, c)) continue;
+            ++with_obj;
+            if (!any) any = c;
+            if (!g_crf && (!T.crf_setup || ret_bool(T.crf_setup, c))) g_crf = c;
         }
+        if (!g_crf) g_crf = any;
+        char b[160];
+        snprintf(b, sizeof b, "%d CaptureRoomFighter, %d with a model, %s", n, with_obj,
+                 !g_crf ? "no preview" : (g_crf == any && T.crf_setup && !ret_bool(T.crf_setup, g_crf)) ? "using one not set up yet" : "using one set up");
+        if (g_crf_log != b) { g_crf_log = b; logf("rto: preview search: %s", b); }
     }
     Model& md = g_models[0];
     Obj* root = g_crf ? call_obj(T.crf_obj, g_crf) : nullptr;
     if (root && T.crf_setup && !ret_bool(T.crf_setup, g_crf)) root = nullptr;   // still building
-    if (root != md.root) { reset(md); md.root = root; }
+    if (root != md.root) {
+        reset(md); md.root = root;
+        if (root) logf("rto: preview model %s", str(call_obj(T.go_name, root)).c_str());
+    }
     if (!root) return;
     process(md, menu::active() ? menu::side() : 0, true);
 }
@@ -649,7 +672,11 @@ void tick(uint32_t ev) {
     try {
         if (ev & EV_SELECT_START) { g_select = true; g_watch_until = 0; for (auto& md : g_models) reset(md); }
         if (ev & EV_SELECT_END) g_select = false;
-        if (ev & EV_MENU_OPEN) { g_bs = true; g_bs_seen = g_frame; }
+        if (ev & EV_MENU_OPEN) {
+            if (!g_bs || g_bs_closed) logf("rto: Battle Settings open: its preview is followed");
+            g_bs = true; g_bs_closed = false; g_bs_seen = g_frame;
+        }
+        if ((ev & EV_MENU_CLOSE) && g_bs && !g_bs_closed) { g_bs_closed = true; g_bs_seen = g_frame; }
         if ((ev & (EV_HOLDER | EV_RTO_MODEL)) && !g_select) {
             if (!g_watch_until) {
                 if (costumes::select_active()) { g_select = true; return; }   // the select screen builds its own models
@@ -666,9 +693,13 @@ void tick(uint32_t ev) {
         bool fs = false;
         if (g_bs) {
             fs = fighter_settings_visible();
+            if (fs != g_fs_was) { g_fs_was = fs; logf("rto: Fighter Settings %s", fs ? "on screen" : "left"); }
             if (fs) g_bs_seen = g_frame;
-            else if (g_frame - g_bs_seen > 180 && !menu::active()) {
+            else if (g_bs_closed && g_frame - g_bs_seen > 180 && !menu::active()) {
+                // closed (HidObject also comes when a sub-screen hides it: Fighter Settings on screen keeps it)
+                logf("rto: Battle Settings closed: its preview is no longer followed");
                 g_bs = false;
+                g_fs_was = false;
                 reset(g_models[0]);
                 g_crf = nullptr;
                 res_gc();

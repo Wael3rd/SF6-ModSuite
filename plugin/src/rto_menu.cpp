@@ -52,6 +52,8 @@ struct Hint {
     std::vector<uint32_t> writes;
     bool pad = false;
     bool key_was = false;
+    bool raw_was = false;                           // F / A down, any row (log of every press)
+    int text_log = -1, has_log = -1;                // last logged: costume row text found, outfit with options
 } H;
 uint32_t g_pad_a = 32;
 bool g_pad_bits = false;
@@ -206,7 +208,7 @@ void teardown(const char* why) {
 
 void open() {
     const Slot* slot = preview_slot();
-    if (!slot || !g_svc) return;
+    if (!slot || !g_svc) { logf("rto: menu not opened (%s)", !slot ? "no outfit with options on the preview" : "no option service"); return; }
     S = State{};
     S.slot = slot;
     S.side = g_last_side;
@@ -324,6 +326,11 @@ void hint_tick() {
         Obj* cm = call_obj(agent, "get_ControlMain");
         Obj* spin = cm ? reinterpret_cast<Obj*>(a->ui_find_child(cm, "p_Spin_costume", 8)) : nullptr;
         H.text = spin ? reinterpret_cast<Obj*>(a->ui_find_child(spin, "e_text", 4)) : nullptr;
+        const int found = H.text ? 1 : 0;
+        if (found != H.text_log) {
+            H.text_log = found;
+            logf("rto: Fighter Settings: costume row %s", found ? "text found" : spin ? "found, no e_text in it" : "(p_Spin_costume) not found");
+        }
     }
     // the device last used: the key shown is the decide key of that device
     if (pad_mask()) H.pad = true;
@@ -336,21 +343,42 @@ void hint_tick() {
     if (base != H.base) { H.base_at = H.base.empty() ? 0 : g_frame; H.base = base; }   // the first read is no change
     // the preview was identified after the outfit shown changed: it is that outfit's
     const bool has = slot && preview_since() >= static_cast<int>(H.base_at);
+    if ((has ? 1 : 0) != H.has_log) {
+        H.has_log = has ? 1 : 0;
+        if (has) logf("rto: costume row '%s': %s/%s has options (%s)", base.c_str(), slot->fighter_dir.c_str(), slot->folder.c_str(), slot->label.c_str());
+        else logf("rto: costume row '%s': no options (%s)", base.c_str(),
+                  !slot ? "the preview wears no outfit with options" : "the preview was not seen again since the outfit changed");
+    }
     if (H.text && !H.off && !cur.empty()) {
         const std::string want = has ? base + (H.pad ? kPadHint : kKeyHint) : base;
         if (want != cur) {
             H.writes.push_back(g_frame);
             while (!H.writes.empty() && g_frame - H.writes.front() > 120) H.writes.erase(H.writes.begin());
             if (H.writes.size() > 12) { H.off = true; logf("rto: the costume row's text is rewritten all the time: no key hint there"); }
-            else a->ui_set_text(C(), H.text, want.c_str());
+            else {
+                const SF6CoreStatus st = a->ui_set_text(C(), H.text, want.c_str());
+                logf("rto: costume row text -> '%s' (%s)", want.c_str(), st == SF6CORE_OK ? "written" : ("core status " + std::to_string(static_cast<int>(st))).c_str());
+            }
         }
     }
 
     // the key: F / A on the costume row
     Obj* item = call_obj(agent, "GetFocusItem");
     Obj* ctrl = item ? get_obj(item, "<Control>k__BackingField") : nullptr;
-    const bool on_row = ctrl && str(call_obj(ctrl, "get_Name")) == "p_Spin_costume";
-    const bool down = on_row && game_has_focus() && (key_down(0x46) || (pad_mask() & g_pad_a) != 0);
+    const std::string row = ctrl ? str(call_obj(ctrl, "get_Name")) : std::string();
+    const bool on_row = row == "p_Spin_costume";
+    const bool raw = key_down(0x46) || (pad_mask() & g_pad_a) != 0;
+    const bool down = on_row && game_has_focus() && raw;
+    if (raw && !H.raw_was && !S.active) {                // every press, and what it led to
+        const char* why = !game_has_focus() ? "the game window is not in front"
+                        : !on_row ? "not on the costume row"
+                        : !has ? "this outfit has no options"
+                        : a->opt_window_open() ? "an option window is already open"
+                        : g_frame - S.closed_at <= 30 ? "the menu just closed"
+                        : nullptr;
+        logf("rto: key %s on row '%s': %s", key_down(0x46) ? "F" : "A", row.empty() ? "?" : row.c_str(), why ? why : "opening the menu");
+    }
+    H.raw_was = raw;
     if (down && !H.key_was && has && !S.active && !a->opt_window_open() && g_frame - S.closed_at > 30) open();
     H.key_was = down;
 }

@@ -342,6 +342,9 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
   not seen until the next one (the probes saw no rebuild on Training resets); the Training pause menu's Character
   Settings popup has no menu (its preview is not handled); menu texts are English only; no mouse click on the
   costume row; whether the pad's A on the costume row does something in the game was not checked.
+- A modular mod that is an add-on (no body mesh, e.g. "Mai face accessories": the loader logs "partial option ... no
+  body mesh in part 01") makes no outfit, so no slot lists its options: its stored options wait for the add-on
+  archives item below.
 
 - **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
   are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as
