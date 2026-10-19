@@ -1090,6 +1090,32 @@ bool modernize_mdf2(const std::vector<uint8_t>& mod, const std::vector<uint8_t>&
     return true;
 }
 
+size_t mdf2_rebind_textures(std::vector<uint8_t>& data,
+                            const std::unordered_map<std::string, std::string>& to) {
+    std::vector<MdfMat> mats;
+    if (!mdf_read(data, mats)) return 0;
+    auto norm = [](std::string s) {
+        size_t a = s.find_first_not_of("@ ");
+        s = a == std::string::npos ? std::string() : s.substr(a);
+        for (auto& c : s) c = c == '\\' ? '/' : char(std::tolower((unsigned char)c));
+        for (size_t q; (q = s.find("//")) != std::string::npos; ) s.erase(q, 1);
+        return s;
+    };
+    size_t n = 0;
+    for (auto& m : mats)
+        for (auto& t : m.tex) {
+            auto it = to.find(norm(t.path));
+            if (it == to.end()) continue;
+            // the new path goes to the end of the file, the binding points at it (as modernize_mdf2)
+            const uint64_t at = data.size();
+            for (char c : it->second) { data.push_back((uint8_t)c); data.push_back(0); }
+            data.push_back(0); data.push_back(0);
+            memcpy(data.data() + t.entry_at + 16, &at, 8);
+            n++;
+        }
+    return n;
+}
+
 bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
     if (b.size() < 40 || memcmp(b.data(), "TEX\0", 4) != 0) return false;
     const uint16_t w = rd<uint16_t>(b, 8), h = rd<uint16_t>(b, 10);

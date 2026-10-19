@@ -1149,6 +1149,8 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
 // Mod costume detection
 // ============================================================================
 
+struct RtoMod;   // runtime costume options of a modular mod (docs/RUNTIME_OPTIONS.md)
+
 struct ModCostume {
     int fighter;
     std::string fighter_dir;
@@ -1164,6 +1166,9 @@ struct ModCostume {
     // Files of an add-on made for another outfit's folder, moved into this costume (path in the costume ->
     // folder they were written for); their material files still name that folder
     std::unordered_map<std::string, std::string> remapped;
+    // Variant of a modular mod with runtime options: the mod's options, and those this costume is made of
+    std::shared_ptr<const RtoMod> rto;
+    std::vector<size_t> rto_selected;
 };
 
 // allow_partial: a costume that replaces only some parts (a head, an accessory) is kept as long as it
@@ -1351,6 +1356,70 @@ static std::unordered_map<std::string, ModSource> g_mod_source;
 struct LeftOut { int fighter; std::string label, reason; };
 static std::vector<LeftOut> g_left_out;
 
+// ============================================================================
+// Runtime costume options (docs/RUNTIME_OPTIONS.md)
+// ============================================================================
+// costume_mods\settings.ini, RuntimeOptions: "off" (default) builds what it always did; "on" makes one
+// outfit per modular mod (its first combination) and stores every option of the mod in the pak for the
+// in-game menu, listed in SF6_Costumes_Data\costume_options.json; "variants" keeps the outfits of "off"
+// and stores the options as well.
+enum class RtoLayout { Off, Variants, One };
+static RtoLayout g_rto_layout = RtoLayout::Off;
+static const char* RTO_FORMAT = "sf6-costume-options-1";
+static const char* RTO_FILE = "costume_options.json";
+
+struct RtoOption {
+    std::string id, name, folder;
+    std::string mode;   // "base" (always worn, not a choice), "pick" (one per group), "toggle" (on or off)
+    std::unordered_map<std::string, ModFileRef> files;
+};
+struct RtoGroup { std::string name; std::vector<size_t> options; };
+struct RtoMod {
+    std::string name, source, defaults_from;
+    std::vector<RtoGroup> groups;   // in the order their files are laid over each other (later wins)
+    std::vector<RtoOption> options;
+    // Every combination build_modular makes (variant slots): its costume id, label and options worn
+    struct Variant { std::string mod_id, label; std::vector<size_t> selected; };
+    std::vector<Variant> variants;
+};
+struct RtoFile { std::string kind, target, path; };
+struct RtoSlotOut {
+    std::shared_ptr<const RtoMod> mod;
+    std::vector<size_t> selected;                   // options the slot is made of
+    std::map<size_t, std::vector<RtoFile>> files;   // option -> its files, as this slot loads them
+    std::vector<RtoFile> base;                      // what a target is when no chosen option ships it
+};
+static std::map<std::pair<std::string, int>, RtoSlotOut> g_rto_slots;   // (fighter_dir, costume_no)
+
+// What the runtime does with a file: swap a mesh, a material, a texture or a chain on the model;
+// "colour" (a colour file, for the Color Mod); "other" only takes effect at the next launch
+static const char* rto_kind(const std::string& low) {
+    if (low.find(".mesh.") != std::string::npos) return "mesh";
+    if (low.find(".mdf2.") != std::string::npos) return "material";
+    if (low.find(".tex.") != std::string::npos) return "texture";
+    if (low.find(".chain.") != std::string::npos) return "chain";
+    if (low.find("_cmd_") != std::string::npos && low.find(".user.") != std::string::npos) return "colour";
+    return "other";
+}
+
+// A pak path as the game names the resource: lowercase, without natives/stm/ and the version
+// ("natives/stm/product/model/esf/esf028/006/01/esf028_006_01.mesh.230110883" ->
+//  "product/model/esf/esf028/006/01/esf028_006_01.mesh")
+static std::string resource_name(const std::string& pak_path) {
+    std::string s = str_lower(pak_path);
+    if (s.compare(0, 12, "natives/stm/") == 0) s.erase(0, 12);
+    if (str_ends_with(s, ".x64")) {                       // Havok cloth: .havokcloth.1.x64
+        s.resize(s.size() - 4);
+        auto d = s.rfind('.');
+        if (d != std::string::npos) s.resize(d);
+        return s;
+    }
+    auto d = s.rfind('.');
+    if (d != std::string::npos && d + 1 < s.size()
+        && std::all_of(s.begin() + d + 1, s.end(), [](char c) { return c >= '0' && c <= '9'; })) s.resize(d);
+    return s;
+}
+
 static std::string json_escape(const std::string& v) {
     std::string o;
     for (unsigned char c : v) {
@@ -1405,6 +1474,122 @@ static void write_outfits_json(const std::string& path, const std::vector<SlotIn
         fprintf(f, "%s\n    {\"fighter\": %d, \"label\": \"%s\", \"reason\": \"%s\"}", first ? "" : ",",
                 lo.fighter, json_escape(lo.label).c_str(), json_escape(lo.reason).c_str());
         first = false;
+    }
+    fprintf(f, "\n  ]\n}\n");
+    fclose(f);
+}
+
+// costume_options.json (docs/RUNTIME_OPTIONS.md): the options of every modular mod and, for each of its
+// slots, the files each option swaps on the model (target -> stored copy, as the game names resources)
+static void write_options_json(const std::string& path, const std::vector<SlotInfo>& slots,
+                               const std::string& pak_name, const std::vector<RegSlot>& former_slots) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return;
+    char when[32];
+    SYSTEMTIME st; GetLocalTime(&st);
+    sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    const char* layout = g_rto_layout == RtoLayout::One ? "one" : "variants";
+    fprintf(f, "{\n  \"format\": \"%s\",\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"pak\": \"%s\",\n"
+               "  \"layout\": \"%s\",\n  \"mods\": [", RTO_FORMAT, when, json_escape(LOADER_BUILD_ID).c_str(),
+            json_escape(pak_name).c_str(), layout);
+    // Each mod once, keyed by fighter folder and root name (stable across mod updates)
+    auto key_of = [](const SlotInfo& sl) { return sl.fighter_dir + "/" + str_lower(sl.mod_costume->rto->name); };
+    auto has_out = [](const SlotInfo& sl) {
+        return sl.mod_costume && sl.mod_costume->rto && g_rto_slots.count({sl.fighter_dir, sl.new_costume_no}) > 0;
+    };
+    std::vector<std::pair<std::string, const RtoMod*>> mods;
+    for (auto& sl : slots) {
+        if (!has_out(sl)) continue;
+        std::string k = key_of(sl);
+        if (std::none_of(mods.begin(), mods.end(), [&](auto& m) { return m.first == k; }))
+            mods.push_back({k, sl.mod_costume->rto.get()});
+    }
+    bool first = true;
+    for (auto& [k, rm] : mods) {
+        fprintf(f, "%s\n    {\"key\": \"%s\", \"name\": \"%s\", \"source\": \"%s\", \"defaults_from\": \"%s\", \"groups\": [",
+                first ? "" : ",", json_escape(k).c_str(), json_escape(rm->name).c_str(),
+                json_escape(rm->source).c_str(), json_escape(rm->defaults_from).c_str());
+        first = false;
+        bool fg = true;
+        for (auto& g : rm->groups) {
+            fprintf(f, "%s\n      {\"name\": \"%s\", \"options\": [", fg ? "" : ",", json_escape(g.name).c_str());
+            fg = false;
+            bool fo = true;
+            for (auto oi : g.options) {
+                auto& op = rm->options[oi];
+                // live: every file can be swapped on the model; colour: colour files (Color Mod);
+                // relaunch: some file only takes effect at the next launch
+                bool other = false, colour = false;
+                for (auto& [p, mf] : op.files) {
+                    std::string kd = rto_kind(str_lower(p));
+                    if (kd == "other") other = true; else if (kd == "colour") colour = true;
+                }
+                fprintf(f, "%s\n        {\"id\": \"%s\", \"name\": \"%s\", \"folder\": \"%s\", \"mode\": \"%s\", \"apply\": \"%s\"}",
+                        fo ? "" : ",", op.id.c_str(), json_escape(op.name).c_str(), json_escape(op.folder).c_str(),
+                        op.mode.c_str(), other ? "relaunch" : colour ? "colour" : "live");
+                fo = false;
+            }
+            fprintf(f, "\n      ]}");
+        }
+        // The combinations build_modular makes as variant slots: ready-made sets of options
+        fprintf(f, "\n    ], \"variants\": [");
+        for (size_t v = 0; v < rm->variants.size(); ++v) {
+            fprintf(f, "%s\n      {\"label\": \"%s\", \"options\": [", v ? "," : "",
+                    json_escape(rm->variants[v].label).c_str());
+            for (size_t k = 0; k < rm->variants[v].selected.size(); ++k)
+                fprintf(f, "%s\"%s\"", k ? ", " : "", rm->options[rm->variants[v].selected[k]].id.c_str());
+            fprintf(f, "]}");
+        }
+        fprintf(f, "\n    ]}");
+    }
+    fprintf(f, "\n  ],\n  \"slots\": [");
+    auto put_files = [&](const std::vector<RtoFile>& files, const char* indent) {
+        bool ff = true;
+        for (auto& rf : files) {
+            fprintf(f, "%s\n%s{\"kind\": \"%s\", \"target\": \"%s\", \"path\": \"%s\"}", ff ? "" : ",", indent,
+                    rf.kind.c_str(), json_escape(rf.target).c_str(), json_escape(rf.path).c_str());
+            ff = false;
+        }
+    };
+    first = true;
+    for (auto& sl : slots) {
+        if (!has_out(sl)) continue;
+        const RtoSlotOut& so = g_rto_slots.at({sl.fighter_dir, sl.new_costume_no});
+        fprintf(f, "%s\n    {\"fighter\": %d, \"fighter_dir\": \"%s\", \"costume_no\": %d, \"folder\": \"%s\", "
+                   "\"name\": \"%s\", \"label\": \"%s\", \"mod\": \"%s\",\n      \"defaults\": [",
+                first ? "" : ",", sl.fighter, sl.fighter_dir.c_str(), sl.new_costume_no, sl.new_folder.c_str(),
+                json_escape(sl.outfit_name).c_str(), json_escape(mod_label(sl.mod_id)).c_str(),
+                json_escape(key_of(sl)).c_str());
+        first = false;
+        for (size_t k = 0; k < so.selected.size(); ++k)
+            fprintf(f, "%s\"%s\"", k ? ", " : "", so.mod->options[so.selected[k]].id.c_str());
+        fprintf(f, "],\n      \"options\": {");
+        bool fo = true;
+        for (auto& [oi, files] : so.files) {
+            fprintf(f, "%s\n        \"%s\": [", fo ? "" : ",", so.mod->options[oi].id.c_str());
+            fo = false;
+            put_files(files, "          ");
+            fprintf(f, "]");
+        }
+        fprintf(f, "\n      },\n      \"base\": [");
+        put_files(so.base, "        ");
+        // Slots of the previous launch that held other combinations of this mod (variant slots before
+        // the one-outfit layout): their saved choices move to this slot with these options
+        fprintf(f, "],\n      \"former\": [");
+        bool fr = true;
+        for (auto& v : so.mod->variants) {
+            if (v.mod_id == sl.mod_id) continue;
+            for (auto& rs : former_slots) {
+                if (rs.mod_id != v.mod_id || rs.fighter_dir != sl.fighter_dir || rs.new_costume_no == sl.new_costume_no) continue;
+                fprintf(f, "%s\n        {\"costume_no\": %d, \"folder\": \"%s\", \"label\": \"%s\", \"options\": [",
+                        fr ? "" : ",", rs.new_costume_no, rs.new_folder.c_str(), json_escape(v.label).c_str());
+                fr = false;
+                for (size_t k = 0; k < v.selected.size(); ++k)
+                    fprintf(f, "%s\"%s\"", k ? ", " : "", so.mod->options[v.selected[k]].id.c_str());
+                fprintf(f, "]}");
+            }
+        }
+        fprintf(f, "]}");
     }
     fprintf(f, "\n  ]\n}\n");
     fclose(f);
@@ -1772,6 +1957,13 @@ static void add_slot_files(PakWriter& writer,
         for (auto& [pth, mf] : *files) own_roots.insert(mod_root(mf));
     const ModFileMaps own_files = {&mc->files_in_folder, &mc->files_other, &mc->files_shared};
 
+    // Where the slot put each file it relocated (original -> slot's copy, last write wins), for the
+    // runtime options: an option replaces what the slot's model loads (see the end of this function)
+    std::unordered_map<std::string, std::string> slot_targets;
+    auto note_target = [&](const std::string& orig, const std::string& target) {
+        if (mc->rto && written_paths.count(target)) slot_targets[str_lower(orig)] = target;
+    };
+
     // Dir-only relocation helper (shared across phases)
     auto relocate_dir_only = [&](const std::string& p) -> std::string {
         std::string old_dir = fd + "/" + old_f + "/";
@@ -1921,6 +2113,7 @@ static void add_slot_files(PakWriter& writer,
         }
         written_paths.insert(new_path);
         record_relocation(path, new_path);
+        note_target(path, new_path);
         g_relocated_mod_paths.insert(path);
         count++;
         if (low.find(".tex.") != std::string::npos && !is_streaming)
@@ -1984,6 +2177,7 @@ static void add_slot_files(PakWriter& writer,
                         uint64_t nh = pak_path_hash(std::string_view(new_path));
                         writer.add_uncompressed(nh, std::move(mdf_data));
                         written_paths.insert(new_path);
+                        note_target(vp, new_path);
                         relocated_vanilla_mdf2.push_back(vp);
                         count++; patched++;
                     }
@@ -2006,6 +2200,7 @@ static void add_slot_files(PakWriter& writer,
                 patch_material(mdf_data);
                 writer.add_uncompressed(pak_path_hash(std::string_view(new_path)), std::move(mdf_data));
                 written_paths.insert(new_path);
+                note_target(vp, new_path);
                 relocated_vanilla_mdf2.push_back(vp);
                 count++; patched++;
             }
@@ -2054,6 +2249,7 @@ static void add_slot_files(PakWriter& writer,
                 uint64_t th = pak_path_hash(std::string_view(ccvd_target));
                 writer.add_uncompressed(th, std::move(ccvd_data));
                 written_paths.insert(ccvd_target);
+                note_target(ccvd_orig, ccvd_target);
                 count++; patched++;
             }
         }
@@ -2110,7 +2306,7 @@ static void add_slot_files(PakWriter& writer,
         for (auto& cn : cmd_names) {
             std::string cmd_orig = base_model + cn;
             std::string cmd_target = relocate_dir_only(cmd_orig);
-            if (written_paths.count(cmd_target)) continue;
+            if (written_paths.count(cmd_target)) { note_target(cmd_orig, cmd_target); continue; }
             uint64_t th = pak_path_hash(std::string_view(cmd_target));
             auto mfit = mc->files_in_folder.find(cmd_orig);
             if (mfit != mc->files_in_folder.end()) {
@@ -2166,6 +2362,7 @@ static void add_slot_files(PakWriter& writer,
                                                            : "nothing to put in its place, the slot may never finish loading");
                 }
             }
+            note_target(cmd_orig, cmd_target);
         }
     }
 
@@ -2195,6 +2392,7 @@ static void add_slot_files(PakWriter& writer,
             }
         }
         record_relocation(chain_orig, chain_target);
+        note_target(chain_orig, chain_target);
     }
 
     // 2d. chain.user: for parts with mod chain.chain, relocate vanilla chain.user
@@ -2325,6 +2523,7 @@ static void add_slot_files(PakWriter& writer,
         }
         written_paths.insert(new_path);
         record_relocation(path, new_path);
+        note_target(path, new_path);
         count++;
     }
     if (!shared_parts.empty()) {
@@ -2364,6 +2563,7 @@ static void add_slot_files(PakWriter& writer,
                 if (patch_material(md) == 0) continue;
                 writer.add_uncompressed(pak_path_hash(std::string_view(new_path)), std::move(md));
                 written_paths.insert(new_path);
+                note_target(vp, new_path);
                 if (folder == old_f) relocated_vanilla_mdf2.push_back(vp);
                 else shared_material_given = true;
                 printf("      material %s names textures of the mod: the slot gets its own copy\n", vp.c_str());
@@ -2394,6 +2594,7 @@ static void add_slot_files(PakWriter& writer,
             writer.add_raw(h, std::move(raw), att, ds);
             written_paths.insert(new_path);
             record_relocation(path, new_path);
+            note_target(path, new_path);
             count++; ext_count++;
         }
         if (ext_count)
@@ -2773,6 +2974,108 @@ static void add_slot_files(PakWriter& writer,
             written_paths.insert(new_scene);
             count++; patched++;
         }
+    }
+
+    // ---- Runtime options (docs/RUNTIME_OPTIONS.md) ----
+    // Every option of the slot's modular mod is stored in the slot's folder, under rto/<option id>/, as
+    // this slot would use it: materials point at the slot's textures and at the option's own copies. For
+    // the files of the options the slot is made of, a "base" copy keeps what they replace (the mod's base
+    // files, else the game's). Nothing the slot itself loads changes.
+    if (mc->rto && g_rto_layout != RtoLayout::Off) {
+        const RtoMod& rm = *mc->rto;
+        RtoSlotOut out;
+        out.mod = mc->rto;
+        out.selected = mc->rto_selected;
+        const std::string fighter_root = std::string(BASE_PFX) + "model/esf/" + fd + "/";
+        const std::string slot_root = fighter_root + new_f + "/";
+        // The file the slot's model loads in place of an original one
+        auto target_of = [&](const std::string& p) {
+            auto it = slot_targets.find(str_lower(p));
+            return it != slot_targets.end() ? it->second : str_lower(p);
+        };
+        // rto/<id>/<path in the slot folder>, or rto/<id>/_/<path in the fighter folder> (000/, mini/...)
+        auto stored_of = [&](const std::string& id, const std::string& target) {
+            std::string tail = target.compare(0, slot_root.size(), slot_root) == 0
+                ? target.substr(slot_root.size()) : "_/" + target.substr(fighter_root.size());
+            return slot_root + "rto/" + id + "/" + tail;
+        };
+        // Files of this costume: its folder, 000/ and the fighter's named folders (streaming twins
+        // follow their texture, other costume folders belong to other slots)
+        auto belongs = [&](const std::string& p) {
+            std::string low = str_lower(p), pfd, folder;
+            if (low.compare(0, fighter_root.size(), fighter_root) != 0) return false;
+            if (parse_model_folder(low, pfd, folder)) return folder == old_f || folder == "000";
+            return true;
+        };
+        size_t stored_new = 0;
+        auto store = [&](const std::string& id, const std::string& orig, const ModFileRef* mf,
+                         const std::unordered_map<std::string, std::string>& rebind,
+                         const ModFileMaps* twins) -> RtoFile {
+            const std::string low = str_lower(orig), target = target_of(orig), path = stored_of(id, target);
+            const uint64_t h = pak_path_hash(std::string_view(path));
+            if (!writer.find(h)) {
+                const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(orig)));   // the game's file
+                if (str_ends_with(low, ".mdf2.31")) {
+                    std::vector<uint8_t> d = mf ? mf->read_data() : base_pak.read(*ve);
+                    patch_material(d);
+                    if (mf && ve) {
+                        std::vector<uint8_t> rebuilt; int rb = 0;
+                        if (modernize_mdf2(d, base_pak.read(*ve), rebuilt, &rb)) d = std::move(rebuilt);
+                    }
+                    if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
+                    writer.add_uncompressed(h, std::move(d));
+                } else if (mf && needs_content_patch(low)) {
+                    writer.add_uncompressed(h, mf->read_data());
+                } else if (mf) {
+                    std::vector<uint8_t> raw; int64_t att, ds;
+                    mf->read_raw(raw, att, ds);
+                    writer.add_raw(h, std::move(raw), att, ds);
+                } else {
+                    writer.add_raw(h, base_pak.read_raw(*ve), ve->attributes, ve->decompressed_size);
+                }
+                stored_new++;
+                if (low.find(".tex.") != std::string::npos)
+                    write_streaming_twin(writer, written_paths, orig, path, all_mod, base_pak, twins);
+            }
+            return {rto_kind(low), resource_name(target), resource_name(path)};
+        };
+        for (size_t oi = 0; oi < rm.options.size(); ++oi) {
+            const RtoOption& op = rm.options[oi];
+            if (op.mode == "base") continue;
+            std::vector<std::string> paths;
+            for (auto& [p, mf] : op.files) if (belongs(p)) paths.push_back(p);
+            if (paths.empty()) continue;
+            std::sort(paths.begin(), paths.end());
+            // The textures the option ships, as its materials name them -> the option's copies
+            std::unordered_map<std::string, std::string> rebind;
+            for (auto& p : paths) {
+                if (str_lower(p).find(".tex.") == std::string::npos) continue;
+                const std::string stored = resource_name(stored_of(op.id, target_of(p)));
+                rebind[resource_name(p)] = stored;
+                rebind[resource_name(target_of(p))] = stored;
+            }
+            const ModFileMaps twins = {&op.files};
+            auto& files = out.files[oi];
+            for (auto& p : paths) files.push_back(store(op.id, p, &op.files.at(p), rebind, &twins));
+        }
+        std::set<std::string> chosen;   // files of the options the slot is made of
+        for (auto oi : out.selected)
+            if (rm.options[oi].mode != "base")
+                for (auto& [p, mf] : rm.options[oi].files) if (belongs(p)) chosen.insert(p);
+        for (auto& p : chosen) {
+            const RtoOption* src = nullptr;
+            for (auto& g : rm.groups)          // base options in layering order: the last one wins
+                for (auto oi : g.options)
+                    if (rm.options[oi].mode == "base" && rm.options[oi].files.count(p)) src = &rm.options[oi];
+            if (!src && !base_pak.find(pak_path_hash(std::string_view(p)))) continue;   // nothing under it
+            const ModFileMaps twins = {src ? &src->files : &mc->files_in_folder};
+            out.base.push_back(store("base", p, src ? &src->files.at(p) : nullptr, {}, src ? &twins : nullptr));
+        }
+        size_t listed = out.base.size();
+        for (auto& [oi, f] : out.files) listed += f.size();
+        printf("      runtime options: %zu options, %zu files (%zu base copies), %zu new pak entries\n",
+               out.files.size(), listed, out.base.size(), stored_new);
+        g_rto_slots[{fd, slot.new_costume_no}] = std::move(out);
     }
 
     if (streaming_count)
@@ -4183,27 +4486,80 @@ static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
 
 static std::string unit_label(const UnitFiles& u) { return trim_ws(u.name.empty() ? u.u.rel : u.name); }
 
-// Pushes one costume made of several options, files merged in the given order (later ones win)
-static void push_combined(const std::vector<size_t>& parts, const std::string& label, ScanOutputs& o,
-                          const std::string& info_rel, const std::string& info_path) {
-    std::unordered_map<std::string, ModFileRef> merged;
+// Id of a costume made of several options: from their ids, in order
+static std::string combined_mod_id(const std::vector<size_t>& parts) {
     std::string id_src;
-    for (auto i : parts) {
-        for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
-        id_src += (id_src.empty() ? "" : "+") + g_units[i].mod_id;
-    }
+    for (auto i : parts) id_src += (id_src.empty() ? "" : "+") + g_units[i].mod_id;
     char idb[24];
     snprintf(idb, sizeof(idb), "%016llx", (unsigned long long)fnv1a64(id_src));
+    return idb;
+}
+
+// Pushes one costume made of several options, files merged in the given order (later ones win)
+static void push_combined(const std::vector<size_t>& parts, const std::string& label, ScanOutputs& o,
+                          const std::string& info_rel, const std::string& info_path,
+                          const std::shared_ptr<const RtoMod>& rto = nullptr,
+                          const std::vector<size_t>& rto_selected = {}) {
+    std::unordered_map<std::string, ModFileRef> merged;
+    for (auto i : parts)
+        for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
+    const std::string id = combined_mod_id(parts);
+    const char* idb = id.c_str();
     printf("\n  variant: %s\n", label.c_str());
     auto costumes = detect_mod_costumes(merged, o.inv, false, true);
     print_costumes(costumes);
     if (costumes.empty()) return;
+    for (auto& mc : costumes) { mc.rto = rto; mc.rto_selected = rto_selected; }
     printf("    mod_id: %s\n", idb);
     g_mod_names[idb] = label;
     if (!parts.empty()) g_mod_source[idb] = g_mod_source[g_units[parts[0]].mod_id];
     o.mods_out.push_back({idb, std::move(costumes)});
     for (auto i : parts) o.all_mod_out.insert(g_units[i].files.begin(), g_units[i].files.end());
     o.infos_out.push_back({info_rel, info_path});
+}
+
+// Runtime options of a modular mod (docs/RUNTIME_OPTIONS.md): every option of every group, with the
+// files it ships. Groups in the order build_modular lays them over each other. In the root group, the
+// option build_modular always keeps (main files) is "base", the others are toggles (hide ponytail); an
+// "optional" option is a toggle; a group of one option is a toggle (on by default); other groups are
+// "pick" (one option at a time). unit_option: unit index -> option index.
+static std::shared_ptr<RtoMod> rto_from_groups(const std::map<std::string, std::vector<size_t>>& groups,
+                                               const std::string& root,
+                                               std::unordered_map<size_t, size_t>& unit_option) {
+    auto m = std::make_shared<RtoMod>();
+    m->name = root;
+    std::set<std::string> ids;
+    for (auto& [key, members] : groups) {
+        std::vector<size_t> mem, plain;
+        for (auto i : members) if (!g_units[i].files.empty()) mem.push_back(i);
+        if (mem.empty()) continue;
+        std::sort(mem.begin(), mem.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
+        const bool optional_group = contains_ci(key, "optional");
+        for (auto i : mem) if (!optional_group && !contains_ci(g_units[i].name, "optional")) plain.push_back(i);
+        const bool root_group = !key.empty() && key[0] == '(';
+        RtoGroup g;
+        g.name = trim_ws(g_units[mem[0]].addonfor);
+        for (auto i : mem) {
+            RtoOption op;
+            op.name = unit_label(g_units[i]);
+            op.folder = rel_tail(g_units[i].u.rel);
+            const bool is_plain = std::find(plain.begin(), plain.end(), i) != plain.end();
+            if (!is_plain) op.mode = "toggle";
+            else if (root_group) op.mode = (i == plain[0]) ? "base" : "toggle";
+            else op.mode = plain.size() == 1 ? "toggle" : "pick";
+            // Stable across mod updates (archive names carry versions): the group and the option's folder
+            char idb[16];
+            uint32_t h = fnv1a32(str_lower(key + "/" + op.folder));
+            do { snprintf(idb, sizeof idb, "%08x", h++); } while (!ids.insert(idb).second);
+            op.id = idb;
+            op.files = g_units[i].files;
+            unit_option[i] = m->options.size();
+            g.options.push_back(m->options.size());
+            m->options.push_back(std::move(op));
+        }
+        m->groups.push_back(std::move(g));
+    }
+    return m;
 }
 
 // A modular mod made for Fluffy Mod Manager: options point ("addonfor") at groups, not at other
@@ -4249,6 +4605,14 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     }
     if (root.size() > 2 && root.front() == '(' && root.back() == ')') root = trim_ws(root.substr(1, root.size() - 2));
     if (root.empty()) root = g_units[tree[0]].u.rel;
+    std::shared_ptr<RtoMod> rto;
+    std::unordered_map<size_t, size_t> unit_option;
+    if (g_rto_layout != RtoLayout::Off) {
+        rto = rto_from_groups(groups, root, unit_option);
+        rto->defaults_from = "loader";
+        auto src = g_mod_source.find(g_units[tree[0]].mod_id);
+        if (src != g_mod_source.end()) rto->source = src->second.source;
+    }
     // Several shape groups multiply; past 24 costumes only the largest one varies
     size_t total = 1;
     for (auto& a : axes) total *= a.second.size();
@@ -4301,24 +4665,56 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
             printf("    optional, left out: %s\n", names.c_str());
         }
     }
+    // Every combination: its files (unit indices, layered by group), label and options worn
+    struct Combo { std::vector<size_t> idx; std::string label; std::vector<size_t> selected; };
+    std::vector<Combo> combos;
     std::vector<size_t> pick(axes.size(), 0);
     for (size_t n = 0; n < total; ++n) {
         std::vector<std::pair<std::string, size_t>> parts = fixed;
-        std::string label = root;
+        Combo c;
+        c.label = root;
         for (size_t a = 0; a < axes.size(); ++a) {
             size_t i = axes[a].second[pick[a]];
             parts.push_back({axes[a].first, i});
-            label += " - " + unit_label(g_units[i]);
+            c.label += " - " + unit_label(g_units[i]);
         }
         std::stable_sort(parts.begin(), parts.end(), [](auto& x, auto& y) { return x.first < y.first; });
-        std::vector<size_t> idx;
-        for (auto& p : parts) idx.push_back(p.second);
-        push_combined(idx, label, o, g_units[tree[0]].u.rel, g_units[tree[0]].info_path);
+        for (auto& p : parts) c.idx.push_back(p.second);
+        for (auto i : c.idx) if (unit_option.count(i)) c.selected.push_back(unit_option[i]);
+        if (rto) {   // an option whose every file a later one replaces is not worn: not a default
+            std::set<std::string> covered;
+            std::vector<size_t> kept;
+            for (auto it = c.selected.rbegin(); it != c.selected.rend(); ++it) {
+                const RtoOption& op = rto->options[*it];
+                bool shadowed = op.mode != "base" && !op.files.empty();
+                for (auto& [p, mf] : op.files) if (!covered.count(p)) shadowed = false;
+                for (auto& [p, mf] : op.files) covered.insert(p);
+                if (!shadowed) kept.insert(kept.begin(), *it);
+            }
+            c.selected = std::move(kept);
+            rto->variants.push_back({combined_mod_id(c.idx), c.label, c.selected});
+        }
+        combos.push_back(std::move(c));
         for (size_t a = 0; a < axes.size(); ++a) {           // next combination
             if (++pick[a] < axes[a].second.size()) break;
             pick[a] = 0;
         }
     }
+    if (rto) {
+        size_t n_opt = 0;
+        for (auto& op : rto->options) if (op.mode != "base") n_opt++;
+        printf("    runtime options: %zu groups, %zu options stored for the in-game menu\n", rto->groups.size(), n_opt);
+    }
+    // One outfit per modular mod: its first combination (same id, so the same slot as before), every
+    // other one chosen in game
+    if (g_rto_layout == RtoLayout::One && combos.size() > 1) {
+        printf("    one outfit (RuntimeOptions=on): the first combination, the %zu others are options chosen in game\n",
+               combos.size() - 1);
+        combos.resize(1);
+        combos[0].label = root;
+    }
+    for (auto& c : combos)
+        push_combined(c.idx, c.label, o, g_units[tree[0]].u.rel, g_units[tree[0]].info_path, rto, c.selected);
 }
 
 // Turns the loaded units into costumes. Complete options are used as they are. A partial option
@@ -4620,7 +5016,13 @@ static const char* kSettingsTemplate =
     "; Fluffy's Games\\SF6\\Mods folder. Left empty, the loader looks for Fluffy by itself\r\n"
     "; (Documents, Desktop, Downloads, the game folder and the root of each drive).\r\n"
     "; Example: FluffyModManager=D:\\Tools\\FluffyModManager\r\n"
-    "FluffyModManager=\r\n";
+    "FluffyModManager=\r\n"
+    ";\r\n"
+    "; RuntimeOptions: costume options chosen in game (in progress, see docs/RUNTIME_OPTIONS.md).\r\n"
+    ";   off: one outfit per combination of a modular mod's options, as before (default)\r\n"
+    ";   on: one outfit per modular mod, every option stored for the in-game menu\r\n"
+    ";   variants: the outfits of \"off\", every option stored as well\r\n"
+    "RuntimeOptions=off\r\n";
 
 static std::string read_setting(const std::string& path, const char* key) {
     std::string txt = read_text_file(path);
@@ -5422,6 +5824,15 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 3a. Check if costume_mods folder exists (quick existence check)
     std::string costume_mods_dir = game_dir + "\\reframework\\costume_mods";
     bool has_costume_mods = (GetFileAttributesA(costume_mods_dir.c_str()) != INVALID_FILE_ATTRIBUTES);
+    // Runtime costume options (docs/RUNTIME_OPTIONS.md)
+    {
+        std::string v = str_lower(read_setting(costume_mods_dir + "\\settings.ini", "runtimeoptions"));
+        g_rto_layout = (v == "on" || v == "1") ? RtoLayout::One : v == "variants" ? RtoLayout::Variants : RtoLayout::Off;
+        g_rto_slots.clear();
+        if (g_rto_layout == RtoLayout::Off) DeleteFileA((registry_dir + "\\" + RTO_FILE).c_str());
+        else logf("  runtime options: %s\n", g_rto_layout == RtoLayout::One ? "on (one outfit per modular mod)"
+                                                                          : "variants (options stored too)");
+    }
     const bool has_loose = has_loose_files(game_dir);   // Fluffy Mod Manager's loose files
     // Fluffy is looked for only when it has put files in the game (loose files or a mod pak)
     g_fluffy = FluffyState{};
@@ -5495,6 +5906,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 3d. Fingerprint check for early exit
     std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir)
                        + base_pak_fingerprint(base_path);
+    if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
+        new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
+    const bool options_missing = g_rto_layout != RtoLayout::Off
+        && GetFileAttributesA((registry_dir + "\\" + RTO_FILE).c_str()) == INVALID_FILE_ATTRIBUTES;
     int target_num = top_foreign + 1;
     char target_name[128];
     sprintf(target_name, "re_chunk_000.pak.patch_%03d.pak", target_num);
@@ -5503,7 +5918,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     {
         std::string reg_path = registry_dir + "\\registry.json";
         auto reg_check = load_registry(reg_path.c_str());
-        if (reg_check.fingerprint == new_fp && !new_fp.empty()) {
+        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing) {
             // Check our pak exists (the real one: a marker-only placeholder holds no costume)
             uint32_t target_entries = 0;
             if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
@@ -5666,6 +6081,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::string reg_path = registry_dir + "\\registry.json";
     auto registry = load_registry(reg_path.c_str());
     printf("\nAssigning slots...\n");
+    const std::vector<RegSlot> former_slots = registry.slots;   // for costume_options.json "former"
     auto slots = assign_slots(mods_with_costumes, inv, registry, meta);
     if (slots.empty()) { logf("No slots to create.\n"); log_close(); return 0; }
 
@@ -5929,6 +6345,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);
+    if (g_rto_layout != RtoLayout::Off) {
+        write_options_json(registry_dir + "\\" + RTO_FILE, slots, target_name, former_slots);
+        logf("  %s: options of %zu slots\n", RTO_FILE, (size_t)std::count_if(slots.begin(), slots.end(),
+             [](const SlotInfo& sl) { return g_rto_slots.count({sl.fighter_dir, sl.new_costume_no}) > 0; }));
+    }
 
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();

@@ -135,3 +135,10 @@ bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<ui
 // tightly packed but whose pitch is wrong gets the right pitch (counted in *repaired). Returns the
 // number of levels left inconsistent; 0 for a texture of unknown format or not a texture.
 int texture_mip_check(std::vector<uint8_t>& tex, bool repair, int* repaired);
+
+// Runtime costume options: points every texture binding of a material file (.mdf2) whose path is a key
+// of `to` at the value instead (the new path is appended to the file, as modernize_mdf2 does). Keys:
+// lowercase, '/' separators, no natives/stm/ and no version ("product/model/esf/esf028/001/01/x.tex").
+// Returns the number of bindings changed; 0 (data untouched) when the file is not a material file.
+size_t mdf2_rebind_textures(std::vector<uint8_t>& data,
+                            const std::unordered_map<std::string, std::string>& to);
