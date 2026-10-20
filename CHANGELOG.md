@@ -9,6 +9,21 @@
   fingerprint are read with the wide API and the long-path prefix (fork 1.9.7).
 - An antivirus briefly locking a freshly unpacked archive no longer makes the loader skip it: the cache folder rename
   is retried for about 2 s (fork 1.10.4).
+- Modular mods with nested Fluffy menus ("03 Outfit" > "Lower Neckline" > option) are made as Fluffy installs them:
+  the menu folders (a `modinfo.ini` only) are read, every option under one top-level group is one choice, the main
+  files are merged first (a root not named `(...)` could overwrite the options), a group whose name or description
+  says "optional" is left out, outfits are named after the mod; a modular mod may make 50 combinations (24 before)
+  (fork 1.9.7-custom).
+- An option whose `AddonFor` names another complete option of its mod is made with that option ("Leon as Luke +
+  Optional - More muscles"), not as an outfit of its own without the option's files (fork 1.9.8).
+- Add-ons whose `AddonFor` names nothing of their mod, beside a single complete option, are add-ons of that option
+  (with a WARN: fix the mod's `AddonFor`); they were lost in a modular mod that made nothing of them (fork 1.9.9).
+- Runtime costume options (`RuntimeOptions=on`; ours, with the Slotsloader Manager's "choose one" rule): an outfit
+  with add-ons (Leon Requiem On Luke, Aloha Ryu, Lily's DMC5 Nico...) is one outfit, its add-ons chosen in game
+  (add-ons replacing a same file are one choice: Leon Hair / Trimmed Hair); a group its author asks exactly one option of ("2! Skin", "Choose one") is offered without None
+  (unless its options share files with another group's); an option for a part the outfit takes from another folder
+  (Leon's hair add-ons, the game's hair in `000/02/`) now replaces that part. A modular mod none of whose options
+  has a body mesh (Mai face accessories) still makes no outfit, with a WARN instead of nothing.
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite
 

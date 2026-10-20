@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rtofit-zzfixes";
+static const char* LOADER_BUILD_ID = "2026-10-20-rtofit-zzfixes-134";
 
 // ============================================================================
 // Utility
@@ -1373,7 +1373,11 @@ struct RtoOption {
     std::string mode;   // "base" (always worn, not a choice), "pick" (one per group), "toggle" (on or off)
     std::unordered_map<std::string, ModFileRef> files;
 };
-struct RtoGroup { std::string name; std::vector<size_t> options; };
+struct RtoGroup {
+    std::string name;
+    std::vector<size_t> options;
+    bool required = false;   // the author asks for exactly one of its options: offered without "None"
+};
 struct RtoMod {
     std::string name, source, defaults_from;
     std::vector<RtoGroup> groups;   // in the order their files are laid over each other (later wins)
@@ -2996,10 +3000,54 @@ static void add_slot_files(PakWriter& writer,
         out.selected = mc->rto_selected;
         const std::string fighter_root = std::string(BASE_PFX) + "model/esf/" + fd + "/";
         const std::string slot_root = fighter_root + new_f + "/";
+        // What the slot's scene loads for each model part: a part the slot does not have in its own folder
+        // stays the game's (Leon as Luke wears the game's hair, 000/02/; its hair add-ons ship 001/02/ and a
+        // scene pointing there, which only a slot made with them follows)
+        std::map<std::string, std::vector<std::string>> scene_part;   // "02" -> the scene's files of part 02
+        {
+            const std::string sp = "natives/stm/product/charparam/esf/" + fd + "/" + slot.scene_name + ".scn.20";
+            const uint64_t sh = pak_path_hash(std::string_view(sp));
+            const std::string rp = "product/model/esf/" + fd + "/";
+            if (writer.find(sh))
+                for (auto& r : scene_model_refs(writer.get(sh))) {
+                    const std::string low = str_lower(r.text);
+                    if (low.compare(0, rp.size(), rp) != 0) continue;
+                    const size_t a = low.find('/', rp.size());
+                    if (a == std::string::npos || low.size() < a + 4 || low[a + 3] != '/') continue;
+                    scene_part[low.substr(a + 1, 2)].push_back(low);
+                }
+        }
         // The file the slot's model loads in place of an original one
         auto target_of = [&](const std::string& p) {
-            auto it = slot_targets.find(str_lower(p));
-            return it != slot_targets.end() ? it->second : str_lower(p);
+            const std::string low = str_lower(p);
+            auto it = slot_targets.find(low);
+            if (it != slot_targets.end()) return it->second;
+            // An option's mesh, material or chain of a part the slot does not have in its folder: what the slot's
+            // model loads for that part (the option replaces it there)
+            const std::string pre = fighter_root + old_f + "/";
+            const bool mesh = low.find(".mesh.") != std::string::npos, mdf = low.find(".mdf2.") != std::string::npos;
+            const bool chain = low.find("_chain.chain.") != std::string::npos;
+            if (low.compare(0, pre.size(), pre) != 0 || low.size() < pre.size() + 3 || low[pre.size() + 2] != '/'
+                || !(mesh || mdf || chain)) return low;
+            const std::string nn = low.substr(pre.size(), 2);
+            auto sc = scene_part.find(nn);
+            if (sc == scene_part.end()) return low;
+            std::string x;   // the folder the scene takes the part from
+            const std::string rp = "product/model/esf/" + fd + "/";
+            for (auto& r : sc->second)
+                if (str_ends_with(r, ".mesh")) x = r.substr(rp.size(), r.find('/', rp.size()) - rp.size());
+            if (x.empty() || x == new_f || x == old_f) return low;
+            for (auto& r : sc->second)
+                if ((mesh && str_ends_with(r, ".mesh")) || (mdf && str_ends_with(r, ".mdf2"))) {
+                    std::string t = scene_ref_pak_path(r, inv.suffixes);
+                    if (!t.empty()) return t;
+                }
+            if (!chain) return low;
+            // "<old>/02/esf002_<old>_02_chain.chain.*" -> "<x>/02/esf002_<x>_02_chain.chain.*"
+            std::string name = low.substr(pre.size() + 3);
+            const std::string stem = fd + "_" + old_f + "_" + nn;
+            if (name.compare(0, stem.size(), stem) == 0) name = fd + "_" + x + "_" + nn + name.substr(stem.size());
+            return fighter_root + x + "/" + nn + "/" + name;
         };
         // rto/<id>/<path in the slot folder>, or rto/<id>/_/<path in the fighter folder> (000/, mini/...)
         auto stored_of = [&](const std::string& id, const std::string& target) {
@@ -3238,6 +3286,18 @@ static void add_slot_files(PakWriter& writer,
                 printf("      runtime options: group \"%s\" offered without None (no base copy of %s)\n",
                        rm.groups[gi].name.c_str(), first.c_str());
             }
+            // Groups whose author asks for exactly one option ("2! Skin", "Select only one"), when the slot offers one
+            for (size_t gi = 0; gi < rm.groups.size(); ++gi) {
+                if (!rm.groups[gi].required || std::find(out.required.begin(), out.required.end(), gi) != out.required.end())
+                    continue;
+                bool offered = false;
+                for (auto oi : rm.groups[gi].options) if (rm.options[oi].mode == "pick" && out.files.count(oi)) offered = true;
+                if (!offered) continue;
+                out.required.push_back(gi);
+                printf("      runtime options: group \"%s\" offered without None (its author asks for exactly one)\n",
+                       rm.groups[gi].name.c_str());
+            }
+            std::sort(out.required.begin(), out.required.end());
         }
         size_t listed = out.base.size();
         for (auto& [oi, f] : out.files) listed += f.size();
@@ -4467,6 +4527,7 @@ struct ModUnit {
     std::string pak;   // .pak file name, empty for a natives tree
     std::string rel;   // path shown in the log
     bool game_install = false;   // the game's own natives tree (mods Fluffy copied there)
+    bool menu = false;           // a modinfo.ini without natives or .pak: a Fluffy menu (dummy) entry, no files
 };
 
 struct ScanOutputs {
@@ -4482,13 +4543,15 @@ struct ScanOutputs {
 // two levels of nesting at most; folders are searched four levels deep. Wide API with the long_w
 // prefix (from ZZtaii's Slotsloader fork (1.9.7), MIT): the options of an archive unpacked under a
 // deep game folder pass MAX_PATH, and the whole archive was skipped as "no natives folder".
+// A folder holding only a modinfo.ini is kept as a menu entry: the Fluffy groups (DummyMod) that
+// options of a modular mod hang from (from ZZtaii's Slotsloader fork (1.9.7-custom), MIT).
 static void collect_mod_units(const std::string& dir, const std::string& rel,
                               int depth, int nest, std::vector<ModUnit>& out) {
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(long_w(a2w_path(dir) + L"\\*").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     std::vector<std::string> subdirs, paks, archives;
-    bool has_natives = false;
+    bool has_natives = false, has_modinfo = false;
     do {
         std::string name = w2a(fd.cFileName);
         if (name == "." || name == ".." || name.empty()) continue;
@@ -4499,6 +4562,8 @@ static void collect_mod_units(const std::string& dir, const std::string& rel,
             paks.push_back(name);
         } else if (is_archive_name(name)) {
             archives.push_back(name);
+        } else if (str_lower(name) == "modinfo.ini") {
+            has_modinfo = true;
         }
     } while (FindNextFileW(h, &fd));
     FindClose(h);
@@ -4507,6 +4572,7 @@ static void collect_mod_units(const std::string& dir, const std::string& rel,
     std::sort(archives.begin(), archives.end());
 
     if (has_natives) out.push_back({dir, "", rel});
+    if (has_modinfo && !has_natives && paks.empty()) out.push_back({dir, "", rel, false, true});
     for (auto& p : paks) out.push_back({dir, p, rel + "/" + p});
     if (nest < 2) {
         for (auto& a : archives) {
@@ -4528,6 +4594,7 @@ struct UnitFiles {
     ModUnit u;
     int source = 0;                      // units coming from the same folder or archive share it
     std::string name, addonfor, bundle;  // from modinfo.ini (Fluffy), may be empty
+    std::string description;             // modinfo.ini, may be empty
     std::string mod_id, info_path;
     std::unordered_map<std::string, ModFileRef> files;
     std::vector<ModCostume> costumes;    // empty: partial option, candidate add-on
@@ -4535,6 +4602,15 @@ struct UnitFiles {
 };
 static std::vector<UnitFiles> g_units;
 static int g_unit_source = 0;
+
+// A Fluffy menu entry of a modular mod (a folder with a modinfo.ini only, usually DummyMod=True):
+// the mod's root ("00 Menu"), a group ("03 Outfit") or a sub-group ("Lower Neckline")
+// (from ZZtaii's Slotsloader fork (1.9.7-custom), MIT)
+struct MenuNode {
+    int source = 0;
+    std::string name, addonfor, description, rel;
+};
+static std::vector<MenuNode> g_menus;
 
 static std::string trim_ws(const std::string& s) {
     size_t a = 0, b = s.size();
@@ -4553,9 +4629,13 @@ static uint64_t fnv1a64(const std::string& s) {
     return h;
 }
 
-static void read_modinfo(const std::string& dir, UnitFiles& uf) {
+struct ModInfoFields { std::string name, addonfor, bundle, description; };
+
+// modinfo.ini's fields (descriptions: from ZZtaii's Slotsloader fork (1.9.7-custom), MIT)
+static ModInfoFields read_modinfo_fields(const std::string& dir) {
+    ModInfoFields mi;
     FILE* f = _wfopen(long_w(a2w_path(dir + "\\modinfo.ini")).c_str(), L"rb");   // long path: ZZtaii fork 1.9.7
-    if (!f) return;
+    if (!f) return mi;
     char line[2048];
     while (fgets(line, sizeof(line), f)) {
         std::string l(line);
@@ -4565,11 +4645,21 @@ static void read_modinfo(const std::string& dir, UnitFiles& uf) {
         if (eq == std::string::npos) continue;
         std::string k = str_lower(trim_ws(l.substr(0, eq)));
         std::string v = trim_ws(l.substr(eq + 1));
-        if (k == "name") uf.name = v;
-        else if (k == "addonfor") uf.addonfor = v;
-        else if (k == "nameasbundle") uf.bundle = v;
+        if (k == "name") mi.name = v;
+        else if (k == "addonfor") mi.addonfor = v;
+        else if (k == "nameasbundle") mi.bundle = v;
+        else if (k == "description") mi.description = v;
     }
     fclose(f);
+    return mi;
+}
+
+static void read_modinfo(const std::string& dir, UnitFiles& uf) {
+    auto mi = read_modinfo_fields(dir);
+    uf.name = mi.name;
+    uf.addonfor = mi.addonfor;
+    uf.bundle = mi.bundle;
+    uf.description = mi.description;
 }
 
 static void print_costumes(const std::vector<ModCostume>& costumes) {
@@ -4669,14 +4759,21 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     return true;
 }
 
-static bool process_units(const std::vector<ModUnit>& units, const std::string& rel_path,
+static bool process_units(const std::vector<ModUnit>& all_units, const std::string& rel_path,
                           ScanOutputs& o) {
+    std::vector<ModUnit> units, menus;
+    for (auto& u : all_units) (u.menu ? menus : units).push_back(u);
     if (units.empty()) {
         printf("    no natives folder, .pak or usable archive found, skipping\n");
         return false;
     }
     if (units.size() > 1) printf("    %zu options in this mod\n", units.size());
     int source = ++g_unit_source;
+    for (auto& m : menus) {   // the mod's Fluffy menu entries (ZZtaii fork 1.9.7-custom)
+        auto mi = read_modinfo_fields(m.dir);
+        if (mi.name.empty()) continue;
+        g_menus.push_back({source, mi.name, mi.addonfor, mi.description, m.rel});
+    }
     bool any = false;
     for (auto& u : units) {
         if (units.size() > 1 || u.rel != rel_path) printf("  option: %s\n", u.rel.c_str());
@@ -4755,15 +4852,17 @@ static std::string combined_mod_id(const std::vector<size_t>& parts) {
     return idb;
 }
 
-// Pushes one costume made of several options, files merged in the given order (later ones win)
+// Pushes one costume made of several options, files merged in the given order (later ones win). Its id
+// comes from the options' ids in `id_order` when given, else in the merge order.
 static void push_combined(const std::vector<size_t>& parts, const std::string& label, ScanOutputs& o,
                           const std::string& info_rel, const std::string& info_path,
                           const std::shared_ptr<const RtoMod>& rto = nullptr,
-                          const std::vector<size_t>& rto_selected = {}) {
+                          const std::vector<size_t>& rto_selected = {},
+                          const std::vector<size_t>& id_order = {}) {
     std::unordered_map<std::string, ModFileRef> merged;
     for (auto i : parts)
         for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
-    const std::string id = combined_mod_id(parts);
+    const std::string id = combined_mod_id(id_order.empty() ? parts : id_order);
     const char* idb = id.c_str();
     printf("\n  variant: %s\n", label.c_str());
     auto costumes = detect_mod_costumes(merged, o.inv, false, true);
@@ -4778,48 +4877,162 @@ static void push_combined(const std::vector<size_t>& parts, const std::string& l
     o.infos_out.push_back({info_rel, info_path});
 }
 
-// Runtime options of a modular mod (docs/RUNTIME_OPTIONS.md): every option of every group, with the
-// files it ships. Groups in the order build_modular lays them over each other. In the root group, the
-// option build_modular always keeps (main files) is "base", the others are toggles (hide ponytail); an
-// "optional" option is a toggle; a group of one option is a toggle (on by default); other groups are
-// "pick" (one option at a time). unit_option: unit index -> option index.
-static std::shared_ptr<RtoMod> rto_from_groups(const std::map<std::string, std::vector<size_t>>& groups,
-                                               const std::string& root,
+// A group of options as the runtime options see it (docs/RUNTIME_OPTIONS.md)
+struct RtoGroupIn {
+    std::string key;            // identity: the option ids are made from it and the option's folder
+    std::string name;           // shown in the menu
+    bool root = false;          // the mod's root: its first plain option is the main files ("base")
+    bool outfit = false;        // root of an outfit with add-ons: its one member is the base, whatever its name
+    bool choice = false;        // one option at a time ("pick"); else each option on or off ("toggle")
+    bool required = false;      // the author asks for exactly one: offered without "None"
+    std::vector<size_t> members;
+};
+
+// An option id: stable across mod updates (archive names carry versions), from the group's key and the
+// option's folder; `ids` keeps them unique within the mod
+static std::string rto_option_id(const std::string& key, const std::string& folder, std::set<std::string>& ids) {
+    char idb[16];
+    uint32_t h = fnv1a32(str_lower(key + "/" + folder));
+    do { snprintf(idb, sizeof idb, "%08x", h++); } while (!ids.insert(idb).second);
+    return idb;
+}
+
+// Runtime options of a mod: every option of every group, with the files it ships. Groups in the order
+// their files are laid over each other (later wins). In a root group the first plain option (the main
+// files) is "base", the others are toggles (hide ponytail); an optional option is a toggle; in a choice
+// group the options are "pick" (one at a time; a lone option a toggle unless the group is required);
+// in another group each option is a toggle. unit_option: unit index -> option index.
+static std::shared_ptr<RtoMod> rto_from_groups(const std::vector<RtoGroupIn>& groups, const std::string& name,
+                                               const std::set<size_t>& optional_units,
                                                std::unordered_map<size_t, size_t>& unit_option) {
     auto m = std::make_shared<RtoMod>();
-    m->name = root;
+    m->name = name;
     std::set<std::string> ids;
-    for (auto& [key, members] : groups) {
+    std::vector<bool> is_root;   // per group of m
+    for (auto& gi : groups) {
         std::vector<size_t> mem, plain;
-        for (auto i : members) if (!g_units[i].files.empty()) mem.push_back(i);
+        for (auto i : gi.members) if (!g_units[i].files.empty()) mem.push_back(i);
         if (mem.empty()) continue;
         std::sort(mem.begin(), mem.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
-        const bool optional_group = contains_ci(key, "optional");
-        for (auto i : mem) if (!optional_group && !contains_ci(g_units[i].name, "optional")) plain.push_back(i);
-        const bool root_group = !key.empty() && key[0] == '(';
+        for (auto i : mem) if (!optional_units.count(i)) plain.push_back(i);
+        // The main files: the root's first plain option that does not call itself an add-on ("3) addon -
+        // remove wrinkles" hangs from the root of Mai's face accessories, beside no main files)
+        size_t base = SIZE_MAX;
+        for (auto i : plain)
+            if (base == SIZE_MAX && (gi.outfit || (!contains_ci(g_units[i].name, "addon") && !contains_ci(g_units[i].name, "add-on"))))
+                base = i;
         RtoGroup g;
-        g.name = trim_ws(g_units[mem[0]].addonfor);
+        g.name = gi.name;
         for (auto i : mem) {
             RtoOption op;
             op.name = unit_label(g_units[i]);
             op.folder = rel_tail(g_units[i].u.rel);
             const bool is_plain = std::find(plain.begin(), plain.end(), i) != plain.end();
             if (!is_plain) op.mode = "toggle";
-            else if (root_group) op.mode = (i == plain[0]) ? "base" : "toggle";
-            else op.mode = plain.size() == 1 ? "toggle" : "pick";
-            // Stable across mod updates (archive names carry versions): the group and the option's folder
-            char idb[16];
-            uint32_t h = fnv1a32(str_lower(key + "/" + op.folder));
-            do { snprintf(idb, sizeof idb, "%08x", h++); } while (!ids.insert(idb).second);
-            op.id = idb;
+            else if (gi.root) op.mode = (i == base) ? "base" : "toggle";
+            else if (gi.choice) op.mode = (plain.size() == 1 && !gi.required) ? "toggle" : "pick";
+            else op.mode = "toggle";
+            if (op.mode == "pick" && gi.required) g.required = true;
+            op.id = rto_option_id(gi.key, op.folder, ids);
             op.files = g_units[i].files;
             unit_option[i] = m->options.size();
             g.options.push_back(m->options.size());
             m->options.push_back(std::move(op));
         }
         m->groups.push_back(std::move(g));
+        is_root.push_back(gi.root);
+    }
+    // A group whose options share a file with options of another group is not required: picking there turns
+    // its option off (a later one would hide it), and the menu would put it back over the new choice (Mai
+    // mini dress: "4! NSFW", "4! SFW" and "4! Skimpy" all ship the body mesh, "3! Dress" and "4! SFW" the
+    // dress texture; one choice across several groups is not expressed)
+    for (size_t a = 0; a < m->groups.size(); ++a) {
+        RtoGroup& g = m->groups[a];
+        std::string other;
+        for (size_t b = 0; b < m->groups.size() && g.required && other.empty(); ++b) {
+            if (b == a) continue;
+            for (auto oa : g.options)
+                for (auto ob : m->groups[b].options) {
+                    if (!other.empty() || m->options[oa].mode != "pick" || m->options[ob].mode == "base") continue;
+                    for (auto& [p, mf] : m->options[oa].files)
+                        if (m->options[ob].files.count(p)) { other = m->groups[b].name; break; }
+                }
+        }
+        if (!other.empty()) {
+            g.required = false;
+            printf("    runtime options: group %s: one option asked, but it shares files with group %s: None kept\n",
+                   g.name.c_str(), other.c_str());
+        }
+    }
+    for (size_t a = 0; a < m->groups.size(); ++a) {
+        const RtoGroup& g = m->groups[a];
+        if (is_root[a]) continue;
+        bool pick = false;
+        for (auto oi : g.options) if (m->options[oi].mode == "pick") pick = true;
+        printf("    runtime options: group %s: %s\n", g.name.c_str(),
+               g.required ? "pick exactly one (no None)" : pick ? "pick one or none" : "each option on or off");
     }
     return m;
+}
+
+// Where an option of a modular mod sits in the mod's Fluffy menu: its "addonfor" is followed up
+// through the menu entries of the same mod (folders with a modinfo.ini only) to the group right
+// under the mod's root. Fluffy shows "03 Outfit" > "Lower Neckline" > "Shoes": the option "Shoes"
+// belongs to the top-level group "03 Outfit", where one option is picked among all its sub-groups.
+// (from ZZtaii's Slotsloader fork (1.9.7-custom), MIT)
+struct MenuPlace {
+    std::vector<int> chain;   // menu entries from the option's own up to its top-level group
+    bool from_root = false;   // the option hangs from the mod's root entry itself (main files)
+    std::string parent;       // what the top-level group (or the option) hangs from: the mod's name
+};
+
+static MenuPlace menu_place(const std::string& addonfor, const std::vector<int>& menus) {
+    MenuPlace p;
+    std::string cur = trim_ws(addonfor);
+    while (!cur.empty()) {
+        int m = -1;
+        for (auto k : menus) if (eq_ci(g_menus[k].name, cur)) { m = k; break; }
+        if (m < 0 || std::find(p.chain.begin(), p.chain.end(), m) != p.chain.end()) break;
+        if (trim_ws(g_menus[m].addonfor).empty()) {          // the mod's root entry ("00 Menu")
+            p.from_root = p.chain.empty();
+            p.parent = trim_ws(g_menus[m].name);
+            return p;
+        }
+        p.chain.push_back(m);
+        cur = trim_ws(g_menus[m].addonfor);
+    }
+    if (!p.chain.empty()) p.parent = cur;                    // a root entry the mod does not ship
+    return p;
+}
+
+// The author asks for exactly one option of a group: its description says select / choose / pick (only)
+// one ("Select only one", "choose 1"), or its name is numbered with "!" ("2! Skin type options"). The rule
+// of ZZtaii's Slotsloader Manager (the idea, not its code).
+static bool says_pick_one(const std::string& text) {
+    const std::string t = str_lower(text);
+    for (const char* verb : {"select", "choose", "pick"}) {
+        for (size_t p = t.find(verb); p != std::string::npos; p = t.find(verb, p + 1)) {
+            size_t q = p + strlen(verb);
+            while (q < t.size() && isalpha((unsigned char)t[q])) q++;      // "selects", "chosen"
+            auto word = [&](const char* w) {
+                size_t r = q, n = strlen(w);
+                while (r < t.size() && t[r] == ' ') r++;
+                if (t.compare(r, n, w) != 0 || (r + n < t.size() && isalnum((unsigned char)t[r + n]))) return false;
+                q = r + n;
+                return true;
+            };
+            word("only");
+            if (word("one") || word("1")) return true;
+        }
+    }
+    return false;
+}
+
+static bool bang_numbered(const std::string& name) {
+    const std::string n = trim_ws(name);
+    size_t i = 0;
+    while (i < n.size() && isdigit((unsigned char)n[i])) i++;
+    return i > 0 && i < n.size() && n[i] == '!';
 }
 
 // A modular mod made for Fluffy Mod Manager: options point ("addonfor") at groups, not at other
@@ -4829,60 +5042,167 @@ static std::shared_ptr<RtoMod> rto_from_groups(const std::map<std::string, std::
 // costume per option; a group that only changes textures (skins) keeps its first option; optional
 // groups and options are left out. Without this, every body got every skin and extra stacked on it
 // (C. Viper swimsuit and lingerie: over 130 outfits, the character's 100 slots overflowed).
+// Groups are the options' "addonfor" names, unless options hang from sub-groups of the menu
+// ("03 Outfit" > "Lower Neckline" > option): then each top-level group is one choice, the main
+// files come first and the groups follow in their folder order (later ones win), a group whose
+// name or description says "optional" is left out, and costumes are named after the mod. In every
+// case the main files (the options that hang from the mod's root) are merged first, so a group's
+// option replaces them. (Nested menus, merge order and the 50-combination cap: from ZZtaii's
+// Slotsloader fork (1.9.7-custom), MIT.)
+// Combinations one modular mod may make: a character has 100 extra slots, one mod takes half at most
+static const size_t MODULAR_MAX_COMBINATIONS = 50;
+
 static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
-    std::map<std::string, std::vector<size_t>> groups;   // by addonfor; sorted: "(root)" < "2) " < "3) "
-    for (auto i : tree) groups[str_lower(trim_ws(g_units[i].addonfor))].push_back(i);
-    std::vector<std::pair<std::string, size_t>> fixed;             // (group, option) in every costume
-    std::vector<std::pair<std::string, std::vector<size_t>>> axes; // groups giving one costume per option
+    std::vector<int> menus;
+    for (int k = 0; k < (int)g_menus.size(); ++k)
+        if (g_menus[k].source == g_units[tree[0]].source) menus.push_back(k);
+    std::map<size_t, MenuPlace> place;
+    bool nested = false;
+    std::string mod_name;
+    for (auto i : tree) {
+        place[i] = menu_place(g_units[i].addonfor, menus);
+        if (place[i].chain.size() >= 2) nested = true;
+        if (mod_name.empty() && (place[i].from_root || !place[i].chain.empty())) mod_name = place[i].parent;
+    }
+
+    struct Group {
+        std::string key, order;   // key: identity (option ids); order: sort text (folder name of a menu group)
+        bool root = false;        // the main files
+        int top = -1;             // menu entry of the group, -1 for a name the menu does not have
+        std::vector<size_t> members;
+    };
+    std::vector<Group> groups;
+    for (auto i : tree) {
+        const auto& pl = place[i];
+        Group g;
+        g.key = str_lower(trim_ws(g_units[i].addonfor));
+        g.order = g.key;
+        g.top = pl.chain.empty() ? -1 : pl.chain.back();
+        if (nested) {
+            if (pl.from_root || (!g.key.empty() && g.key[0] == '(')
+                || (pl.chain.empty() && !mod_name.empty() && eq_ci(g_units[i].addonfor, mod_name))) {
+                g.key = "(root)"; g.order.clear(); g.root = true;
+            } else if (g.top >= 0) {
+                // by the top-level group's NAME, not its place in the menu: saved choices keep their ids
+                g.key = "menu:" + str_lower(trim_ws(g_menus[g.top].name));
+                g.order = str_lower(rel_tail(g_menus[g.top].rel));
+            }
+        } else {
+            g.root = pl.from_root || (!g.key.empty() && g.key[0] == '(');
+        }
+        auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& x) { return x.key == g.key; });
+        if (it == groups.end()) { groups.push_back(g); it = groups.end() - 1; }
+        it->members.push_back(i);
+    }
+    // Id order: by "addonfor" ("(root)" < "2) " < "3) "), so a mod keeps its slots; nested: main files,
+    // then the top-level groups in folder order. Merge order: the main files first, then the same order.
+    std::sort(groups.begin(), groups.end(), [&](const Group& a, const Group& b) {
+        if (nested && a.root != b.root) return a.root;
+        if (nested && a.order != b.order) return a.order < b.order;
+        return a.key < b.key;
+    });
+    std::vector<int> merge_rank(groups.size());
+    for (size_t gi = 0; gi < groups.size(); ++gi) merge_rank[gi] = int(gi) + (groups[gi].root ? 0 : int(groups.size()));
+    auto group_name = [&](const Group& g) {
+        return nested && g.root ? mod_name : g.top >= 0 && nested ? trim_ws(g_menus[g.top].name)
+                                                                  : trim_ws(g_units[g.members[0]].addonfor);
+    };
+    auto group_desc = [&](const Group& g) { return g.top >= 0 ? g_menus[g.top].description : std::string(); };
+
+    auto optional_option = [&](size_t i, const Group& g) {
+        std::string key = str_lower(trim_ws(g_units[i].addonfor));
+        if (contains_ci(key, "optional") || contains_ci(g_units[i].name, "optional")) return true;
+        for (auto k : place[i].chain) if (contains_ci(g_menus[k].name, "optional")) return true;
+        return g.top >= 0 && contains_ci(g_menus[g.top].description, "optional");
+    };
+    std::set<size_t> optional_units;
+    std::vector<std::pair<size_t, size_t>> fixed;             // (group, option) in every costume
+    std::vector<std::pair<size_t, std::vector<size_t>>> axes; // groups giving one costume per option
     int optional_left = 0, skins_left = 0;
     std::string root;
     // One log line per group that does not vary: "<group> -> <kept option>; left out: <options>"
     struct Frozen { std::string group, why; size_t kept; std::vector<size_t> left; };
     std::vector<Frozen> frozen;
     std::vector<std::string> optional_names;
-    for (auto& [key, members] : groups) {
+    std::vector<std::string> role(groups.size());
+    for (size_t gi = 0; gi < groups.size(); ++gi) {
+        const auto& g = groups[gi];
         std::vector<size_t> m;
-        for (auto i : members) {
-            if (contains_ci(key, "optional") || contains_ci(g_units[i].name, "optional")) {
-                optional_left++;
+        int optional_here = 0;
+        for (auto i : g.members) {
+            if (optional_option(i, g)) {
+                optional_units.insert(i);
+                optional_left++; optional_here++;
                 if (!g_units[i].files.empty()) optional_names.push_back(unit_label(g_units[i]));
                 continue;
             }
             if (!g_units[i].files.empty()) m.push_back(i);
         }
-        if (m.empty()) continue;
+        if (m.empty()) { role[gi] = optional_here ? "optional, left out" : "no files"; continue; }
         std::sort(m.begin(), m.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
-        if (root.empty() && !key.empty() && key[0] == '(') root = trim_ws(g_units[m[0]].addonfor);
-        std::string gname = trim_ws(g_units[m[0]].addonfor);
-        if (m.size() == 1) { fixed.push_back({key, m[0]}); continue; }
+        if (!nested && root.empty() && !g.key.empty() && g.key[0] == '(') root = trim_ws(g_units[m[0]].addonfor);
+        if (m.size() == 1) { fixed.push_back({gi, m[0]}); role[gi] = "always installed"; continue; }
         bool shape = false;
         for (auto i : m) if (unit_has_mesh(g_units[i])) shape = true;
-        if (shape) axes.push_back({key, m});
+        if (shape) { axes.push_back({gi, m}); role[gi] = std::to_string(m.size()) + " options, one costume each"; }
         else {
-            fixed.push_back({key, m[0]}); skins_left += int(m.size()) - 1;
-            frozen.push_back({gname, "texture group", m[0], std::vector<size_t>(m.begin() + 1, m.end())});
+            fixed.push_back({gi, m[0]}); skins_left += int(m.size()) - 1;
+            frozen.push_back({group_name(g), "texture group", m[0], std::vector<size_t>(m.begin() + 1, m.end())});
+            role[gi] = std::to_string(m.size()) + " texture options, the first one kept";
         }
     }
+    if (root.empty() && !mod_name.empty()) root = mod_name;
     if (root.size() > 2 && root.front() == '(' && root.back() == ')') root = trim_ws(root.substr(1, root.size() - 2));
     if (root.empty()) root = g_units[tree[0]].u.rel;
     std::shared_ptr<RtoMod> rto;
     std::unordered_map<size_t, size_t> unit_option;
     if (g_rto_layout != RtoLayout::Off) {
-        rto = rto_from_groups(groups, root, unit_option);
+        // In merge order (the plugin lays a later group's files over an earlier one's)
+        std::vector<size_t> by_merge(groups.size());
+        for (size_t gi = 0; gi < groups.size(); ++gi) by_merge[gi] = gi;
+        std::stable_sort(by_merge.begin(), by_merge.end(), [&](size_t a, size_t b) { return merge_rank[a] < merge_rank[b]; });
+        std::vector<RtoGroupIn> in;
+        for (auto gi : by_merge) {
+            const auto& g = groups[gi];
+            RtoGroupIn r;
+            r.key = g.key;
+            r.name = group_name(g);
+            r.root = g.root;
+            r.members = g.members;
+            // A choice when the author says so, or when every option ships one same file (two of them on
+            // would hide each other); required unless the group says "optional"
+            const std::string desc = group_desc(g);
+            const bool told = says_pick_one(desc) || bang_numbered(r.name);
+            std::vector<size_t> plain;
+            for (auto i : g.members) if (!optional_units.count(i) && !g_units[i].files.empty()) plain.push_back(i);
+            bool shared = plain.size() >= 2;
+            if (shared)
+                for (auto& [p, mf] : g_units[plain[0]].files) {
+                    shared = true;
+                    for (size_t k = 1; k < plain.size() && shared; ++k) shared = g_units[plain[k]].files.count(p) > 0;
+                    if (shared) break;
+                }
+            r.choice = told || shared;
+            r.required = told && !contains_ci(r.name, "optional") && !contains_ci(desc, "optional");
+            in.push_back(std::move(r));
+        }
+        rto = rto_from_groups(in, root, optional_units, unit_option);
         rto->defaults_from = "loader";
         auto src = g_mod_source.find(g_units[tree[0]].mod_id);
         if (src != g_mod_source.end()) rto->source = src->second.source;
     }
-    // Several shape groups multiply; past 24 costumes only the largest one varies
+    // Several shape groups multiply; past MODULAR_MAX_COMBINATIONS costumes only the largest one varies
     size_t total = 1;
     for (auto& a : axes) total *= a.second.size();
-    if (total > 24 && axes.size() > 1) {
+    if (total > MODULAR_MAX_COMBINATIONS && axes.size() > 1) {
         std::sort(axes.begin(), axes.end(), [](auto& a, auto& b) { return a.second.size() > b.second.size(); });
         for (size_t k = 1; k < axes.size(); ++k) {
             fixed.push_back({axes[k].first, axes[k].second[0]});
-            frozen.push_back({trim_ws(g_units[axes[k].second[0]].addonfor), "past the 24-costume cap",
-                              axes[k].second[0],
+            frozen.push_back({group_name(groups[axes[k].first]),
+                              "past the " + std::to_string(MODULAR_MAX_COMBINATIONS) + "-costume cap", axes[k].second[0],
                               std::vector<size_t>(axes[k].second.begin() + 1, axes[k].second.end())});
+            role[axes[k].first] = std::to_string(axes[k].second.size()) + " options, the first one kept (over "
+                                + std::to_string(MODULAR_MAX_COMBINATIONS) + " combinations)";
         }
         axes.resize(1);
         total = axes[0].second.size();
@@ -4891,12 +5211,15 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     if (skins_left) printf(", first option of each texture group (%d others left out)", skins_left);
     if (optional_left) printf(", %d optional part%s left out", optional_left, optional_left > 1 ? "s" : "");
     printf("\n");
+    if (nested)
+        for (size_t gi = 0; gi < groups.size(); ++gi)
+            printf("    group %s: %s\n", groups[gi].root ? "main files" : group_name(groups[gi]).c_str(), role[gi].c_str());
     if (axes.size() == 1)
-        printf("    varies: %s (%zu options)\n", trim_ws(g_units[axes[0].second[0]].addonfor).c_str(), axes[0].second.size());
-    {   // which later group's files replace a frozen option's files (same path: the last group wins)
-        std::vector<std::pair<std::string, size_t>> first = fixed;
+        printf("    varies: %s (%zu options)\n", group_name(groups[axes[0].first]).c_str(), axes[0].second.size());
+    {   // which later group's files replace a frozen option's files (same path: the last group merged wins)
+        std::vector<std::pair<size_t, size_t>> first = fixed;
         for (auto& a : axes) first.push_back({a.first, a.second[0]});
-        std::stable_sort(first.begin(), first.end(), [](auto& x, auto& y) { return x.first < y.first; });
+        std::stable_sort(first.begin(), first.end(), [&](auto& x, auto& y) { return merge_rank[x.first] < merge_rank[y.first]; });
         for (auto& f : frozen) {
             std::string names;
             for (size_t k = 0; k < f.left.size(); ++k) names += (k ? ", " : "") + unit_label(g_units[f.left[k]]);
@@ -4910,7 +5233,7 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
                     if (q.second == f.kept) { after = true; continue; }
                     if (after && g_units[q.second].files.count(pth)) {
                         hit = true;
-                        if (by.empty()) by = trim_ws(g_units[q.second].addonfor);
+                        if (by.empty()) by = group_name(groups[q.first]);
                     }
                 }
                 if (hit) lost++;
@@ -4925,20 +5248,31 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
             printf("    optional, left out: %s\n", names.c_str());
         }
     }
-    // Every combination: its files (unit indices, layered by group), label and options worn
-    struct Combo { std::vector<size_t> idx; std::string label; std::vector<size_t> selected; };
+    // Name of an option inside its top-level group: its sub-groups, then its own name
+    auto option_label = [&](size_t i) {
+        std::string s;
+        if (nested) {
+            const auto& ch = place[i].chain;
+            for (size_t k = ch.size(); k-- > 1;) s += trim_ws(g_menus[ch[k - 1]].name) + " - ";
+        }
+        return s + unit_label(g_units[i]);
+    };
+    // Every combination: its files (unit indices, in merge order), id order, label and options worn
+    struct Combo { std::vector<size_t> idx, id_order; std::string label; std::vector<size_t> selected; };
     std::vector<Combo> combos;
     std::vector<size_t> pick(axes.size(), 0);
     for (size_t n = 0; n < total; ++n) {
-        std::vector<std::pair<std::string, size_t>> parts = fixed;
+        std::vector<std::pair<size_t, size_t>> parts = fixed;
         Combo c;
         c.label = root;
         for (size_t a = 0; a < axes.size(); ++a) {
             size_t i = axes[a].second[pick[a]];
             parts.push_back({axes[a].first, i});
-            c.label += " - " + unit_label(g_units[i]);
+            c.label += " - " + option_label(i);
         }
         std::stable_sort(parts.begin(), parts.end(), [](auto& x, auto& y) { return x.first < y.first; });
+        for (auto& p : parts) c.id_order.push_back(p.second);
+        std::stable_sort(parts.begin(), parts.end(), [&](auto& x, auto& y) { return merge_rank[x.first] < merge_rank[y.first]; });
         for (auto& p : parts) c.idx.push_back(p.second);
         for (auto i : c.idx) if (unit_option.count(i)) c.selected.push_back(unit_option[i]);
         if (rto) {   // an option whose every file a later one replaces is not worn: not a default
@@ -4952,7 +5286,7 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
                 if (!shadowed) kept.insert(kept.begin(), *it);
             }
             c.selected = std::move(kept);
-            rto->variants.push_back({combined_mod_id(c.idx), c.label, c.selected});
+            rto->variants.push_back({combined_mod_id(c.id_order), c.label, c.selected});
         }
         combos.push_back(std::move(c));
         for (size_t a = 0; a < axes.size(); ++a) {           // next combination
@@ -4973,8 +5307,123 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
         combos.resize(1);
         combos[0].label = root;
     }
+    const size_t before = o.mods_out.size();
     for (auto& c : combos)
-        push_combined(c.idx, c.label, o, g_units[tree[0]].u.rel, g_units[tree[0]].info_path, rto, c.selected);
+        push_combined(c.idx, c.label, o, g_units[tree[0]].u.rel, g_units[tree[0]].info_path, rto, c.selected, c.id_order);
+    // An add-on mod (no option has a body mesh: "Mai face accessories" replaces the shared head 000/00/ or
+    // Outfit 2's head) makes nothing: its options would belong on every outfit wearing those parts (not done yet)
+    if (o.mods_out.size() == before)
+        printf("    WARN: modular mod %s gave no costume (no combination of its options is a complete outfit: an add-on "
+               "mod, not used)\n", root.c_str());
+}
+
+// The last word every name shares, for a choice made of add-ons ("Optional - Leon Hair", "Optional -
+// Trimmed Hair" -> "Hair"); empty when there is none
+static std::string shared_word(const std::vector<std::string>& names) {
+    auto words = [](const std::string& s) {
+        std::vector<std::string> w; std::string cur;
+        for (char c : s + " ") {
+            if (isalnum((unsigned char)c)) cur += c;
+            else if (!cur.empty()) { w.push_back(cur); cur.clear(); }
+        }
+        return w;
+    };
+    static const std::set<std::string> skip = {"optional", "addon", "add", "on", "for", "the", "and", "with", "only"};
+    if (names.empty()) return {};
+    auto first = words(names[0]);
+    for (size_t k = first.size(); k-- > 0;) {
+        const std::string low = str_lower(first[k]);
+        if (low.size() < 3 || skip.count(low)) continue;
+        bool all = true;
+        for (size_t n = 1; n < names.size() && all; ++n) {
+            bool found = false;
+            for (auto& w : words(names[n])) if (str_lower(w) == low) found = true;
+            all = found;
+        }
+        if (all) return first[k];
+    }
+    return {};
+}
+
+// An outfit and the add-ons made for it (the options of its mod that name it or complete it) as
+// runtime options (docs/RUNTIME_OPTIONS.md): the outfit is the base, each add-on a toggle, add-ons that
+// replace a same file one choice ("Leon Hair" / "Trimmed Hair"). RuntimeOptions=on: the outfit alone (its
+// own id: its slot as before), every add-on chosen in game, any number of them; "variants": the outfits
+// RuntimeOptions=off makes as well. False (nothing done) when an add-on brings files for another outfit
+// folder (the runtime swaps files of the slot's own folders only) or the outfit was not made.
+static bool build_addon_options(size_t j, const std::vector<size_t>& adds, bool apart, ScanOutputs& o) {
+    const auto& b = g_units[j];
+    for (auto a : adds) if (!g_units[a].targets.empty() && !shares_target(g_units[a], b)) return false;
+    auto e = std::find_if(o.mods_out.begin(), o.mods_out.end(), [&](const auto& m) { return m.first == b.mod_id; });
+    if (e == o.mods_out.end()) return false;
+    // Add-ons that replace a same file (directly or through another one): one choice
+    std::vector<size_t> cl(adds.size());
+    for (size_t x = 0; x < adds.size(); ++x) cl[x] = x;
+    auto find = [&](size_t x) { while (cl[x] != x) x = cl[x] = cl[cl[x]]; return x; };
+    for (size_t x = 0; x < adds.size(); ++x)
+        for (size_t y = x + 1; y < adds.size(); ++y)
+            if (units_overlap(g_units[adds[x]], g_units[adds[y]])) cl[find(y)] = find(x);
+    std::vector<RtoGroupIn> in(2);
+    in[0].key = "addon"; in[0].name = unit_label(b); in[0].root = in[0].outfit = true; in[0].members = {j};
+    in[1].key = "addon"; in[1].name = "Add-ons";              // add-ons on their own: each on or off
+    std::map<size_t, size_t> group_of;                         // cluster -> its group in `in`
+    for (size_t x = 0; x < adds.size(); ++x) {
+        size_t r = find(x), n = 0;
+        for (size_t y = 0; y < adds.size(); ++y) if (find(y) == r) n++;
+        if (n == 1) { in[1].members.push_back(adds[x]); continue; }
+        auto it = group_of.find(r);
+        if (it == group_of.end()) {
+            it = group_of.emplace(r, in.size()).first;
+            in.emplace_back();
+            in.back().key = "addon";
+            in.back().choice = true;
+        }
+        in[it->second].members.push_back(adds[x]);
+    }
+    for (auto& [r, gi] : group_of) {
+        std::vector<std::string> names;
+        for (auto a : in[gi].members) names.push_back(unit_label(g_units[a]));
+        std::string w = shared_word(names);
+        in[gi].name = w.empty() ? unit_label(b) + " - choice " + std::to_string(gi - 1) : w;
+    }
+    std::unordered_map<size_t, size_t> unit_option;
+    std::shared_ptr<RtoMod> rto = rto_from_groups(in, unit_label(b), {}, unit_option);
+    rto->defaults_from = "loader";
+    if (auto src = g_mod_source.find(b.mod_id); src != g_mod_source.end()) rto->source = src->second.source;
+    const std::vector<size_t> base_sel = {unit_option[j]};
+    // The outfits RuntimeOptions=off makes (one per add-on, plus all of them when they replace no same
+    // file; the outfit alone past three add-ons): ready-made sets, and the slots they had move here
+    struct Var { std::vector<size_t> parts; std::string label; std::vector<size_t> sel; };
+    std::vector<Var> vars;
+    std::vector<std::vector<size_t>> sets;
+    if (adds.size() <= 3) {
+        for (auto a : adds) sets.push_back({a});
+        if (adds.size() >= 2 && apart) sets.push_back(adds);
+    }
+    rto->variants.push_back({b.mod_id, unit_label(b), base_sel});
+    for (auto& v : sets) {
+        Var x{{j}, unit_label(b), base_sel};
+        for (auto a : v) { x.parts.push_back(a); x.label += " + " + unit_label(g_units[a]); x.sel.push_back(unit_option[a]); }
+        rto->variants.push_back({combined_mod_id(x.parts), x.label, x.sel});
+        vars.push_back(std::move(x));
+    }
+    // A complete add-on was an outfit of its own before (its id): its slot moves to the outfit with it
+    for (auto a : adds)
+        if (!g_units[a].costumes.empty())
+            rto->variants.push_back({g_units[a].mod_id, unit_label(g_units[a]), {base_sel[0], unit_option[a]}});
+    for (auto& mc : e->second) { mc.rto = rto; mc.rto_selected = base_sel; }
+    std::string names;
+    for (auto a : adds) names += (names.empty() ? "" : ", ") + unit_label(g_units[a]);
+    printf("\n  %s: %zu add-on%s as runtime options (%s)\n", unit_label(b).c_str(), adds.size(),
+           adds.size() > 1 ? "s" : "", names.c_str());
+    size_t n_opt = 0;
+    for (auto& op : rto->options) if (op.mode != "base") n_opt++;
+    printf("    runtime options: %zu groups, %zu options stored for the in-game menu\n", rto->groups.size(), n_opt);
+    if (g_rto_layout == RtoLayout::One)
+        printf("    one outfit (RuntimeOptions=on): %s, its add-ons chosen in game\n", unit_label(b).c_str());
+    else
+        for (auto& x : vars) push_combined(x.parts, x.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, x.sel);
+    return true;
 }
 
 // Turns the loaded units into costumes. Complete options are used as they are. A partial option
@@ -5023,14 +5472,61 @@ static void finalize_units(ScanOutputs& o) {
                 if (!names_option) tree.push_back(i);
             }
             if (tree.size() < 2) continue;
+            // Add-ons whose "addonfor" names nothing of their mod (no option, no menu entry) beside a single
+            // complete option that hangs from nothing: that option was renamed after the add-ons were written
+            // ("Buff Leon as Luke" for an option now named "Buff Leon as Luke - Buff Leon as Luke C1 [...]").
+            // Fluffy would not link them either; not a modular mod (it made nothing of add-ons without a body
+            // mesh: they were lost): add-ons of that option (rules below). (from ZZtaii's Slotsloader fork
+            // (1.9.9), MIT)
+            {
+                std::vector<size_t> bases;
+                for (auto j : idx)
+                    if (g_units[j].addonfor.empty() && !g_units[j].costumes.empty()) bases.push_back(j);
+                bool dangling = bases.size() == 1;
+                for (auto i : tree) {
+                    const auto& u = g_units[i];
+                    if (!dangling) break;
+                    if (!u.costumes.empty() || !shares_target(u, g_units[bases[0]])) dangling = false;
+                    for (auto& m : g_menus)
+                        if (m.source == src && eq_ci(m.name, u.addonfor)) dangling = false;
+                }
+                if (dangling) {
+                    for (auto i : tree)
+                        printf("\n  WARN: %s: its addonfor \"%s\" names no option of the mod; taken as an add-on of "
+                               "%s, the mod's only complete option (a mod manager would not link it: fix the add-on's "
+                               "AddonFor and Requirement)\n", unit_label(g_units[i]).c_str(),
+                               trim_ws(g_units[i].addonfor).c_str(), unit_label(g_units[bases[0]]).c_str());
+                    continue;
+                }
+            }
             for (auto i : tree) modular.insert(i);
             build_modular(tree, o);
         }
     }
 
+    // A complete option (it has its own mesh) whose "addonfor" names another complete option of the
+    // same mod is an add-on of that option: Fluffy installs it over that option, both active (Leon
+    // Requiem on Luke: "Optional - More muscles", addonfor "Leon as Luke", the name of the main option,
+    // ships only a body mesh). It is made with that option (the add-on rules below), not as an outfit of
+    // its own without the option's files. An option that is itself such an add-on is not a base (no
+    // chains). (from ZZtaii's Slotsloader fork (1.9.8), MIT)
+    std::map<size_t, size_t> complete_addon_of;
+    for (size_t i = 0; i < g_units.size(); ++i) {
+        const auto& a = g_units[i];
+        const std::string want = trim_ws(a.addonfor);
+        if (a.costumes.empty() || a.files.empty() || modular.count(i) || want.empty()) continue;
+        for (size_t j = 0; j < g_units.size(); ++j) {
+            const auto& b = g_units[j];
+            if (j == i || b.source != a.source || b.costumes.empty() || modular.count(j)) continue;
+            if (eq_ci(trim_ws(b.name), want)) { complete_addon_of[i] = j; break; }
+        }
+    }
+    for (auto it = complete_addon_of.begin(); it != complete_addon_of.end(); )
+        it = complete_addon_of.count(it->second) ? complete_addon_of.erase(it) : std::next(it);
+
     for (size_t i = 0; i < g_units.size(); ++i) {
         auto& uf = g_units[i];
-        if (uf.costumes.empty() || modular.count(i)) continue;
+        if (uf.costumes.empty() || modular.count(i) || complete_addon_of.count(i)) continue;
         o.mods_out.push_back({uf.mod_id, uf.costumes});
         o.all_mod_out.insert(uf.files.begin(), uf.files.end());
         o.infos_out.push_back({uf.u.rel, uf.info_path});
@@ -5044,7 +5540,7 @@ static void finalize_units(ScanOutputs& o) {
         for (int rule = 0; rule < 4 && bases.empty(); ++rule) {
             for (size_t j = 0; j < g_units.size(); ++j) {
                 const auto& b = g_units[j];
-                if (b.costumes.empty() || modular.count(j)) continue;
+                if (b.costumes.empty() || modular.count(j) || complete_addon_of.count(j)) continue;
                 bool hit = false;
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
@@ -5071,6 +5567,11 @@ static void finalize_units(ScanOutputs& o) {
         }
         for (auto j : bases) addons_of[j].push_back(i);
     }
+    for (auto& [i, j] : complete_addon_of) {
+        printf("\n  %s: add-on of %s (its addonfor), made with it\n", unit_label(g_units[i]).c_str(),
+               unit_label(g_units[j]).c_str());
+        addons_of[j].push_back(i);
+    }
 
     for (auto& [j, adds] : addons_of) {
         const auto& b = g_units[j];
@@ -5086,15 +5587,17 @@ static void finalize_units(ScanOutputs& o) {
             for (size_t y = x + 1; y < adds.size() && separate; ++y)
                 if (!user_grouped(g_units[adds[x]], g_units[adds[y]])) separate = false;
         }
+        // An add-on put with its costume in one sub-folder is meant for that costume: only the combined
+        // outfit is made, not the costume alone as well
+        bool grouped = false;
+        for (auto a : adds) if (user_grouped(g_units[a], b)) grouped = true;
+        // Runtime options: the outfit with its add-ons chosen in game (any number of them)
+        if (g_rto_layout != RtoLayout::Off && !separate && !grouped && build_addon_options(j, adds, apart, o)) continue;
         if (adds.size() > 3 && !separate) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());
             continue;
         }
-        // An add-on put with its costume in one sub-folder is meant for that costume: only the combined
-        // outfit is made, not the costume alone as well
-        bool grouped = false;
-        for (auto a : adds) if (user_grouped(g_units[a], b)) grouped = true;
         if (grouped) {
             o.mods_out.erase(std::remove_if(o.mods_out.begin(), o.mods_out.end(),
                              [&](const auto& e) { return e.first == b.mod_id; }), o.mods_out.end());
@@ -5117,6 +5620,7 @@ static void finalize_units(ScanOutputs& o) {
         }
     }
     g_units.clear();
+    g_menus.clear();
 }
 
 // The game folder's natives tree holds costume files (a costume folder of a character)
@@ -5551,6 +6055,7 @@ static void scan_costume_mods(
     g_archive_cache_root = base_dir + "\\.cache";
     g_archive_cache_used.clear();
     g_units.clear();
+    g_menus.clear();
     g_unit_source = 0;
 
     ScanOutputs o{ inv, mods_out, all_mod_out, pak_readers_out, infos_out, upgraded_tex_out };
@@ -5646,6 +6151,7 @@ static void scan_costume_mods(
         std::vector<ModUnit> all, units;
         if (!root_dir.empty()) collect_mod_units(root_dir, rel, 0, 2, all);
         for (auto& u : all) {
+            if (u.menu) { units.push_back(u); continue; }   // menu entries: where its options sit in Fluffy's menu
             if (!u.pak.empty()) continue;
             std::string r = u.dir.size() > root_dir.size() ? str_lower(u.dir.substr(root_dir.size() + 1)) : "";
             for (auto& c : r) if (c == '\\') c = '/';

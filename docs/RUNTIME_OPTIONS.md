@@ -8,7 +8,7 @@ for a user who does not set `RuntimeOptions` (no manifest: the plugin's runtime-
 
 Costume mods made for Fluffy Mod Manager often come as one archive with groups of options: body types, skins,
 dress textures, SFW / NSFW variants, extra jiggle, a tan, "hide ponytail" for hair mods... Today the Slots Loader
-turns such a *modular mod* into up to 24 outfits (one per combination of the options that change meshes) and keeps
+turns such a *modular mod* into up to 50 outfits (one per combination of the options that change meshes) and keeps
 only the first option of every other group. Example, "Mini Dress Mai C1 Swap" v1.5: 43 options in 6 groups, 10
 outfits, 32 options never reachable.
 
@@ -55,16 +55,32 @@ before (same pak bytes, same `outfits.json`, same registry).
 ## Data model
 
 A modular mod is the tree `build_modular` already reads: options (folders with `modinfo.ini`) whose `AddonFor`
-names a group, groups whose `AddonFor` names the root.
+names a group, groups whose `AddonFor` names the root. The Fluffy menu entries (folders holding only a
+`modinfo.ini`, usually `DummyMod=True`) are read too, with their descriptions (ported from ZZtaii's Slotsloader
+fork 1.9.7-custom, MIT).
 
-- **Group**: the options sharing one `AddonFor`, in the order `build_modular` lays them over each other (sorted
-  group names; the files of a later group replace those of an earlier one at the same path).
-- **Option**: `id` (8 hex digits, a hash of the group and the option's folder name: stable when the archive is
-  updated or renamed), `name` (from `modinfo.ini`), `folder`, its files, and a `mode`:
-  - `base`: always worn, not a choice (the root group's main files, the option `build_modular` always keeps);
-  - `pick`: one option of the group at a time (a group of 2 or more options);
-  - `toggle`: on or off (another option of the root group such as "hide ponytail", an option or a group whose name
-    says "optional", a group of one option).
+- **Group**: the options sharing one `AddonFor`. When options hang from sub-groups of the menu ("03 Outfit" >
+  "Lower Neckline" > option), every option under one top-level group is ONE group (one choice), keyed by that
+  top-level group's **name** (`menu:<name>`, not its place in the menu, so saved choices keep their ids); the main
+  files of such a mod form the group `(root)`. Groups are listed in the order their files are laid over each
+  other: the **root group (main files) first**, then the others (sorted group names; nested: menu folder order). The
+  files of a later group replace those of an earlier one at the same path. (Before the port, a root whose name did
+  not start with `(` could be merged last, over the options.)
+- **Option**: `id` (8 hex digits, a hash of the group key and the option's folder name: stable when the archive is
+  updated or renamed; unchanged for mods without nested menus), `name` (from `modinfo.ini`), `folder`, its files,
+  and a `mode`:
+  - `base`: always worn, not a choice (the root group's main files: its first plain option whose name does not say
+    "addon" / "add-on");
+  - `pick`: one option of the group at a time, in a **choice** group: its author asks for one ("2! Skin": a name
+    numbered with `!`, or a description saying select / choose / pick (only) one, as ZZtaii's Slotsloader Manager
+    reads it), or every option of the group ships one same file (two of them on would hide each other);
+  - `toggle`: on or off: another option of the root group ("hide ponytail"), an option or a group whose name or
+    description says "optional", a lone option, every option of a group that is not a choice.
+- **Exactly one** (no None): a choice group its author asks one option of, unless its name or description says
+  "optional", and unless its options share a file with options of another group (Mai mini dress: "4! NSFW",
+  "4! SFW" and "4! Skimpy" all ship the body mesh, "3! Dress" and "4! SFW" the dress texture: picking in one
+  group turns the other's option off, a required group would put it back over the new choice). Listed in each
+  slot's `required` (with the groups that have no base copy, see Storage).
 - An option is **a set of files: (original path -> stored copy)**. Each file has a **kind**: `mesh`, `material`
   (`.mdf2`), `texture`, `chain` (all four swapped on the model at runtime), `colour` (colour files, for the Color
   Mod) or `other` (user files, cloth, scenes: only at the next launch). Per option, `apply` sums it up: `live`,
@@ -77,6 +93,33 @@ names a group, groups whose `AddonFor` names the root.
   file", which turned off the SFW option's texture and left a set no variant has.)
 - **Defaults** of an outfit = the options its combination is made of, minus those whose every file a later option
   replaces (they are not worn).
+
+### Outfits with add-ons (not modular)
+
+A complete option and the options of its mod made for it (Fluffy `AddonFor` naming it, the same bundle, the same
+archive touching its costume folder; a complete option whose `AddonFor` names another complete option, ported from
+the fork 1.9.8; add-ons whose `AddonFor` names nothing of their mod beside a single complete option, fork 1.9.9,
+with a WARN) are also one mod:
+
+- `RuntimeOptions=off`: as before, the outfit plus one outfit per add-on (and one with all of them when they replace
+  no same file; the outfit alone past three add-ons). "Leon Requiem On Luke C1": Leon as Luke, + More muscles,
+  + Leon Hair, + Trimmed Hair (More muscles was an outfit of its own without the main files before the port).
+- `on`: **one outfit**, the outfit alone (its own id: its slot as before), every add-on an option, any number of them:
+  the outfit is `base`, each add-on a `toggle` in the group "Add-ons", add-ons that replace a same file one choice
+  group (`pick`, with None) named after the word their names share ("Hair": Leon Hair / Trimmed Hair). The former
+  add-on outfits are its `variants` (saved choices of their slots move to it, `former`), the complete add-on's
+  own former outfit too. `variants`: the outfits of `off`, with the options stored.
+- Not when an add-on brings files for another costume folder than the outfit's (the runtime swaps the slot's own
+  folders only), nor for separate add-ons the user put with the outfit in one sub-folder (all worn): `off` rules.
+
+An **add-on mod** (a modular mod none of whose options has a body mesh: "Mai face accessories", whose options
+replace the shared head `000/00/` or Outfit 2's head) still makes nothing, now with a WARN; its options belong on
+every outfit that wears those parts (see Not covered yet).
+
+Options of a part the slot does not have in its own folder (Leon as Luke wears the game's hair, `000/02/`; its hair
+add-ons ship `001/02/` and a scene pointing there) target what the slot's scene loads for that part: the mesh and
+material files the scene names for it, the chain of the same name in that folder. Before, they targeted the
+original folder's path, which no model loads (the option did nothing).
 
 ## Storage in the costume pak
 
@@ -412,9 +455,9 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
   not seen until the next one (the probes saw no rebuild on Training resets); the Training pause menu's Character
   Settings popup has no menu (its preview is not handled); menu texts are English only; no mouse click on the
   costume row; whether the pad's A on the costume row does something in the game was not checked.
-- A modular mod that is an add-on (no body mesh, e.g. "Mai face accessories": the loader logs "partial option ... no
-  body mesh in part 01") makes no outfit, so no slot lists its options: its stored options wait for the add-on
-  archives item below.
+- A modular mod that is an add-on (no body mesh, e.g. "Mai face accessories": its "C1 swap" options replace the
+  shared head `000/00/`, its "C2" options Outfit 2's head) makes no outfit (the loader WARNs), so no slot lists its
+  options: they wait for the add-on archives item below.
 
 - **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
   are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as
