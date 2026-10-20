@@ -315,9 +315,25 @@ void SF6CORE_CALL cb_closed(void*) {
     if (S.active) teardown("window closed");
 }
 
+// A left click on the costume row's body (1080p reference, rows 70 px apart: Color is y 283-336 in the Color Mod, so
+// Costume is 213-266; x 156-716 less 70 px at each end for the row's arrows, which change the outfit). The cursor is
+// read only while the game window is in front (the Color Mod's mouse_state rule).
+bool mouse_over_costume_row() {
+    HWND hw = GetForegroundWindow();
+    DWORD pid = 0;
+    if (hw) GetWindowThreadProcessId(hw, &pid);
+    RECT rc{};
+    POINT p{};
+    if (!hw || pid != GetCurrentProcessId() || !GetClientRect(hw, &rc) || !GetCursorPos(&p) || !ScreenToClient(hw, &p)) return false;
+    const double w = rc.right - rc.left, h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return false;
+    const double sx = w / 1920, sy = h / 1080;
+    return p.x >= (156 + 70) * sx && p.x <= (716 - 70) * sx && p.y >= 213 * sy && p.y <= 266 * sy;
+}
+
 // ---- Fighter Settings: the guide bar entry and the key ----
 //
-// The entry "<ICON KeyF> Costume options" (pad: <ICON BtnD>) goes into the bottom input guide bar while the costume
+// The entry "<ICON KeyF><ICON MouseL> Costume options" (pad: <ICON BtnD>) goes into the bottom input guide bar while the costume
 // row of an outfit with options is focused, like the Color Mod's "<ICON KeyF><ICON MouseL> Edit Color" on its Color
 // row. ONE writer of that text, always (crash of 20/10, docs/RUNTIME_OPTIONS.md: both DLLs writing it = up to 14 pairs
 // of set_Message per row change, one side from a game UI job thread, and a use-after-free in the game):
@@ -328,9 +344,10 @@ void SF6CORE_CALL cb_closed(void*) {
 //    value instead (the kit B behaviour, 100 Costume / Color round trips without a crash).
 const char* kEntryLabel = "Costume options";        // English only: the plugin has no locale system
 const char* kSep = "      ";                        // the Color Mod's separator between entries (six spaces)
-const char* kKeyHint = "  <ICON KeyF>";             // the costume row's icon (older Color Mod only)
+const char* kKeyHint = "  <ICON KeyF><ICON MouseL>";             // the costume row's icon (older Color Mod only)
 const char* kPadHint = "  <ICON BtnD>";
-std::string entry_text(bool pad) { return std::string(pad ? "<ICON BtnD> " : "<ICON KeyF> ") + kEntryLabel; }
+std::string entry_text(bool pad) { return std::string(pad ? "<ICON BtnD> " : "<ICON KeyF><ICON MouseL> ") + kEntryLabel; }
+const std::string kOldEntryKey = std::string("<ICON KeyF> ") + kEntryLabel;   // the entry before the mouse icon: still taken out
 void erase_all(std::string& s, const std::string& what) {
     for (size_t at; (at = s.find(what)) != std::string::npos;) s.erase(at, what.size());
 }
@@ -414,6 +431,7 @@ void own_bar(bool show, bool leaving = false) {
     std::string want = cur;
     erase_all(want, kSep + entry_text(false));
     erase_all(want, kSep + entry_text(true));
+    erase_all(want, kSep + kOldEntryKey);
     if (show) want += kSep + entry_text(H.pad);
     if (want == cur) return;                        // never an identical write
     if (!leaving && !H.bar_guard.take("the guide bar text")) return;
@@ -470,7 +488,7 @@ void hint_tick() {
     const Slot* slot = preview_slot();
     const std::string cur = alive(H.text) ? str(call_obj(H.text, "get_Message")) : std::string();
     std::string base = cur;
-    for (const char* s : { kKeyHint, kPadHint }) if (ends_with(base, s)) base.resize(base.size() - std::strlen(s));
+    for (const char* s : { kKeyHint, "  <ICON KeyF>", kPadHint }) if (ends_with(base, s)) base.resize(base.size() - std::strlen(s));
     if (base != H.base) { H.base_at = H.base.empty() ? 0 : g_frame; H.base = base; }   // the first read is no change
     // the preview was identified after the outfit shown changed: it is that outfit's
     const bool has = slot && preview_since() >= static_cast<int>(H.base_at);
@@ -505,7 +523,8 @@ void hint_tick() {
 
     // the key: F / A on the costume row
     const bool raw = key_down(0x46) || (pad_mask() & g_pad_a) != 0;
-    const bool down = on_row && game_has_focus() && raw;
+    const bool click = on_row && key_down(0x01) && mouse_over_costume_row();   // left click on the row, like the Color row
+    const bool down = on_row && game_has_focus() && (raw || click);
     if (raw && !H.raw_was && !S.active) {                // every press, and what it led to
         const char* why = !game_has_focus() ? "the game window is not in front"
                         : !on_row ? "not on the costume row"

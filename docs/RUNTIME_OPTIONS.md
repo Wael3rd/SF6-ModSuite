@@ -358,7 +358,7 @@ does, the fallback above is the next step.
 
 - **Where**: Battle Settings > character (Fighter Settings, agent `MatchingFighterSetting`). While the costume row
   (`p_Spin_costume`) is focused, the preview wears a slot with options and our menu is closed, the bottom input
-  guide bar gets an extra entry `<ICON KeyF> Costume options` (`<ICON BtnD>` after a pad input), like the Color
+  guide bar gets an extra entry `<ICON KeyF><ICON MouseL> Costume options` (a left click on the row's body, arrows excluded, opens the menu like F) (`<ICON BtnD>` after a pad input), like the Color
   Mod's `<ICON KeyF><ICON MouseL> Edit Color` on its Color row. The label is English only (the plugin has no locale
   system).
 - **One writer of the bar** (the bar's `e_text_0_g_*`, else its first `e_text_0_d_*`). Who writes depends on the
