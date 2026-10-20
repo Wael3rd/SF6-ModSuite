@@ -852,6 +852,37 @@ struct ModFileRef {
     }
 };
 
+// A file put in the pak exactly as it is read from its source. The same source put again (one mod file
+// copied into several slots, runtime options, streaming twins) shares the data of its first copy without
+// being read again (PakWriter::add_same_source: the pak is the same as if it had been read and compared).
+static std::string source_key(const char* how, const ModFileRef& mf) {
+    if (mf.is_disk()) return std::string(how) + "|" + str_lower(mf.disk_path);
+    char buf[64];
+    snprintf(buf, sizeof buf, "|%p|%016llx", (const void*)mf.pak, (unsigned long long)mf.hash);
+    return how + std::string(buf);
+}
+static void put_mod_raw(PakWriter& w, uint64_t h, const ModFileRef& mf) {
+    const std::string key = source_key("raw", mf);
+    if (w.add_same_source(h, key)) return;
+    std::vector<uint8_t> raw; int64_t att, ds;
+    mf.read_raw(raw, att, ds);
+    w.add_raw(h, std::move(raw), att, ds);
+    w.note_source(key);
+}
+static void put_mod_data(PakWriter& w, uint64_t h, const ModFileRef& mf) {
+    const std::string key = source_key("data", mf);
+    if (w.add_same_source(h, key)) return;
+    w.add_uncompressed(h, mf.read_data());
+    w.note_source(key);
+}
+static void put_game_raw(PakWriter& w, uint64_t h, PakReader& pak, const PakEntry& e) {
+    char key[48];
+    snprintf(key, sizeof key, "game|%p", (const void*)&e);
+    if (w.add_same_source(h, key)) return;
+    w.add_raw(h, pak.read_raw(e), e.attributes, e.decompressed_size);
+    w.note_source(key);
+}
+
 // A file directly in product/model/ (no sub-folder): the game keeps none there, so a mod that ships one
 // (Dance Outfit for Cammy: model/1.tex, named by its materials) adds a file, overrides nothing
 static bool is_model_root_file(const std::string& low) {
@@ -899,18 +930,14 @@ static int write_streaming_twin(PakWriter& writer,
     const ModFileRef* twin = nullptr;
     if (own) for (auto* files : *own) { auto it = files->find(s_orig); if (it != files->end()) { twin = &it->second; break; } }
     if (twin) {
-        auto data = twin->read_data();
-        uint64_t h = pak_path_hash(std::string_view(s_new));
-        writer.add_uncompressed(h, std::move(data));
+        put_mod_data(writer, pak_path_hash(std::string_view(s_new)), *twin);
         written.insert(s_new);
         return 1;
     }
     uint64_t sh = pak_path_hash(std::string_view(s_orig));
     auto* se = base_pak.find(sh);
     if (se) {
-        auto raw = base_pak.read_raw(*se);
-        uint64_t h = pak_path_hash(std::string_view(s_new));
-        writer.add_raw(h, std::move(raw), se->attributes, se->decompressed_size);
+        put_game_raw(writer, pak_path_hash(std::string_view(s_new)), base_pak, *se);
         written.insert(s_new);
         return 1;
     }
@@ -2767,14 +2794,9 @@ static void add_slot_files(PakWriter& writer,
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_uncompressed(h, std::move(vdata));
         } else if (needs_content_patch(path)) {
-            auto data = mf.read_data();
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_uncompressed(h, std::move(data));
+            put_mod_data(writer, pak_path_hash(std::string_view(new_path)), mf);
         } else {
-            std::vector<uint8_t> raw; int64_t att, ds;
-            mf.read_raw(raw, att, ds);
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_raw(h, std::move(raw), att, ds);
+            put_mod_raw(writer, pak_path_hash(std::string_view(new_path)), mf);
         }
         written_paths.insert(new_path);
         record_relocation(path, new_path);
@@ -2982,21 +3004,16 @@ static void add_slot_files(PakWriter& writer,
             uint64_t th = pak_path_hash(std::string_view(cmd_target));
             auto mfit = mc->files_in_folder.find(cmd_orig);
             if (mfit != mc->files_in_folder.end()) {
-                std::vector<uint8_t> raw; int64_t att, ds;
-                mfit->second.read_raw(raw, att, ds);
-                writer.add_raw(th, std::move(raw), att, ds);
+                put_mod_raw(writer, th, mfit->second);
                 written_paths.insert(cmd_target); count++;
             } else if (from_own_mod(cmd_orig)) {
-                std::vector<uint8_t> raw; int64_t att, ds;
-                amf.at(cmd_orig).read_raw(raw, att, ds);
-                writer.add_raw(th, std::move(raw), att, ds);
+                put_mod_raw(writer, th, amf.at(cmd_orig));
                 written_paths.insert(cmd_target); count++;
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(cmd_orig));
                 auto* oe = base_pak.find(oh);
                 if (oe) {
-                    auto raw = base_pak.read_raw(*oe);
-                    writer.add_raw(th, std::move(raw), oe->attributes, oe->decompressed_size);
+                    put_game_raw(writer, th, base_pak, *oe);
                     written_paths.insert(cmd_target); count++;
                 } else if (named_by_list) {
                     // The colour list names a colour file the game's paks do not have. Fluffy Mod
@@ -3051,15 +3068,13 @@ static void add_slot_files(PakWriter& writer,
             uint64_t th = pak_path_hash(std::string_view(chain_target));
             auto mfit = mc->files_in_folder.find(chain_orig);
             if (mfit != mc->files_in_folder.end()) {
-                auto data2 = mfit->second.read_data();
-                writer.add_uncompressed(th, std::move(data2));
+                put_mod_data(writer, th, mfit->second);
                 written_paths.insert(chain_target); count++;
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(chain_orig));
                 auto* oe = base_pak.find(oh);
                 if (oe) {
-                    auto raw = base_pak.read_raw(*oe);
-                    writer.add_raw(th, std::move(raw), oe->attributes, oe->decompressed_size);
+                    put_game_raw(writer, th, base_pak, *oe);
                     written_paths.insert(chain_target); count++;
                 }
             }
@@ -3187,14 +3202,9 @@ static void add_slot_files(PakWriter& writer,
             uint64_t h = pak_path_hash(std::string_view(new_path));
             writer.add_uncompressed(h, std::move(vdata));
         } else if (needs_content_patch(path)) {
-            auto data = mf.read_data();
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_uncompressed(h, std::move(data));
+            put_mod_data(writer, pak_path_hash(std::string_view(new_path)), mf);
         } else {
-            std::vector<uint8_t> raw; int64_t att, ds;
-            mf.read_raw(raw, att, ds);
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_raw(h, std::move(raw), att, ds);
+            put_mod_raw(writer, pak_path_hash(std::string_view(new_path)), mf);
         }
         written_paths.insert(new_path);
         record_relocation(path, new_path);
@@ -3263,10 +3273,7 @@ static void add_slot_files(PakWriter& writer,
             std::string new_path = (sl != std::string::npos)
                                  ? path.substr(0, sl+1) + new_fn : new_fn;
             if (written_paths.count(new_path)) continue;
-            std::vector<uint8_t> raw; int64_t att, ds;
-            mf.read_raw(raw, att, ds);
-            uint64_t h = pak_path_hash(std::string_view(new_path));
-            writer.add_raw(h, std::move(raw), att, ds);
+            put_mod_raw(writer, pak_path_hash(std::string_view(new_path)), mf);
             written_paths.insert(new_path);
             record_relocation(path, new_path);
             note_target(path, new_path);
@@ -3884,13 +3891,11 @@ static void add_slot_files(PakWriter& writer,
                     if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
                     writer.add_uncompressed(h, std::move(d));
                 } else if (mf && needs_content_patch(low)) {
-                    writer.add_uncompressed(h, mf->read_data());
+                    put_mod_data(writer, h, *mf);
                 } else if (mf) {
-                    std::vector<uint8_t> raw; int64_t att, ds;
-                    mf->read_raw(raw, att, ds);
-                    writer.add_raw(h, std::move(raw), att, ds);
+                    put_mod_raw(writer, h, *mf);
                 } else {
-                    writer.add_raw(h, base_pak.read_raw(*ve), ve->attributes, ve->decompressed_size);
+                    put_game_raw(writer, h, base_pak, *ve);
                 }
                 stored_new++;
                 if (low.find(".tex.") != std::string::npos)
@@ -4513,12 +4518,8 @@ static void add_game_options(PakWriter& writer, std::unordered_set<std::string>&
                 if (!writer.find(h)) {
                     const ModFileRef& mf = op.files.at(p);
                     if (data.count(p)) writer.add_uncompressed(h, std::move(data[p]));
-                    else if (needs_content_patch(low)) writer.add_uncompressed(h, mf.read_data());
-                    else {
-                        std::vector<uint8_t> raw; int64_t att, ds;
-                        mf.read_raw(raw, att, ds);
-                        writer.add_raw(h, std::move(raw), att, ds);
-                    }
+                    else if (needs_content_patch(low)) put_mod_data(writer, h, mf);
+                    else put_mod_raw(writer, h, mf);
                     stored_new++;
                     if (low.find(".tex.") != std::string::npos)
                         write_streaming_twin(writer, written_paths, p, path, all_mod, base_pak, &twins);
@@ -4561,8 +4562,7 @@ static void add_restorations(PakWriter& writer,
         uint64_t h = pak_path_hash(std::string_view(pak_path));
         auto* be = base_pak.find(h);
         if (be) {
-            auto raw = base_pak.read_raw(*be);
-            writer.add_raw(h, std::move(raw), be->attributes, be->decompressed_size);
+            put_game_raw(writer, h, base_pak, *be);
             written_paths.insert(pak_path);
             restored++;
             // Also restore streaming twin
@@ -4573,8 +4573,7 @@ static void add_restorations(PakWriter& writer,
                     uint64_t sh = pak_path_hash(std::string_view(sp));
                     auto* se = base_pak.find(sh);
                     if (se) {
-                        auto sr = base_pak.read_raw(*se);
-                        writer.add_raw(sh, std::move(sr), se->attributes, se->decompressed_size);
+                        put_game_raw(writer, sh, base_pak, *se);
                         written_paths.insert(sp);
                         streaming_restored++;
                     }
@@ -4585,8 +4584,7 @@ static void add_restorations(PakWriter& writer,
             // Not in the game and not relocated by any slot: another slot may still reference it
             // at this path (in_relocated alone dropped files a slot of another mod needed).
             (void)in_relocated;
-            auto data = mf.read_data();
-            writer.add_uncompressed(h, std::move(data));
+            put_mod_data(writer, h, mf);
             written_paths.insert(pak_path);
             added++;
             // ...with its high-resolution twin when the mod ships one
@@ -4595,8 +4593,7 @@ static void add_restorations(PakWriter& writer,
                 std::string sp = std::string(STREAM_PFX) + pak_path.substr(bp);
                 auto tw = all_mod.find(sp);
                 if (tw != all_mod.end() && !written_paths.count(sp)) {
-                    auto sd = tw->second.read_data();
-                    writer.add_uncompressed(pak_path_hash(std::string_view(sp)), std::move(sd));
+                    put_mod_data(writer, pak_path_hash(std::string_view(sp)), tw->second);
                     written_paths.insert(sp);
                 }
             }
