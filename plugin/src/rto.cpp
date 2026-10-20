@@ -56,6 +56,7 @@ bool g_model_noisy = false;         // SetupAppearance seen all the time: that e
 std::atomic<uint32_t> g_model_calls{0};
 bool g_warm_done = false;
 std::set<std::string> g_warm;       // files of the choices made in the menu, kept loaded
+std::set<std::string> g_warm_prev;  // files of every option of the outfit the preview wears, kept while it wears it
 uint32_t g_gc_at = 0;
 
 // ---- game types and methods ----
@@ -190,7 +191,7 @@ void backoff(const std::string& path) {
 void res_gc() {
     size_t n = 0;
     for (auto it = g_res.begin(); it != g_res.end();) {
-        if (!g_warm.count(it->first) && g_frame - it->second.used > 600) {
+        if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && g_frame - it->second.used > 600) {
             if (it->second.holder) it->second.holder->release();
             it = g_res.erase(it); ++n;
         } else ++it;
@@ -266,6 +267,8 @@ void visit(Model& md, Obj* go) {
     if (Obj* p = comp_of(go, T.t_pcc)) md.colors.push_back(p);
 }
 
+void warm_preview(const Slot* s);
+
 void walk(Model& md) {
     md.meshes.clear(); md.chains.clear(); md.colors.clear(); md.verify.clear();
     md.walked = true; md.chains_mapped = false; md.settled = false;
@@ -302,7 +305,32 @@ void walk(Model& md) {
         md.orig.clear();
         if (found) logf("rto: %s wears %s/%s (%s): %zu meshes, %zu chains", md.name, found->fighter_dir.c_str(), found->folder.c_str(),
                         found->label.c_str(), md.meshes.size(), md.chains.size());
+        if (&md == &g_models[0]) warm_preview(found);
     }
+}
+
+// The files of every option of the outfit the Battle Settings preview wears, asked for as soon as it is seen: a pick
+// made in the menu a second later then swaps at once, whole. Asked for only at the pick, a file of an option never
+// worn before (and the textures its material names) was not resident after its 30 frames (20/10, Ryu Aloha C2 on its
+// first pick: body put back, hair white; right on the next picks, its files asked for since). Kept while the preview
+// wears that outfit (res_gc), given back after.
+constexpr size_t kWarmPreview = 160;
+void warm_preview(const Slot* s) {
+    std::set<std::string> want;
+    if (s) {
+        auto add = [&](const File& f) {
+            if (f.path.empty() || f.path == f.target || want.size() >= kWarmPreview) return;
+            if (f.kind != "mesh" && f.kind != "material" && f.kind != "texture" && f.kind != "chain") return;
+            if (want.insert(f.path).second) res_get(f.path, f.kind, false);
+        };
+        for (auto& [id, fs] : s->files)
+            if (!hidden(g_m, *s, id)) for (auto& f : fs) add(f);
+        for (auto& f : s->base) add(f);
+    }
+    if (want != g_warm_prev && !want.empty())
+        logf("rto: %zu files of %s/%s's options asked for ahead (the preview wears it)%s", want.size(), s->fighter_dir.c_str(),
+             s->folder.c_str(), want.size() >= kWarmPreview ? " (the first ones)" : "");
+    g_warm_prev = std::move(want);
 }
 
 std::string target_of(const Slot& s, const std::string& p) {
@@ -1059,6 +1087,7 @@ void tick(uint32_t ev) {
                 g_crf = nullptr;
                 g_gone_at = 0;
                 g_prev_fighter = -1;
+                warm_preview(nullptr);
                 res_gc();
             }
         }
