@@ -73,6 +73,8 @@ std::string norm_path(const std::string& path);
 
 // A name cut to max_chars characters (UTF-8), ending with "..." when cut (the menu's title)
 std::string clip_name(const std::string& s, size_t max_chars);
+// An option or group name as the menu shows it: no leading "!", "1)" or "addon -" (then first letter upper case)
+std::string display_name(const std::string& s);
 constexpr size_t kTitleNameChars = 40;   // the outfit's name in the menu title, before "  -  P1"
 
 // ---- the user's choices ----

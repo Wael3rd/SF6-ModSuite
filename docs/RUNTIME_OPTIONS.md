@@ -152,10 +152,12 @@ Where each group of the add-on goes (a group = a series of its menu: `!C2 Mai fa
 
 The options: **none is worn by default** (the outfit stays as installed; the slot's own files, or the game's, are
 the way back: no base copy). A series with a "main files" option (its name says "main file") is one choice with None:
-the main files alone, or each other option **with** the main files (what Fluffy installs: "1) Main files" + one of
+each other option **with** the main files (the main files alone are not offered) (what Fluffy installs: "1) Main files" + one of
 "2) Glasses + piercings / Glasses only / Piercings only"); in another series, options that replace a same file are one
 choice (named after the word their names share), the others On / Off. An option with colour or other files only is
-not one (nothing to swap on a model: "CVS Shin Akuma Inspired Color").
+not one (nothing to swap on a model: "CVS Shin Akuma Inspired Color"). The menu shows names without the prefixes
+mods use for Fluffy's sort order ("!C2 Mai face accessories" -> "C2 Mai face accessories", "3) addon - remove mais
+facial wrinkles" -> "Remove mais facial wrinkles"); the manifest keeps the mod's names.
 
 **Fit** (`addon_fit`, per slot and per game outfit): an option is stored for an outfit only if each of its files fits
 what that outfit wears there; else the log says `runtime options: <option> does not fit this outfit (<file>: why):
@@ -187,7 +189,7 @@ outfit, ours and the game's (an outfit that relocated them, Fly In A Bucket, get
 wrinkle masks by all four.
 
 Offline (Wael's mods, `RuntimeOptions=on`): Mai's Outfit 1, 3 and Drive Tech get "remove wrinkles", Outfit 2 the
-"C2" series (one choice: Main files / Glasses + piercings / Glasses only / Piercings only, each with the main files)
+"C2" series (one choice: None / Glasses + piercings / Glasses only / Piercings only, each with the main files)
 and "remove wrinkles", the mini dress the "C1 swap" series and "remove wrinkles"; A.K.I's Outfit 1 "No Sleeves";
 Cammy's Outfit 4 the pale skin. Ingrid's book and cat put loose in `Ingrid\` (a test copy) go on every Ingrid outfit
 where they fit; in Wael's sub-folders they stay options of the Fly In A Bucket outfits only.

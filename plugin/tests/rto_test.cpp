@@ -435,8 +435,12 @@ int main(int argc, char** argv) {
         check(t.game && !q.slots[1].game, "game outfit: \"game\" read");
         check(q.slot_of_paths({ "product/model/esf/esf028/002/01/esf028_002_01.mesh", "product/model/esf/esf028/007/01/esf028_007_01.mesh" }) == &q.slots[1],
               "a model with a part in the game's folder and its body in ours wears our slot");
-        check(q.slot_of_paths({ "product/model/esf/esf028/000/00/esf028_000_00.mesh", "product/model/esf/esf028/002/01/esf028_002_01.mesh" }) == &t,
-              "a model loading the game outfit's folder wears the game outfit");
+        check(q.slot_of_paths({ "product/model/esf/esf028/002/00/esf028_002_00.mesh", "product/model/esf/esf028/002/01/esf028_002_01.mesh" }) == &t,
+              "a model loading the game outfit's files wears the game outfit");
+        check(q.slot_of_paths({ "product/model/esf/esf028/002/rto/c2glas01/00/esf028_002_00.mesh", "product/model/esf/esf028/002/01/esf028_002_01.mesh" }) == &t,
+              "a model wearing an option's copy still wears the game outfit");
+        check(q.slot_of_paths({ "product/model/esf/esf028/000/00/esf028_000_00.mesh", "product/model/esf/esf028/002/01/esf028_002_01.mesh" }) == nullptr,
+              "another game outfit sharing the folder (not the mesh the options replace): none");
         check(q.slot_of_paths({ "product/model/esf/esf028/001/01/esf028_001_01.mesh" }) == nullptr, "another game outfit: none");
         Choices none;
         auto c = chosen_of(q, t, none, 0);
@@ -467,6 +471,14 @@ int main(int argc, char** argv) {
         check(cut == "Ingrid - Fly In A Bucket - Drive Tech..." && cut.size() == 40, "title: a longer name ends with ...");
         const std::string u8 = "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";   // 6 characters, 12 bytes
         check(clip_name(u8, 6) == u8 && clip_name(u8, 5) == "\xC3\xA9\xC3\xA9...", "title: characters, not bytes (UTF-8)");
+    }
+
+    {   // names shown in the menu: no sort-order prefixes
+        check(display_name("3) addon - remove mais facial wrinkles") == "Remove mais facial wrinkles", "name: number and addon prefix");
+        check(display_name("!C2 Mai face accessories") == "C2 Mai face accessories", "name: leading !");
+        check(display_name("2) glasses only") == "Glasses only", "name: number, first letter upper case");
+        check(display_name("Ken SFV Hair V2") == "Ken SFV Hair V2", "name: a plain name is kept");
+        check(display_name("2B hair") == "2B hair" && display_name("1)") == "1)", "name: a number that is the name stays");
     }
 
     int rc = 0;

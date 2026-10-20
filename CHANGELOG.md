@@ -64,7 +64,10 @@
   file a mod's outfit ships (the "C1 swap" glasses) on that outfit; else on the game outfits that load its files (the
   "C2" glasses on Mai's Outfit 2, the game's files as the way back). Stored only where it fits (joints, materials,
   textures), none worn by default; a series' "main files" go with each of its other options. The plugin finds a game
-  outfit with options from the paths its model loads (our slots first).
+  outfit with options from the paths its model loads (our slots first); a game outfit whose options replace a mesh
+  or material is worn only when its model loads that file (A.K.I's Outfit 4 shares Outfit 1's folder, not its mdf2).
+- Runtime costume options: a series' "main files" alone are no longer a choice (the mod always pairs them with one
+  of its other options); the menu shows names without the prefixes mods use for Fluffy's order ("!", "1)", "addon -").
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

@@ -6583,8 +6583,8 @@ static void attach_addons(ScanOutputs& o) {
             if (mem.size() >= 2)
                 for (auto i : mem) if (main == SIZE_MAX && contains_ci(unit_label(g_units[i]), "main file")) main = i;
             if (main != SIZE_MAX) {
+                // the main files alone are not offered: the mod always pairs them with one of its other options
                 Group g{key, trim_ws(gi.name), {}};
-                g.options.push_back(opt(main, "pick"));
                 for (auto i : mem) {
                     if (i == main) continue;
                     RtoOption x = opt(i, "pick");

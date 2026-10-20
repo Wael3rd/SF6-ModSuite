@@ -90,6 +90,40 @@ std::string clip_name(const std::string& s, size_t max_chars) {
     return s.substr(0, end) + "...";
 }
 
+std::string display_name(const std::string& s) {
+    // Mods name their options for Fluffy's sort order: "!C2 ...", "1) Main files", "3) addon - ..."
+    size_t i = 0;
+    auto skip_ws = [&] { while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i; };
+    skip_ws();
+    while (i < s.size() && (s[i] == '!' || s[i] == '#' || s[i] == '_')) ++i;
+    skip_ws();
+    size_t d = i;
+    while (d < s.size() && s[d] >= '0' && s[d] <= '9') ++d;
+    if (d > i && d < s.size() && (s[d] == ')' || s[d] == '.' || s[d] == '-' || s[d] == ']')) { i = d + 1; skip_ws(); }
+    auto starts_ci = [&](const std::string& w) {
+        if (s.size() < i + w.size()) return false;
+        for (size_t k = 0; k < w.size(); ++k) {
+            char c = s[i + k];
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            if (c != w[k]) return false;
+        }
+        return true;
+    };
+    for (const std::string w : { "addon", "add-on", "add on" }) {
+        const size_t n = w.size();
+        if (!starts_ci(w)) continue;
+        size_t j = i + n;
+        while (j < s.size() && s[j] == ' ') ++j;
+        if (j < s.size() && (s[j] == '-' || s[j] == ':')) { i = j + 1; skip_ws(); }
+        break;
+    }
+    std::string out = s.substr(i);
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    if (out.empty()) return s;
+    if (i > 0 && out[0] >= 'a' && out[0] <= 'z') out[0] = static_cast<char>(out[0] - 'a' + 'A');   // a prefix was taken off
+    return out;
+}
+
 int Mod::find(const std::string& id) const {
     for (size_t i = 0; i < options.size(); ++i) if (options[i].id == id) return static_cast<int>(i);
     return -1;
@@ -106,12 +140,25 @@ const Slot* Manifest::slot_of_path(const std::string& path) const {
 }
 
 const Slot* Manifest::slot_of_paths(const std::vector<std::string>& paths) const {
+    // Several game outfits can share one model folder (A.K.I's Outfit 1 and 4, each its own mdf2): a game outfit
+    // whose options replace a mesh or a material is worn only when the model loads one of those files
+    auto worn = [&](const Slot& s) {
+        bool model_files = false;
+        for (auto& [stored, target] : s.rev) {
+            const bool mesh = target.size() > 5 && target.compare(target.size() - 5, 5, ".mesh") == 0;
+            const bool mdf2 = target.size() > 5 && target.compare(target.size() - 5, 5, ".mdf2") == 0;
+            if (!mesh && !mdf2) continue;
+            model_files = true;
+            for (auto& p : paths) if (p == target || p == stored) return true;   // the game's file, or an option's copy worn
+        }
+        return !model_files;
+    };
     const Slot* game = nullptr;
     for (auto& p : paths) {
         for (auto& s : slots) {
             if (s.prefix.empty() || p.compare(0, s.prefix.size(), s.prefix) != 0) continue;
             if (!s.game) return &s;
-            if (!game) game = &s;
+            if (!game && worn(s)) game = &s;
         }
     }
     return game;
@@ -461,7 +508,7 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
             Row r;
             r.kind = Row::Pick;
             r.group = static_cast<int>(gi);
-            r.title = g.name;
+            r.title = display_name(g.name);
             if (chunks > 1) r.title += " (" + std::to_string(c + 1) + "/" + std::to_string(chunks) + ")";
             r.none = none;
             if (none) {
@@ -473,7 +520,7 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
                 bool partial = false;
                 offered(s, o.id, &partial);
                 r.partial = r.partial || partial;
-                r.labels.push_back(o.name + (partial ? " *" : ""));
+                r.labels.push_back(display_name(o.name) + (partial ? " *" : ""));
                 r.label_option.push_back(picks[k]);
                 if (has(chosen, o.id)) r.value = static_cast<int>(r.labels.size());
             }
@@ -486,7 +533,7 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
             r.group = static_cast<int>(gi);
             r.option = oi;
             offered(s, o.id, &r.partial);
-            r.title = o.name + (r.partial ? " *" : "");
+            r.title = display_name(o.name) + (r.partial ? " *" : "");
             r.labels = { "Off", "On" };
             r.label_option = { -1, oi };
             r.value = has(chosen, o.id) ? 2 : 1;
