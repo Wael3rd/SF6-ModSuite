@@ -103,7 +103,23 @@ natives/stm/product/model/esf/<fighter>/<slot folder>/rto/<option id>/_/<path in
   A mesh gets a base copy only if it has every joint of the slot's mesh (its name table, materials aside): the
   model keeps its chains and other parts while the mesh is swapped, and they move those joints. Swimsuit C. Viper
   ships no body in its main files: the game's Outfit 1 body, without the 18 joints the swimsuit's chain moves,
-  stopped the game in a chain job half a second after the swap (19/10). Without a copy, None keeps the slot's mesh.
+  stopped the game in a chain job half a second after the swap (19/10).
+  A base copy is made **only when it fits** what the model may wear with it (20/10, loader `2026-10-20-rtofit`):
+  - a material file must define every material of each mesh the model may wear at its part (the meshes the mod's
+    options ship there, else the game's) and every texture it names must exist; the **game's** material file only
+    where the mod keeps the game's mesh for that part. Mai mini dress ships the body's materials in its skin
+    options only: the game's Outfit 1 material file lacked 11 of the 14 materials of the dress's body and "None"
+    drew the body black. C. Viper swimsuit keeps the game's material names, but the game's file still laid the
+    game's textures on the mod's mesh (34 of the 83 textures of its skin materials are the mod's).
+  - a mesh: every material it uses must be in each material file an option ships for its part; the **game's** mesh
+    only where the mod keeps the game's material file (C. Viper lace lingerie: Outfit 2's body, refused).
+  - a texture from the game (none of the mod's base files ships it): only with the proportions of the slot's own.
+  - the mod's base files (main files) are used when they fit.
+  The loader logs each refusal (`runtime options: no base copy of ... (why)`).
+- **Required groups**: a pick group one of whose options ships a file the slot wears with no base copy, and no pick
+  of another group ships it, is listed in the slot's `required`: the menu offers it **without None** (the group
+  always wears one of its options). On Wael's install: Mai's skin group, both groups of each C. Viper mod. Mai's
+  dress group keeps None: its base copy is the main files' `mini1_atos.tex` (the same file as its "side stripes").
 - The pak builder already stores identical data once: the copies of a file shared by the slot and by its options,
   or by several slots, cost an entry (48 bytes), not their size.
 
@@ -156,8 +172,9 @@ game names resources: lowercase, without `natives/stm/` and without the version 
        "a7125dd3": [{"kind": "texture", "target": "product/model/esf/esf028/mini/mini1_atos.tex",
                      "path": "product/model/esf/esf028/006/rto/a7125dd3/_/mini/mini1_atos.tex"}],
        "...": []},
-     "base": [{"kind": "mesh", "target": "product/model/esf/esf028/006/01/esf028_006_01.mesh",
-               "path": "product/model/esf/esf028/006/rto/base/01/esf028_006_01.mesh"}, "..."],
+     "base": [{"kind": "texture", "target": "product/model/esf/esf028/mini/mini1_atos.tex",
+               "path": "product/model/esf/esf028/006/rto/base/_/mini/mini1_atos.tex"}, "..."],
+     "required": [1],
      "former": [{"costume_no": 6, "folder": "007", "label": "mini dress Mai C1 Swap - Regular - Barefoot",
                  "options": ["0e0a734f", "b104ad5a", "a7125dd3", "d5be40d1", "4fe85878"]}, "..."]}]
 }
@@ -168,6 +185,9 @@ game names resources: lowercase, without `natives/stm/` and without the version 
 - `slots[].options` lists only options that have files for that slot (a multi-costume mod's other folders belong to
   its other slots).
 - `slots[].former`: see [Saved choices and slot numbers](#saved-choices-and-slot-numbers).
+- `slots[].required`: pick groups (index in the mod's `groups`) offered without None (see Base copies). A side's
+  choices that hold no option of such a group (a None saved before) wear its default: the slot's default option in
+  that group, else its first offered option (`complete()` in `rto_data.cpp`, also after every menu change).
 - `format` changes when a field changes meaning; the plugin ignores a manifest of another format, or one whose
   `pak` is not the costume pak of `outfits.json` (stale file).
 
@@ -200,7 +220,8 @@ Written by the plugin only, read at runtime. Per mod key, per player side:
 ## Runtime (plugin, lot B)
 
 Effective file of a target, for one model: among the chosen options in layering order, the last one that ships it;
-none -> the `base` copy if listed; else the slot's own file (nothing to do).
+none -> the `base` copy if listed; else the slot's own file (nothing to do). A required group always has one of its
+options in the set (see `slots[].required`).
 
 1. **Load**: read `costume_options.json` and the choices once at start (background thread), again when the loader's
    generation changes.
@@ -302,7 +323,8 @@ does, the fallback above is the next step.
   never open together (both need the option window closed).
 - **Pages** (7 rows at most, the dialog's pool): page 1 = Player side (P1 / P2), the first option rows, More options (pushes page 2), Restore defaults; later pages = option rows (+
   More options). A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
-  split in rows "Group (1/2)"...). A toggle = an Off / On row. Options that change nothing on the model (colour or
+  split in rows "Group (1/2)"...); a required group has no None (split in rows, its first label is "(other row)":
+  picked on the row that holds the choice, it goes back to the group's default). A toggle = an Off / On row. Options that change nothing on the model (colour or
   cloth files only, e.g. the tan) are not offered; one that also ships such files is marked `*` (its description
   says so). Texts are English only for now.
 - **A change**: saved at once (`costume_choices.json`), applied to the preview by the runtime (a not-yet-loaded

@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rtobase";
+static const char* LOADER_BUILD_ID = "2026-10-20-rtofit";
 
 // ============================================================================
 // Utility
@@ -1388,6 +1388,7 @@ struct RtoSlotOut {
     std::vector<size_t> selected;                   // options the slot is made of
     std::map<size_t, std::vector<RtoFile>> files;   // option -> its files, as this slot loads them
     std::vector<RtoFile> base;                      // what a target is when no chosen option ships it
+    std::vector<size_t> required;                   // pick groups offered without "None" (a file without base copy)
 };
 static std::map<std::pair<std::string, int>, RtoSlotOut> g_rto_slots;   // (fighter_dir, costume_no)
 
@@ -1573,6 +1574,9 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
         }
         fprintf(f, "\n      },\n      \"base\": [");
         put_files(so.base, "        ");
+        // Pick groups (index in the mod's groups) the menu offers without "None"
+        fprintf(f, "],\n      \"required\": [");
+        for (size_t k = 0; k < so.required.size(); ++k) fprintf(f, "%s%zu", k ? ", " : "", so.required[k]);
         // Slots of the previous launch that held other combinations of this mod (variant slots before
         // the one-outfit layout): their saved choices move to this slot with these options
         fprintf(f, "],\n      \"former\": [");
@@ -1824,6 +1828,9 @@ namespace slotcheck {
 static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out, std::vector<std::string>* all = nullptr);
 static bool mesh_joint_names(const std::vector<uint8_t>& b, std::set<std::string>& out);
 static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
+static std::string material_fit(PakWriter& writer, PakReader& base_pak,
+                                const std::unordered_map<std::string, std::string>& suffixes,
+                                const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf);
 }
 // Meshes taken over by donate_parts(): the slot check does not pair them with a material file (the mod's
 // part may name a material no file defines, on purpose: the game then draws nothing for it)
@@ -3009,6 +3016,17 @@ static void add_slot_files(PakWriter& writer,
             return true;
         };
         size_t stored_new = 0;
+        // A material file as this slot stores it: the mod's (mf) or the game's, pointing at the slot's textures
+        auto material_data = [&](const std::string& orig, const ModFileRef* mf) {
+            const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(orig)));   // the game's file
+            std::vector<uint8_t> d = mf ? mf->read_data() : base_pak.read(*ve);
+            patch_material(d);
+            if (mf && ve) {
+                std::vector<uint8_t> rebuilt; int rb = 0;
+                if (modernize_mdf2(d, base_pak.read(*ve), rebuilt, &rb)) d = std::move(rebuilt);
+            }
+            return d;
+        };
         auto store = [&](const std::string& id, const std::string& orig, const ModFileRef* mf,
                          const std::unordered_map<std::string, std::string>& rebind,
                          const ModFileMaps* twins) -> RtoFile {
@@ -3017,12 +3035,7 @@ static void add_slot_files(PakWriter& writer,
             if (!writer.find(h)) {
                 const PakEntry* ve = base_pak.find(pak_path_hash(std::string_view(orig)));   // the game's file
                 if (str_ends_with(low, ".mdf2.31")) {
-                    std::vector<uint8_t> d = mf ? mf->read_data() : base_pak.read(*ve);
-                    patch_material(d);
-                    if (mf && ve) {
-                        std::vector<uint8_t> rebuilt; int rb = 0;
-                        if (modernize_mdf2(d, base_pak.read(*ve), rebuilt, &rb)) d = std::move(rebuilt);
-                    }
+                    std::vector<uint8_t> d = material_data(orig, mf);
                     if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
                     writer.add_uncompressed(h, std::move(d));
                 } else if (mf && needs_content_patch(low)) {
@@ -3063,41 +3076,168 @@ static void add_slot_files(PakWriter& writer,
         for (auto oi : out.selected)
             if (rm.options[oi].mode != "base")
                 for (auto& [p, mf] : rm.options[oi].files) if (belongs(p)) chosen.insert(p);
-        for (auto& p : chosen) {
+        // The base option a file comes from (base options in layering order: the last one wins)
+        auto base_src = [&](const std::string& p) {
             const RtoOption* src = nullptr;
-            for (auto& g : rm.groups)          // base options in layering order: the last one wins
+            for (auto& g : rm.groups)
                 for (auto oi : g.options)
                     if (rm.options[oi].mode == "base" && rm.options[oi].files.count(p)) src = &rm.options[oi];
+            return src;
+        };
+        // The option the slot's own file comes from (the last one wins)
+        auto own_of = [&](const std::string& p) {
+            const RtoOption* own = nullptr;
+            for (auto& g : rm.groups)
+                for (auto oi : g.options)
+                    if (rm.options[oi].mode != "base" && rm.options[oi].files.count(p)
+                        && std::find(out.selected.begin(), out.selected.end(), oi) != out.selected.end()) own = &rm.options[oi];
+            return own;
+        };
+        auto game_file = [&](const std::string& p) {
+            const PakEntry* e = base_pak.find(pak_path_hash(std::string_view(p)));
+            return e ? base_pak.read(*e) : std::vector<uint8_t>{};
+        };
+        // A base copy that does not fit is not made: the group then always keeps one of its options (no "None")
+        auto no_base = [&](const std::string& p, const RtoOption* src, const std::string& why) {
+            printf("      runtime options: no base copy of %s (%s, %s)\n",
+                   p.c_str(), src ? "the mod's base files" : "the game's file", why.c_str());
+        };
+        // A model part's file without its extension and material variant: ".../001/01/esf028_001_01" for the
+        // mesh esf028_001_01.mesh.* and the material file esf028_001_01_v00.mdf2.*
+        auto part_stem = [](const std::string& low) {
+            std::string s = low.substr(0, std::min(low.find(".mesh."), low.find(".mdf2.")));
+            if (low.find(".mdf2.") != std::string::npos)
+                if (auto v = s.rfind("_v"); v != std::string::npos && v > s.rfind('/')) s.resize(v);
+            return s;
+        };
+        std::set<std::string> base_mesh;   // meshes given a base copy, lowercase: the model may wear them
+        std::vector<std::string> order;    // meshes first: a material file is checked against them
+        for (auto& p : chosen) if (str_lower(p).find(".mesh.") != std::string::npos) order.push_back(p);
+        for (auto& p : chosen) if (str_lower(p).find(".mesh.") == std::string::npos) order.push_back(p);
+        for (auto& p : order) {
+            const std::string low = str_lower(p);
+            const RtoOption* src = base_src(p);
             if (!src && !base_pak.find(pak_path_hash(std::string_view(p)))) continue;   // nothing under it
             // A mesh is swapped on a model that keeps its chains and its other parts: the copy must have every
             // joint of the slot's mesh, which they move. The game's Outfit 1 body as the base copy of Swimsuit
             // C. Viper (no body in its main files), without the 18 joints the swimsuit's chain moves, stopped the
             // game in a chain job half a second after the swap (19/10). Without a copy, the slot's own mesh stays.
-            if (str_lower(p).find(".mesh.") != std::string::npos) {
-                const RtoOption* own = nullptr;      // the option the slot's mesh comes from (the last one wins)
-                for (auto& g : rm.groups)
-                    for (auto oi : g.options)
-                        if (rm.options[oi].mode != "base" && rm.options[oi].files.count(p)
-                            && std::find(out.selected.begin(), out.selected.end(), oi) != out.selected.end()) own = &rm.options[oi];
+            if (low.find(".mesh.") != std::string::npos) {
+                const RtoOption* own = own_of(p);
+                const std::vector<uint8_t> data = src ? src->files.at(p).read_data() : game_file(p);
                 std::set<std::string> need, have;
+                std::vector<std::string> mm;
                 std::string why;
                 if (!own || !slotcheck::mesh_joint_names(own->files.at(p).read_data(), need)) why = "the slot's mesh is not readable";
-                else if (!slotcheck::mesh_joint_names(src ? src->files.at(p).read_data()
-                                                          : base_pak.read(*base_pak.find(pak_path_hash(std::string_view(p)))), have))
+                else if (!slotcheck::mesh_joint_names(data, have) || !slotcheck::mesh_materials(data, mm))
                     why = "it is not readable";
                 else {
                     std::vector<std::string> miss;
                     for (auto& n : need) if (!have.count(n)) miss.push_back(n);
                     if (!miss.empty()) why = std::to_string(miss.size()) + " joints of the slot's mesh missing, " + miss[0] + "...";
                 }
-                if (!why.empty()) {
-                    printf("      runtime options: no base copy of %s (%s, %s): no option of its group = the slot's own mesh\n",
-                           p.c_str(), src ? "the mod's base files" : "the game's file", why.c_str());
-                    continue;
+                // It is drawn with the part's material files: each one an option ships must define its materials.
+                // The game's mesh only where the mod keeps the game's material file: the mod's materials name the
+                // mod's textures, laid out for the mod's mesh (C. Viper lace lingerie: Outfit 2's body, 20/10).
+                for (auto& op : rm.options)
+                    for (auto& [q, mf] : op.files) {
+                        const std::string ql = str_lower(q);
+                        if (!why.empty() || !str_ends_with(ql, ".mdf2.31") || part_stem(ql) != part_stem(low)) continue;
+                        std::vector<std::string> dm;
+                        if (!src) why = "the mod ships its own material file for this part (" + op.name + ")";
+                        else if (!slotcheck::mdf2_materials(mf.read_data(), dm)) why = "the material file of " + op.name + " is not readable";
+                        else
+                            for (auto& m : mm)
+                                if (why.empty() && std::find(dm.begin(), dm.end(), m) == dm.end())
+                                    why = "material " + m + " not in the material file of " + op.name;
+                    }
+                if (!why.empty()) { no_base(p, src, why); continue; }
+                base_mesh.insert(low);
+            } else if (str_ends_with(low, ".mdf2.31")) {
+                // A material file is worn with its part's mesh: it must define every material of each mesh the
+                // model may wear there, and the textures it names must exist. The game's Outfit 1 material file
+                // as the base copy of Mai's mini dress skin (the mod ships the body's materials in its skin options
+                // only) lacked 11 of the 14 materials of the dress's body: "None" drew the body black (20/10).
+                // The game's material file only where the mod keeps the game's mesh: with the same material names
+                // (C. Viper swimsuit), it still lays the game's textures on the mod's mesh (34 of the 83 textures
+                // of the swimsuit's skin materials are the mod's).
+                const std::string mesh_pfx = part_stem(low) + ".mesh.";
+                std::vector<const ModFileRef*> mod_meshes;   // the part's meshes the mod ships
+                bool in_base = false;
+                for (auto& op : rm.options)
+                    for (auto& [q, mf] : op.files)
+                        if (str_lower(q).compare(0, mesh_pfx.size(), mesh_pfx) == 0) {
+                            mod_meshes.push_back(&mf);
+                            if (op.mode == "base") in_base = true;
+                        }
+                std::string why;
+                if (!src && !mod_meshes.empty()) why = "the mod ships its own mesh for this part";
+                else {
+                    std::vector<std::vector<uint8_t>> meshes;
+                    for (auto* mf : mod_meshes) meshes.push_back(mf->read_data());
+                    if (!in_base) {   // without an option's mesh the model wears the game's: none ships one, or it has a base copy
+                        std::string game_mesh;
+                        for (auto& m : base_mesh) if (m.compare(0, mesh_pfx.size(), mesh_pfx) == 0) game_mesh = m;
+                        if (game_mesh.empty() && mod_meshes.empty())
+                            if (auto sx = inv.suffixes.find("mesh"); sx != inv.suffixes.end()) game_mesh = mesh_pfx + sx->second;
+                        if (!game_mesh.empty())
+                            if (auto gm = game_file(game_mesh); !gm.empty()) meshes.push_back(std::move(gm));
+                    }
+                    const std::vector<uint8_t> d = material_data(p, src ? &src->files.at(p) : nullptr);
+                    if (meshes.empty()) why = slotcheck::material_fit(writer, base_pak, inv.suffixes, {}, d);
+                    for (auto& m : meshes)
+                        if (why.empty()) why = slotcheck::material_fit(writer, base_pak, inv.suffixes, m, d);
                 }
+                if (!why.empty()) { no_base(p, src, why); continue; }
+            } else if (low.find(".tex.") != std::string::npos && !src) {
+                // The game's texture under an option's: only with the proportions of the slot's own (another
+                // layout would be mapped wrong on the mod's mesh)
+                auto dims = [](const std::vector<uint8_t>& b, uint32_t& w, uint32_t& h) {
+                    if (b.size() < 12 || memcmp(b.data(), "TEX\0", 4) != 0) return false;
+                    w = uint32_t(b[8] | (b[9] << 8)); h = uint32_t(b[10] | (b[11] << 8));
+                    return w && h;
+                };
+                const RtoOption* own = own_of(p);
+                uint32_t w0 = 0, h0 = 0, w1 = 0, h1 = 0;
+                std::string why;
+                if (!own || !dims(own->files.at(p).read_data(), w0, h0)) why = "the slot's texture is not readable";
+                else if (!dims(game_file(p), w1, h1)) why = "it is not readable";
+                else if (uint64_t(w0) * h1 != uint64_t(w1) * h0)
+                    why = std::to_string(w1) + "x" + std::to_string(h1) + " against the slot's " + std::to_string(w0) + "x" + std::to_string(h0);
+                if (!why.empty()) { no_base(p, src, why); continue; }
             }
             const ModFileMaps twins = {src ? &src->files : &mc->files_in_folder};
             out.base.push_back(store("base", p, src ? &src->files.at(p) : nullptr, {}, src ? &twins : nullptr));
+        }
+        // Pick groups the menu offers without "None": a file the slot wears from one of their options has no base
+        // copy, and no pick of another group ships it (a "None" would leave the option's file on the model)
+        {
+            std::vector<size_t> group_of(rm.options.size(), SIZE_MAX);
+            for (size_t gi = 0; gi < rm.groups.size(); ++gi) for (auto oi : rm.groups[gi].options) group_of[oi] = gi;
+            auto live = [](const std::string& k) { return k == "mesh" || k == "material" || k == "texture" || k == "chain"; };
+            std::set<std::string> backed, worn;
+            for (auto& b : out.base) backed.insert(b.target);
+            for (auto oi : out.selected)
+                if (auto it = out.files.find(oi); it != out.files.end()) for (auto& f : it->second) worn.insert(f.target);
+            for (size_t gi = 0; gi < rm.groups.size(); ++gi) {
+                std::string first;   // the first such file, for the log
+                for (auto oi : rm.groups[gi].options) {
+                    auto it = out.files.find(oi);
+                    if (rm.options[oi].mode != "pick" || it == out.files.end()) continue;
+                    for (auto& f : it->second) {
+                        if (!first.empty() || !live(f.kind) || backed.count(f.target) || !worn.count(f.target)) continue;
+                        bool elsewhere = false;
+                        for (auto& [oj, fj] : out.files)
+                            if (rm.options[oj].mode == "pick" && group_of[oj] != gi)
+                                for (auto& x : fj) if (x.target == f.target) elsewhere = true;
+                        if (!elsewhere) first = f.target;
+                    }
+                }
+                if (first.empty()) continue;
+                out.required.push_back(gi);
+                printf("      runtime options: group \"%s\" offered without None (no base copy of %s)\n",
+                       rm.groups[gi].name.c_str(), first.c_str());
+            }
         }
         size_t listed = out.base.size();
         for (auto& [oi, f] : out.files) listed += f.size();
@@ -3310,6 +3450,21 @@ struct Ctx {
     const std::unordered_map<std::string, ModFileRef>* all_mod = nullptr;
 };
 
+// A texture a material file names that the game will not find, or one with a broken mip table
+static std::string texture_problem(const Ctx& c, const std::vector<uint8_t>& mdf) {
+    for (auto& s : utf16_strings(mdf)) {
+        if (!str_ends_with(str_lower(s), ".tex")) continue;
+        std::string p = resource_path(s, *c.suffixes);
+        if (!p.empty() && !c.gf.exists(p)) return "texture missing: " + s;
+        if (!p.empty())
+            if (auto* t = c.gf.writer->peek(pak_path_hash(std::string_view(p)))) {
+                std::vector<uint8_t> head(t->begin(), t->begin() + std::min<size_t>(t->size(), 4096));
+                if (texture_mip_check(head, false, nullptr)) return "texture with an inconsistent mip table: " + s;
+            }
+    }
+    return {};
+}
+
 // Why a mesh and its material file cannot be loaded together, or empty
 static std::string pair_problem(const Ctx& c, const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf) {
     if (mesh.empty()) return "mesh missing";
@@ -3323,17 +3478,23 @@ static std::string pair_problem(const Ctx& c, const std::vector<uint8_t>& mesh, 
     for (auto& m : mm)
         if (!have.count(m)) { if (n_missing++ < 3) missing += (missing.empty() ? "" : ", ") + m; }
     if (n_missing) return std::to_string(n_missing) + " materials of the mesh not in its material file (" + missing + ")";
-    for (auto& s : utf16_strings(mdf)) {
-        if (!str_ends_with(str_lower(s), ".tex")) continue;
-        std::string p = resource_path(s, *c.suffixes);
-        if (!p.empty() && !c.gf.exists(p)) return "texture missing: " + s;
-        if (!p.empty())
-            if (auto* t = c.gf.writer->peek(pak_path_hash(std::string_view(p)))) {
-                std::vector<uint8_t> head(t->begin(), t->begin() + std::min<size_t>(t->size(), 4096));
-                if (texture_mip_check(head, false, nullptr)) return "texture with an inconsistent mip table: " + s;
-            }
+    return texture_problem(c, mdf);
+}
+
+// Runtime options: why a material file cannot be worn with this mesh (empty mesh: its textures only), or empty
+static std::string material_fit(PakWriter& writer, PakReader& base_pak,
+                                const std::unordered_map<std::string, std::string>& suffixes,
+                                const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf) {
+    Ctx c;
+    c.gf.writer = &writer;
+    c.gf.paks.push_back(&base_pak);
+    c.suffixes = &suffixes;
+    if (mesh.empty()) {
+        std::vector<std::string> dm;
+        if (!mdf2_materials(mdf, dm)) return "material file not readable";
+        return texture_problem(c, mdf);
     }
-    return {};
+    return pair_problem(c, mesh, mdf);
 }
 
 // Missing textures of a material file: taken from the mod when it ships them (a file of the mod the

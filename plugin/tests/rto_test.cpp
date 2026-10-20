@@ -206,6 +206,55 @@ int main(int argc, char** argv) {
         apply_row(big, big.slots[0], c, r[1], 1);
         check(c.empty(), "None on its own row clears it");
     }
+    {   // a required group (the loader found no base copy for a file of its options): no "None"
+        std::string j = kManifest;
+        const std::string at = "\"former\": [";
+        j.replace(j.find(at), at.size(), "\"required\": [1], " + at);
+        Manifest q; std::string e;
+        check(parse_manifest(j, q, e) && q.slots[0].required == std::vector<int>{ 1 }, "required groups parsed");
+        const Slot& t = q.slots[0];
+        check(required(t, 1) && !required(t, 2), "skin required, dress not");
+        auto c = t.defaults;
+        auto r = rows(q, t, c);
+        check(r.size() == 6 && !r[2].none && r[2].labels.size() == 2 && r[2].labels[0] == "damaged" && r[2].value == 1,
+              "required skin row: its 2 options, no None, 'damaged' chosen");
+        check(r.size() == 6 && r[3].none && r[3].labels[0] == "None", "dress row keeps None");
+        apply_row(q, t, c, r[2], 2);
+        check(has(c, "skin0002") && !has(c, "skin0001"), "required row value -> pick");
+        Choices ch;
+        auto& sd = ch.mods["esf028/test dress"][0];
+        sd.changed = true;
+        sd.ids = { "base0001", "drss0002" };                // saved with no skin (None before the group was required)
+        auto p1 = chosen_of(q, t, ch, 0);
+        check(has(p1, "skin0001") && has(p1, "drss0002"), "a saved None of a required group -> its default option");
+        Slot u = t;
+        u.defaults = { "base0001", "drss0001" };
+        check(default_pick(q, u, 1) == "skin0001" && has(chosen_of(q, u, Choices{}, 0), "skin0001"),
+              "no default in the group: its first offered option");
+        auto d = desired(q, t, p1);
+        check(is_orig(d, T_MDF2), "the default skin: the slot's own material file");
+    }
+    {   // a required group split in rows: the first label says the choice is on another row
+        Manifest big; std::string e2;
+        std::string j = R"({"format": "sf6-costume-options-1", "layout": "one", "mods": [{"key": "k", "name": "N", "groups": [{"name": "G", "options": [)";
+        std::string files;
+        for (int i = 0; i < 20; ++i) {
+            char id[16]; std::snprintf(id, sizeof id, "o%07d", i);
+            j += std::string(i ? "," : "") + "{\"id\": \"" + id + "\", \"name\": \"n" + std::to_string(i) + "\", \"mode\": \"pick\"}";
+            files += std::string(i ? "," : "") + "\"" + id + "\": [{\"kind\": \"texture\", \"target\": \"product/model/esf/esf001/005/t.tex\", \"path\": \"product/model/esf/esf001/005/rto/" + id + "/t.tex\"}]";
+        }
+        j += R"(]}], "variants": []}], "slots": [{"fighter": 1, "fighter_dir": "esf001", "costume_no": 4, "folder": "005", "mod": "k", "required": [0], "defaults": ["o0000017"], "options": {)" + files + "}}]}";
+        check(parse_manifest(j, big, e2), "manifest with a required 20-option group");
+        const Slot& t = big.slots[0];
+        auto r = rows(big, t, t.defaults);
+        check(r.size() == 2 && r[0].labels[0] == "(other row)" && r[0].labels.size() == 15 && r[1].labels.size() == 7,
+              "split in 2 rows, first label '(other row)'");
+        auto c = t.defaults;
+        apply_row(big, t, c, r[0], 4);
+        check(has(c, "o0000002") && c.size() == 1, "pick on the first row");
+        apply_row(big, t, c, r[0], 1);
+        check(has(c, "o0000017") && c.size() == 1, "'(other row)' on the row holding the choice -> the default option");
+    }
     {
         check(preset_label(mod, 0) == "regular" && preset_label(mod, 1) == "thick", "preset labels without the mod's name");
         check(preset_of(mod, s.defaults) == 1, "defaults = preset 'regular'");

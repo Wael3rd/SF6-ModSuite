@@ -154,6 +154,8 @@ bool parse_manifest(const std::string& text, Manifest& out, std::string& err) {
             if (const Json* os = js.get("options"); os && os->kind == Json::Object)
                 for (auto& [id, jf] : os->obj) s.files[id] = files_of(&jf);
             s.base = files_of(js.get("base"));
+            if (const Json* rq = js.get("required"); rq && rq->kind == Json::Array)
+                for (auto& e : rq->arr) if (e.kind == Json::Number) s.required.push_back(static_cast<int>(e.as_int(-1)));
             if (const Json* fs = js.get("former"); fs && fs->kind == Json::Array)
                 for (auto& jf : fs->arr)
                     s.former.push_back({ int_of(jf.get("costume_no"), -1), str_of(jf.get("folder")), str_of(jf.get("label")),
@@ -251,14 +253,53 @@ std::string write_choices(const Choices& c, const Manifest& m) {
 std::vector<std::string> chosen_of(const Manifest& m, const Slot& s, const Choices& c, int side) {
     const Mod* mod = m.mod_of(s);
     auto it = c.mods.find(s.mod);
-    if (!mod || it == c.mods.end() || side < 0 || side > 1 || !it->second[static_cast<size_t>(side)].changed) return s.defaults;
+    if (!mod || it == c.mods.end() || side < 0 || side > 1 || !it->second[static_cast<size_t>(side)].changed) {
+        std::vector<std::string> out = s.defaults;
+        complete(m, s, out);
+        return out;
+    }
     std::vector<std::string> out;
     for (auto& id : it->second[static_cast<size_t>(side)].ids) if (mod->find(id) >= 0 && !has(out, id)) out.push_back(id);
     for (auto& id : s.defaults) {                            // what is always worn stays
         int x = mod->find(id);
         if (x >= 0 && mod->options[static_cast<size_t>(x)].mode == "base" && !has(out, id)) out.push_back(id);
     }
+    complete(m, s, out);                                     // a saved "None" of a required group: its default
     return out;
+}
+
+bool required(const Slot& s, int group) {
+    return std::find(s.required.begin(), s.required.end(), group) != s.required.end();
+}
+
+std::string default_pick(const Manifest& m, const Slot& s, int group) {
+    const Mod* mod = m.mod_of(s);
+    if (!mod || group < 0 || group >= static_cast<int>(mod->groups.size())) return {};
+    auto pick = [&](const std::string& id) {
+        const int x = mod->find(id);
+        return x >= 0 && mod->options[static_cast<size_t>(x)].group == group && mod->options[static_cast<size_t>(x)].mode == "pick"
+            && offered(s, id);
+    };
+    for (auto& id : s.defaults) if (pick(id)) return id;
+    for (int oi : mod->groups[static_cast<size_t>(group)].options)
+        if (pick(mod->options[static_cast<size_t>(oi)].id)) return mod->options[static_cast<size_t>(oi)].id;
+    return {};
+}
+
+void complete(const Manifest& m, const Slot& s, std::vector<std::string>& chosen) {
+    const Mod* mod = m.mod_of(s);
+    if (!mod) return;
+    for (int g : s.required) {
+        if (g < 0 || g >= static_cast<int>(mod->groups.size())) continue;
+        bool any = false;
+        for (int oi : mod->groups[static_cast<size_t>(g)].options) {
+            const Option& o = mod->options[static_cast<size_t>(oi)];
+            if (o.mode == "pick" && has(chosen, o.id)) any = true;
+        }
+        if (any) continue;
+        const std::string id = default_pick(m, s, g);
+        if (!id.empty()) chosen.push_back(id);               // as worn by default: no option turned off for it
+    }
 }
 
 // ---- what the model loads ----
@@ -358,7 +399,10 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
             if (o.mode == "pick") picks.push_back(oi);
             else if (o.mode == "toggle") toggles.push_back(oi);
         }
-        const size_t per = kMaxLabels - 1;                   // + "None"
+        // A required group has no "None"; split in rows, its first label only says the choice is on another row
+        const bool req = required(s, static_cast<int>(gi));
+        const bool none = !req || picks.size() > kMaxLabels;
+        const size_t per = none ? kMaxLabels - 1 : kMaxLabels;
         const size_t chunks = (picks.size() + per - 1) / per;
         for (size_t c = 0; c < chunks; ++c) {
             Row r;
@@ -366,8 +410,11 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
             r.group = static_cast<int>(gi);
             r.title = g.name;
             if (chunks > 1) r.title += " (" + std::to_string(c + 1) + "/" + std::to_string(chunks) + ")";
-            r.labels.push_back("None");
-            r.label_option.push_back(-1);
+            r.none = none;
+            if (none) {
+                r.labels.push_back(req ? "(other row)" : "None");
+                r.label_option.push_back(-1);
+            }
             for (size_t k = c * per; k < picks.size() && k < (c + 1) * per; ++k) {
                 const Option& o = mod->options[static_cast<size_t>(picks[k])];
                 bool partial = false;
@@ -402,13 +449,18 @@ void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chose
     const int oi = r.label_option[static_cast<size_t>(value - 1)];
     if (r.kind == Row::Toggle) {
         if (r.option >= 0) toggle(m, s, chosen, mod->options[static_cast<size_t>(r.option)].id, oi >= 0);
-        return;
+    } else if (oi >= 0) {
+        choose(m, s, chosen, r.group, mod->options[static_cast<size_t>(oi)].id);
+    } else {
+        // None on this row: only when the group's choice is one of this row's options (a group split in
+        // several rows keeps a choice made on another row); a required group goes back to its default
+        for (int x : r.label_option)
+            if (x >= 0 && has(chosen, mod->options[static_cast<size_t>(x)].id)) {
+                choose(m, s, chosen, r.group, required(s, r.group) ? default_pick(m, s, r.group) : "");
+                break;
+            }
     }
-    if (oi >= 0) { choose(m, s, chosen, r.group, mod->options[static_cast<size_t>(oi)].id); return; }
-    // None on this row: only when the group's choice is one of this row's options (a group split in
-    // several rows keeps a choice made on another row)
-    for (int x : r.label_option)
-        if (x >= 0 && has(chosen, mod->options[static_cast<size_t>(x)].id)) { choose(m, s, chosen, r.group, ""); return; }
+    complete(m, s, chosen);                                  // an option turned off for this one may leave a required group empty
 }
 
 int preset_of(const Mod& mod, const std::vector<std::string>& chosen) {

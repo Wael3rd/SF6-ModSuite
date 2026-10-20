@@ -43,6 +43,7 @@ struct Slot {
     std::vector<std::string> defaults;
     std::map<std::string, std::vector<File>> files;          // option id -> its files for this slot
     std::vector<File> base;                                  // a target without any chosen option shipping it
+    std::vector<int> required;                               // pick groups without "None": always one of their options
     std::vector<Former> former;
     std::map<std::string, std::string> rev;                  // stored path -> target (filled by parse_manifest)
     std::string prefix;                                      // "product/model/esf/<fighter_dir>/<folder>/"
@@ -76,6 +77,13 @@ std::string write_choices(const Choices& c, const Manifest& m);
 // The options a side wears on a slot: the slot's defaults until the user changed something
 std::vector<std::string> chosen_of(const Manifest& m, const Slot& s, const Choices& c, int side);
 
+// A group the loader marked "required": a file the slot wears from its options has no base copy (no usable
+// file to go back to), so the group always has one of its options. complete() gives each such group without
+// a choice its default option (the slot's default in that group, else its first offered option).
+bool required(const Slot& s, int group);
+std::string default_pick(const Manifest& m, const Slot& s, int group);
+void complete(const Manifest& m, const Slot& s, std::vector<std::string>& chosen);
+
 // ---- what the model loads ----
 struct Want {
     std::string kind;
@@ -106,6 +114,7 @@ struct Row {
     std::vector<int> label_option;       // per label: option index, -1 = none / off
     int value = 1;
     bool partial = false;
+    bool none = true;                    // pick: label 1 is "None" (a required group: only when split in rows)
 };
 constexpr size_t kMaxLabels = 15;        // a native spin crashed above 16 entries (R9)
 std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::string>& chosen);
