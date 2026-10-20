@@ -85,6 +85,8 @@
   parts); an outfit that is a game outfit with parts taken off (Ryu Outfit 1 No Cloak, Sagat Outfit 1 Shirtless) is an
   option of that game outfit. Their former outfits move there with their option chosen. Each build logs a short merge
   audit (what was merged, what looks related and why it was not).
+- Fighter Settings shows the name of the outfit on the preview (our outfits: the mod's name; the game's: its own)
+  at the right end of the bottom input guide bar.
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

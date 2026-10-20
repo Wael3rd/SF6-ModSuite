@@ -17,7 +17,7 @@ std::atomic<bool> g_closing{false};
 namespace {
 
 bool g_hooks = false;
-bool g_costumes_busy = true, g_stages_busy = true, g_rto_busy = true;   // checked on the first frames
+bool g_costumes_busy = true, g_stages_busy = true, g_rto_busy = true, g_name_busy = true;   // checked on the first frames
 
 // Closing guard state (not cancellable for WM_DESTROY / WM_NCDESTROY / WM_ENDSESSION)
 uint32_t s_close_frame = 0;
@@ -66,7 +66,7 @@ void on_late_update() {
     }
 
     uint32_t ev = g_events.exchange(0, std::memory_order_acq_rel);
-    if (!ev && !g_costumes_busy && !g_stages_busy && !g_rto_busy) {
+    if (!ev && !g_costumes_busy && !g_stages_busy && !g_rto_busy && !g_name_busy) {
         perf::end(perf::OnLateUpdate, pt_outer);
         return;
     }
@@ -77,6 +77,7 @@ void on_late_update() {
             costumes::install_hooks();
             stages::install_hooks();
             rto::install_hooks();
+            fsname::install_hooks();
         }
         if (ev & EV_DIAG) diag_flush();
         {
@@ -90,9 +91,11 @@ void on_late_update() {
             perf::end(perf::StagesTick, pt);
         }
         rto::tick(ev);                      // runtime costume options (after the costume work of the frame)
+        fsname::tick(ev);                   // the outfit's name on Fighter Settings
         g_costumes_busy = costumes::busy();
         g_stages_busy = stages::busy();
         g_rto_busy = rto::busy();
+        g_name_busy = fsname::busy();
     } catch (const std::exception& e) {
         logf("EXCEPTION: %s", e.what());
     } catch (...) {

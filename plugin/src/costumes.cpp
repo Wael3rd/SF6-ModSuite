@@ -1315,5 +1315,11 @@ void tick(uint32_t ev) {
 
 bool online() { return online_now(); }
 bool select_active() { return select_screen_active(); }
+std::string slot_label(int fighter, int costume_no) {
+    auto f = g_slot_of.find(fighter);
+    if (f == g_slot_of.end()) return {};
+    auto c = f->second.find(costume_no);
+    return c == f->second.end() ? std::string() : g_slots[c->second].label;
+}
 
 } // namespace slots::costumes

@@ -148,6 +148,13 @@ namespace costumes {
     void tick(uint32_t events);
     bool online();                    // an online battle is loaded or played (its description says so)
     bool select_active();             // the character select screen is open (read now, not watched)
+    std::string slot_label(int fighter, int costume_no);   // one of our outfits: its label (outfits.json), else ""
+}
+// fs_name.cpp: the outfit's name on Fighter Settings, at the right end of the bottom input guide bar
+namespace fsname {
+    void install_hooks();             // first frame (needs the core's ui_clone_control)
+    bool busy();
+    void tick(uint32_t events);
 }
 namespace stages {
     void init();
