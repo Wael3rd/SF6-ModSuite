@@ -113,11 +113,26 @@ class PakWriter {
 public:
     struct RawEntry {
         uint64_t             hash;
-        std::vector<uint8_t> blob;
+        std::vector<uint8_t> blob;         // the data, when held in memory
         int64_t              attributes;
         int64_t              decompressed_size;
         int64_t              alias = -1;   // index of an entry holding identical data, or -1
+        int64_t              spill_at = -1;   // offset of the data in the spill file, or -1
+        uint64_t             size = 0;     // size of the stored (possibly compressed) data
+        uint64_t             sig = 0;      // content signature of that data
+        bool                 replaced = false;
     };
+
+    PakWriter() = default;
+    ~PakWriter();
+    PakWriter(const PakWriter&) = delete;
+    PakWriter& operator=(const PakWriter&) = delete;
+
+    // Data of min_size bytes or more goes to this scratch file as it is added instead of staying in
+    // memory (a costume pak is many GB: held in memory it paged the whole PC out). The file is
+    // deleted when the writer goes away, crash included. False (everything stays in memory) when it
+    // cannot be made. The pak written is the same either way.
+    bool spill_to(const char* path, uint64_t min_size = 1 << 20);
 
     // Store a pre-compressed blob verbatim (passthrough).
     void add_raw(uint64_t hash, std::vector<uint8_t> blob,
@@ -126,15 +141,25 @@ public:
     // Store uncompressed data (attrib = 0).
     void add_uncompressed(uint64_t hash, std::vector<uint8_t> data);
 
+    // The same source again (a mod file, a pak entry, read the same way): the new entry shares the
+    // data of the entry first added from it, exactly as if the data had been read and compared again,
+    // without reading it. False when that cannot be decided without the data (source not seen, or its
+    // entry replaced since): read the source, add it, then note_source().
+    bool add_same_source(uint64_t hash, const std::string& source);
+    // The entry just added was read from this source, unchanged.
+    void note_source(const std::string& source);
+
     // The entry last added under this hash, its data decompressed, or null / empty.
     const RawEntry* find(uint64_t hash) const;
     std::vector<uint8_t> get(uint64_t hash) const;
-    // Data of an entry stored uncompressed, without copy; null otherwise.
-    const std::vector<uint8_t>* peek(uint64_t hash) const;
+    // The first n bytes (fewer if shorter) of an entry stored uncompressed; false otherwise.
+    bool head(uint64_t hash, size_t n, std::vector<uint8_t>& out) const;
     // Replaces the data of an entry (stored uncompressed). Entries that shared its data keep it.
     bool replace(uint64_t hash, std::vector<uint8_t> data);
 
-    bool write(const char* path);
+    // durable: the file is flushed to the disk before returning (it is then renamed over a pak).
+    // With a spill file, write() gives its space back as it copies: the writer is done afterwards.
+    bool write(const char* path, bool durable = false);
 
     size_t entry_count() const { return entries_.size(); }
 
@@ -143,13 +168,29 @@ public:
     // one bundle share most of their textures, so this keeps the pak close to the mods' size.
     size_t dedup_count() const { return dedup_count_; }
     uint64_t dedup_bytes() const { return dedup_bytes_; }
+    // Entries shared through add_same_source, and the bytes not read for them.
+    size_t source_hits() const { return source_hits_; }
+    uint64_t source_bytes() const { return source_bytes_; }
+    uint64_t spilled_bytes() const { return spill_end_; }
 
 private:
     void push(RawEntry e);
+    void store(RawEntry& e);   // spills e's data when it is big enough
+    bool read_stored(const RawEntry& owner, uint64_t at, void* dst, size_t n) const;
+    bool stored_equals(const RawEntry& owner, const std::vector<uint8_t>& data) const;
+    bool stored_equal(const RawEntry& a, const RawEntry& b) const;
+    void stored_data(const RawEntry& owner, std::vector<uint8_t>& out) const;
 
     std::vector<RawEntry> entries_;
     std::unordered_map<uint64_t, size_t> by_hash_;
     std::unordered_map<uint64_t, std::vector<size_t>> by_sig_;
+    std::unordered_map<std::string, size_t> by_source_;
     size_t dedup_count_ = 0;
     uint64_t dedup_bytes_ = 0;
+    size_t source_hits_ = 0;
+    uint64_t source_bytes_ = 0;
+    void* spill_ = nullptr;    // HANDLE of the spill file
+    uint64_t spill_min_ = 0;
+    uint64_t spill_end_ = 0;
+    uint64_t given_back_ = 0;  // spill bytes below this were given back by write()
 };

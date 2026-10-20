@@ -4801,8 +4801,7 @@ static std::string texture_problem(const Ctx& c, const std::vector<uint8_t>& mdf
         std::string p = resource_path(s, *c.suffixes);
         if (!p.empty() && !c.gf.exists(p)) return "texture missing: " + s;
         if (!p.empty())
-            if (auto* t = c.gf.writer->peek(pak_path_hash(std::string_view(p)))) {
-                std::vector<uint8_t> head(t->begin(), t->begin() + std::min<size_t>(t->size(), 4096));
+            if (std::vector<uint8_t> head; c.gf.writer->head(pak_path_hash(std::string_view(p)), 4096, head)) {
                 if (texture_mip_check(head, false, nullptr)) return "texture with an inconsistent mip table: " + s;
             }
     }
@@ -10675,6 +10674,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     log_step("slots assigned");
     printf("\nAssembling output pak (minimal)...\n");
     PakWriter writer;
+    // The big files wait in a scratch file beside the pak, not in memory (it pages the PC out)
+    if (!writer.spill_to((target_path + ".spill").c_str()))
+        logf("  WARN: cannot create %s.spill, the pak is built in memory\n", target_path.c_str());
     std::unordered_set<std::string> written_paths;
 
     g_relocated_mod_paths.clear();
@@ -10902,6 +10904,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     if (writer.dedup_count())
         logf("  %zu entries share data with an identical one (%.1f MB not written twice)\n",
              writer.dedup_count(), writer.dedup_bytes() / 1048576.0);
+    if (writer.source_hits())
+        logf("  %zu of them added again from the same file, not read twice (%.1f MB)\n",
+             writer.source_hits(), writer.source_bytes() / 1048576.0);
+    if (writer.spilled_bytes())
+        logf("  %.1f MB held in the spill file while building, not in memory\n", writer.spilled_bytes() / 1048576.0);
 
     // 10. Save registry with fingerprint
     registry.fingerprint = new_fp;
