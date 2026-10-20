@@ -105,6 +105,18 @@ const Slot* Manifest::slot_of_path(const std::string& path) const {
     return nullptr;
 }
 
+const Slot* Manifest::slot_of_paths(const std::vector<std::string>& paths) const {
+    const Slot* game = nullptr;
+    for (auto& p : paths) {
+        for (auto& s : slots) {
+            if (s.prefix.empty() || p.compare(0, s.prefix.size(), s.prefix) != 0) continue;
+            if (!s.game) return &s;
+            if (!game) game = &s;
+        }
+    }
+    return game;
+}
+
 const Slot* Manifest::slot_of(int fighter, int costume_no) const {
     for (auto& s : slots) if (s.fighter == fighter && s.costume_no == costume_no) return &s;
     return nullptr;
@@ -167,6 +179,7 @@ bool parse_manifest(const std::string& text, Manifest& out, std::string& err) {
             s.label = str_of(js.get("label"));
             s.mod = str_of(js.get("mod"));
             s.defaults = strings_of(js.get("defaults"));
+            if (const Json* gm = js.get("game"); gm && gm->kind == Json::Bool) s.game = gm->b;
             if (const Json* os = js.get("options"); os && os->kind == Json::Object)
                 for (auto& [id, jf] : os->obj) s.files[id] = files_of(&jf);
             s.base = files_of(js.get("base"));

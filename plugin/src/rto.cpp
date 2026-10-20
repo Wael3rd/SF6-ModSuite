@@ -271,11 +271,13 @@ void walk(Model& md) {
     } rec{ md, n };
     Obj* tr = call_obj(T.go_tr, md.root);
     if (tr) rec.run(call_obj(T.tr_child, tr), 1);
-    const Slot* found = nullptr;
+    // one of our slots before a game outfit with options (a slot may keep a part in its outfit's game folder)
+    std::vector<std::string> paths;
     for (auto& mc : md.meshes) {
-        if ((found = g_m.slot_of_path(holder_path(call_obj(T.get_mesh, mc.c))))) break;
-        if ((found = g_m.slot_of_path(holder_path(call_obj(T.get_mat, mc.c))))) break;
+        paths.push_back(holder_path(call_obj(T.get_mesh, mc.c)));
+        paths.push_back(holder_path(call_obj(T.get_mat, mc.c)));
     }
+    const Slot* found = g_m.slot_of_paths(paths);
     if (found) md.since = g_frame;
     else {
         std::string first;

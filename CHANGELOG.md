@@ -58,6 +58,12 @@
 - Runtime costume options: an outfit put with its add-ons in one sub-folder is named after the outfit alone ("Ingrid -
   Fly In A Bucket - Drive Tech", no more "+ Book + Cat": they are options); the menu's title cuts a name past 40
   characters ("...").
+- Runtime costume options: a separate add-on that makes no outfit (Mai face accessories, A.K.I No Sleeves, Cammy C4
+  pale skin) becomes options of the outfits whose files it replaces: a series replacing a mesh or material file a mod's
+  outfit ships (the "C1 swap" glasses) on that outfit; else on the game outfits that load its files (the "C2" glasses
+  on Mai's Outfit 2, the game's files as the way back). Stored only where it fits (joints, materials,
+  textures), none worn by default; a series' "main files" go with each of its other options. The plugin finds a game
+  outfit with options from the paths its model loads (our slots first).
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

@@ -401,6 +401,64 @@ int main(int argc, char** argv) {
               && joints_at(q, t, "product/model/esf/esf010/010/02/other.mesh") == -1, "joints of a copy, of the slot's own mesh");
     }
 
+    {   // a game outfit given a separate add-on's options ("game": true): no base copy, nothing worn by default; a mod
+        // slot made from that outfit that keeps a part in the game's folder is still identified as the mod slot
+        const char* j = R"JSON({"format": "sf6-costume-options-1", "generated": "g", "loader": "t", "pak": "p", "layout": "one",
+          "mods": [
+            {"key": "esf028/game outfit 2", "name": "Outfit 2", "source": "Mai/face.zip", "defaults_from": "game", "groups": [
+              {"name": "!C2 Mai face accessories", "options": [
+                {"id": "c2main01", "name": "1) Main files - C2", "folder": "a", "mode": "pick", "apply": "live"},
+                {"id": "c2glas01", "name": "2) Glasses only", "folder": "b", "mode": "pick", "apply": "live"}]},
+              {"name": "Mai face accessories", "options": [
+                {"id": "wrnk0001", "name": "3) addon - remove wrinkles", "folder": "c", "mode": "toggle", "apply": "live"}]}],
+             "variants": []},
+            {"key": "esf028/mod", "name": "Mod", "source": "x", "defaults_from": "loader", "groups": [
+              {"name": "Mod", "options": [{"id": "modbase1", "name": "Mod", "folder": "m", "mode": "base", "apply": "live"}]},
+              {"name": "Add-ons", "options": [{"id": "modadd01", "name": "Add", "folder": "n", "mode": "toggle", "apply": "live"}]}],
+             "variants": []}],
+          "slots": [
+            {"fighter": 28, "fighter_dir": "esf028", "costume_no": 1, "folder": "002", "name": "Outfit 2", "label": "Outfit 2",
+             "mod": "esf028/game outfit 2", "game": true, "defaults": [],
+             "options": {
+               "c2main01": [{"kind": "texture", "target": "product/model/esf/esf028/002/00/esf028_002_00_head_albd.tex", "path": "product/model/esf/esf028/002/rto/c2main01/00/esf028_002_00_head_albd.tex"}],
+               "c2glas01": [{"kind": "mesh", "target": "product/model/esf/esf028/002/00/esf028_002_00.mesh", "path": "product/model/esf/esf028/002/rto/c2glas01/00/esf028_002_00.mesh"},
+                            {"kind": "texture", "target": "product/model/esf/esf028/002/00/esf028_002_00_head_albd.tex", "path": "product/model/esf/esf028/002/rto/c2glas01/00/esf028_002_00_head_albd.tex"}],
+               "wrnk0001": [{"kind": "texture", "target": "product/model/esf/esf028/000/00/esf028_000_00_facialblend.tex", "path": "product/model/esf/esf028/002/rto/wrnk0001/_/000/00/esf028_000_00_facialblend.tex"}]},
+             "base": [], "required": [], "former": []},
+            {"fighter": 28, "fighter_dir": "esf028", "costume_no": 6, "folder": "007", "name": "Outfit II", "label": "Mod",
+             "mod": "esf028/mod", "defaults": ["modbase1"],
+             "options": {"modadd01": [{"kind": "mesh", "target": "product/model/esf/esf028/007/30/esf028_007_30.mesh", "path": "product/model/esf/esf028/007/rto/modadd01/30/esf028_007_30.mesh"}]},
+             "base": [], "required": [], "former": []}]})JSON";
+        Manifest q; std::string e6;
+        check(parse_manifest(j, q, e6) && q.slots.size() == 2, "game outfit: manifest parsed");
+        const Slot& t = q.slots[0];
+        check(t.game && !q.slots[1].game, "game outfit: \"game\" read");
+        check(q.slot_of_paths({ "product/model/esf/esf028/002/01/esf028_002_01.mesh", "product/model/esf/esf028/007/01/esf028_007_01.mesh" }) == &q.slots[1],
+              "a model with a part in the game's folder and its body in ours wears our slot");
+        check(q.slot_of_paths({ "product/model/esf/esf028/000/00/esf028_000_00.mesh", "product/model/esf/esf028/002/01/esf028_002_01.mesh" }) == &t,
+              "a model loading the game outfit's folder wears the game outfit");
+        check(q.slot_of_paths({ "product/model/esf/esf028/001/01/esf028_001_01.mesh" }) == nullptr, "another game outfit: none");
+        Choices none;
+        auto c = chosen_of(q, t, none, 0);
+        check(c.empty(), "game outfit: nothing worn by default");
+        auto d = desired(q, t, c);
+        check(is_orig(d, "product/model/esf/esf028/002/00/esf028_002_00.mesh") && is_orig(d, "product/model/esf/esf028/000/00/esf028_000_00_facialblend.tex"),
+              "game outfit: without options, the game's own files");
+        choose(q, t, c, 0, "c2glas01");
+        toggle(q, t, c, "wrnk0001", true);
+        d = desired(q, t, c);
+        check(path_of(d, "product/model/esf/esf028/002/00/esf028_002_00.mesh") == "product/model/esf/esf028/002/rto/c2glas01/00/esf028_002_00.mesh"
+              && path_of(d, "product/model/esf/esf028/002/00/esf028_002_00_head_albd.tex") == "product/model/esf/esf028/002/rto/c2glas01/00/esf028_002_00_head_albd.tex"
+              && path_of(d, "product/model/esf/esf028/000/00/esf028_000_00_facialblend.tex") == "product/model/esf/esf028/002/rto/wrnk0001/_/000/00/esf028_000_00_facialblend.tex",
+              "game outfit: the glasses (with the series' main files) and the wrinkles");
+        choose(q, t, c, 0, "");
+        d = desired(q, t, c);
+        check(is_orig(d, "product/model/esf/esf028/002/00/esf028_002_00.mesh"), "game outfit: None gives back the game's head");
+        auto r = rows(q, t, c);
+        check(r.size() == 2 && r[0].kind == Row::Pick && r[0].none && r[0].labels.size() == 3 && r[1].kind == Row::Toggle,
+              "game outfit: a choice with None (main files / glasses) and an On / Off row");
+    }
+
     {   // the menu title: a long outfit name is cut, UTF-8 aware
         check(clip_name("Ingrid - Fly In A Bucket - Drive Tech", kTitleNameChars) == "Ingrid - Fly In A Bucket - Drive Tech",
               "title: a name of 40 characters or less is kept");

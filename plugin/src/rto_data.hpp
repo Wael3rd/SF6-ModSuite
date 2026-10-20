@@ -51,6 +51,7 @@ struct Slot {
     std::vector<Former> former;
     std::map<std::string, std::string> rev;                  // stored path -> target (filled by parse_manifest)
     std::string prefix;                                      // "product/model/esf/<fighter_dir>/<folder>/"
+    bool game = false;                                       // a game outfit given a separate add-on's options (no slot of ours)
 };
 struct Manifest {
     std::string format, generated, loader, pak, layout;
@@ -60,6 +61,9 @@ struct Manifest {
     const Mod* mod_by_key(const std::string& key) const;
     // The slot whose folder holds this resource ("product/model/esf/esf028/006/..."), lowercase path
     const Slot* slot_of_path(const std::string& path) const;
+    // The slot a model wears, from the resources it loads: one of our slots before a game outfit (a slot of ours
+    // may keep a part in the game's folder of the outfit it is made from)
+    const Slot* slot_of_paths(const std::vector<std::string>& paths) const;
     const Slot* slot_of(int fighter, int costume_no) const;
 };
 bool parse_manifest(const std::string& text, Manifest& out, std::string& err);

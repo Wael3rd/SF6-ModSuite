@@ -121,8 +121,59 @@ with a WARN) are also one mod:
   folders only; Cammy's Belly_cammy02 + BellyHair01_Cammy, hair made for `001/02/`): `off` rules.
 
 An **add-on mod** (a modular mod none of whose options has a body mesh: "Mai face accessories", whose options
-replace the shared head `000/00/` or Outfit 2's head) still makes nothing, now with a WARN; its options belong on
-every outfit that wears those parts (see Not covered yet).
+replace the shared head `000/00/` or Outfit 2's head) makes no outfit: with `on` / `variants` its options go on the
+outfits whose files they replace (next section); with `off` it is not used (WARN).
+
+### Add-ons on other outfits (20/10, loader `2026-10-20-rto-addons`)
+
+A separate add-on that makes no outfit of its own becomes runtime options of the outfits whose files it replaces
+(`attach_addons` in the loader): a modular mod none of whose combinations is a complete outfit ("Mai face accessories
+C2 and swap test"), or a lone add-on no outfit of its own mod completes (A.K.I No Sleeves: a material file of
+Outfit 1; Cammy C4 pale skin: textures of Outfit 4). With `off` nothing changes (such add-ons are not used). An
+add-on that makes an outfit of its own today (C. Viper C2 Glasses Removed, "applied to the original outfit it
+modifies") still does.
+
+Where each group of the add-on goes (a group = a series of its menu: `!C2 Mai face accessories`):
+
+- A **mesh or material file a mod's outfit ships too**: an option of those outfits. The "C1 swap" series
+  (glasses / piercings on the head `000/00/` that "Mini Dress Mai C1 Swap" ships) goes on the mini dress. The same
+  texture paths alone do not count: that is a re-skin of the game's outfit (Cammy C4 pale skin, next to outfits made
+  for Cammy's Outfit 4 slot that ship their own textures at those paths).
+- Else, the **game outfits** that load its files (a costume folder `NNN/`: the game outfit of that folder; a `000/`
+  file: the costumes whose scene or material files name it, from the vanilla index): options of that game outfit.
+  The "C2" series (`002/00/`) goes on Mai's Outfit 2.
+
+The options: **none is worn by default** (the outfit stays as installed; the slot's own files, or the game's, are
+the way back: no base copy). A series with a "main files" option (its name says "main file") is one choice with None:
+the main files alone, or each other option **with** the main files (what Fluffy installs: "1) Main files" + one of
+"2) Glasses + piercings / Glasses only / Piercings only"); in another series, options that replace a same file are one
+choice (named after the word their names share), the others On / Off. An option with colour or other files only is
+not one (nothing to swap on a model: "CVS Shin Akuma Inspired Color").
+
+**Fit** (`addon_fit`, per slot and per game outfit): an option is stored for an outfit only if each of its files fits
+what that outfit wears there; else the log says `runtime options: <option> does not fit this outfit (<file>: why):
+not offered here`.
+
+- a mesh: the outfit wears a mesh at that path; the add-on's mesh has every joint of it (the model keeps its chains);
+  every material of the add-on's mesh is in the part's material file (the option's own, else the outfit's `_v00`);
+- a material file: every material of the part's mesh (the option's, else the outfit's) is in it, and every texture it
+  names exists (the option's own textures count);
+- a texture: the outfit loads a texture at that path (any size: "remove wrinkles" is an 8x8 over a 512x256 mask);
+- a chain: the outfit has one at that path.
+
+**Game outfits** in the manifest: a `slots[]` entry with `"game": true`, the game's costume number (Outfit 2 = 1) and
+folder (`002`), name and label "Outfit 1".."Outfit 4" / "Drive Tech", mod key `<fighter>/game outfit 2` (its groups
+are the add-ons' series), `defaults`, `base`, `required` and `former` empty. Options are stored under the game's
+folder: `esf028/002/rto/<id>/00/esf028_002_00.mesh`, `esf028/002/rto/<id>/_/000/00/...`; nothing the game loads
+changes. The plugin finds a model's outfit from the paths it loads, **one of our slots first**, then a game outfit
+(`Manifest::slot_of_paths`: a slot of ours may keep a part in its game outfit's folder); menu, F hint and runtime are
+those of a slot. Online, an opponent wearing that game outfit shows P1's options on this screen only (as a
+replacement mod would).
+
+Offline (Wael's mods, `RuntimeOptions=on`): Mai's four game outfits get "remove wrinkles" (its textures are loaded
+by all four), Outfit 2 also the "C2" series (one choice: Main files / Glasses + piercings / Glasses only / Piercings
+only, each with the main files), the mini dress the "C1 swap" series; A.K.I's Outfit 1 "No Sleeves"; Cammy's Outfit 4
+the pale skin.
 
 Options of a part the slot does not have in its own folder (Leon as Luke wears the game's hair, `000/02/`; its hair
 add-ons ship `001/02/` and a scene pointing there) target what the slot's scene loads for that part: the mesh and
@@ -515,15 +566,12 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
   not seen until the next one (the probes saw no rebuild on Training resets); the Training pause menu's Character
   Settings popup has no menu (its preview is not handled); menu texts are English only; no mouse click on the
   costume row; whether the pad's A on the costume row does something in the game was not checked.
-- A modular mod that is an add-on (no body mesh, e.g. "Mai face accessories": its "C1 swap" options replace the
-  shared head `000/00/`, its "C2" options Outfit 2's head) makes no outfit (the loader WARNs), so no slot lists its
-  options: they wait for the add-on archives item below.
-
 - **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
   are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as
   defaults (`defaults_from: "fluffy"`).
-- **Separate add-on archives** for the same costume (e.g. a face accessories mod applied to any Mai outfit): listed
-  as extra option groups of every slot whose costume uses the parts they replace. Lot B.
+- Separate add-ons: done (see [Add-ons on other outfits](#add-ons-on-other-outfits-2010-loader-2026-10-20-rto-addons)).
+  Not done: an add-on that makes an outfit of its own today (applied to the game outfit it modifies) stays an
+  outfit; its options are not put on other outfits.
 - `other` files (cloth, physics user files) cannot be swapped at runtime: their options apply at the next launch
   only (or not at all with `on`, the menu says so).
 - Slotsloader Manager compatibility (`variants.json` / `variant_choices.json`): done, see
@@ -535,5 +583,5 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
   `costume_options.json` (options, defaults, presets, former slots), `RuntimeOptions=off|on|variants`.
 - **B (built, to test in game)**: plugin runtime (load, preload, apply per model, rebuild moments), the
   texture-sharing check (offline: per model; the fallback is not built), choices file, Battle Settings menu,
-  migration of `state.json`. Left for later: Fluffy unchecked options, add-on archives as option groups.
+  migration of `state.json`. Left for later: Fluffy unchecked options.
 - **C**: tan and colour options through the Color Mod; presets and "Save as"; default `RuntimeOptions=on`.
