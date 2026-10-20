@@ -7550,16 +7550,34 @@ static void attach_addons(ScanOutputs& o) {
                 }
                 if (!pa_nsfw) games_hit = games;
             } else {
-                // a mod's outfit the add-on was made for ships the same mesh or material file (the shape it is made
-                // for); the same texture paths alone are a re-skin of the game's outfit (Cammy C4 pale skin, beside
-                // outfits made for Cammy's Outfit 4 slot that ship their own textures there)
+                // Every outfit that wears a file it replaces, as a retouch (20/10: the C1 swap glasses replace Mai's
+                // head 000/00, which the mini dress ships and Outfit 1 / 3 / DriveTech load: all of them); where each
+                // option fits is decided when it is stored (slotcheck::addon_fit, logged per outfit). A mod's outfit
+                // wears it when it ships the same mesh or material file (the shape it is made for) or, shipping none of
+                // the series' files, is made from a game outfit that loads it. One that ships only the series'
+                // textures is a re-skin of its own (Cammy C4 pale skin, beside outfits made for Cammy's Outfit 4 slot
+                // that ship their own textures there): left out.
                 for (size_t k = 0; k < o.mods_out.size(); ++k) {
                     if (!same_root(k)) continue;
-                    for (auto& lp : paths)
-                        if ((lp.find(".mesh.") != std::string::npos || lp.find(".mdf2.") != std::string::npos)
-                            && !shared(lp) && ships(o.mods_out[k], lp)) { mods_hit.push_back(k); break; }
+                    const auto& e = o.mods_out[k];
+                    bool shape = false, any = false;
+                    for (auto& lp : paths) {
+                        if (!ships(e, lp)) continue;
+                        any = true;
+                        if ((lp.find(".mesh.") != std::string::npos || lp.find(".mdf2.") != std::string::npos) && !shared(lp)) shape = true;
+                    }
+                    bool worn = false;   // (a file every game outfit loads, or none, tells nothing: as for the game's)
+                    if (!any)
+                        for (auto& mc : e.second)
+                            if (mc.fighter_dir == fd && std::any_of(paths.begin(), paths.end(), [&](const std::string& lp) {
+                                    return !shared(lp) && costume_touches(inv, fighter, mc.original_costume_no, mc.original_folder, lp);
+                                })) { worn = true; break; }
+                    if (shape || worn) mods_hit.push_back(k);
+                    else if (any)
+                        printf("    runtime options: %s ships the textures of %s, %s itself: not an option there\n",
+                               mod_label(e.first).c_str(), pa.name.c_str(), trim_ws(gi.name).c_str());
                 }
-                if (mods_hit.empty() && !pa_nsfw)
+                if (!pa_nsfw)
                     for (auto* c : games)
                         for (auto& lp : paths) {
                             std::string pfd, folder;
@@ -7633,7 +7651,7 @@ static void attach_addons(ScanOutputs& o) {
             printf("\n  add-on %s, %s: %zu option%s (%s%s), for %s\n", pa.name.c_str(), trim_ws(gi.name).c_str(), n,
                    n > 1 ? "s" : "", pa.retouch ? "a retouch: the outfits that wear its files"
                                     : all_shared ? "files every outfit of the fighter loads"
-                                    : !mods_hit.empty() ? "a mod's outfit ships its mesh or material files" : "files of the game's outfits",
+                                    : "the outfits that wear the files it replaces",
                    pa_nsfw ? "; NSFW: NSFW outfits only" : "",
                    names.empty() ? "no outfit: not used" : names.c_str());
         }

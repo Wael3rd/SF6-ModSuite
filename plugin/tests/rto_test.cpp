@@ -625,6 +625,12 @@ int main(int argc, char** argv) {
         check(hit("No-Panties version") && hit("full see through") && hit("See-Through dress") && hit("seethru top"), "nsfw: spaces and dashes do not matter");
         check(!hit("see the through") && !hit("4! SFW style options c1") && hit("4! NSFW style options c1"), "nsfw: 'see ... through' not, SFW not, NSFW yes");
         check(hit("Mai_NSFWMod") && hit("TOPLESS") && hit("Thicc - heels + pubic hair"), "nsfw: case and underscores");
+        // Mai 20/10: the mini dress and the face accessories are not NSFW by their names (only their options under
+        // "4! NSFW style options c1" are): in costume_mods they stay a normal outfit and normal add-ons
+        check(!hit("Mini Dress Mai C1 Swap 2598 1.5 2026-08-03T14-08Z CDBEcykZp.zip") && !hit("mini dress Mai C1 Swap")
+              && !hit("Mai face accessories C2 and swap test-2598-1-1-1749085458.zip") && !hit("!C1 Swap Mai face accessories")
+              && !hit("!C2 Mai face accessories") && !hit("3) addon - remove mais facial wrinkles"),
+              "nsfw: Mai's mini dress and face accessories are not NSFW by name");
         check(hit("N\xC3\xBC" "de Mod") && hit("N\xFC" "de Mod") && hit("Nu\xCC\x88" "de"), "nsfw: accents dropped (UTF-8, ANSI, combining)");
         check(hit("Goth Juri/See/Through") && hit("mod/opt/naked") && !hit("mod/opt/barefoot"), "nsfw: a folder path: each folder and the whole path");
         check(nsfw::compact("C-Viper-Barefoot") == "cviperbarefoot" && nsfw::compact("\xC3\x89lena") == "elena", "nsfw: compact");

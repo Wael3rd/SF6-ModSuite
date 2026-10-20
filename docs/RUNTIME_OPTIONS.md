@@ -140,13 +140,15 @@ Where each group of the add-on goes (a group = a series of its menu: `!C2 Mai fa
   the fighter**, ours and the game's. Mai's "3) addon - remove wrinkles" (`000/00/..._facialblend.tex`, loaded by all
   four game costumes); Ingrid's book (`000/32`, `000/34`) and cat (`000/30`) when they are not in a sub-folder with
   an outfit.
-- Else, a **mesh or material file a mod's outfit ships too**: an option of those outfits. The "C1 swap" series
-  (glasses / piercings on the head `000/00/` that "Mini Dress Mai C1 Swap" ships) goes on the mini dress. The same
-  texture paths alone do not count: that is a re-skin of the game's outfit (Cammy C4 pale skin, next to outfits made
-  for Cammy's Outfit 4 slot that ship their own textures at those paths).
-- Else, the **game outfits** that load its files (a costume folder `NNN/`: the game outfit of that folder; a `000/`
-  file: the costumes whose scene or material files name it, from the vanilla index): options of that game outfit.
-  The "C2" series (`002/00/`) goes on Mai's Outfit 2.
+- Else, **every outfit that wears a file it replaces** (as a retouch, 20/10): a mod's outfit that ships the same
+  mesh or material file (the shape it is made for), or that ships none of the series' files and is made from a game
+  outfit that loads one; and the **game outfits** that load its files (a costume folder `NNN/`: the game outfit of
+  that folder; a `000/` file: the costumes whose scene or material files name it, from the vanilla index). Where each
+  option fits is decided when it is stored (joints, materials, textures; logged per outfit). The "C1 swap" series
+  (glasses / piercings on the head `000/00/`, which "Mini Dress Mai C1 Swap" ships) goes on the mini dress, Outfit 1
+  and Drive Tech (Outfit 2 wears no mesh there, Outfit 3 no material for that part); the "C2" series (`002/00/`) on
+  Outfit 2. A mod's outfit that ships only the series' textures itself is a re-skin of its own, left out (Cammy C4
+  pale skin, next to outfits made for Cammy's Outfit 4 slot that ship their own textures at those paths; logged).
 - An add-on put with an outfit in one sub-folder is still that outfit's option only (the folder wins, as before); a
   copy of an add-on an outfit already has (same paths, same sizes) is not put on it twice.
 

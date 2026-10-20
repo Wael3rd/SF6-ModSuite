@@ -86,8 +86,8 @@
   characters ("...").
 - Runtime costume options: a separate add-on that makes no outfit (Mai face accessories, A.K.I No Sleeves, Cammy C4
   pale skin) becomes options of the outfits whose files it replaces: a series made of files every outfit of the
-  fighter loads (Mai's "remove wrinkles") on every outfit, ours and the game's; a series replacing a mesh or material
-  file a mod's outfit ships (the "C1 swap" glasses) on that outfit; else on the game outfits that load its files (the
+  fighter loads (Mai's "remove wrinkles") on every outfit, ours and the game's; another series on every outfit that
+  wears a file it replaces, ours and the game's (the "C1 swap" glasses on the mini dress, Outfit 1 and Drive Tech; the
   "C2" glasses on Mai's Outfit 2, the game's files as the way back). Stored only where it fits (joints, materials,
   textures), none worn by default; a series' "main files" go with each of its other options. The plugin finds a game
   outfit with options from the paths its model loads (our slots first); a game outfit whose options replace a mesh
