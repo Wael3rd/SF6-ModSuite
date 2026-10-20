@@ -174,6 +174,11 @@ not offered here`.
 - a texture: the outfit loads a texture at that path (any size: "remove wrinkles" is an 8x8 over a 512x256 mask);
 - a chain: the outfit has one at that path.
 
+What an outfit wears or loads (fit, and where an add-on goes) includes, as for versions, the files its physics `.user`
+files name, one level: a body chain named only by its `_chain.user` (Ryu's Outfit 1 `esf001_001_01_chain.chain`)
+takes an add-on's chain there (before: "the outfit has no chain there"). Those names are read while the mods are
+scanned, for the fighters of the add-ons.
+
 ### Retouches (20/10, loader `2026-10-20-rto-retouch`)
 
 With `on` (not `variants`, which keeps the outfits of `off`), a **retouch** makes no outfit of its own: a mod (its

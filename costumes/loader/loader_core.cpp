@@ -1584,6 +1584,12 @@ static bool outfit_wears(const VanillaIndex& inv, int fighter, int cno, const st
         for (auto& u : it->second) if (u.first == fighter) return false;
     return true;
 }
+// Whether a game costume loads a file: outfit_wears, or a file its physics .user files name (game_physics, read while
+// the mods are scanned: attach_addons reads those of the fighters its add-ons go on before the pak is built)
+static const std::map<std::string, std::string>& game_physics(const VanillaIndex& inv, int fighter, int cno);
+static bool outfit_loads(const VanillaIndex& inv, int fighter, int cno, const std::string& low) {
+    return outfit_wears(inv, fighter, cno, low) || game_physics(inv, fighter, cno).count(low) > 0;
+}
 
 // What the runtime does with a file: swap a mesh, a material, a texture or a chain on the model;
 // "colour" (a colour file, for the Color Mod); "other" only takes effect at the next launch
@@ -3896,7 +3902,7 @@ static void add_slot_files(PakWriter& writer,
             if (auto it = slot_targets.find(low); it != slot_targets.end()) low = str_lower(it->second);
             const uint64_t h = pak_path_hash(std::string_view(low));
             if (low.compare(0, slot_root.size(), slot_root) == 0) return writer.find(h) ? writer.get(h) : std::vector<uint8_t>{};
-            if (!outfit_wears(inv, slot.fighter, slot.original_costume_no, low)) return {};
+            if (!outfit_loads(inv, slot.fighter, slot.original_costume_no, low)) return {};
             if (writer.find(h)) return writer.get(h);
             for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
             if (auto* e = base_pak.find(h)) return base_pak.read(*e);
@@ -4477,7 +4483,7 @@ static void add_game_options(PakWriter& writer, std::unordered_set<std::string>&
         };
         auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
             const std::string low = str_lower(path);
-            if (!outfit_wears(inv, g.fighter, g.costume_no, low)) return {};
+            if (!outfit_loads(inv, g.fighter, g.costume_no, low)) return {};
             const uint64_t h = pak_path_hash(std::string_view(low));
             for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
             if (auto* e = base_pak.find(h)) return base_pak.read(*e);
@@ -6498,7 +6504,7 @@ static bool costume_touches(const VanillaIndex& inv, int fighter, int cno, const
                             const std::string& low) {
     std::string fd, folder;
     if (!parse_model_folder(low, fd, folder) || atoi(fd.c_str() + 3) != fighter) return false;
-    return folder == "000" ? outfit_wears(inv, fighter, cno, low) : folder == folder_of_costume;
+    return folder == "000" ? outfit_loads(inv, fighter, cno, low) : folder == folder_of_costume;
 }
 
 // Why a retouch does not fit the game outfit it modifies (the one its outfit was made from; any game outfit when that
@@ -6521,7 +6527,7 @@ static std::string retouch_game_fit(const VanillaIndex& inv, const UnitFiles& u)
         if (!made.empty() && !made.count(costume_folder(*c))) continue;
         auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
             const std::string low = str_lower(path);
-            if (!outfit_wears(inv, c->fighter, c->costume_no, low)) return {};
+            if (!outfit_loads(inv, c->fighter, c->costume_no, low)) return {};
             const PakEntry* e = base.find(pak_path_hash(std::string_view(low)));
             return e ? base.read(*e) : std::vector<uint8_t>{};
         };
@@ -7379,6 +7385,19 @@ static void attach_addons(ScanOutputs& o) {
         }
         g_pending_addons = std::move(merged);
     }
+    {   // What the game outfits of their fighters load through their physics .user files (outfit_loads): read while the
+        // game's pak is open, the options are stored later
+        std::set<int> fighters;
+        for (auto& pa : g_pending_addons)
+            for (auto& g : pa.groups)
+                for (auto i : g.members)
+                    for (auto& [p, mf] : g_units[i].files) {
+                        std::string pfd, folder;
+                        if (parse_model_folder(str_lower(p), pfd, folder)) fighters.insert(atoi(pfd.c_str() + 3));
+                    }
+        for (auto& c : inv.costumes)
+            if (fighters.count(c.fighter)) game_physics(inv, c.fighter, c.costume_no);
+    }
     struct Group { std::string key, name; std::vector<RtoOption> options; };   // ids made per outfit from the key
     std::set<std::pair<const RtoMod*, std::string>> done;                     // a group goes once on a mod
     // Two options of the same files (paths and sizes): the outfit already has that add-on (a copy of it was put with
@@ -7598,12 +7617,15 @@ static void attach_addons(ScanOutputs& o) {
             }
             const int fighter = atoi(fd.c_str() + 3);
             const std::vector<const CostumeInfo*> games = game_outfits_of(inv, fighter);   // one per model folder
+            // a game outfit names a 000/ file: its scene or material files, or its physics .user files (game_physics)
+            auto game_names = [&](int cno, const std::string& lp) {
+                return inv.used_by(pak_path_hash(std::string_view(lp)), fighter, cno) || game_physics(inv, fighter, cno).count(lp) > 0;
+            };
             auto shared = [&](const std::string& lp) {
                 std::string pfd, folder;
                 if (!parse_model_folder(lp, pfd, folder) || folder != "000") return false;
-                const uint64_t h = pak_path_hash(std::string_view(lp));
                 size_t n = 0;
-                for (auto* c : games) if (inv.used_by(h, fighter, c->costume_no)) ++n;
+                for (auto* c : games) if (game_names(c->costume_no, lp)) ++n;
                 return n == 0 || n == games.size();
             };
             auto ships = [&](const std::pair<std::string, std::vector<ModCostume>>& e, const std::string& lp) {
@@ -7664,8 +7686,7 @@ static void attach_addons(ScanOutputs& o) {
                     for (auto& lp : paths) {
                         std::string pfd, folder;
                         if (shared(lp) || !parse_model_folder(lp, pfd, folder)) continue;
-                        if (folder == "000" ? inv.used_by(pak_path_hash(std::string_view(lp)), fighter, c->costume_no)
-                                            : folder == folder_of(*c)) { games_hit.push_back(c); break; }
+                        if (folder == "000" ? game_names(c->costume_no, lp) : folder == folder_of(*c)) { games_hit.push_back(c); break; }
                     }
             }
             // An outfit alone in its sub-folder is its own: no other mod's add-on or retouch goes on it
@@ -7947,6 +7968,11 @@ static bool is_physics_file(const std::string& low) {
 // by the scene). Read once per costume while the mods are scanned.
 static std::map<std::pair<int, int>, std::map<std::string, std::string>> g_game_physics;
 static const std::map<std::string, std::string>& game_physics(const VanillaIndex& inv, int fighter, int cno) {
+    if (!g_scan_base_pak) {   // the pak is built: what was read while the mods were scanned
+        static const std::map<std::string, std::string> none;
+        const auto f = g_game_physics.find({fighter, cno});
+        return f == g_game_physics.end() ? none : f->second;
+    }
     auto [it, fresh] = g_game_physics.try_emplace({fighter, cno});
     auto& out = it->second;
     if (!fresh) return out;
@@ -7973,10 +7999,6 @@ static const std::map<std::string, std::string>& game_physics(const VanillaIndex
                 if (const std::string p = slotcheck::resource_path(ref, inv.suffixes); !p.empty()) add(p);
         }
     return out;
-}
-// Whether a game costume loads a file: outfit_wears, or a file its physics .user files name (game_physics)
-static bool outfit_loads(const VanillaIndex& inv, int fighter, int cno, const std::string& low) {
-    return outfit_wears(inv, fighter, cno, low) || game_physics(inv, fighter, cno).count(low) > 0;
 }
 // The md5s of the physics files a game costume loads
 static std::set<std::string> game_physics_md5(const VanillaIndex& inv, int fighter, int cno) {
