@@ -708,18 +708,33 @@ does, the fallback above is the next step.
   elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
   never open together (both need the option window closed).
 - **Title**: the outfit's name in capitals and the side (`MINI DRESS MAI C1 SWAP  -  P1`); a name longer than 40
-  characters (UTF-8) is cut and ends with `...`, so the side stays readable. The costume row shows the game's
+  characters (UTF-8; 30 when the menu has several pages) is cut and ends with `...`, so the side stays readable.
+  Several pages: the Color Mod's colour editor's paged title, `<ICON KeyA>   MINI DRESS MAI C1 SWAP  -  P1   1/2
+  <ICON KeyE>` (pad: `<ICON BtnL1>` / `<ICON BtnR1>`; the glyphs of the device in use when the pages were built). The costume row shows the game's
   "Outfit VII"; the outfit's name is also at the right of the guide bar ("Outfit name on Fighter Settings" below).
-- **Pages** (7 rows at most, the dialog's pool): page 1 = Player side (P1 / P2), the first option rows, More options (pushes page 2), Restore defaults; later pages = option rows (+
-  More options). A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
+- **Pages** (7 rows at most, the dialog's pool; split by `split_pages`, `rto_data.cpp`, unit-tested): page 1 = Player
+  side (P1 / P2), the first 5 option rows, Restore defaults; later pages = 7 option rows each (no "More options" row
+  since 20/10). Player side and Restore defaults are on page 1 only, like the colour editor's extra rows (its cluster
+  list keeps them on its first page): they act on every page at once, the title shows the side on every page, page 1
+  is one key away from any page (pages wrap), and the other pages keep their 7 rows for options. **Page turning** =
+  the colour editor's (`colormod/src/dialogs/editor_core.cpp`, page turning): the game's tab keys
+  (`app.InputAssign.Digital.Id` UITabL / UITabR; the symbol from `InputGuideManager.GetSymbolText` in keyboard mode, so
+  A / E on an AZERTY keyboard, Q / E on a QWERTY one; fallback: scan codes 0x10 / 0x12 in the layout in use, else A /
+  E; read again every 120 frames) or L1 / R1 (`via.hid.GamePadButton` LTrigTop / RTrigTop), or a left click on the
+  title row left / right of the title (1080p reference y 190-252, x 40-470 / 590-1020), on a key press (no repeat),
+  wrapping, only while the game window is in front. A turn builds every page again (values as they are now) and
+  replaces the page on screen (`opt_navigate` with `SF6CORE_OPT_NAV_REBUILD`, nothing pushed: Esc closes the menu from
+  any page); the cursor stays on the same row index (`opt_focused_entry`), the last row when the other page is
+  shorter. No key of the preview camera (mouse, PageUp / PageDown, right stick, L3, L2 / R2) is a page key.
+  A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
   split in rows "Group (1/2)"...); a required group has no None (split in rows, its first label is "(other row)":
   picked on the row that holds the choice, it goes back to the group's default). A toggle = an Off / On row. Options that change nothing on the model (colour or
   cloth files only, e.g. the tan) are not offered; one that also ships such files is marked `*` (its description
   says so). Texts are English only for now.
 - **A change**: saved at once (`costume_choices.json`), applied to the preview by the runtime (a not-yet-loaded
   file shows within a second); the page is rebuilt on the next frame when other values changed (an option turned
-  off), a page under it is rebuilt when it comes back on top. The window docks left (x -430, as the
-  Color Mod's editor on this screen) so the preview stays visible. Esc goes back / closes, as the game's dialogs.
+  off); the other pages show it when turned to. The window docks left (x -430, as the
+  Color Mod's editor on this screen) so the preview stays visible. Esc closes the menu, as the game's dialogs.
 - **Preview camera** (`plugin/src/rto_camera.cpp`, a port of the Color Mod's `colormod/src/dialogs/camera.cpp`
   with the same constants, limits and input; the Color Mod is unchanged): while the menu is open on Fighter
   Settings, exactly what the colour editor gives. Mouse right of the docked dialog (x > 1040 at 1920 wide): left

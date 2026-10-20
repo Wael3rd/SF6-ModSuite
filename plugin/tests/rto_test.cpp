@@ -101,9 +101,14 @@ static int real_manifest(const char* file) {
         for (auto& [t, w] : d) if (!w.orig) ++changed;
         std::printf("  slot %s/%s (costume %d) %s: %zu targets, %zu not as built with its defaults, %zu former\n",
                     s.fighter_dir.c_str(), s.folder.c_str(), s.costume_no, s.label.c_str(), d.size(), changed, s.former.size());
-        for (auto& r : rows(m, s, s.defaults))
+        const auto rs = rows(m, s, s.defaults);
+        for (auto& r : rs)
             std::printf("    %-6s %-48s %zu labels, value %d%s\n", r.kind == Row::Pick ? "pick" : "toggle", r.title.c_str(),
                         r.labels.size(), r.value, r.partial ? " (partial)" : "");
+        const auto pages = split_pages(static_cast<int>(rs.size()), 7, 2);   // the menu's split (rto_menu.cpp)
+        std::printf("    menu: %zu rows on %zu pages (", rs.size(), pages.size());
+        for (size_t p = 0; p < pages.size(); ++p) std::printf("%s%zu", p ? " + " : "", pages[p].size());
+        std::printf(" option rows; page 1 also Player side and Restore defaults)\n");
     }
     return 0;
 }
@@ -701,6 +706,26 @@ int main(int argc, char** argv) {
             jiggle = jiggle || row.title == "more jiggle";
         }
         check(fishnet && damaged && jiggle, "on: NSFW options offered");
+    }
+
+    {   // the menu's pages: 7 rows a page, the first one also holds the player side and Restore defaults
+        auto flat = [](const std::vector<std::vector<int>>& pg) {
+            std::vector<int> all; for (auto& p : pg) all.insert(all.end(), p.begin(), p.end()); return all;
+        };
+        auto seq = [](int n) { std::vector<int> v; for (int i = 0; i < n; ++i) v.push_back(i); return v; };
+        auto p0 = split_pages(0, 7, 2);
+        check(p0.size() == 1 && p0[0].empty(), "pages: no row = one empty page");
+        auto p5 = split_pages(5, 7, 2);
+        check(p5.size() == 1 && p5[0].size() == 5, "pages: 5 rows fit the first page with its 2 own rows");
+        auto p6 = split_pages(6, 7, 2);
+        check(p6.size() == 2 && p6[0].size() == 5 && p6[1].size() == 1 && flat(p6) == seq(6), "pages: 6 rows = 5 + 1");
+        auto p19 = split_pages(19, 7, 2);
+        check(p19.size() == 3 && p19[0].size() == 5 && p19[1].size() == 7 && p19[2].size() == 7 && flat(p19) == seq(19),
+              "pages: 19 rows = 5 + 7 + 7, in order, no row taken by a page button");
+        auto p20 = split_pages(20, 7, 2);
+        check(p20.size() == 4 && p20[3].size() == 1 && flat(p20) == seq(20), "pages: 20 rows = 5 + 7 + 7 + 1");
+        auto odd = split_pages(3, 2, 5);
+        check(odd.size() == 2 && odd[0].size() == 1 && flat(odd) == seq(3), "pages: a head larger than a page still takes a row");
     }
 
     int rc = 0;

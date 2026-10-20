@@ -163,6 +163,10 @@ constexpr size_t kMaxLabels = 15;        // a native spin crashed above 16 entri
 std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::string>& chosen);
 void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const Row& r, int value,
                std::vector<std::string>* notes = nullptr);
+// The menu's pages: `total` option rows, at most `per_page` rows a page, the first page also holding `head` rows of its
+// own (the player side, Restore defaults). Per page: the option rows' indexes, in order. At least one page (empty
+// when there is no row).
+std::vector<std::vector<int>> split_pages(int total, int per_page, int head);
 // 0: no preset matches the set, k: the mod's variant k-1
 int preset_of(const Mod& mod, const std::vector<std::string>& chosen);
 std::string preset_label(const Mod& mod, size_t k);   // a variant's label without the mod's name
