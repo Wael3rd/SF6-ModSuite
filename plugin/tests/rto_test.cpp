@@ -355,6 +355,52 @@ int main(int argc, char** argv) {
         check(former_of(q, 2, 7, &fo) == &t && fo && fo->ids.size() == 2, "the former add-on outfit's slot moves to the outfit");
     }
 
+    {   // part units, as the loader writes them (20/10): Ken SFV Hair V2 = the hair's mesh, material and chain worn by
+        // default, the game's hair as one unit (base copies with "unit"); a second toggle without any base copy
+        const char* j = R"JSON({"format": "sf6-costume-options-1", "layout": "one", "mods": [
+          {"key": "esf010/kensfv", "name": "KenSFV", "groups": [
+            {"name": "KenSFV", "options": [{"id": "aa404dd9", "name": "KenSFV", "mode": "base"}]},
+            {"name": "Add-ons", "options": [{"id": "86fddfb3", "name": "Ken SFV Hair V2", "mode": "toggle"},
+                                            {"id": "0000beef", "name": "Prop", "mode": "toggle"}]}]}],
+          "slots": [{"fighter": 10, "fighter_dir": "esf010", "costume_no": 9, "folder": "010", "mod": "esf010/kensfv",
+            "defaults": ["aa404dd9", "86fddfb3", "0000beef"],
+            "options": {
+              "86fddfb3": [
+                {"kind": "mesh", "target": "product/model/esf/esf010/010/02/esf010_010_02.mesh", "path": "product/model/esf/esf010/010/rto/86fddfb3/02/esf010_010_02.mesh", "unit": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain", "joints": 62},
+                {"kind": "chain", "target": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain", "path": "product/model/esf/esf010/010/rto/86fddfb3/02/esf010_002_02_chain.chain", "unit": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain"},
+                {"kind": "material", "target": "product/model/esf/esf010/010/02/esf010_010_02_v00.mdf2", "path": "product/model/esf/esf010/010/rto/86fddfb3/02/esf010_010_02_v00.mdf2", "unit": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain"},
+                {"kind": "texture", "target": "product/model/esf/esf010/010/02/esf010_010_02_hai2_albd.tex", "path": "product/model/esf/esf010/010/rto/86fddfb3/02/esf010_010_02_hai2_albd.tex"}],
+              "0000beef": [
+                {"kind": "mesh", "target": "product/model/esf/esf010/010/30/esf010_010_30.mesh", "path": "product/model/esf/esf010/010/rto/0000beef/30/esf010_010_30.mesh"}]},
+            "base": [
+              {"kind": "mesh", "target": "product/model/esf/esf010/010/02/esf010_010_02.mesh", "path": "product/model/esf/esf010/010/rto/base/02/esf010_010_02.mesh", "unit": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain", "joints": 131, "own_joints": 62},
+              {"kind": "chain", "target": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain", "path": "product/model/esf/esf010/010/rto/base/02/esf010_002_02_chain.chain", "unit": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain"},
+              {"kind": "material", "target": "product/model/esf/esf010/010/02/esf010_010_02_v00.mdf2", "path": "product/model/esf/esf010/010/rto/base/02/esf010_010_02_v00.mdf2", "unit": "product/model/esf/esf010/010/02/esf010_002_02_chain.chain"}],
+            "required": [], "former": []}]})JSON";
+        Manifest q; std::string e5;
+        check(parse_manifest(j, q, e5), "part units: manifest parsed");
+        const Slot& t = q.slots[0];
+        const std::string U = "product/model/esf/esf010/010/02/esf010_002_02_chain.chain";
+        check(t.base.size() == 3 && t.base[0].unit == U && t.base[0].joints == 131, "part units: unit and joints parsed");
+        auto c = t.defaults;
+        toggle(q, t, c, "86fddfb3", false);
+        auto d = desired(q, t, c);
+        check(path_of(d, "product/model/esf/esf010/010/02/esf010_010_02.mesh") == "product/model/esf/esf010/010/rto/base/02/esf010_010_02.mesh"
+              && path_of(d, U.c_str()) == "product/model/esf/esf010/010/rto/base/02/esf010_002_02_chain.chain"
+              && path_of(d, "product/model/esf/esf010/010/02/esf010_010_02_v00.mdf2") == "product/model/esf/esf010/010/rto/base/02/esf010_010_02_v00.mdf2",
+              "part units: Off -> the game's mesh, material and chain");
+        check(d["product/model/esf/esf010/010/02/esf010_010_02.mesh"].unit == U && d[U].unit == U, "part units: the wanted files say their unit");
+        check(is_orig(d, "product/model/esf/esf010/010/02/esf010_010_02_hai2_albd.tex"), "part units: the add-on's own texture is left (nothing names it)");
+        check(removable(q, t, "86fddfb3"), "part units: the hair can be turned off");
+        check(!removable(q, t, "0000beef"), "a default toggle without any base copy cannot be turned off");
+        auto r = rows(q, t, t.defaults);
+        check(r.size() == 1 && r[0].kind == Row::Toggle && r[0].title == "Ken SFV Hair V2" && r[0].value == 2,
+              "only the hair row (the toggle Off cannot change is not offered)");
+        check(joints_at(q, t, "product/model/esf/esf010/010/rto/base/02/esf010_010_02.mesh") == 131
+              && joints_at(q, t, "product/model/esf/esf010/010/02/esf010_010_02.mesh") == 62
+              && joints_at(q, t, "product/model/esf/esf010/010/02/other.mesh") == -1, "joints of a copy, of the slot's own mesh");
+    }
+
     int rc = 0;
     if (argc > 1) rc = real_manifest(argv[1]);
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }

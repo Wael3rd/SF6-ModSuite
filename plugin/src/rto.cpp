@@ -38,6 +38,7 @@ bool g_disabled = false;
 int g_faults = 0;
 uint32_t g_ver = 1;                 // choices version: a model re-applies when it changes
 bool g_migrated = false;
+std::set<const Slot*> g_no_rows;    // slots whose menu would be empty: no F hint, no menu
 
 // ---- screens and events ----
 bool g_select = false;              // character select open: nothing at all
@@ -62,7 +63,7 @@ struct Types {
     Method *get_comp = nullptr, *go_tr = nullptr, *go_name = nullptr, *tr_child = nullptr, *tr_next = nullptr, *tr_go = nullptr;
     Method *get_mesh = nullptr, *get_mat = nullptr, *set_mesh = nullptr, *set_mat = nullptr, *mesh_ready = nullptr,
            *mat_ready = nullptr, *mat_num = nullptr, *tex_num = nullptr, *get_tex = nullptr, *set_tex = nullptr;
-    Method *ch_get = nullptr, *ch_set = nullptr, *ch_restart = nullptr;
+    Method *ch_get = nullptr, *ch_set = nullptr, *ch_restart = nullptr, *ch_enable = nullptr, *ch_enabled = nullptr;
     Method *set_color = nullptr;
     Method *crf_obj = nullptr, *crf_setup = nullptr, *pb_go = nullptr, *pb_applied = nullptr;
 };
@@ -102,6 +103,8 @@ bool types() {
     T.ch_get = method_of(T.chain, "get_ChainAsset", 0);
     T.ch_set = method_of(T.chain, "set_ChainAsset", 1);
     T.ch_restart = method_of(T.chain, "restart", 0);
+    T.ch_enable = method_of(T.chain, "set_Enabled", 1);       // via.Component: a part unit's swap (not required)
+    T.ch_enabled = method_of(T.chain, "get_Enabled", 0);
     T.set_color = method_of(T.pcc, "SetColor", 1);
     T.crf_obj = method_of(T.crf, "get_FighterObj", 0);
     T.crf_setup = method_of(T.crf, "get_IsSetUpEnd", 0);
@@ -196,8 +199,19 @@ void res_gc() {
 // Models
 // ---------------------------------------------------------------------------------------------
 struct TexBind { uint32_t mi = 0, ti = 0; std::string target; };
-struct MeshComp { Obj* c = nullptr; std::string go, mat_key, exp_mesh, exp_mat; std::vector<TexBind> binds; };
-struct ChainComp { Obj* c = nullptr; std::string go, target; };
+struct MeshComp { Obj* c = nullptr; Obj* gobj = nullptr; std::string go, mat_key, exp_mesh, exp_mat; std::vector<TexBind> binds; };
+struct ChainComp { Obj* c = nullptr; Obj* gobj = nullptr; std::string go, target; };
+// A part unit being swapped (mesh and/or material + the chain of the same GameObject, docs/RUNTIME_OPTIONS.md,
+// Part units): 1 = chain stopped on frame `at`, swap on a later frame; 2 = swapped on `at`, checked and the chain
+// started again on a later frame; 3 = put back on `at` (not drawable), chain started again on a later frame.
+// Between two frames the part always wears a whole (mesh, material, chain) of one source.
+struct UnitSwap {
+    Obj* mesh = nullptr; Obj* chain = nullptr;
+    int stage = 1;
+    uint32_t at = 0;
+    bool stopped = false;                        // the chain was enabled and this module stopped it
+    std::string go, pm, wm, pt, wt, pc, wc;      // what it wore, what it gets (mesh, material, chain); "" = unchanged
+};
 struct Verify { Obj* c = nullptr; bool mesh = true; std::string path, prev; };
 struct Model {
     const char* name = "";
@@ -209,6 +223,7 @@ struct Model {
     std::vector<Obj*> colors;
     std::map<std::string, std::string> orig;     // target -> what the model wore there when first seen (chains)
     std::vector<Verify> verify;
+    std::vector<UnitSwap> units;
     bool walked = false, settled = false, chains_mapped = false;
     uint32_t ver = 0, next = 0, walk_at = 0, check_at = 0, since = 0;
     std::set<std::string> told;                  // log lines given once
@@ -216,6 +231,12 @@ struct Model {
 Model g_models[3];                                // preview, P1, P2
 
 void reset(Model& md) {
+    // a chain this module stopped starts again: between two frames its part always wears a whole unit
+    for (auto& u : md.units)
+        if (u.stopped && T.ch_enable && alive_as(u.chain, T.chain)) {
+            call(T.ch_enable, u.chain, { arg_bool(true) });
+            logf("rto: %s %s chain started again (model reset)", md.name, u.go.c_str());
+        }
     const char* nm = md.name;
     md = Model{};
     md.name = nm;
@@ -227,8 +248,8 @@ Obj* comp_of(Obj* go, Obj* type) { return call_obj(T.get_comp, go, { arg_obj(typ
 void visit(Model& md, Obj* go) {
     if (!go) return;
     std::string name = str(call_obj(T.go_name, go));
-    if (Obj* m = comp_of(go, T.t_mesh)) { MeshComp mc; mc.c = m; mc.go = name; md.meshes.push_back(mc); }
-    if (Obj* c = comp_of(go, T.t_chain)) { ChainComp cc; cc.c = c; cc.go = name; md.chains.push_back(cc); }
+    if (Obj* m = comp_of(go, T.t_mesh)) { MeshComp mc; mc.c = m; mc.gobj = go; mc.go = name; md.meshes.push_back(mc); }
+    if (Obj* c = comp_of(go, T.t_chain)) { ChainComp cc; cc.c = c; cc.gobj = go; cc.go = name; md.chains.push_back(cc); }
     if (Obj* p = comp_of(go, T.t_pcc)) md.colors.push_back(p);
 }
 
@@ -332,6 +353,24 @@ bool drifted(Model& md) {
     return false;
 }
 
+bool drawable(Obj* mesh, bool m, bool t) {
+    return (!m || ret_bool(T.mesh_ready, mesh)) && (!t || (ret_bool(T.mat_ready, mesh) && ret_u32(T.mat_num, mesh) > 0));
+}
+// A part unit's files (each null when unchanged): the chain first, on the mesh still worn (a chain set on a mesh
+// that lacks some of its joints leaves them out: the game sets Mai's esf028_001_30_Chain on four prop meshes that
+// each lack most of them), then the mesh and the material, then the chain set up again on the mesh now worn. The
+// loader checked that the chain set first names no joint that goes away with the mesh it replaces.
+void put_unit(Obj* mesh, Obj* chain, Res* m, Res* t, Res* c) {
+    if (c) { call(T.ch_set, chain, { arg_obj(c->holder) }); call(T.ch_restart, chain); }
+    if (m) call(T.set_mesh, mesh, { arg_obj(m->holder) });
+    if (t) call(T.set_mat, mesh, { arg_obj(t->holder) });
+    if (c) call(T.ch_restart, chain);
+}
+void unit_done(Model& md, UnitSwap& u, const char* why) {
+    if (u.stopped && T.ch_enable && alive_as(u.chain, T.chain)) call(T.ch_enable, u.chain, { arg_bool(true) });
+    logf("rto: %s %s chain %s (%s)", md.name, u.go.c_str(), u.stopped ? "started again" : "left as the game had it", why);
+}
+
 void pass(Model& md) {
     const Slot& s = *md.slot;
     const auto chosen = chosen_of(g_m, s, g_c, md.side);
@@ -339,6 +378,33 @@ void pass(Model& md) {
     for (auto& [t, w] : want) if (!w.orig) if (auto it = g_res.find(w.path); it != g_res.end()) it->second.used = g_frame;
     bool pending = false, colour = false;
     const char* side_name = md.side == 1 ? "P2" : "P1";
+
+    // 0. part units in flight (a chain stopped): checked a frame after their swap, then their chain runs again
+    for (auto it = md.units.begin(); it != md.units.end();) {
+        UnitSwap& u = *it;
+        if (!alive_as(u.mesh, T.mesh) || !alive_as(u.chain, T.chain)) {           // the model was rebuilt
+            md.walked = false; pending = true; it = md.units.erase(it); continue;
+        }
+        if (g_frame - u.at > 120) { unit_done(md, u, "given up"); it = md.units.erase(it); continue; }
+        if (u.stage == 1 || g_frame <= u.at) { ++it; continue; }                      // its swap: step 2
+        if (u.stage == 2 && !drawable(u.mesh, !u.wm.empty(), !u.wt.empty())) {
+            Res* bm = u.wm.empty() ? nullptr : res_get(u.pm, "mesh", true);
+            Res* bt = u.wt.empty() ? nullptr : res_get(u.pt, "material", true);
+            Res* bc = u.wc.empty() ? nullptr : res_get(u.pc, "chain", true);
+            put_unit(u.mesh, u.chain, bm && bm->holder ? bm : nullptr, bt && bt->holder ? bt : nullptr,
+                     bc && bc->holder ? bc : nullptr);
+            if (!u.wm.empty()) backoff(u.wm);
+            if (!u.wt.empty()) backoff(u.wt);
+            logf("rto: %s %s not drawable a frame later, back to %s", md.name, u.go.c_str(),
+                 short_path(u.pm.empty() ? u.pt : u.pm).c_str());
+            u.stage = 3; u.at = g_frame; pending = true; colour = true;
+            ++it; continue;
+        }
+        unit_done(md, u, u.stage == 2 ? "part swapped" : "part put back");
+        it = md.units.erase(it);
+    }
+    std::set<Obj*> unit_chains;                       // chains of parts swapped as units: not by step 4
+    for (auto& u : md.units) unit_chains.insert(u.chain);
 
     // 1. the parts swapped on the last frame must still be drawable
     for (auto& v : md.verify) {
@@ -354,21 +420,86 @@ void pass(Model& md) {
     std::set<Obj*> just_set;                          // parts whose material changes this frame: textures next frame
     md.verify.clear();
 
-    // 2. meshes and materials (a pair when both change)
+    if (!md.chains_mapped) map_chains(md, want);
+
+    // 2. meshes and materials (a pair when both change; with the chain of their GameObject: a part unit)
     for (auto& mc : md.meshes) {
         if (!alive_as(mc.c, T.mesh)) { md.walked = false; pending = true; break; }
         const std::string pm = holder_path(call_obj(T.get_mesh, mc.c)), pt = holder_path(call_obj(T.get_mat, mc.c));
         const std::string wm = want_path(md, want, target_of(s, pm)), wt = want_path(md, want, target_of(s, pt));
         const bool need_m = !wm.empty() && wm != pm, need_t = !wt.empty() && wt != pt;
         if (!need_m && !need_t) continue;
+        // The chain of the same GameObject, when it changes too: the part is swapped as one unit
+        ChainComp* cc = nullptr;
+        for (auto& c : md.chains) if (c.gobj == mc.gobj && alive_as(c.c, T.chain)) { cc = &c; break; }
+        std::string pc, wc;
+        if (cc) {
+            pc = holder_path(call_obj(T.ch_get, cc->c));
+            wc = want_path(md, want, cc->target.empty() ? target_of(s, pc) : cc->target);
+            if (wc == pc) wc.clear();
+        }
+        // a unit's mesh comes with its chain, never without it (19/10: a mesh lacking the joints of the chain
+        // still bound to it stopped the game)
+        if (auto w = want.find(target_of(s, need_m ? pm : pt)); w != want.end() && w->second.unit.size() > 6
+            && w->second.unit.compare(w->second.unit.size() - 6, 6, ".chain") == 0
+            && (!cc || (cc->target.empty() ? target_of(s, pc) : cc->target) != w->second.unit)) {
+            tell_once(md, mc.go + ": the chain of its part (" + short_path(w->second.unit) + ") is not on the model, part left as is");
+            continue;
+        }
+        const bool unit = !wc.empty();
+        if (unit) unit_chains.insert(cc->c);
+        if (unit && !T.ch_enable) { tell_once(md, mc.go + ": its chain cannot be stopped, part left as is"); continue; }
         if (!ret_bool(T.mesh_ready, mc.c) || !ret_bool(T.mat_ready, mc.c)) { pending = true; continue; }   // the game still loads it
         Res* rm = need_m ? res_get(wm, "mesh", false) : nullptr;
         Res* rt = need_t ? res_get(wt, "material", false) : nullptr;
-        if ((rm && rm->dead) || (rt && rt->dead)) { tell_once(md, "cannot load " + short_path(rm && rm->dead ? wm : wt)); continue; }
-        if ((need_m && !usable(rm)) || (need_t && !usable(rt))) { pending = true; continue; }
+        Res* rc = unit ? res_get(wc, "chain", false) : nullptr;
+        if ((rm && rm->dead) || (rt && rt->dead) || (rc && rc->dead)) {
+            tell_once(md, "cannot load " + short_path(rm && rm->dead ? wm : rt && rt->dead ? wt : wc));
+            continue;
+        }
+        if ((need_m && !usable(rm)) || (need_t && !usable(rt)) || (unit && !usable(rc))) { pending = true; continue; }
         Res* back_m = need_m ? res_get(pm, "mesh", true) : nullptr;      // the way back, made before the swap
         Res* back_t = need_t ? res_get(pt, "material", true) : nullptr;
-        if ((need_m && !usable(back_m)) || (need_t && !usable(back_t))) { tell_once(md, "no way back from " + mc.go); continue; }
+        Res* back_c = unit ? res_get(pc, "chain", true) : nullptr;
+        if ((need_m && !usable(back_m)) || (need_t && !usable(back_t)) || (unit && !usable(back_c))) {
+            tell_once(md, "no way back from " + mc.go);
+            continue;
+        }
+        if (unit) {
+            // A part unit (docs/RUNTIME_OPTIONS.md, Part units): its chain stopped first, the swap a frame later (no
+            // job of that chain runs meanwhile), checked and the chain started again a frame after that (step 0)
+            UnitSwap* u = nullptr;
+            for (auto& x : md.units) if (x.chain == cc->c) u = &x;
+            if (!u) {
+                UnitSwap n;
+                n.mesh = mc.c; n.chain = cc->c; n.go = mc.go; n.at = g_frame;
+                n.stopped = !T.ch_enabled || ret_bool(T.ch_enabled, cc->c);
+                if (n.stopped) call(T.ch_enable, cc->c, { arg_bool(false) });
+                md.units.push_back(n);
+                logf("rto: %s %s %s: chain %s for its part's swap", md.name, side_name, mc.go.c_str(),
+                     n.stopped ? "stopped" : "already stopped");
+                continue;
+            }
+            if (u->stage != 1 || g_frame <= u->at) continue;
+            u->pm = need_m ? pm : ""; u->wm = need_m ? wm : ""; u->pt = need_t ? pt : ""; u->wt = need_t ? wt : "";
+            u->pc = pc; u->wc = wc;
+            put_unit(mc.c, cc->c, rm, rt, rc);
+            if (!drawable(mc.c, need_m, need_t)) {
+                put_unit(mc.c, cc->c, back_m, back_t, back_c);
+                if (need_m) backoff(wm);
+                if (need_t) backoff(wt);
+                logf("rto: %s %s %s: part not drawable, put back", md.name, side_name, mc.go.c_str());
+                u->stage = 3; u->at = g_frame; pending = true;
+                continue;
+            }
+            u->stage = 2; u->at = g_frame;
+            just_set.insert(mc.c);
+            colour = true;
+            logf("rto: %s %s %s: part%s%s%s%s chain %s (joints %d -> %d)", md.name, side_name, mc.go.c_str(),
+                 need_m ? " mesh " : "", need_m ? short_path(wm).c_str() : "", need_t ? " material " : "",
+                 need_t ? short_path(wt).c_str() : "", short_path(wc).c_str(), joints_at(g_m, s, pm), joints_at(g_m, s, wm));
+            continue;
+        }
         if (need_m) call(T.set_mesh, mc.c, { arg_obj(rm->holder) });
         if (need_t) call(T.set_mat, mc.c, { arg_obj(rt->holder) });
         const bool ok = (!need_m || ret_bool(T.mesh_ready, mc.c)) && (!need_t || (ret_bool(T.mat_ready, mc.c) && ret_u32(T.mat_num, mc.c) > 0));
@@ -426,14 +557,15 @@ void pass(Model& md) {
         }
     }
 
-    // 4. chains
-    if (!md.chains_mapped) map_chains(md, want);
+    // 4. chains (mapped before step 2)
     for (auto& cc : md.chains) {
         if (!alive_as(cc.c, T.chain)) { md.walked = false; pending = true; break; }
+        if (unit_chains.count(cc.c)) continue;        // swapped with its part (step 2)
         const std::string cur = holder_path(call_obj(T.ch_get, cc.c));
         const std::string t = cc.target.empty() ? target_of(s, cur) : cc.target;
         const std::string w = want_path(md, want, t);
         if (w.empty() || w == cur) continue;
+        if (auto u = want.find(t); u != want.end() && !u->second.unit.empty()) continue;   // a unit's chain: only with its mesh
         Res* r = res_get(w, "chain", false);
         if (r->dead) { tell_once(md, "cannot load " + short_path(w)); continue; }
         if (!usable(r)) { pending = true; continue; }
@@ -442,6 +574,14 @@ void pass(Model& md) {
         logf("rto: %s %s %s chain %s", md.name, side_name, cc.go.c_str(), short_path(w).c_str());
     }
 
+    // a part waiting for its swap that no longer needs one (the choice changed back): its chain runs again
+    for (auto it = md.units.begin(); it != md.units.end();) {
+        if (it->stage == 1 && !unit_chains.count(it->chain) && g_frame > it->at) {
+            unit_done(md, *it, "no swap needed any more");
+            it = md.units.erase(it);
+        } else ++it;
+    }
+    if (!md.units.empty()) { md.next = g_frame + 1; return; }
     if (pending) { md.next = g_frame + 5; return; }
     if (!md.verify.empty()) { md.next = g_frame + 1; return; }
     md.settled = true;
@@ -507,6 +647,7 @@ void preview_tick() {
     }
     if (!root) return;
     process(md, menu::active() ? menu::side() : 0, true);
+    if (!md.units.empty()) g_prev_next = g_frame + 1;     // a part unit in flight: its chain stays stopped one frame only
 }
 
 void watch_tick() {
@@ -531,6 +672,7 @@ void watch_tick() {
         seen[id] = true;
         if (go != md.root) { reset(md); md.root = go; }
         if (go) process(md, net ? 0 : id, true);      // online: the player's own fighter wears P1's options
+        if (!md.units.empty()) g_watch_next = g_frame + 1;
     }
     for (int i = 0; i < 2; ++i) if (!seen[i] && g_models[1 + i].root) reset(g_models[1 + i]);
 }
@@ -603,11 +745,11 @@ void choices_changed() {
 }
 int preview_since() {
     const Model& md = g_models[0];
-    return (md.root && md.slot) ? static_cast<int>(md.since) : -1;
+    return (md.root && md.slot && !g_no_rows.count(md.slot)) ? static_cast<int>(md.since) : -1;
 }
 const Slot* preview_slot() {
     const Model& md = g_models[0];
-    return (md.root && md.slot) ? md.slot : nullptr;
+    return (md.root && md.slot && !g_no_rows.count(md.slot)) ? md.slot : nullptr;
 }
 
 void init() {
@@ -627,6 +769,19 @@ void init() {
         for (auto& n : notes) logf("rto: choices: %s", n.c_str());
     }
     g_on = true;
+    // Toggles the slot wears whose Off would change nothing (no copy of the part without them): not in the menu
+    for (auto& s : g_m.slots) {
+        const Mod* mod = g_m.mod_of(s);
+        if (!mod) continue;
+        for (auto& o : mod->options)
+            if (o.mode == "toggle" && offered(s, o.id) && !removable(g_m, s, o.id))
+                logf("rto: %s/%s: \"%s\" cannot be turned off live (no copy of the outfit without it): not in the menu",
+                     s.fighter_dir.c_str(), s.folder.c_str(), o.name.c_str());
+        if (rows(g_m, s, s.defaults).empty()) {
+            g_no_rows.insert(&s);
+            logf("rto: %s/%s: no option can change live, no options menu", s.fighter_dir.c_str(), s.folder.c_str());
+        }
+    }
     size_t opts = 0;
     for (auto& m : g_m.mods) opts += m.options.size();
     logf("rto: %zu modular mods, %zu options, %zu slots (layout %s, generated %s)", g_m.mods.size(), opts, g_m.slots.size(),

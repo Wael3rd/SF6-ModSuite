@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rto-manager-contract";
+static const char* LOADER_BUILD_ID = "2026-10-20-rto-units";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -1403,7 +1403,9 @@ struct RtoMod {
     struct Variant { std::string mod_id, label; std::vector<size_t> selected; std::string row; };
     std::vector<Variant> variants;
 };
-struct RtoFile { std::string kind, target, path; };
+// unit: the part unit the file belongs to (its chain's target, else its mesh's): swapped together at runtime;
+// joints: a mesh's joint count, own_joints: that of the slot's own mesh at the target (base mesh of a unit)
+struct RtoFile { std::string kind, target, path, unit; int joints = -1, own_joints = -1; };
 struct RtoSlotOut {
     std::shared_ptr<const RtoMod> mod;
     std::vector<size_t> selected;                   // options the slot is made of
@@ -1568,8 +1570,12 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
     auto put_files = [&](const std::vector<RtoFile>& files, const char* indent) {
         bool ff = true;
         for (auto& rf : files) {
-            fprintf(f, "%s\n%s{\"kind\": \"%s\", \"target\": \"%s\", \"path\": \"%s\"}", ff ? "" : ",", indent,
+            fprintf(f, "%s\n%s{\"kind\": \"%s\", \"target\": \"%s\", \"path\": \"%s\"", ff ? "" : ",", indent,
                     rf.kind.c_str(), json_escape(rf.target).c_str(), json_escape(rf.path).c_str());
+            if (!rf.unit.empty()) fprintf(f, ", \"unit\": \"%s\"", json_escape(rf.unit).c_str());
+            if (rf.joints >= 0) fprintf(f, ", \"joints\": %d", rf.joints);
+            if (rf.own_joints >= 0) fprintf(f, ", \"own_joints\": %d", rf.own_joints);
+            fprintf(f, "}");
             ff = false;
         }
     };
@@ -2189,6 +2195,7 @@ static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8
 namespace slotcheck {
 static bool mesh_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out, std::vector<std::string>* all = nullptr);
 static bool mesh_joint_names(const std::vector<uint8_t>& b, std::set<std::string>& out);
+static bool chain_names_joint(const std::vector<uint8_t>& chain, const std::string& joint);
 static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::string>& out);
 static std::string material_fit(PakWriter& writer, PakReader& base_pak,
                                 const std::unordered_map<std::string, std::string>& suffixes,
@@ -3653,6 +3660,124 @@ static void add_slot_files(PakWriter& writer,
                 if (auto v = s.rfind("_v"); v != std::string::npos && v > s.rfind('/')) s.resize(v);
             return s;
         };
+        // A model part every option ships whole (its mesh, its material files and, in the same folder, its chain):
+        // its base copy is the part as ONE unit, every file from one source (the mod's base files or the game's),
+        // all or nothing, and the manifest says so ("unit"): the runtime swaps them together, the chain stopped
+        // (docs/RUNTIME_OPTIONS.md, Part units). Ken SFV Hair V2 ships the hair's mesh, material file and chain:
+        // the per-file checks below refuse the game's hair mesh (it lacks the 22 joints of the add-on's chain,
+        // which the game's own chain does not move) and the game's material file (the mod ships its own mesh),
+        // so "Off" changed nothing. Ingrid's Fly In A Bucket props (cat, book: mesh + material of 000/30-34).
+        // Joints: see below (never a chain bound to a joint that disappears with a mesh).
+        std::map<std::string, std::string> unit_of;   // lowercase pak path -> its unit (the chain's target, else the mesh's)
+        std::map<std::string, int> unit_joints;       // resource name (target or stored copy) -> joints of that mesh
+        for (auto& pm : chosen) {
+            const std::string lm = str_lower(pm);
+            if (lm.find(".mesh.") == std::string::npos) continue;
+            const std::string stem = part_stem(lm), dir = lm.substr(0, lm.rfind('/') + 1);
+            // a part's file: its mesh / material files (same stem), a chain in its folder when it is the only mesh there
+            size_t meshes_in_dir = 0;
+            for (auto& q : chosen) {
+                const std::string ql = str_lower(q);
+                if (ql.compare(0, dir.size(), dir) == 0 && ql.find('/', dir.size()) == std::string::npos
+                    && ql.find(".mesh.") != std::string::npos) ++meshes_in_dir;
+            }
+            auto of_part = [&](const std::string& ql) {
+                if (ql.find(".mesh.") != std::string::npos || str_ends_with(ql, ".mdf2.31")) return part_stem(ql) == stem;
+                return meshes_in_dir == 1 && ql.find("_chain.chain.") != std::string::npos
+                    && ql.compare(0, dir.size(), dir) == 0 && ql.find('/', dir.size()) == std::string::npos;
+            };
+            std::set<std::string> part;   // lowercase
+            std::map<std::string, std::string> spelled;   // lowercase -> the option's spelling (map keys)
+            for (auto& q : chosen) if (of_part(str_lower(q))) { part.insert(str_lower(q)); spelled[str_lower(q)] = q; }
+            std::string chain;
+            for (auto& q : part) if (q.find("_chain.chain.") != std::string::npos) chain = q;
+            if (part.size() < 2) continue;   // a mesh alone: the per-file checks (its material file is not the options')
+            std::string why;
+            // every option that ships a file of the part ships all of it (no mix of two sources on the model)
+            std::vector<const RtoOption*> shippers;
+            for (auto& op : rm.options) {
+                if (op.mode == "base") continue;
+                std::set<std::string> t;
+                for (auto& [q, mf] : op.files) if (of_part(str_lower(q))) t.insert(str_lower(q));
+                if (t.empty()) continue;
+                if (t != part && why.empty()) why = op.name + " ships " + std::to_string(t.size()) + " of its " + std::to_string(part.size()) + " files";
+                shippers.push_back(&op);
+            }
+            // one source for the whole part
+            const RtoOption* src = base_src(spelled[lm]);
+            for (auto& q : part) {
+                if (!why.empty()) break;
+                if (base_src(spelled[q]) != src) why = "its files come from several sources";
+                else if (!src && !base_pak.find(pak_path_hash(std::string_view(spelled[q])))) why = "the game has no " + q;
+            }
+            std::vector<uint8_t> mesh_data;
+            std::set<std::string> jb;
+            if (why.empty()) {
+                mesh_data = src ? src->files.at(spelled[lm]).read_data() : game_file(spelled[lm]);
+                if (!slotcheck::mesh_joint_names(mesh_data, jb)) why = "its mesh is not readable";
+            }
+            // its material files fit its mesh (materials defined, textures present)
+            for (auto& q : part) {
+                if (!why.empty() || !str_ends_with(q, ".mdf2.31")) continue;
+                const std::vector<uint8_t> d = material_data(spelled[q], src ? &src->files.at(spelled[q]) : nullptr);
+                why = slotcheck::material_fit(writer, base_pak, inv.suffixes, mesh_data, d);
+            }
+            // Joints. Without a chain in the part: the base mesh has every joint of the slot's (the model's chain
+            // there, the slot's own, stays bound to them). With one, the runtime goes from one (mesh, chain) of
+            // the part to another by setting the new chain first, on the mesh still worn, then the new mesh: a
+            // chain set on a mesh that lacks some of its joints leaves them out (the game itself sets Mai's
+            // esf028_001_30_Chain on four prop meshes that each lack most of its joints), so the joints that
+            // disappear with the old mesh must not be named by the new chain (its "_end" joints and collision
+            // joints, by UTF-16 name or name hash). Checked for every pair of what the model may wear there.
+            struct Wear { std::string who; std::set<std::string> joints; std::vector<uint8_t> chain; };
+            std::vector<Wear> wears;
+            if (why.empty()) {
+                wears.push_back({"the base", jb, {}});
+                if (!chain.empty()) wears.back().chain = src ? src->files.at(spelled[chain]).read_data() : game_file(spelled[chain]);
+            }
+            std::map<std::string, int> joints;
+            const std::string mt = resource_name(target_of(pm));
+            const RtoOption* own = own_of(pm);
+            for (auto* op : shippers) {
+                if (!why.empty()) break;
+                Wear w{op->name, {}, {}};
+                if (!slotcheck::mesh_joint_names(op->files.at(spelled[lm]).read_data(), w.joints)) { why = "the mesh of " + op->name + " is not readable"; break; }
+                if (!chain.empty()) w.chain = op->files.at(spelled[chain]).read_data();
+                size_t miss = 0;
+                for (auto& n : w.joints) if (!jb.count(n)) ++miss;
+                if (chain.empty() && op == own && miss) why = std::to_string(miss) + " joints of the slot's mesh missing";
+                joints[resource_name(stored_of(op->id, target_of(pm)))] = int(w.joints.size());
+                if (op == own) joints[mt] = int(w.joints.size());
+                wears.push_back(std::move(w));
+            }
+            // the scan must at least find a joint of each chain's own mesh (else the chain is not read this way)
+            for (auto& w : wears) {
+                if (!why.empty() || chain.empty()) break;
+                bool any = false;
+                for (auto& n : w.joints) if (!any && slotcheck::chain_names_joint(w.chain, n)) any = true;
+                if (!any) why = "the chain of " + w.who + " names no joint of its mesh";
+            }
+            for (size_t a = 0; a < wears.size() && why.empty() && !chain.empty(); ++a)
+                for (size_t b = 0; b < wears.size() && why.empty(); ++b) {
+                    if (a == b) continue;
+                    for (auto& n : wears[a].joints)
+                        if (!wears[b].joints.count(n) && slotcheck::chain_names_joint(wears[b].chain, n)) {
+                            why = "the chain of " + wears[b].who + " names " + n + ", a joint of " + wears[a].who + "'s mesh only";
+                            break;
+                        }
+                }
+            if (!why.empty()) {
+                if (!chain.empty())
+                    printf("      runtime options: part %s is not one unit (%s): its files are checked one by one\n", dir.c_str(), why.c_str());
+                continue;
+            }
+            joints[resource_name(stored_of("base", target_of(pm)))] = int(jb.size());
+            const std::string key = resource_name(target_of(chain.empty() ? pm : spelled[chain]));
+            for (auto& q : part) unit_of[q] = key;
+            for (auto& [r, n] : joints) unit_joints[r] = n;
+            printf("      runtime options: part %s as one unit (%zu files%s) from %s, %zu joints\n", dir.c_str(), part.size(),
+                   chain.empty() ? "" : ", its chain", src ? "the mod's base files" : "the game's files", jb.size());
+        }
         std::set<std::string> base_mesh;   // meshes given a base copy, lowercase: the model may wear them
         std::vector<std::string> order;    // meshes first: a material file is checked against them
         for (auto& p : chosen) if (str_lower(p).find(".mesh.") != std::string::npos) order.push_back(p);
@@ -3661,6 +3786,15 @@ static void add_slot_files(PakWriter& writer,
             const std::string low = str_lower(p);
             const RtoOption* src = base_src(p);
             if (!src && !base_pak.find(pak_path_hash(std::string_view(p)))) continue;   // nothing under it
+            if (auto u = unit_of.find(low); u != unit_of.end()) {   // a part unit: checked as a whole above
+                const ModFileMaps twins = {src ? &src->files : &mc->files_in_folder};
+                RtoFile rf = store("base", p, src ? &src->files.at(p) : nullptr, {}, src ? &twins : nullptr);
+                rf.unit = u->second;
+                if (auto j = unit_joints.find(rf.path); j != unit_joints.end()) rf.joints = j->second;
+                out.base.push_back(std::move(rf));
+                if (low.find(".mesh.") != std::string::npos) base_mesh.insert(low);
+                continue;
+            }
             // A mesh is swapped on a model that keeps its chains and its other parts: the copy must have every
             // joint of the slot's mesh, which they move. The game's Outfit 1 body as the base copy of Swimsuit
             // C. Viper (no body in its main files), without the 18 joints the swimsuit's chain moves, stopped the
@@ -3764,6 +3898,19 @@ static void add_slot_files(PakWriter& writer,
             }
             const ModFileMaps twins = {src ? &src->files : &mc->files_in_folder};
             out.base.push_back(store("base", p, src ? &src->files.at(p) : nullptr, {}, src ? &twins : nullptr));
+        }
+        // The options' files of a part unit say so too, their meshes with their joints (the runtime's order)
+        if (!unit_of.empty()) {
+            std::map<std::string, std::string> unit_target;   // target -> unit
+            for (auto& b : out.base) if (!b.unit.empty()) unit_target[b.target] = b.unit;
+            for (auto& [oi, files] : out.files)
+                for (auto& rf : files) {
+                    if (auto u = unit_target.find(rf.target); u != unit_target.end()) rf.unit = u->second;
+                    if (auto j = unit_joints.find(rf.path); j != unit_joints.end()) rf.joints = j->second;
+                }
+            for (auto& b : out.base)
+                if (b.kind == "mesh" && !b.unit.empty())
+                    if (auto j = unit_joints.find(b.target); j != unit_joints.end()) b.own_joints = j->second;
         }
         // Pick groups the menu offers without "None": a file the slot wears from one of their options has no base
         // copy, and no pick of another group ships it (a "None" would leave the option's file on the model)
@@ -3959,6 +4106,32 @@ static bool mesh_joint_names(const std::vector<uint8_t>& b, std::set<std::string
     const std::set<std::string> m(mats.begin(), mats.end());
     for (auto& n : names) if (!m.count(n)) out.insert(n);
     return true;
+}
+
+// A chain file names a joint by its UTF-16 name (the "_end" joint of each chain) or by its name hash (murmur3,
+// seed 0xFFFFFFFF, over the UTF-16LE name: collision joints...). Conservative: a match by chance only refuses.
+static bool chain_names_joint(const std::vector<uint8_t>& chain, const std::string& joint) {
+    std::vector<uint8_t> w;
+    for (char c : joint) { w.push_back(uint8_t(c)); w.push_back(0); }
+    if (w.empty()) return false;
+    if (std::search(chain.begin(), chain.end(), w.begin(), w.end()) != chain.end()) return true;
+    auto rotl = [](uint32_t x, int r) { return (x << r) | (x >> (32 - r)); };
+    uint32_t h = 0xFFFFFFFFu;
+    const size_t n = w.size() / 4;
+    for (size_t i = 0; i < n; ++i) {
+        uint32_t k; memcpy(&k, w.data() + 4 * i, 4);
+        k *= 0xcc9e2d51u; k = rotl(k, 15); k *= 0x1b873593u;
+        h ^= k; h = rotl(h, 13); h = h * 5 + 0xe6546b64u;
+    }
+    uint32_t k = 0;
+    const size_t t = w.size() & 3;
+    if (t >= 3) k ^= uint32_t(w[4 * n + 2]) << 16;
+    if (t >= 2) k ^= uint32_t(w[4 * n + 1]) << 8;
+    if (t >= 1) { k ^= w[4 * n]; k *= 0xcc9e2d51u; k = rotl(k, 15); k *= 0x1b873593u; h ^= k; }
+    h ^= uint32_t(w.size());
+    h ^= h >> 16; h *= 0x85ebca6bu; h ^= h >> 13; h *= 0xc2b2ae35u; h ^= h >> 16;
+    uint8_t hb[4]; memcpy(hb, &h, 4);
+    return std::search(chain.begin(), chain.end(), hb, hb + 4) != chain.end();
 }
 
 // Materials a material file defines (.mdf2.31: 100-byte material headers, name offset first)

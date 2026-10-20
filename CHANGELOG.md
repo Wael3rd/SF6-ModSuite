@@ -28,6 +28,10 @@
   too, its add-ons worn by default (what the sub-folder made before, same slot) and chosen in game; before, it made
   the combined outfit without options. A chain is no longer put back under a mesh that stays (a part's mesh without
   a way back keeps its own chain).
+- Runtime costume options: an add-on that brings a part's mesh, material and chain together (Ken SFV Hair V2) can be
+  turned off live: the part without it (the game's hair) is stored as one unit and swapped as one, the chain stopped
+  for the swap and set before the mesh; Ingrid's Fly In A Bucket book / cat add-ons give back the game's props. An
+  option worn by default that turning off would not change is no longer offered.
 - Joint constraints a mod ships (`.jcns`) are used by its outfit, as a replacement install uses them: the outfit gets
   its own copy of the game's `_jcs.user` naming them (or the mod's own, repointed), and its scene follows it. Before,
   the outfit drove the mod's mesh with the game's constraints (A.K.I. bare-legs mods with added toe bones). A

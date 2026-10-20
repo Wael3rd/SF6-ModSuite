@@ -166,7 +166,27 @@ natives/stm/product/model/esf/<fighter>/<slot folder>/rto/<option id>/_/<path in
   - the mod's base files (main files) are used when they fit.
   - a chain: not when a mesh of its part (same folder) has no base copy: the slot's own mesh stays, its own chain
     stays with it (Ken SFV Hair V2: the game's hair chain under the mod's hair; loader `2026-10-20-rto-grouped-addons`).
+    A part whose mesh, material file and chain change together is a **part unit** instead (below).
   The loader logs each refusal (`runtime options: no base copy of ... (why)`).
+- **Part units** (20/10, loader `2026-10-20-rto-units`): a model part that every option touching it ships whole
+  (its mesh, its material files and, when it is the only mesh of its folder, the chain of that folder) gets its base
+  copy as one unit: every file from one source (the mod's base files, else the game's), all or nothing, the per-file
+  checks above replaced by checks of the whole. Ken SFV Hair V2 ships the hair's mesh, material file and chain; the
+  per-file rules refused the game's hair mesh (it lacks the 22 joints of the add-on's chain) and the game's material
+  file (the mod ships its own mesh), so "Off" changed nothing on the model. Checks of a unit:
+  - its material files fit its mesh (`material_fit`: materials defined, textures present);
+  - without a chain in the unit: the base mesh has every joint of the slot's mesh (the model's chain there stays);
+  - with a chain: for every two (mesh, chain) the model may wear there (the base, each option shipping the part),
+    the chain of one names no joint that only the mesh of the other has (`_end` joints by UTF-16 name, collision
+    joints by name hash: murmur3, seed 0xFFFFFFFF, UTF-16LE), and each chain names at least one joint of its own
+    mesh (else it is not read this way: refused). The runtime sets the new chain before the new mesh (see Runtime),
+    so no joint that disappears with the old mesh is ever bound to the chain. Ken: the two hairs share 40 joints,
+    the game's has 73 of its own (none named by the add-on's chain), the add-on's 22 (none named by the game's).
+  The manifest marks every file of a unit (base copies and the options' copies) with `unit` (the target of its
+  chain, else of its mesh) and its meshes with `joints` (logs). Logged: `runtime options: part <folder> as one unit
+  (N files[, its chain]) from the game's files | the mod's base files, J joints`, or with a chain
+  `... is not one unit (why): its files are checked one by one`. Ingrid's Fly In A Bucket props (book 000/32 + 34,
+  cat 000/30: mesh + material each) are units too: "Off" gives back the game's props.
 - **Required groups**: a pick group one of whose options ships a file the slot wears with no base copy, and no pick
   of another group ships it, is listed in the slot's `required`: the menu offers it **without None** (the group
   always wears one of its options). On Wael's install: Mai's skin group, both groups of each C. Viper mod. Mai's
@@ -236,6 +256,9 @@ game names resources: lowercase, without `natives/stm/` and without the version 
 - `slots[].options` lists only options that have files for that slot (a multi-costume mod's other folders belong to
   its other slots).
 - `slots[].former`: see [Saved choices and slot numbers](#saved-choices-and-slot-numbers).
+- File entries may also carry `unit` (the file belongs to a part unit, named by the target of its chain, else of
+  its mesh: swapped together), `joints` (a unit's mesh: its joint count) and `own_joints` (a unit's base mesh: the
+  joint count of the slot's own mesh at that target). Older plugins ignore them.
 - `slots[].required`: pick groups (index in the mod's `groups`) offered without None (see Base copies). A side's
   choices that hold no option of such a group (a None saved before) wear its default: the slot's default option in
   that group, else its first offered option (`complete()` in `rto_data.cpp`, also after every menu change).
@@ -310,6 +333,22 @@ options in the set (see `slots[].required`).
   (`MeshReady`; `MaterialReady` and `MaterialNum` > 0) and again **on the next frame**, else the part goes back at
   once to what it wore (a holder of that file made before the swap) and is tried again later (1 s, 2 s, 4 s...;
   left out after 6 tries, one log line). The probe's not-resident body stayed `MeshReady` 0 for 50+ frames.
+- **Part units** (mesh and/or material and the chain of the same GameObject all change; 20/10): the chain is
+  stopped (`via.Component.set_Enabled(false)`, only if it was enabled), and on a later frame: `set_ChainAsset(new
+  chain)` + `restart` on the mesh still worn, then `setMesh` / `set_Material`, then `restart` again (the chain set
+  up on the mesh now worn); the next frame, if the part is drawable the chain runs again, else the old unit goes
+  back the same way (chain first) and the chain runs again a frame later. Why this order: the 19/10 crash came from
+  joints that went away with a mesh while a chain still moved them; a chain set on a mesh lacking some of its joints
+  leaves them out (the game itself sets Mai's `esf028_001_30_Chain` on four prop meshes that each lack most of its
+  joints), so the old chain is released while all its joints are there, and the new chain, set first, is never
+  bound to a joint that disappears (the loader's check above). No frame ever has a running chain on a part made of
+  two sources; between two frames a part wears a whole unit, so a model reset (or a fault) starts a stopped chain
+  again at once; a stopped chain is started again after 2 s at most. A unit's chain never changes alone (step 4
+  skips it), and a unit's mesh whose chain is not on the model is left as is (one log line).
+- **Toggles Off cannot change**: an option worn by default none of whose files has a base copy (Off would show the
+  same model) is not offered; a slot left without any row gets no menu and no F hint. Logged once at start:
+  `rto: <fighter>/<folder>: "<option>" cannot be turned off live (no copy of the outfit without it): not in the menu`.
+  With a manifest written before part units, Ken SFV Hair V2 and Ingrid's book / cat are hidden that way.
 - **Chains**: the body's chain is not loaded from the slot's folder (Mai: `esf028/002/esf028_002_01_chain.chain`),
   so an option's `..._01_chain.chain` stands for the chain of the part with the same number (the GameObject whose
   mesh is `..._01.mesh`); the way back is the file that part wore when first seen.

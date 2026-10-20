@@ -26,6 +26,8 @@ std::vector<File> files_of(const Json* j) {
         f.kind = str_of(e.get("kind"));
         f.target = norm_path(str_of(e.get("target")));
         f.path = norm_path(str_of(e.get("path")));
+        f.unit = norm_path(str_of(e.get("unit")));
+        f.joints = int_of(e.get("joints"), -1);
         if (!f.kind.empty() && !f.target.empty() && !f.path.empty()) out.push_back(std::move(f));
     }
     return out;
@@ -310,7 +312,7 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
     const Mod* mod = m.mod_of(s);
     if (!mod) return out;
     // per target: the options of this slot that ship it (rank, id, stored path)
-    struct Ship { int rank; std::string id, path; };
+    struct Ship { int rank; std::string id, path, unit; };
     std::map<std::string, std::vector<Ship>> by_target;
     std::map<std::string, std::string> kind_of;
     for (auto& [id, files] : s.files) {
@@ -318,12 +320,12 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
         if (x < 0) continue;
         for (auto& f : files) {
             if (!live_kind(f.kind)) continue;
-            by_target[f.target].push_back({ mod->options[static_cast<size_t>(x)].rank, id, f.path });
+            by_target[f.target].push_back({ mod->options[static_cast<size_t>(x)].rank, id, f.path, f.unit });
             kind_of[f.target] = f.kind;
         }
     }
-    std::map<std::string, std::string> base;
-    for (auto& f : s.base) if (live_kind(f.kind)) { base[f.target] = f.path; kind_of.emplace(f.target, f.kind); }
+    std::map<std::string, const File*> base;
+    for (auto& f : s.base) if (live_kind(f.kind)) { base[f.target] = &f; kind_of.emplace(f.target, f.kind); }
     auto winner = [&](const std::vector<Ship>* ships, const std::vector<std::string>& set) -> const Ship* {
         const Ship* w = nullptr;
         if (ships) for (auto& sh : *ships) if (has(set, sh.id) && (!w || sh.rank > w->rank)) w = &sh;
@@ -339,9 +341,9 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
         if ((wc && wd && wc->id == wd->id) || (!wc && !wd)) {
             w.orig = true;
         } else if (wc) {
-            w.orig = false; w.path = wc->path;
+            w.orig = false; w.path = wc->path; w.unit = wc->unit;
         } else if (auto b = base.find(target); b != base.end()) {
-            w.orig = false; w.path = b->second;
+            w.orig = false; w.path = b->second->path; w.unit = b->second->unit;
         } else {
             w.orig = true;                                   // no way back without the option: the slot's own file
             if (notes) notes->push_back("no base copy of " + target + ": the slot's own file stays");
@@ -349,6 +351,29 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
         out[target] = std::move(w);
     }
     return out;
+}
+
+bool removable(const Manifest& m, const Slot& s, const std::string& id) {
+    if (!has(s.defaults, id)) return true;                   // not worn by default: On adds it, Off goes back
+    std::vector<std::string> without = s.defaults;
+    erase_id(without, id);
+    for (auto& [t, w] : desired(m, s, without)) if (!w.orig) return true;   // the slot's defaults: every target orig
+    return false;
+}
+
+int joints_at(const Manifest& m, const Slot& s, const std::string& path) {
+    for (auto& f : s.base) if (f.path == path) return f.joints;
+    for (auto& [id, files] : s.files) for (auto& f : files) if (f.path == path) return f.joints;
+    // a target: the slot's own file there is that of the default option that wins it (same bytes)
+    const Mod* mod = m.mod_of(s);
+    int rank = -1, j = -1;
+    if (mod)
+        for (auto& [id, files] : s.files) {
+            const int x = mod->find(id);
+            if (x < 0 || !has(s.defaults, id) || mod->options[static_cast<size_t>(x)].rank < rank) continue;
+            for (auto& f : files) if (f.target == path) { rank = mod->options[static_cast<size_t>(x)].rank; j = f.joints; }
+        }
+    return j;
 }
 
 // ---- keeping a set coherent ----
@@ -396,6 +421,7 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
         for (int oi : g.options) {
             const Option& o = mod->options[static_cast<size_t>(oi)];
             if (!offered(s, o.id)) continue;
+            if (o.mode == "toggle" && !removable(m, s, o.id)) continue;   // its Off would change nothing
             if (o.mode == "pick") picks.push_back(oi);
             else if (o.mode == "toggle") toggles.push_back(oi);
         }

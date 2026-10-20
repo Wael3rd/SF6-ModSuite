@@ -20,7 +20,11 @@ constexpr const char* kManifestFormat = "sf6-costume-options-1";
 constexpr const char* kChoicesFormat = "sf6-costume-choices-1";
 
 // ---- the manifest ----
-struct File { std::string kind, target, path; };          // kind: mesh, material, texture, chain, colour, other
+struct File {
+    std::string kind, target, path;                          // kind: mesh, material, texture, chain, colour, other
+    std::string unit;                                        // a part unit (its chain's target, else its mesh's): one swap
+    int joints = -1;                                         // a unit's mesh: its joint count (logs)
+};
 struct Option {
     std::string id, name, folder, mode, apply;               // mode: base, pick, toggle
     int group = -1;
@@ -74,6 +78,12 @@ bool parse_choices(const std::string& text, Choices& out);
 void sanitize(Choices& c, const Manifest& m, std::vector<std::string>& notes);
 std::string write_choices(const Choices& c, const Manifest& m);
 
+// A toggle the slot wears by default whose Off would change nothing on the model (no base copy of any of its
+// files, nothing else ships them): not offered (Ken SFV Hair V2 before part units: Off did nothing)
+bool removable(const Manifest& m, const Slot& s, const std::string& id);
+// The joint count the manifest gives for a mesh (a stored copy, or a target: the slot's own file), -1
+int joints_at(const Manifest& m, const Slot& s, const std::string& path);
+
 // The options a side wears on a slot: the slot's defaults until the user changed something
 std::vector<std::string> chosen_of(const Manifest& m, const Slot& s, const Choices& c, int side);
 
@@ -89,6 +99,7 @@ struct Want {
     std::string kind;
     bool orig = true;        // the slot's own file at the target (what the model loads without any change)
     std::string path;        // else this stored copy
+    std::string unit;        // the part unit of the file wanted (a base copy's or an option's), "" = none
 };
 // target -> what to load there, for every target an option or a base copy of the slot names
 std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std::vector<std::string>& chosen,
