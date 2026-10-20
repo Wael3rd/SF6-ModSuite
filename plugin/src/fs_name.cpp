@@ -448,7 +448,7 @@ void tick(uint32_t ev) {
         if (ev & EV_SELECT_END) g_select = false;
         if (ev & EV_MENU_OPEN) { g_bs = true; g_bs_closed = false; g_bs_seen = g_frame; }
         if ((ev & EV_MENU_CLOSE) && g_bs) g_bs_closed = true;
-        if (!g_bs || g_select) { hide(g_select ? "character select" : "Battle Settings closed"); return; }
+        if (!g_bs || g_select) { g_fs_vis = false; hide(g_select ? "character select" : "Battle Settings closed"); return; }
         Obj* agent = fs_agent();
         const bool fs_vis = agent && visible(agent);
         if (fs_vis && !g_fs_vis) { g_fs_since = g_frame; g_fid = -1; }   // a new screen: its fighter found again
