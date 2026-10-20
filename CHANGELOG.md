@@ -85,6 +85,8 @@
   parts); an outfit that is a game outfit with parts taken off (Ryu Outfit 1 No Cloak, Sagat Outfit 1 Shirtless) is an
   option of that game outfit. Their former outfits move there with their option chosen. Each build logs a short merge
   audit (what was merged, what looks related and why it was not).
+- Runtime costume options (`on`): materials an option brings that the outfit itself has not get their colour entries
+  in the outfit's colour files (Aloha Ryu C2's head: eyebrows and beard are coloured again); nothing else changes.
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

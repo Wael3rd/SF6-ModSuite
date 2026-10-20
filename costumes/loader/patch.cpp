@@ -2,6 +2,7 @@
 #include <string>
 #include <cstring>
 #include <cctype>
+#include <algorithm>
 #define BCDEC_IMPLEMENTATION
 #include "bcdec.h"
 
@@ -841,6 +842,152 @@ bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<ui
     CmdDoc doc;
     if (!cmd_parse(data, doc)) return false;
     out = cmd_write(doc, nullptr);
+    return true;
+}
+
+namespace {
+std::string cmd_name(const CmdInst& in) {   // a ClusterData's Name
+    std::string s;
+    if (in.fields.empty()) return s;
+    const auto& raw = in.fields[0].raw;
+    for (size_t k = 0; k + 1 < raw.size(); k += 2) {
+        const uint16_t ch = uint16_t(raw[k] | (raw[k + 1] << 8));
+        if (!ch) break;
+        s += char(ch);
+    }
+    return s;
+}
+uint32_t cmd_part_type(const CmdInst& md) {   // a MaterialData's Type (ePartsType)
+    uint32_t t = UINT32_MAX;
+    if (!md.fields.empty() && md.fields[0].raw.size() == 4) memcpy(&t, md.fields[0].raw.data(), 4);
+    return t;
+}
+// The MaterialData instances of a colour file (the root's Parts), or empty when the tree is not the expected one
+std::vector<uint32_t> cmd_parts(const CmdDoc& doc) {
+    if (doc.objects.empty() || doc.objects[0] >= doc.inst.size()) return {};
+    const CmdInst& root = doc.inst[doc.objects[0]];
+    if (root.fields.size() != 1 || root.fields[0].kind != 'O') return {};
+    for (uint32_t m : root.fields[0].refs)
+        if (m == 0 || m >= doc.inst.size() || doc.inst[m].fields.size() < 2 || doc.inst[m].fields[1].kind != 'O') return {};
+    return root.fields[0].refs;
+}
+size_t cmd_cluster_count(const CmdDoc& doc) {
+    size_t n = 0;
+    for (uint32_t m : cmd_parts(doc)) n += doc.inst[m].fields[1].refs.size();
+    return n;
+}
+// Inserts instances at index pos (their references already numbered as they will be), every reference to pos and
+// after moving with them
+void cmd_insert(CmdDoc& doc, uint32_t pos, std::vector<CmdInst> block) {
+    const uint32_t k = (uint32_t)block.size();
+    for (auto& in : doc.inst)
+        for (auto& f : in.fields)
+            for (auto& r : f.refs) if (r >= pos) r += k;
+    for (auto& o : doc.objects) if (o >= pos) o += k;
+    doc.inst.insert(doc.inst.begin() + pos, std::make_move_iterator(block.begin()), std::make_move_iterator(block.end()));
+}
+}
+
+bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<const std::vector<uint8_t>*>& sources,
+                              const std::vector<std::string>& materials, std::vector<std::string>& added,
+                              std::string* why) {
+    auto fail = [&](const char* w) { if (why) *why = w; return false; };
+    CmdDoc doc;
+    if (!cmd_parse(data, doc) || cmd_parts(doc).empty()) return fail("colour file layout not understood");
+    if (cmd_write(doc, nullptr) != data) return fail("colour file does not read back byte for byte");
+    const size_t before = cmd_cluster_count(doc);
+    std::unordered_map<uint32_t, uint32_t> crc;   // type -> CRC in this file
+    for (size_t i = 1; i < doc.inst.size(); i++) crc.emplace(doc.inst[i].type, doc.inst[i].crc);
+    auto has = [&](uint32_t type, const std::string& name) {
+        for (uint32_t m : cmd_parts(doc))
+            if (cmd_part_type(doc.inst[m]) == type)
+                for (uint32_t c : doc.inst[m].fields[1].refs)
+                    if (c && c < doc.inst.size() && cmd_name(doc.inst[c]) == name) return true;
+        return false;
+    };
+    std::vector<CmdDoc> src(sources.size());
+    std::vector<bool> src_ok(sources.size(), false);
+    for (size_t s = 0; s < sources.size(); s++)
+        src_ok[s] = sources[s] && cmd_parse(*sources[s], src[s]) && !cmd_parts(src[s]).empty();
+    std::vector<std::string> done;
+    for (auto& name : materials) {
+        if (std::find(done.begin(), done.end(), name) != done.end()) continue;
+        done.push_back(name);
+        for (size_t s = 0; s < sources.size(); s++) {   // the first source naming the material gives every entry of it
+            if (!src_ok[s]) continue;
+            const CmdDoc& sd = src[s];
+            bool found = false;
+            for (uint32_t sm : cmd_parts(sd)) {
+                const uint32_t type = cmd_part_type(sd.inst[sm]);
+                for (uint32_t sc : sd.inst[sm].fields[1].refs) {
+                    if (!sc || sc >= sd.inst.size() || cmd_name(sd.inst[sc]) != name) continue;
+                    found = true;
+                    if (has(type, name)) continue;
+                    // The cluster and every instance under it, in the source's order (an instance after the ones
+                    // it references, as the game writes them)
+                    std::vector<uint32_t> sub, todo{sc};
+                    std::vector<bool> seen(sd.inst.size(), false);
+                    bool bad = false;
+                    while (!todo.empty()) {
+                        const uint32_t i = todo.back(); todo.pop_back();
+                        if (!i || seen[i]) continue;
+                        if (i >= sd.inst.size()) { bad = true; break; }
+                        seen[i] = true;
+                        sub.push_back(i);
+                        for (auto& f : sd.inst[i].fields) for (uint32_t r : f.refs) todo.push_back(r);
+                    }
+                    std::sort(sub.begin(), sub.end());
+                    for (uint32_t i : sub) {
+                        auto it = crc.find(sd.inst[i].type);
+                        if (it != crc.end() && it->second != sd.inst[i].crc) bad = true;   // another layout
+                        for (auto& f : sd.inst[i].fields) for (uint32_t r : f.refs) if (r && r > i) bad = true;
+                    }
+                    if (bad || sub.empty() || sub.back() != sc) continue;
+                    // Where it goes: right before the MaterialData of that part type, else a new MaterialData of
+                    // that type right before the root
+                    uint32_t md = 0;
+                    for (uint32_t m : cmd_parts(doc)) if (cmd_part_type(doc.inst[m]) == type) { md = m; break; }
+                    const uint32_t pos = md ? md : doc.objects[0];
+                    std::unordered_map<uint32_t, uint32_t> at;
+                    for (size_t x = 0; x < sub.size(); x++) at[sub[x]] = pos + (uint32_t)x;
+                    std::vector<CmdInst> block;
+                    for (uint32_t i : sub) {
+                        CmdInst in = sd.inst[i];
+                        for (auto& f : in.fields) for (auto& r : f.refs) if (r) r = at.at(r);
+                        block.push_back(std::move(in));
+                    }
+                    const uint32_t cl = pos + (uint32_t)sub.size() - 1;
+                    if (!md) {
+                        if (auto it = crc.find(sd.inst[sm].type); it != crc.end() && it->second != sd.inst[sm].crc) continue;
+                        CmdInst m = sd.inst[sm];
+                        m.fields[1].refs = {cl};
+                        block.push_back(std::move(m));
+                    }
+                    const uint32_t k = (uint32_t)block.size();
+                    for (auto& in : block) crc.emplace(in.type, in.crc);
+                    cmd_insert(doc, pos, std::move(block));
+                    if (md) {
+                        doc.inst[md + k].fields[1].refs.push_back(cl);
+                    } else {
+                        // the new part at the end of the root's Parts: the parts there keep their positions (the
+                        // Color Mod lays its colour trees over the live data part by part, by position)
+                        doc.inst[doc.objects[0]].fields[0].refs.push_back(pos + k - 1);
+                    }
+                    added.push_back(name);
+                }
+            }
+            if (found) break;
+        }
+    }
+    if (added.empty()) return true;
+    std::vector<uint8_t> out = cmd_write(doc, nullptr);
+    // Read back with the same parser: every entry there, the others unchanged
+    CmdDoc back;
+    if (!cmd_parse(out, back) || cmd_cluster_count(back) != before + added.size()) {
+        added.clear();
+        return fail("the written colour file does not read back");
+    }
+    data = std::move(out);
     return true;
 }
 
