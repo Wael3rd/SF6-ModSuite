@@ -4,43 +4,47 @@
 // preview has options, the bottom input guide bar gets an "F  Costume options" entry while the costume row
 // is focused; that key on the costume row opens the game's option window through the core's option service
 // (the Color Mod's colour editor opens the same way from the Color row; its keys are F on the Color row, X,
-// and C / V inside its editor). Pages of at most 7 rows (the dialog's pool): the player side, one choice
-// row per pick group (None + its options, at most 15 labels a row: R9), one On / Off row per toggle,
-// More options, Restore defaults. A change is saved at once and shown on the preview by rto.cpp.
+// and C / V and its page keys inside its editor). Pages of at most 7 rows (the dialog's pool): one choice row
+// per pick group (None + its options, at most 15 labels a row: R9), one On / Off row per toggle; the first
+// page also holds the player side (top) and Restore defaults (bottom). Several pages turn like the colour
+// editor's: the game's tab keys (A / E on an AZERTY keyboard, Q / E on a QWERTY one) or L1 / R1, wrapping, or a
+// click left / right on the title, which reads "<prev>   NAME  -  P1   2/3   <next>". A change is saved at once
+// and shown on the preview by rto.cpp.
 // (No preset row: the mod's former variants only serve the migration of a Battle Settings choice, rto.cpp.)
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <set>
 
 namespace slots::rto::menu {
 namespace {
 
 constexpr int kRowsPerPage = 7;
+constexpr int kHeadRows = 2;                        // the first page's own rows: Player side, Restore defaults
+constexpr size_t kPagedNameChars = 30;              // the outfit's name in a paged title (room for the keys and "2/3")
 constexpr float kDockX = -430.0f;                   // the dialog docked left: the preview stays visible
 
-struct Act { enum Kind { Side, Option, More, Restore } kind = Option; int page = 0, pos = 0, row = -1; };
+struct Act { enum Kind { Side, Option, Restore } kind = Option; int page = 0, pos = 0, row = -1; };
 
 struct State {
     bool active = false;
-    uint32_t opened_at = 0, closed_at = 0, refresh_at = 0;
+    uint32_t opened_at = 0, closed_at = 0;
     const Slot* slot = nullptr;
-    int side = 0, page = 0;
+    int side = 0, page = 0;                         // page: the one on screen (pages are siblings, never stacked)
     std::vector<Row> rows;
     std::vector<std::string> chosen;
     std::vector<std::string> shown;     // the set the menu showed last (keep_hidden: hidden NSFW choices kept)
     std::vector<std::vector<int>> pages;            // per page: indexes into rows
     std::vector<int64_t> groups;
-    std::map<int64_t, Act> acts;                    // every entry made while the menu is open (a parent page keeps old ids)
-    std::set<int> stale;                            // pages whose values changed since they were built
-    std::map<int, int> focus;                       // per page: the row to land on when it is rebuilt
+    std::map<int64_t, Act> acts;                    // every entry made while the menu is open (old ids stay: a late callback)
     int rebuild_page = -1, rebuild_pos = 0;         // asked by a callback, done on the next frame
+    bool prev_was = false, next_was = false;        // the page keys, last frame
 };
 State S;
 bool g_svc = false;
@@ -79,7 +83,7 @@ struct Hint {
     uint32_t gwrites = 0;                           // our guide bar writes this visit (logged when it ends)
 } H;
 
-uint32_t g_pad_a = 32;
+uint32_t g_pad_a = 32, g_pad_l1 = 256, g_pad_r1 = 1024;   // via.hid.GamePadButton RDown / LTrigTop / RTrigTop
 bool g_pad_bits = false;
 
 const SF6CoreAPI* A() { return ui::core(); }
@@ -99,8 +103,11 @@ uint32_t pad_mask() {
     }
     if (!g_pad_bits) {
         g_pad_bits = true;
-        if (auto* td = api().tdb()->find_type("via.hid.GamePadButton"))
+        if (auto* td = api().tdb()->find_type("via.hid.GamePadButton")) {
             if (auto* f = td->find_field("RDown")) g_pad_a = static_cast<uint32_t>(f->get_data<int32_t>(nullptr));
+            if (auto* f = td->find_field("LTrigTop")) g_pad_l1 = static_cast<uint32_t>(f->get_data<int32_t>(nullptr));
+            if (auto* f = td->find_field("RTrigTop")) g_pad_r1 = static_cast<uint32_t>(f->get_data<int32_t>(nullptr));
+        }
     }
     Obj* devs = m_dev ? call_obj(m_dev, reinterpret_cast<Obj*>(gp)) : nullptr;
     uint32_t mask = 0;
@@ -116,22 +123,95 @@ bool game_has_focus() {
     return pid == GetCurrentProcessId();
 }
 
+// ---- page keys: the Color Mod's colour editor's ----
+// The game's tab keys (app.InputAssign.Digital.Id UITabL / UITabR, L1 / R1 on a pad). On a keyboard the game names
+// the physical key by the layout in use (A on an AZERTY keyboard, Q on a QWERTY one, where A moves left in the
+// menus), so the symbol comes from the game (InputGuideManager.GetSymbolText, keyboard mode) and the key read is the
+// letter it names. A symbol naming no letter or digit, or no answer: the game's default physical keys (scan codes
+// 0x10 / 0x12) in the layout in use, else A / E. Asked again every 120 frames (the key configuration or the layout
+// can change while the game runs).
+struct PageKeys { bool set = false; uint32_t at = 0; std::string sym[2]; int vk[2] = {}; std::string sig; } g_keys;
+
+int key_letter(const std::string& s) {              // "<ICON KeyQ>" -> 'Q'; 0 = no single letter / digit
+    static const std::string pre = "<ICON Key";
+    const size_t i = s.find(pre);
+    if (i == std::string::npos || i + pre.size() + 1 >= s.size() || s[i + pre.size() + 1] != '>') return 0;
+    const char c = s[i + pre.size()];
+    return ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) ? c : 0;
+}
+void read_page_keys() {
+    static Method* m_symbol = nullptr;
+    static int32_t ids[2] = { -1, -1 };
+    static bool resolved = false;
+    if (!resolved) {
+        resolved = true;
+        auto* id_td = api().tdb()->find_type("app.InputAssign.Digital.Id");
+        const char* names[2] = { "UITabL", "UITabR" };
+        for (int i = 0; i < 2; ++i)
+            if (auto* f = id_td ? id_td->find_field(names[i]) : nullptr) ids[i] = f->get_data<int32_t>(nullptr);
+        if (auto* gm_td = api().tdb()->find_type("app.InputGuideManager"))
+            m_symbol = method_of(gm_td, "GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)", 4);
+    }
+    Obj* gm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.InputGuideManager"));
+    std::string sig;
+    for (int i = 0; i < 2; ++i) {
+        constexpr int32_t kModeKeyboard = 2;            // app.InputGuideMode: 1 GamePad, 2 KeyboardAndMouse
+        std::string s = gm && m_symbol && ids[i] >= 0
+            ? str(call_obj(m_symbol, gm, { arg_i32(ids[i]), arg_i32(kModeKeyboard), arg_i32(0), arg_i32(0) })) : std::string();
+        int vk = key_letter(s);
+        const char* from = "game";
+        if (!vk) {
+            const UINT pv = MapVirtualKeyW(i ? 0x12 : 0x10, MAPVK_VSC_TO_VK);
+            const bool letter = (pv >= 'A' && pv <= 'Z') || (pv >= '0' && pv <= '9');
+            vk = letter ? static_cast<int>(pv) : (i ? 'E' : 'A');
+            s = std::string("<ICON Key") + static_cast<char>(vk) + ">";
+            from = letter ? "physical default" : "A / E";
+        }
+        g_keys.sym[i] = s;
+        g_keys.vk[i] = vk;
+        char b[96];
+        std::snprintf(b, sizeof b, "%s%s (vk 0x%02X, %s)", i ? " / " : "", s.c_str(), vk, from);
+        sig += b;
+    }
+    if (sig != g_keys.sig) { g_keys.sig = sig; logf("rto: menu page keys: %s", sig.c_str()); }
+}
+const PageKeys& page_keys() {
+    if (!g_keys.set || g_frame - g_keys.at >= 120) {
+        g_keys.set = true;
+        g_keys.at = g_frame;
+        try { read_page_keys(); } catch (...) { g_keys.sym[0] = "<ICON KeyA>"; g_keys.sym[1] = "<ICON KeyE>"; g_keys.vk[0] = 'A'; g_keys.vk[1] = 'E'; }
+    }
+    return g_keys;
+}
+
+// The colour editor's paged title: "<prev>   TITLE   2/3   <next>" (pad: L1 / R1), the title alone on one page
+std::string page_title(const std::string& title, int pg, int n) {
+    if (n <= 1) return title;
+    const std::string prev = H.pad ? "<ICON BtnL1>" : page_keys().sym[0], next = H.pad ? "<ICON BtnR1>" : page_keys().sym[1];
+    return prev + "   " + title + "   " + std::to_string(pg) + "/" + std::to_string(n) + "   " + next;
+}
+
+// A left click on the title row, left or right of the title (where the page keys' glyphs sit): -1 previous, 1 next,
+// 0 none. The colour editor's area (1080p reference; its dialog is docked like ours on Fighter Settings). The cursor
+// is read only while the game window is in front.
+int mouse_on_title() {
+    HWND hw = GetForegroundWindow();
+    DWORD pid = 0;
+    if (hw) GetWindowThreadProcessId(hw, &pid);
+    RECT rc{};
+    POINT p{};
+    if (!hw || pid != GetCurrentProcessId() || !GetClientRect(hw, &rc) || !GetCursorPos(&p) || !ScreenToClient(hw, &p)) return 0;
+    const double w = rc.right - rc.left, h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return 0;
+    const double sx = w / 1920, sy = h / 1080;
+    if (!(p.y > 190 * sy && p.y < 252 * sy && p.x > 40 * sx && p.x < 1020 * sx)) return 0;
+    return p.x < 470 * sx ? -1 : p.x > 590 * sx ? 1 : 0;
+}
+
 // ---- pages ----
-void layout_pages() {
-    S.pages.clear();
-    const int head = 2;                                                     // side, restore
-    const int total = static_cast<int>(S.rows.size());
-    int i = 0, p = 0;
-    do {
-        const int room = kRowsPerPage - (p == 0 ? head : 0);
-        const bool last = total - i <= room;
-        const int take = last ? total - i : room - 1;                       // - "More options"
-        std::vector<int> pg;
-        for (int k = 0; k < take; ++k) pg.push_back(i + k);
-        i += take;
-        S.pages.push_back(pg);
-        ++p;
-    } while (i < total && p < 16);
+int page_rows(int p) {                              // the entries of page p (its option rows, and the first page's own)
+    if (p < 0 || p >= static_cast<int>(S.pages.size())) return 0;
+    return static_cast<int>(S.pages[static_cast<size_t>(p)].size()) + (p == 0 ? kHeadRows : 0);
 }
 
 int64_t add_entry(int64_t g, int kind, const std::string& key, const std::string& title, const std::string& desc,
@@ -152,14 +232,15 @@ void build() {
     for (int64_t g : S.groups) A()->opt_remove_group(C(), g);
     S.groups.clear();
     S.rows = rows(manifest(), *S.slot, S.chosen);
-    layout_pages();
+    S.pages = split_pages(static_cast<int>(S.rows.size()), kRowsPerPage, kHeadRows);
+    const int n = static_cast<int>(S.pages.size());
     const std::string who = S.side == 1 ? "P2" : "P1";
-    // a long outfit name is cut ("..."): the side stays readable
-    const std::string title = upper(clip_name(S.slot->label.empty() ? S.slot->name : S.slot->label, kTitleNameChars))
-                            + "  -  " + who;
+    // a long outfit name is cut ("..."): the side and the page stay readable
+    const std::string title = upper(clip_name(S.slot->label.empty() ? S.slot->name : S.slot->label,
+                                              n > 1 ? kPagedNameChars : kTitleNameChars)) + "  -  " + who;
     const std::string live = "The preview shows it at once; saved for " + who + ".";
-    for (int p = 0; p < static_cast<int>(S.pages.size()); ++p) {
-        const int64_t g = A()->opt_group(C(), page_key(p).c_str(), title.c_str(), "Costume options");
+    for (int p = 0; p < n; ++p) {
+        const int64_t g = A()->opt_group(C(), page_key(p).c_str(), page_title(title, p + 1, n).c_str(), "Costume options");
         S.groups.push_back(g);
         if (g < 0) continue;
         int pos = 0;
@@ -178,8 +259,6 @@ void build() {
             Act a; a.kind = Act::Option; a.row = ri;
             put(add_entry(g, SF6CORE_OPT_CHOICE, "row" + std::to_string(ri), r.title, desc, r.labels, r.value), a);
         }
-        if (p + 1 < static_cast<int>(S.pages.size()))
-            put(add_entry(g, SF6CORE_OPT_BUTTON, "more", "More options", "The next options of this outfit.", {}, 0), { Act::More });
         if (p == 0)
             put(add_entry(g, SF6CORE_OPT_BUTTON, "restore", "Restore defaults",
                           "Back to the options the outfit was installed with (Fluffy's choice or the loader's), for " + who + ".", {}, 0),
@@ -190,12 +269,29 @@ void build() {
 // From a callback: on the next frame (the core is in its value / button pass now)
 void rebuild_later(int page, int pos) { S.rebuild_page = page; S.rebuild_pos = pos; }
 
-void rebuild(int page, int pos) {
+// Every page is built again (the values as they are now, the title glyphs of the device in use), the window shows
+// `page` with the cursor on row `pos` (the last row when that page is shorter). The pages are siblings: the game
+// replaces the page on screen, nothing is stacked (Esc closes the menu from any page).
+void show(int page, int pos) {
     build();
-    for (int p = 0; p < static_cast<int>(S.pages.size()); ++p) if (p != page) S.stale.insert(p);
-    S.stale.erase(page);
-    S.focus[page] = pos;
-    A()->opt_navigate(C(), page_key(page).c_str(), SF6CORE_OPT_NAV_REBUILD, pos);
+    S.page = std::max(0, std::min(page, static_cast<int>(S.pages.size()) - 1));
+    S.rebuild_page = -1;
+    pos = std::max(0, std::min(pos, page_rows(S.page) - 1));
+    A()->opt_navigate(C(), page_key(S.page).c_str(), SF6CORE_OPT_NAV_REBUILD, pos);
+}
+
+// The colour editor's page turn: previous / next, wrapping; the cursor stays on the same row index when the
+// other page has it
+void turn(bool next) {
+    const int n = static_cast<int>(S.pages.size());
+    if (n <= 1) return;
+    int pos = 0;
+    const int64_t fe = A()->opt_focused_entry();
+    auto it = fe >= 0 ? S.acts.find(fe) : S.acts.end();
+    if (it != S.acts.end() && it->second.page == S.page) pos = it->second.pos;
+    const int from = S.page;
+    show((S.page + (next ? 1 : n - 1)) % n, pos);
+    logf("rto: menu page %d -> %d of %zu (%s, row %d)", from + 1, S.page + 1, S.pages.size(), next ? "next" : "previous", pos);
 }
 
 void commit(const char* why) {
@@ -268,10 +364,7 @@ void SF6CORE_CALL cb_value(void*, int64_t entry, int64_t value) {
             for (size_t k = 0; same && k < now.size(); ++k)
                 if (static_cast<int>(k) == a.row ? now[k].value != value : now[k].value != S.rows[k].value) same = false;
             if (!same) rebuild_later(a.page, a.pos);
-            else {
-                S.rows = now;
-                for (int p = 0; p < static_cast<int>(S.pages.size()); ++p) if (p != a.page) S.stale.insert(p);
-            }
+            else S.rows = now;                      // the other pages show it when turned to (built again then)
         }
     } catch (...) {
         logf("rto: EXCEPTION in the menu (value)");
@@ -284,13 +377,7 @@ void SF6CORE_CALL cb_button(void*, int64_t entry, SF6CoreOptButtonResult* out) {
     if (it == S.acts.end()) return;
     const Act a = it->second;
     try {
-        if (a.kind == Act::More) {
-            S.focus[a.page] = a.pos;
-            S.page = a.page + 1;
-            out->kind = 2; out->rebuild = 1; out->push = 1;
-            std::snprintf(out->key, sizeof out->key, "%s", page_key(S.page).c_str());
-            S.stale.erase(S.page);
-        } else if (a.kind == Act::Restore) {
+        if (a.kind == Act::Restore) {
             choices().mods[S.slot->mod][static_cast<size_t>(S.side)] = Side{};
             S.chosen = chosen_of(manifest(), *S.slot, choices(), S.side);
             S.shown = S.chosen;
@@ -316,11 +403,6 @@ void dock(Obj* param) {
 void SF6CORE_CALL cb_created(void*, void* param) {
     if (!S.active) return;
     try { dock(reinterpret_cast<Obj*>(param)); } catch (...) {}
-}
-void SF6CORE_CALL cb_popped(void*, void*) {
-    if (!S.active) return;
-    if (S.page > 0) --S.page;
-    if (S.stale.count(S.page)) S.refresh_at = g_frame + 15;    // its values changed on the page above
 }
 void SF6CORE_CALL cb_closed(void*) {
     if (S.active) teardown("window closed");
@@ -575,7 +657,7 @@ void install() {
     SF6CoreOptCallbacks cb{};
     cb.struct_size = sizeof cb;
     cb.on_value = cb_value; cb.on_button = cb_button;
-    cb.on_dialog_created = cb_created; cb.on_page_popped = cb_popped; cb.on_window_closed = cb_closed;
+    cb.on_dialog_created = cb_created; cb.on_window_closed = cb_closed;
     g_svc = a->opt_set_callbacks(C(), &cb) == SF6CORE_OK;
     logf("rto: options menu %s", g_svc ? "ready (F on the costume row of Fighter Settings, entry in the guide bar)" : "refused by the core's option service");
 }
@@ -610,16 +692,24 @@ void tick(bool fs_visible) {
                 float x = 0;
                 if (cm && !r.exception_thrown) { std::memcpy(&x, r.bytes.data(), 4); if (std::fabs(x - kDockX) > 0.5f) a->ui_set_position(C(), cm, kDockX, 0.0f, 0.0f); }
             }
+            // page turning, the colour editor's: its keys or L1 / R1, or a click left / right on the title (a turn
+            // builds every page again, so a rebuild a callback asked is done by it)
+            const bool front = game_has_focus();
+            const uint32_t mask = front ? pad_mask() : 0;
+            const PageKeys& k = page_keys();
+            bool prev_down = front && (key_down(k.vk[0]) || (mask & g_pad_l1) != 0);
+            bool next_down = front && (key_down(k.vk[1]) || (mask & g_pad_r1) != 0);
+            if (S.pages.size() > 1 && key_down(0x01)) {
+                const int side = mouse_on_title();
+                if (side < 0) prev_down = true; else if (side > 0) next_down = true;
+            }
+            const bool turn_prev = prev_down && !S.prev_was, turn_next = next_down && !S.next_was && !prev_down;
+            S.prev_was = prev_down; S.next_was = next_down;
+            if (turn_prev || turn_next) turn(turn_next);
             if (S.rebuild_page >= 0) {
                 const int p = S.rebuild_page;
                 S.rebuild_page = -1;
-                if (p == S.page) rebuild(p, S.rebuild_pos);
-                else S.stale.insert(p);
-            }
-            if (S.refresh_at && g_frame >= S.refresh_at) {
-                S.refresh_at = 0;
-                const int pos = S.focus.count(S.page) ? S.focus[S.page] : 0;
-                rebuild(S.page, pos);
+                if (p == S.page) show(p, S.rebuild_pos);   // another page's (a late callback): built again when turned to
             }
         }
         if (fs_visible || S.active) hint_tick();

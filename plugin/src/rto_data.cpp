@@ -638,6 +638,19 @@ void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chose
     complete(m, s, chosen, notes);                           // an option turned off for this one may leave a required group empty
 }
 
+std::vector<std::vector<int>> split_pages(int total, int per_page, int head) {
+    std::vector<std::vector<int>> pages;
+    per_page = std::max(1, per_page);
+    int i = 0;
+    do {
+        const int room = std::max(1, per_page - (pages.empty() ? head : 0));
+        std::vector<int> pg;
+        for (; i < total && static_cast<int>(pg.size()) < room; ++i) pg.push_back(i);
+        pages.push_back(std::move(pg));
+    } while (i < total);
+    return pages;
+}
+
 int preset_of(const Mod& mod, const std::vector<std::string>& chosen) {
     for (size_t k = 0; k < mod.variants.size(); ++k) if (same_set(mod.variants[k].ids, chosen)) return static_cast<int>(k) + 1;
     return 0;
