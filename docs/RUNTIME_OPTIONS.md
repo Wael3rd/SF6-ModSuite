@@ -620,8 +620,8 @@ does, the fallback above is the next step.
   elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
   never open together (both need the option window closed).
 - **Title**: the outfit's name in capitals and the side (`MINI DRESS MAI C1 SWAP  -  P1`); a name longer than 40
-  characters (UTF-8) is cut and ends with `...`, so the side stays readable. The outfit's name shows nowhere else in
-  game (the costume row shows the game's "Outfit VII"; the label is in logs, `outfits.json` and the manifest).
+  characters (UTF-8) is cut and ends with `...`, so the side stays readable. The costume row shows the game's
+  "Outfit VII"; the outfit's name is also at the right of the guide bar ("Outfit name on Fighter Settings" below).
 - **Pages** (7 rows at most, the dialog's pool): page 1 = Player side (P1 / P2), the first option rows, More options (pushes page 2), Restore defaults; later pages = option rows (+
   More options). A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
   split in rows "Group (1/2)"...); a required group has no None (split in rows, its first label is "(other row)":
@@ -653,6 +653,26 @@ does, the fallback above is the next step.
   paint (post) never overlap; no job-thread hook writes `c_00` / `c_02` (the Color Mod's camera writes them only
   while its editor is open, never with our menu), and the only back and forth is one hide and one show per block
   every 30 frames (texts written only when they differ).
+
+### Outfit name on Fighter Settings: `plugin/src/fs_name.cpp` (no new core capability)
+
+- **What**: on Fighter Settings, the name of the outfit on the preview, right-aligned at the right end of the bottom
+  input guide bar's line (the bar's left margin mirrored). One of our outfits: its label (`outfits.json`, the mod's
+  name, e.g. "Aloha Ryu"), read from the screen's `app.UIPartsMatchingFighterSetting` (`FighterId`,
+  `GetCostumeId()`); a game outfit (or that part not found): the costume row's own text, i.e. the game's name. Cut at
+  40 characters ("..."). Works with `RuntimeOptions` off too (its own module, not the options menu).
+- **Shown** while Fighter Settings is on screen and no option window is open; **hidden** under our options menu and
+  the Color Mod's colour editor (their own guide bar and camera hints are there), off that screen, and when it would
+  come within 48 px of the bar's own text (its entries change with the focused row).
+- **How**: never the bar's text (one writer, see above). A copy of the bar's item template `e_text_0` (the element
+  the game duplicates for each entry: same font, size, colour) named `e_text_slots_outfit`, added under
+  `c_guideBtn`'s parent with the core's `ui_clone_control` (core 0.8.2+). R19: the copy is made inside a post-hook of
+  `app.UIPartsInputGuideList.OnLateUpdate`, that list only (its template and parent found from `this`), hidden; the
+  frame only asks. One copy per bar (it lives and dies with the bar's tree), no new copy after 3 refusals in a
+  session. Everything else from LateUpdateBehavior, by the plugin only, through the core (R1, R35: found again by
+  name under its live parent): text (tags shown as typed), ControlPoint = the bar text's row at its right point,
+  AutoRegionFit, scale, position, visibility. Logs: `fs name: ...` in `native_log.txt` (source of the name, geometry
+  once per change, shown / hidden and why).
 
 ## Saved choices and slot numbers
 
