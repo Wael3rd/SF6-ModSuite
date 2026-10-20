@@ -123,13 +123,17 @@ static std::string int_to_roman(int n) {
 static const char* OLD_TEX_SUFFIXES[] = { "143230113" }; // known old tex versions
 static const int   N_OLD_TEX = 1;
 
-// Part of the fingerprint: change it whenever the loader starts producing a different pak, so
-// that installing a new loader regenerates the pak once even if no mod changed.
+// Part of the fingerprint: LOADER_PAK_ID changes whenever the loader starts producing a different pak,
+// so that installing a new loader regenerates the pak once even if no mod changed. LOADER_META_ID changes
+// when only what is written beside the pak changes (registry, outfits.json, costume_options.json,
+// variants.json, colour swatches): the next launch writes them again and keeps the pak (3d). The json
+// files name the loader by LOADER_PAK_ID.
 // Outfit names follow each other per character in costume number order (Outfit I, II, III...), while a
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-nsfw-keywords";
+static const char* LOADER_PAK_ID = "2026-10-20-nsfw-keywords";
+static const char* LOADER_META_ID = "2026-10-20-fastpak";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -1617,7 +1621,7 @@ static void write_outfits_json(const std::string& path, const std::vector<SlotIn
     SYSTEMTIME st; GetLocalTime(&st);
     sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
     fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"pak\": \"%s\",\n  \"outfits\": [",
-            when, json_escape(LOADER_BUILD_ID).c_str(), json_escape(pak_name).c_str());
+            when, json_escape(LOADER_PAK_ID).c_str(), json_escape(pak_name).c_str());
     bool first = true;
     for (auto& sl : slots) {
         auto src = g_mod_source.count(sl.mod_id) ? g_mod_source[sl.mod_id] : ModSource{"", ""};
@@ -1664,7 +1668,7 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
     sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
     const char* layout = g_rto_layout == RtoLayout::One ? "one" : "variants";
     fprintf(f, "{\n  \"format\": \"%s\",\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"pak\": \"%s\",\n"
-               "  \"layout\": \"%s\",\n  \"mods\": [", RTO_FORMAT, when, json_escape(LOADER_BUILD_ID).c_str(),
+               "  \"layout\": \"%s\",\n  \"mods\": [", RTO_FORMAT, when, json_escape(LOADER_PAK_ID).c_str(),
             json_escape(pak_name).c_str(), layout);
     // Each mod once, keyed by fighter folder and root name (stable across mod updates); "<fighter folder>/nsfw/<name>"
     // for a mod of costume_mods_nsfw (its own choices, never those of a mod of the same name in costume_mods; a mod NSFW
@@ -2089,7 +2093,7 @@ static void write_variants_json(const std::string& path, const std::vector<SlotI
     sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
     const char* layout = g_rto_layout == RtoLayout::One ? "on" : g_rto_layout == RtoLayout::Variants ? "variants" : "off";
     std::string js = std::string("{\n  \"generated\": \"") + when + "\",\n  \"loader\": \""
-                   + json_escape(LOADER_BUILD_ID) + "\",\n  \"contract\": " + std::to_string(MANAGER_CONTRACT)
+                   + json_escape(LOADER_PAK_ID) + "\",\n  \"contract\": " + std::to_string(MANAGER_CONTRACT)
                    + ",\n  \"runtime_options\": \"" + layout + "\",\n  \"archives\": [";
     for (size_t a = 0; a < g_variant_archives.size(); ++a) {
         auto& ar = g_variant_archives[a];
@@ -9910,7 +9914,7 @@ static std::string variant_choices_fingerprint() {
 
 static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
                                        const std::vector<FolderModInfo>& folder_infos = {}) {
-    std::string fp = std::string("loader=") + LOADER_BUILD_ID;
+    std::string fp = std::string("loader=") + LOADER_PAK_ID;
     for (auto& pi : mod_paks) {
         WIN32_FILE_ATTRIBUTE_DATA fa;
         if (!GetFileAttributesExA(pi.path.c_str(), GetFileExInfoStandard, &fa)) continue;
@@ -10444,7 +10448,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
         new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
     new_fp += variant_choices_fingerprint();   // empty while every variant is on
-    if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_BUILD_ID)
+    if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)
         std::string k;
         for (auto& w : g_nsfw_keywords) k += (k.empty() ? "" : ",") + nsfw::compact(w);
         char h[24];
@@ -10458,10 +10462,29 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     sprintf(target_name, "re_chunk_000.pak.patch_%03d.pak", target_num);
     std::string target_path = out_dir + "\\" + target_name;
 
+    // The registry keeps the fingerprint followed by ";meta=<LOADER_META_ID>". Same fingerprint but another
+    // meta id (or none: a loader from before the split): the pak would come out the same, only the files
+    // written beside it change. Everything is built again but the pak in place is kept (step 8).
+    const std::string meta_tag = std::string(";meta=") + LOADER_META_ID;
+    bool keep_pak = false;
+    uint32_t keep_entries = 0;
     {
         std::string reg_path = registry_dir + "\\registry.json";
         auto reg_check = load_registry(reg_path.c_str());
-        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing) {
+        const size_t mt = reg_check.fingerprint.rfind(";meta=");
+        const bool meta_same = mt != std::string::npos && reg_check.fingerprint.compare(mt, std::string::npos, meta_tag) == 0;
+        if (mt != std::string::npos) reg_check.fingerprint.erase(mt);
+        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && !meta_same) {
+            uint32_t target_entries = 0;
+            if (our_paks.size() == 1 && _stricmp(our_paks[0].path.c_str(), target_path.c_str()) == 0
+                && classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
+                keep_pak = true;
+                keep_entries = target_entries;
+                logf("  same mods, same pak (%s), files beside it from another loader version: they are written again\n",
+                     LOADER_PAK_ID);
+            }
+        }
+        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && meta_same) {
             // Check our pak exists (the real one: a marker-only placeholder holds no costume)
             uint32_t target_entries = 0;
             if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
@@ -10911,14 +10934,16 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 8. Write the new pak beside the old ones (<pak>.tmp) and flush it to the disk before anything is
     // removed: a full disk, a crash or a power cut while writing leaves the previous pak and registry
     // as they were (the old pak used to be deleted first, and a write cut short left no costumes).
+    // A pak kept (3d) is not written when it would come out with as many entries as it has.
+    const bool write_pak = !keep_pak || writer.entry_count() != keep_entries;
     const std::string tmp_path = target_path + ".tmp";
-    if (!writer.write(tmp_path.c_str(), true)) {
+    if (write_pak && !writer.write(tmp_path.c_str(), true)) {
         DeleteFileA(tmp_path.c_str());
         logf("ERROR: could not write %s (disk full or access denied), costumes not updated.\n",
              tmp_path.c_str());
         log_close(); return 1;
     }
-    log_step("new pak written");
+    if (write_pak) log_step("new pak written");
 
     // 9. Old our-paks out, the new one in. A Street Fighter 6 that was just closed often keeps running
     // for a while with the pak open, which can then be neither deleted nor rewritten (27/09: the pak
@@ -10927,7 +10952,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // saved, and the next launch tries again. An old pak at the new pak's number is replaced in one
     // step by the rename.
     for (auto& op : our_paks) {
-        if (_stricmp(op.path.c_str(), target_path.c_str()) == 0) continue;
+        if (!write_pak || _stricmp(op.path.c_str(), target_path.c_str()) == 0) continue;
         bool stub = false;
         if (!retire_pak(op, top_foreign, &stub)) {
             DeleteFileA(tmp_path.c_str());
@@ -10947,7 +10972,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
 
     // The registry is saved only once the new pak is in place
-    {
+    if (write_pak) {
         bool moved = false;
         for (int i = 0; i < 20 && !moved; i++) {
             moved = MoveFileExA(tmp_path.c_str(), target_path.c_str(),
@@ -10962,7 +10987,8 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             log_close(); return 1;
         }
     }
-    logf("  wrote %s (%zu entries)\n", target_path.c_str(), writer.entry_count());
+    logf(write_pak ? "  wrote %s (%zu entries)\n" : "  kept %s (%zu entries, the pak this build makes)\n",
+         target_path.c_str(), writer.entry_count());
     log_step("pak in place");
     if (writer.dedup_count())
         logf("  %zu entries share data with an identical one (%.1f MB not written twice)\n",
@@ -10974,7 +11000,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         logf("  %.1f MB held in the spill file while building, not in memory\n", writer.spilled_bytes() / 1048576.0);
 
     // 10. Save registry with fingerprint
-    registry.fingerprint = new_fp;
+    registry.fingerprint = new_fp + meta_tag;
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);
