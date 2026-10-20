@@ -1,8 +1,9 @@
 // SF6 Slots — runtime costume options, the game side (rto.hpp, docs/RUNTIME_OPTIONS.md).
 //
-// A model is the Battle Settings preview (CaptureRoomFighter.FighterObj) or a fighter (PlayerBehavior,
-// _PlayerID 0 / 1). Its slot is found from the paths its meshes load (the slot's folder), so the online
-// alias (a slot shown over its carrier) needs nothing more. For the side's chosen options the manifest
+// A model is the Battle Settings preview (CaptureRoomFighter.FighterObj), a side's model on the character
+// select (GameObject FighterVisual_01 / _02) or a fighter (PlayerBehavior, _PlayerID 0 / 1). Its slot is
+// found from the paths its meshes load (the slot's folder), so the online alias (a slot shown over its
+// carrier) needs nothing more. For the side's chosen options the manifest
 // says what each target must be (rto_data: desired); a pass compares that with what the model's
 // components load and swaps what differs, per model: via.render.Mesh setMesh / set_Material /
 // setMaterialTexture, via.motion.Chain set_ChainAsset + restart (the probes of 19/10). Never the shared
@@ -15,9 +16,10 @@
 // part that is not ready goes back at once to what it wore (a holder of that file, made before the
 // swap) and is tried again later. Never shown half loaded.
 //
-// When: the preview while Battle Settings is up (polled every 10 frames, a menu screen); a fighter
-// after an event (its model built: PlayerBehavior.SetupAppearance, or an outfit mounted for a fight):
-// a watch of 10 s, then nothing until the next event.
+// When: the preview while Battle Settings is up and each side's model while the character select is up
+// (polled every 10 frames, menu screens); a fighter after an event (its model built:
+// PlayerBehavior.SetupAppearance, or an outfit mounted for a fight): a watch of 10 s, then nothing until the
+// next event.
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -44,7 +46,7 @@ std::set<const Slot*> g_no_rows_off; // the same while NSFW options are hidden (
 bool has_rows(const Slot* s) { return !g_no_rows.count(s) && (g_m.show_nsfw || !g_no_rows_off.count(s)); }
 
 // ---- screens and events ----
-bool g_select = false;              // character select open: nothing at all
+bool g_select = false;              // character select open: only its two models (select_tick), no fighter watch
 bool g_bs = false;                  // Battle Settings opened, until it is closed (its sub-screens included)
 bool g_bs_closed = false;           // the close event came: g_bs ends once Fighter Settings is not seen for 3 s
 uint32_t g_bs_seen = 0;
@@ -70,6 +72,7 @@ struct Types {
     Method *ch_get = nullptr, *ch_set = nullptr, *ch_restart = nullptr, *ch_enable = nullptr, *ch_enabled = nullptr;
     Method *set_color = nullptr;
     Method *crf_obj = nullptr, *crf_setup = nullptr, *pb_go = nullptr, *pb_applied = nullptr;
+    Method *pcc_go = nullptr, *tr_parent = nullptr;
 };
 Types T;
 
@@ -114,6 +117,8 @@ bool types() {
     T.crf_setup = method_of(T.crf, "get_IsSetUpEnd", 0);
     T.pb_go = method_of(T.pb, "get_GameObject", 0);
     T.pb_applied = method_of(T.pb, "get_IsAppliedResource", 0);
+    T.pcc_go = method_of(T.pcc, "get_GameObject", 0);          // the character select's models (not required)
+    T.tr_parent = method_of(T.tr, "get_Parent", 0);
     T.ok = T.t_mesh && T.t_chain && T.t_pcc && T.get_comp && T.go_tr && T.tr_child && T.tr_next && T.tr_go && T.get_mesh
         && T.get_mat && T.set_mesh && T.set_mat && T.mesh_ready && T.mat_ready && T.mat_num && T.tex_num && T.get_tex
         && T.set_tex && T.ch_get && T.ch_set && T.ch_restart && T.set_color && T.crf_obj && T.pb_go;
@@ -232,7 +237,10 @@ struct Model {
     uint32_t ver = 0, next = 0, walk_at = 0, check_at = 0, since = 0;
     std::set<std::string> told;                  // log lines given once
 };
-Model g_models[3];                                // preview, P1, P2
+Model g_models[5];                                // preview, P1, P2 (fighters), select P1, select P2
+// The character select builds a side's model under the same GameObject (its root stays): looked at more often
+bool select_model(const Model& md) { return &md == &g_models[3] || &md == &g_models[4]; }
+uint32_t check_every(const Model& md) { return select_model(md) ? 10 : 30; }
 
 // The last write of this module on a preview model (frame, what): told when the preview stays empty (preview_tick)
 uint32_t g_prev_write_at = 0;
@@ -646,18 +654,18 @@ void pass(Model& md) {
     md.settled = true;
     for (auto& mc : md.meshes)
         if (alive_as(mc.c, T.mesh)) { mc.exp_mesh = holder_path(call_obj(T.get_mesh, mc.c)); mc.exp_mat = holder_path(call_obj(T.get_mat, mc.c)); }
-    md.check_at = g_frame + 30;
+    md.check_at = g_frame + check_every(md);
 }
 
 // light: compare what the model loads with what it was left with (menu screens and fight watches only)
 void process(Model& md, int side, bool light) {
     if (!alive_as(md.root, T.go)) { reset(md); return; }
-    if (!md.walked || (!md.slot && g_frame >= md.walk_at)) { walk(md); md.walk_at = g_frame + 60; }
+    if (!md.walked || (!md.slot && g_frame >= md.walk_at)) { walk(md); md.walk_at = g_frame + (select_model(md) ? 20 : 60); }
     if (!md.slot) return;
     if (md.side != side || md.ver != g_ver) { md.side = side; md.ver = g_ver; md.settled = false; md.next = 0; }
     if (md.settled) {
         if (!light || g_frame < md.check_at) return;
-        md.check_at = g_frame + 30;
+        md.check_at = g_frame + check_every(md);
         if (!drifted(md)) return;
         logf("rto: %s was rebuilt by the game, options again", md.name);
         walk(md);
@@ -880,6 +888,67 @@ void watch_tick() {
     for (int i = 0; i < 2; ++i) if (!seen[i] && g_models[1 + i].root) reset(g_models[1 + i]);
 }
 
+// The character select's models: each side's PlayerColorController sits on the GameObject FighterVisual_01 (P1) /
+// FighterVisual_02 (P2), its meshes below it (the Color Mod's finding; a parent of that name also counts). Polled
+// every 10 frames while the screen is up, like the Battle Settings preview: the options chosen in the menu show
+// there too (20/10: C. Viper Outfit 1 Coatless in Battle Settings, Outfit 1 with its coat on the character select).
+// Online, the player's own side wears P1's options (as in a fight).
+uint32_t g_sel_scan = 0, g_sel_next = 0, g_sel_start = 0;
+std::string g_sel_log;                // the last search result logged (logged on change)
+int visual_side(Obj* go) {
+    const std::string nm = str(call_obj(T.go_name, go));
+    return nm == "FighterVisual_01" ? 1 : nm == "FighterVisual_02" ? 2 : 0;
+}
+void select_tick() {
+    if (!T.pcc_go || g_frame < g_sel_next) return;
+    g_sel_next = g_frame + 10;
+    Model* sm[2] = { &g_models[3], &g_models[4] };
+    bool want_scan = g_frame - g_sel_scan >= 120;
+    for (auto* md : sm) if (!md->root || !alive_as(md->root, T.go)) want_scan = want_scan || g_frame - g_sel_scan >= 30;
+    if (want_scan) {
+        g_sel_scan = g_frame;
+        // its end missed (no EV_SELECT_END): never into a fight (the intro's rigs hang under FighterVisual_0N too)
+        if (g_frame - g_sel_start > 120 && !costumes::select_active()) {
+            logf("rto: character select no longer up: its models are no longer followed");
+            g_select = false;
+            reset(*sm[0]); reset(*sm[1]);
+            return;
+        }
+        Obj* found[2] = {};
+        Obj* list = find_components(T.pcc);
+        const int n = list_count(list);
+        for (int i = 0; i < n; ++i) {
+            Obj* c = list_item(list, i);
+            Obj* go = c ? call_obj(T.pcc_go, c) : nullptr;
+            int side = go ? visual_side(go) : 0;
+            Obj* tr = (!side && go && T.tr_parent) ? call_obj(T.go_tr, go) : nullptr;
+            for (int up = 0; up < 4 && tr && !side; ++up) {
+                tr = call_obj(T.tr_parent, tr);
+                go = tr ? call_obj(T.tr_go, tr) : nullptr;
+                side = go ? visual_side(go) : 0;
+            }
+            if (side && !found[side - 1]) found[side - 1] = go;
+        }
+        char b[120];
+        snprintf(b, sizeof b, "%d colour controllers, P1 model %s, P2 model %s", n, found[0] ? "found" : "none",
+                 found[1] ? "found" : "none");
+        if (g_sel_log != b) { g_sel_log = b; logf("rto: character select: %s", b); }
+        for (int i = 0; i < 2; ++i) {
+            if (found[i] == sm[i]->root) continue;
+            reset(*sm[i]);
+            sm[i]->root = found[i];
+        }
+    }
+    const bool net = costumes::online();
+    for (int i = 0; i < 2; ++i) {
+        Model& md = *sm[i];
+        if (!md.root) continue;
+        process(md, net ? 0 : i, true);
+        if (!md.units.empty()) g_sel_next = g_frame + 1;     // a part unit in flight: its chain stays stopped one frame only
+        else if (!md.settled && md.next && md.next < g_sel_next) g_sel_next = md.next;
+    }
+}
+
 bool fighter_settings_visible() {
     const SF6CoreAPI* a = ui::core();
     if (!a || !SF6CORE_HAS(a, ui_agents)) return g_bs;
@@ -1036,7 +1105,7 @@ void install_hooks() {
 
 bool busy() {
     if (!on()) return false;
-    if (g_bs || g_watch_until || menu::busy()) return true;
+    if (g_bs || g_select || g_watch_until || menu::busy()) return true;
     return !g_warm_done && g_frame < 60 * 120;
 }
 
@@ -1052,8 +1121,14 @@ void tick(uint32_t ev) {
             logf("rto: NSFW options %s", g_m.show_nsfw ? "shown" : "hidden");
             choices_changed();
         }
-        if (ev & EV_SELECT_START) { g_select = true; g_watch_until = 0; for (auto& md : g_models) reset(md); }
-        if (ev & EV_SELECT_END) g_select = false;
+        if (ev & EV_SELECT_START) {
+            g_select = true; g_watch_until = 0; g_sel_scan = g_sel_next = 0; g_sel_start = g_frame; g_sel_log.clear();
+            for (auto& md : g_models) reset(md);
+        }
+        if ((ev & EV_SELECT_END) && g_select) {
+            g_select = false;
+            reset(g_models[3]); reset(g_models[4]);
+        }
         if (ev & EV_MENU_OPEN) {
             if (!g_bs || g_bs_closed) logf("rto: Battle Settings open: its preview is followed");
             g_bs = true; g_bs_closed = false; g_bs_seen = g_frame;
@@ -1062,7 +1137,10 @@ void tick(uint32_t ev) {
         if (ev & EV_HOLDER) ++g_holders;
         if ((ev & (EV_HOLDER | EV_RTO_MODEL)) && !g_select) {
             if (!g_watch_until) {
-                if (costumes::select_active()) { g_select = true; return; }   // the select screen builds its own models
+                if (costumes::select_active()) {                 // the select screen: its own models (select_tick)
+                    g_select = true; g_sel_scan = g_sel_next = 0; g_sel_start = g_frame; g_sel_log.clear();
+                    return;
+                }
                 logf("rto: fighters watch");
                 g_watch_start = g_frame;
             }
@@ -1072,7 +1150,7 @@ void tick(uint32_t ev) {
                 logf("rto: PlayerBehavior.SetupAppearance is called all the time: not a build event, ignored from now on");
             }
         }
-        if (g_select) return;
+        if (g_select) { select_tick(); return; }
         bool fs = false;
         if (g_bs) {
             fs = fighter_settings_visible();

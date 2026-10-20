@@ -656,8 +656,9 @@ options in the set (see `slots[].required`).
   manifest is 20 KB). A manifest of another format, or one whose `pak` is not `outfits.json`'s, is ignored (one log
   line). The loader now also renames the pak in `costume_options.json` when it only moves the pak (same "pak" key as
   `outfits.json`), else the plugin would take the manifest for stale.
-- **Models**: the preview (`CaptureRoomFighter.FighterObj` once `IsSetUpEnd`) and each fighter (`PlayerBehavior`,
-  `_PlayerID` 0 / 1, once `IsAppliedResource`). Its components are walked once (transform tree, 400 nodes at most):
+- **Models**: the preview (`CaptureRoomFighter.FighterObj` once `IsSetUpEnd`), each side's model on the character
+  select (the GameObject `FighterVisual_01` / `FighterVisual_02` that holds its `PlayerColorController`, or a parent
+  of that name) and each fighter (`PlayerBehavior`, `_PlayerID` 0 / 1, once `IsAppliedResource`). Its components are walked once (transform tree, 400 nodes at most):
   `via.render.Mesh`, `via.motion.Chain`, `app.PlayerColorController`. Its **slot is found from the paths its
   meshes load** (`product/model/esf/<fighter>/<folder>/`), so the online alias (a slot over its carrier) needs
   nothing more. Game objects are never `add_ref`'d (R21): checked alive (`is_managed_object` + type) before use.
@@ -693,7 +694,12 @@ options in the set (see `slots[].required`).
   outfit or colour change, is found by its paths and done again). Fighters only after an event: an outfit mounted
   for a fight (`FighterVisualHolder..ctor`) or a model built (`PlayerBehavior.SetupAppearance`) opens a 10 s watch
   (every 10 frames), then nothing: no read in a fight (R38). If `SetupAppearance` kept the watch open for 30 s it is
-  ignored for the session (not a build event). Nothing while the character select is open.
+  ignored for the session (not a build event). While the character select is open (20/10: an option chosen in
+  Battle Settings was missing there, the model showed the plain outfit): no fighter watch, each side's model is
+  polled like the preview (every 10 frames; a rebuilt model is seen within 10 frames), offline with that side's
+  options, online P1's; one log line per search result (`rto: character select: ...`). If the screen's end event
+  is missed, the models stop being followed once the screen is no longer in the game's flow list (never in a
+  fight: the intro's rigs also hang under `FighterVisual_0N`).
 - **Ahead**: 30 s after start, the files of the choices made in the menu (both sides, 64 at most) are loaded and
   kept, so a fight shows them at once; other holders are given back 10 s after their last use.
 - 5 exceptions: the runtime options stop for the session (one log line).
