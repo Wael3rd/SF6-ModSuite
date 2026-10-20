@@ -473,12 +473,13 @@ void guide_text_fix() {
             const bool mine = g_menus[g.right ? 1 : 0].active;
             const bool in_di = di_active(g.right ? 2 : 1);
             const bool pad2 = bar_pad(g.part.get(), g.right ? 1 : 0).value_or(fsm.pad.value_or(false));
-            // our X entry, then the Slots Loader's "R1 Costume options" (SF6Slots_SelectGuideEntry: we are the one writer
-            // of this corner); X is left out while its costume options hold the panel (X is refused then)
+            // our L1 / X entry, then the Slots Loader's "R1 Costume options" (SF6Slots_SelectGuideEntry: we are the one
+            // writer of this corner); ours is left out while its costume options hold the panel (L1 / X refused then), the
+            // whole corner while the DI mode is on (L1 / X do nothing then; the Slots Loader gives nothing either)
             std::string text;
             if (!fsm.hidden_now && !in_di && mine) {
                 const int side = g.right ? 2 : 1;
-                if (!screens::slots_panel::slots_holds(side)) text = std::string(pad2 ? "<ICON BtnL> " : "<ICON KeyX> ") + L("hint.edit_di_color");
+                if (!screens::slots_panel::slots_holds(side)) text = std::string(pad2 ? "<ICON BtnL1> " : "<ICON KeyX> ") + L("hint.edit_di_color");
                 const std::string se = screens::slots_panel::guide_entry(side, pad2);
                 if (!se.empty()) text += (text.empty() ? "" : "      ") + se;
             }
@@ -490,6 +491,32 @@ void guide_text_fix() {
     }
 }
 void set_bottom_hint(std::optional<std::string> label) { fsm.guide_label = std::move(label); guide_text_fix(); }
+
+// L1 opens the DI mode on the character select (0.22.6): once a visit of a panel, the game's own guide there (its
+// entries, not the corner e_text_0, which is ours) is read, with a warning when it shows L1 too (the game would act on
+// the same press). The select screen's bindings are not known offline: this is the check in the game.
+bool g_l1_checked = false;
+void select_l1_check() {
+    if (g_l1_checked || fsm.guides.empty()) return;
+    std::string all;
+    for (const Guide& g : fsm.guides) {
+        if (!g.btn || !alive(g.btn.get())) continue;
+        for (MO* c = call_obj(g.btn.get(), "get_Child"); c; c = call_obj(c, "get_Next")) {
+            if (name_of(c) == "e_text_0") continue;
+            std::string m = message(c).value_or("");
+            if (const auto sep = m.find("      <ICON"); sep != std::string::npos) m.resize(sep);   // a suffix of ours
+            if (!m.empty() && m != "nil") all += (all.empty() ? "" : " | ") + m;
+        }
+    }
+    if (all.empty()) return;                                          // not written yet: the next pass reads it
+    g_l1_checked = true;
+    if (all.find("<ICON BtnL1>") != std::string::npos) {
+        cmn::log_warn("[select] WARNING: the game's guide on the character select shows L1 (%s): L1 opens the DI mode there too", all.c_str());
+        cmn::journal("select guide: WARNING: the game shows L1 there too: %s", all.c_str());
+    } else {
+        cmn::journal("select guide: the game's entries (no L1, the DI mode's pad key): %s", all.c_str());
+    }
+}
 
 // ---- select menus (find_agents / resolve_menu / resolve / tick_menu / on_selection_changed) -----------------------------
 bool resolve_menu(Menu& m, MO* agent) {
@@ -884,21 +911,22 @@ void resolve_pad() {
 }
 bool pad_btn_down() { resolve_pad(); return (pad_mask() & g_pad.btn) != 0; }
 
-// the X / Square of one player's device: app.InputManager's own per-player reading, else any device
-bool side_x_down(int side) {
+// The DI mode key of one player on the character select: L1 on the pad (0.22.6; X / Square before), X on the keyboard.
+// app.InputManager's own per-player reading, else any device. Fighter Settings and the Training popup keep X / Square.
+bool side_di_down(int side) {
     resolve_pad();
     if (MO* im = API::get()->get_managed_singleton("app.InputManager")) {
         static API::Method* m_flags = nullptr;
         if (!m_flags) m_flags = im->get_type_definition()->find_method("GetGamePadRawFlags");
         if (m_flags) {
-            auto r = m_flags->invoke(im, std::vector<void*>{ ll::arg_u32(g_pad.btn), ll::arg_i32(side - 1) });
+            auto r = m_flags->invoke(im, std::vector<void*>{ ll::arg_u32(g_pad.l1), ll::arg_i32(side - 1) });
             if (!r.exception_thrown) {
                 if (r.dword & 1) return true;
                 if (const auto kb = call_i32(im, "GetKeyboardMousePlayerIndex")) return *kb == side - 1 && key_down(0x58);
             }
         }
     }
-    return key_down(0x58) || pad_btn_down();
+    return key_down(0x58) || (pad_mask() & g_pad.l1) != 0;
 }
 
 // imgui.get_mouse / get_display_size: the game window's client area, refreshed while the game has the focus
@@ -1135,9 +1163,10 @@ void editor_tick() {
         di_side = csm->side;
         if (const auto f = call_i32(csm->param.get(), "get_FighterId"); f && *f > 0) di_fighter = *f;
         if (const auto c = call_i32(csm->param.get(), "GetCostumeId")) di_costume = *c;
-        if (dbg_frame() % 5 == 0) { find_guide_list(); fsm.tcs_guide = true; fsm.cs_guide = true; set_bottom_hint(std::nullopt); }
+        if (dbg_frame() % 5 == 0) { find_guide_list(); fsm.tcs_guide = true; fsm.cs_guide = true; set_bottom_hint(std::nullopt); select_l1_check(); }
     } else if (fsm.cs_guide) {                                         // left the panel: strip the suffix
         fsm.cs_guide = false;
+        g_l1_checked = false;
         if (!tcs.visible) { fsm.hidden_now = true; set_bottom_hint(std::nullopt); fsm.hidden_now = false; fsm.tcs_guide = false; }
     }
     // the EDIT DRIVE COLORS menu for this screen (mech = the page to land on, "" = the first)
@@ -1149,7 +1178,7 @@ void editor_tick() {
     if (csm) {                                                         // character select: DI mode in each player's own panel
         for (int side = 1; side <= 2; ++side) {
             Menu& m = g_menus[side - 1];
-            const bool sdown = m.active && side_x_down(side);
+            const bool sdown = m.active && side_di_down(side);
             bool ready = false;
             if (sdown && dbg_frame() - (int64_t)m.opened_at > 20) {
                 const auto row = focused_row_name(m.agent.get());
@@ -1160,8 +1189,8 @@ void editor_tick() {
                 Opt f = num(lj::index(sel_of(side), "fighter")), c = num(lj::index(sel_of(side), "costume"));
                 if (const auto lf = call_i32(m.param.get(), "get_FighterId"); lf && *lf > 0) f = *lf;
                 if (const auto lc = call_i32(m.param.get(), "GetCostumeId")) c = *lc;
-                const std::string res = nb("screens_dipanel")
-                    ? screens::dipanel::mode::toggle_select(side, addr(m.param), addr(m.agent), (int)f.value_or(0), (int)c.value_or(0)) : std::string("failed");
+                const std::string res = nb("screens_dipanel")    // while on: nothing (A / B leave)
+                    ? screens::dipanel::mode::enter_select(side, addr(m.param), addr(m.agent), (int)f.value_or(0), (int)c.value_or(0)) : std::string("failed");
                 cmn::journal("DI panel P%d: %s", side, res.c_str());
             }
             edit.di_side_was[side] = sdown;

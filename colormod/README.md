@@ -19,8 +19,9 @@ Costume and Drive colours for Street Fighter 6, set from the game's own menus. O
   editor's palette): the arrows move the cursor, F applies the colour under it, Backspace gives the saved colour back.
   The grid needs SF6 Native Core 0.8.2; without it the palette rows show the colour under their cursor as text.
 - **Drive colours** per character and per player: Drive Impact, Drive Reversal, Drive Parry and Drive Rush.
-  - on the character select: **X** (Edit Drive Colors) switches the panel to the four Drive rows;
-  - in Training: pause menu > character settings popup, **X** as well;
+  - on the character select: **L1** on the pad, **X** on the keyboard (Edit Drive Colors) switches the panel to the
+    four Drive rows (A keeps, B goes back);
+  - in Training: pause menu > character settings popup, **X** (Square on the pad);
   - in Fighter Settings: the four Drive rows under Control Settings.
 - Works with the outfits added by the Slots Loader (`../`): the colour a slot really wears is read from the core.
 - Menus in the game's languages (`data/SF6_NativeLocale_data/locale.json`).

@@ -11,8 +11,8 @@
 
 namespace screens::dipanel::mode {
 
-// character select: X on that player's panel (edit.di_panel.toggle) -> "on", "off" or "failed"
-std::string toggle_select(int side, uint64_t param, uint64_t agent, int fighter, int costume);
+// character select: L1 / X on that player's panel -> "on", "already on" (nothing: A / B leave, 0.22.6) or "failed"
+std::string enter_select(int side, uint64_t param, uint64_t agent, int fighter, int costume);
 // training pause > Character Settings popup: X (edit.di_panel.enter with the MatchingFighterSetting as owner)
 bool enter_popup(int side, uint64_t param, uint64_t agent, uint64_t mfs, int fighter, int costume);
 bool active(int side);

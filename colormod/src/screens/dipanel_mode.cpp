@@ -331,9 +331,9 @@ void exit(int side) {
 
 }  // namespace
 
-std::string toggle_select(int side, uint64_t param, uint64_t agent, int fighter, int costume) {
+std::string enter_select(int side, uint64_t param, uint64_t agent, int fighter, int costume) {
     if (side < 1 || side > 2) return "failed";
-    if (g_s[side].on) { exit(side); return "off"; }
+    if (g_s[side].on) return "already on, L1 / X ignored (A / B leave)";
     MO* p = reinterpret_cast<MO*>(param);
     return enter(side, p, reinterpret_cast<MO*>(agent), p, false, "Spins", "Group", {}, fighter, costume) ? "on" : "failed";
 }
