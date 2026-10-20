@@ -25,8 +25,9 @@ void tick(uint32_t events);
 // ---- former variant slots (costumes.cpp, load_state) ----
 // A Battle Settings choice naming a costume number the registry no longer has: when the manifest lists
 // it as a former variant slot (the launch that turned RuntimeOptions on), the kept slot's number, and
-// that variant's options become the P1 choice of the mod. -1 otherwise.
-int migrate_former(int fighter, int costume_no);
+// that variant's options become the P1 choice of the mod. -1 otherwise. game: the kept outfit is a game
+// outfit (a retouch's former outfit: the retouch is an option of the game outfit it was made from).
+int migrate_former(int fighter, int costume_no, bool* game = nullptr);
 void migration_done();                // after load_state: the choices file is written once
 
 // ---- shared with rto_menu.cpp ----

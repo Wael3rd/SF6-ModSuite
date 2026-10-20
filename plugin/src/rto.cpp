@@ -790,18 +790,19 @@ void init() {
          g_m.layout.c_str(), g_m.generated.c_str());
 }
 
-int migrate_former(int fighter, int costume_no) {
+int migrate_former(int fighter, int costume_no, bool* game) {
     if (!g_on) return -1;
     const Former* f = nullptr;
     const Slot* k = former_of(g_m, fighter, costume_no, &f);
     if (!k || !f) return -1;
+    if (game) *game = k->game;
     auto& sd = g_c.mods[k->mod][0];
     sd.changed = true;
     sd.ids = f->ids;
     sd.names.clear();
     g_migrated = true;
-    logf("rto: [F%d] Battle Settings outfit %d (%s) is now outfit %d with that variant's options", fighter, costume_no,
-         f->label.c_str(), k->costume_no);
+    logf("rto: [F%d] Battle Settings outfit %d (%s) is now outfit %d (%s%s) with that variant's options", fighter, costume_no,
+         f->label.c_str(), k->costume_no, k->name.c_str(), k->game ? ", the game's" : "");
     return k->costume_no;
 }
 

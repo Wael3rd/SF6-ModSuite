@@ -114,7 +114,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rto-shared";
+static const char* LOADER_BUILD_ID = "2026-10-20-rto-retouch";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -1400,6 +1400,11 @@ struct RtoOption {
     // An option of a separate add-on put on an outfit it was not made with (attach_addons): stored for a slot only
     // where it fits what the slot wears (addon_fit)
     bool addon = false;
+    // An option of a retouch (meshes and textures of an outfit, no material file): a file the outfit does not load is
+    // left out (a texture no material file of the outfit names), not a reason to refuse the option. from: the retouch's
+    // own outfit before (its mod id), from_folder: the folder of the game outfit it modified (its slot migrates there)
+    bool retouch = false;
+    std::string from, from_folder;
 };
 struct RtoGroup {
     std::string name;
@@ -1665,7 +1670,7 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
         fprintf(f, "],\n      \"former\": [");
         bool fr = true;
         for (auto& v : so.mod->variants) {
-            if (sl.game || v.mod_id == sl.mod_id) continue;
+            if (v.mod_id == sl.mod_id) continue;   // a game outfit: the slots of the retouches made from it
             for (auto& rs : former_slots) {
                 if (rs.mod_id != v.mod_id || rs.fighter_dir != sl.fighter_dir || rs.new_costume_no == sl.costume_no) continue;
                 fprintf(f, "%s\n        {\"costume_no\": %d, \"folder\": \"%s\", \"label\": \"%s\", \"options\": [",
@@ -3700,7 +3705,10 @@ static void add_slot_files(PakWriter& writer,
         // The file this slot's model loads at a path (empty: none): its own copy in its folder, else the game's file
         // when the outfit it is made from loads it (a separate add-on's option is checked against it)
         auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
-            const std::string low = str_lower(path);
+            std::string low = str_lower(path);
+            // a file the slot relocated: its copy (C.Viper lace lingerie: its material file of Outfit 2's head, whose
+            // mesh stays the game's)
+            if (auto it = slot_targets.find(low); it != slot_targets.end()) low = str_lower(it->second);
             const uint64_t h = pak_path_hash(std::string_view(low));
             if (low.compare(0, slot_root.size(), slot_root) == 0) return writer.find(h) ? writer.get(h) : std::vector<uint8_t>{};
             if (!outfit_wears(inv, slot.fighter, slot.original_costume_no, low)) return {};
@@ -3753,6 +3761,16 @@ static void add_slot_files(PakWriter& writer,
             for (auto& [p, mf] : op.files) if (belongs(p)) paths.push_back(p);
             if (paths.empty()) continue;
             std::sort(paths.begin(), paths.end());
+            if (op.retouch) {   // a file this outfit does not load (a texture no material file of it names): left out
+                const size_t before = paths.size();
+                paths.erase(std::remove_if(paths.begin(), paths.end(), [&](const std::string& p) {
+                    return worn(target_of(p)).empty();
+                }), paths.end());
+                if (paths.size() != before)
+                    printf("      runtime options: %s: %zu of its files are not loaded by this outfit: left out\n",
+                           op.name.c_str(), before - paths.size());
+                if (paths.empty()) continue;
+            }
             // The textures the option ships, as its materials name them -> the option's copies
             std::unordered_map<std::string, std::string> rebind;
             for (auto& p : paths) {
@@ -4178,6 +4196,15 @@ static void add_game_options(PakWriter& writer, std::unordered_set<std::string>&
             for (auto& [p, mf] : op.files) if (belongs(p)) paths.push_back(p);
             if (paths.empty()) continue;
             std::sort(paths.begin(), paths.end());
+            if (op.retouch) {   // a file this outfit does not load (a texture no material file of it names): left out
+                const size_t before = paths.size();
+                paths.erase(std::remove_if(paths.begin(), paths.end(), [&](const std::string& p) { return worn(p).empty(); }),
+                            paths.end());
+                if (paths.size() != before)
+                    printf("      runtime options: %s: %zu of its files are not loaded by this outfit: left out\n",
+                           op.name.c_str(), before - paths.size());
+                if (paths.empty()) continue;
+            }
             // The textures the option ships, as its materials name them -> the option's copies
             std::unordered_map<std::string, std::string> rebind;
             std::set<std::string> own_tex;
@@ -4650,8 +4677,10 @@ static std::string addon_fit(PakWriter& writer, PakReader& base_pak, const std::
         if (w.empty()) return "the outfit wears no mesh there";
         std::set<std::string> need, have;
         if (!mesh_joint_names(w, need) || !mesh_joint_names(data, have)) return "a mesh is not readable";
+        // (blend shapes, "BS_<mesh>.<joint>_...", are in the name table too: no chain moves them. C. Viper Barefoot C1
+        // and coat no mesh: Outfit 1's 681 joints, none of its 832 blend shapes)
         size_t miss = 0; std::string first;
-        for (auto& n : need) if (!have.count(n) && miss++ == 0) first = n;
+        for (auto& n : need) if (n.compare(0, 3, "BS_") != 0 && !have.count(n) && miss++ == 0) first = n;
         if (miss) return std::to_string(miss) + " joints of the outfit's mesh missing (" + first + "...)";
         std::vector<uint8_t> mdf = own(stem(low) + mdf_ext);
         if (mdf.empty()) mdf = worn(stem(tlow) + mdf_ext);
@@ -5948,8 +5977,94 @@ struct RtoGroupIn {
 // A separate add-on that makes no outfit of its own (a modular mod none of whose options is a complete outfit:
 // "Mai face accessories"; a lone add-on nothing of its mod completes): with RuntimeOptions, its groups become
 // options of the outfits whose files they replace (attach_addons)
-struct PendingAddon { std::string name, source; std::vector<RtoGroupIn> groups; };
+// retouch: a retouch's groups (see unit_retouch), placed on the outfits that wear its files; src: its folder or archive
+struct PendingAddon { std::string name, source; std::vector<RtoGroupIn> groups; bool retouch = false; int src = 0; };
 static std::vector<PendingAddon> g_pending_addons;
+
+// Retouches (docs/RUNTIME_OPTIONS.md): the folders or archives (UnitFiles::source) whose every option is one
+static std::set<int> g_retouch_sources;
+// The game's paks while the mods are read (retouch_game_fit)
+static PakReader* g_scan_base_pak = nullptr;
+
+// A retouch: an option made of meshes and textures of costumes only (streaming twins included), no material file,
+// no chain, colour or other file: it keeps the look of the outfit it retouches (C. Viper Barefoot C1: Outfit 1's body
+// mesh and textures). Not a mod Fluffy Mod Manager installed (read from its archive, or its copy in the game's own
+// natives folder): the game outfit already wears it there, its files are not the game's.
+static bool unit_retouch(const UnitFiles& u) {
+    if (u.u.game_install || u.files.empty() || u.u.rel.compare(0, 19, "Fluffy Mod Manager/") == 0) return false;
+    bool model = false;
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p), k = rto_kind(low);
+        if (k != "mesh" && k != "texture") return false;
+        std::string fd, folder;
+        if (parse_model_folder(low, fd, folder)) model = true;
+        else if (low.compare(0, strlen(STREAM_PFX), STREAM_PFX) != 0) return false;
+    }
+    return model;
+}
+
+// The game's outfits of a fighter, one per model folder (A.K.I's Outfit 1 and 4 share one)
+static std::string costume_folder(const CostumeInfo& c) { return c.model_dir.substr(c.model_dir.rfind('/') + 1); }
+static std::vector<const CostumeInfo*> game_outfits_of(const VanillaIndex& inv, int fighter) {
+    std::vector<const CostumeInfo*> games;
+    for (auto& c : inv.costumes) {
+        if (c.fighter != fighter || c.costume_no >= 100 || c.model_dir.empty()) continue;
+        if (std::none_of(games.begin(), games.end(), [&](const CostumeInfo* x) { return costume_folder(*x) == costume_folder(c); }))
+            games.push_back(&c);
+    }
+    return games;
+}
+static std::string game_outfit_name(int costume_no) {
+    return costume_no == 4 ? "Drive Tech" : "Outfit " + std::to_string(costume_no + 1);
+}
+
+// Whether an outfit made from a game costume (its number and folder) loads a model file of its fighter at that path
+// (lowercase): a file of its folder, or a 000/ file it loads
+static bool costume_touches(const VanillaIndex& inv, int fighter, int cno, const std::string& folder_of_costume,
+                            const std::string& low) {
+    std::string fd, folder;
+    if (!parse_model_folder(low, fd, folder) || atoi(fd.c_str() + 3) != fighter) return false;
+    return folder == "000" ? outfit_wears(inv, fighter, cno, low) : folder == folder_of_costume;
+}
+
+// Why a retouch does not fit the game outfit it modifies (the one its outfit was made from; any game outfit when that
+// is not known), or empty: each file it ships that the outfit loads passes addon_fit against the game's files (a file
+// the outfit does not load is left out, as in the stored option; at least one must be left). Read while the mods are
+// read: the game's paks only.
+static std::string retouch_game_fit(const VanillaIndex& inv, const UnitFiles& u) {
+    if (!g_scan_base_pak) return "the game's files are not read";
+    PakReader& base = *g_scan_base_pak;
+    PakWriter none;   // addon_fit also looks in our pak: nothing there yet
+    int fighter = -1;
+    for (auto& [p, mf] : u.files) {
+        std::string fd, folder;
+        if (parse_model_folder(str_lower(p), fd, folder)) { fighter = atoi(fd.c_str() + 3); break; }
+    }
+    std::set<std::string> made;   // the folders of the game outfits its outfit was made from
+    for (auto& mc : u.costumes.empty() ? detect_mod_costumes(u.files, inv, true) : u.costumes) made.insert(mc.original_folder);
+    std::string why = "it changes no file of a game outfit";
+    for (auto* c : game_outfits_of(inv, fighter)) {
+        if (!made.empty() && !made.count(costume_folder(*c))) continue;
+        auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
+            const std::string low = str_lower(path);
+            if (!outfit_wears(inv, c->fighter, c->costume_no, low)) return {};
+            const PakEntry* e = base.find(pak_path_hash(std::string_view(low)));
+            return e ? base.read(*e) : std::vector<uint8_t>{};
+        };
+        size_t n = 0;
+        std::string w;
+        for (auto& [p, mf] : u.files) {
+            const std::string low = str_lower(p);
+            if (!costume_touches(inv, fighter, c->costume_no, costume_folder(*c), low) || worn(low).empty()) continue;
+            n++;
+            w = slotcheck::addon_fit(none, base, inv.suffixes, u.files, p, mf.read_data(), p, worn, {});
+            if (!w.empty()) { w = rel_tail(p) + ": " + w; break; }
+        }
+        if (n && w.empty()) return {};
+        if (n) why = game_outfit_name(c->costume_no) + ", " + w;
+    }
+    return why;
+}
 
 // An option id: stable across mod updates (archive names carry versions), from the group's key and the
 // option's folder; `ids` keeps them unique within the mod
@@ -6364,6 +6479,14 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
         for (auto& op : rto->options) if (op.mode != "base") n_opt++;
         printf("    runtime options: %zu groups, %zu options stored for the in-game menu\n", rto->groups.size(), n_opt);
     }
+    // A retouch (every option meshes and textures only, no material file): no outfit, its groups go on the outfits
+    // that wear its files (attach_addons)
+    if (rto && g_retouch_sources.count(g_units[tree[0]].source)) {
+        printf("    a retouch (meshes and textures only, no material file): no outfit of its own, its options go on the "
+               "outfits that wear its files\n");
+        g_pending_addons.push_back({root, rto->source, rto_in, true, g_units[tree[0]].source});
+        return;
+    }
     // One outfit per modular mod: its first combination (same id, so the same slot as before), every
     // other one chosen in game
     if (g_rto_layout == RtoLayout::One && combos.size() > 1) {
@@ -6558,9 +6681,46 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
 // A slot stores an option only where it fits what the slot wears (addon_fit); none is worn by default. A series with
 // a "main files" option (the textures its other options are made for): each other option carries those files, one
 // choice with None; else the options that replace a same file are one choice, the others each on or off.
+// Retouches (pa.retouch: meshes and textures only, no material file) go on every outfit that wears the files they
+// replace: the game outfits that load them and the mods' outfits made from those costumes that do not ship them; the
+// retouches of a fighter are one series (options of different mods that replace a same file: one choice).
 static void attach_addons(ScanOutputs& o) {
     if (g_pending_addons.empty()) return;
     const VanillaIndex& inv = o.inv;
+    {   // the retouches of a fighter (not a modular one: its own groups) as one series
+        std::vector<PendingAddon> merged;
+        std::map<std::string, size_t> series;   // fighter folder -> its series in `merged`
+        for (auto& pa : g_pending_addons) {
+            std::string fd;
+            const bool plain = pa.retouch && std::all_of(pa.groups.begin(), pa.groups.end(),
+                                                         [](const RtoGroupIn& g) { return g.key == "retouch"; });
+            if (plain)
+                for (auto& g : pa.groups)
+                    for (auto i : g.members)
+                        for (auto& [p, mf] : g_units[i].files) {
+                            std::string f, folder;
+                            if (fd.empty() && parse_model_folder(str_lower(p), f, folder)) fd = f;
+                        }
+            if (fd.empty()) { merged.push_back(std::move(pa)); continue; }
+            auto it = series.find(fd);
+            if (it == series.end()) {
+                series[fd] = merged.size();
+                merged.push_back(std::move(pa));
+                auto& m = merged.back();
+                for (size_t k = 1; k < m.groups.size(); ++k)
+                    m.groups[0].members.insert(m.groups[0].members.end(), m.groups[k].members.begin(), m.groups[k].members.end());
+                m.groups.resize(1);
+                m.groups[0].name = fd;
+                m.name = "retouches";
+                continue;
+            }
+            for (auto& g : pa.groups) {
+                auto& to = merged[it->second].groups[0].members;
+                to.insert(to.end(), g.members.begin(), g.members.end());
+            }
+        }
+        g_pending_addons = std::move(merged);
+    }
     struct Group { std::string key, name; std::vector<RtoOption> options; };   // ids made per outfit from the key
     std::set<std::pair<const RtoMod*, std::string>> done;                     // a group goes once on a mod
     // Two options of the same files (paths and sizes): the outfit already has that add-on (a copy of it was put with
@@ -6581,7 +6741,7 @@ static void attach_addons(ScanOutputs& o) {
     };
     auto add_to = [&](RtoMod& m, const std::vector<Group>& gs) {
         for (auto& g : gs) {
-            if (!done.insert({&m, g.key + "\t" + g.name}).second) continue;
+            if (!done.insert({&m, g.key + "\t" + g.name + "\t" + (g.options.empty() ? "" : g.options[0].folder)}).second) continue;
             std::set<std::string> ids;
             for (auto& op : m.options) ids.insert(op.id);
             RtoGroup rg;
@@ -6599,7 +6759,7 @@ static void attach_addons(ScanOutputs& o) {
             if (!rg.options.empty()) m.groups.push_back(std::move(rg));
         }
     };
-    auto folder_of = [](const CostumeInfo& c) { return c.model_dir.substr(c.model_dir.rfind('/') + 1); };
+    auto folder_of = [](const CostumeInfo& c) { return costume_folder(c); };
     // A game outfit's options, made on first use (manifest key "<fighter folder>/game outfit 2")
     auto game_mod = [&](const CostumeInfo& ci, const std::string& source) -> RtoMod& {
         for (auto& g : g_rto_game)
@@ -6609,7 +6769,7 @@ static void attach_addons(ScanOutputs& o) {
         g.costume_no = ci.costume_no;
         g.fighter_dir = ci.fighter_dir;
         g.folder = folder_of(ci);
-        g.name = ci.costume_no == 4 ? "Drive Tech" : "Outfit " + std::to_string(ci.costume_no + 1);
+        g.name = game_outfit_name(ci.costume_no);
         g.mod = std::make_shared<RtoMod>();
         g.mod->name = g.name;
         g.mod->key = ci.fighter_dir + "/game " + str_lower(g.name);
@@ -6660,7 +6820,9 @@ static void attach_addons(ScanOutputs& o) {
             }
             if (mem.empty()) continue;
             std::sort(mem.begin(), mem.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
-            const std::string key = "addon:" + str_lower(pa.name) + "/" + gi.key;
+            // (a retouch series: ids from the option's folder alone, whichever mods are in the series)
+            const std::string key = pa.retouch && gi.key == "retouch" ? std::string("retouch")
+                                                                      : "addon:" + str_lower(pa.name) + "/" + gi.key;
             auto opt = [&](size_t i, const char* mode) {
                 RtoOption x;
                 x.name = unit_label(g_units[i]);
@@ -6668,7 +6830,35 @@ static void attach_addons(ScanOutputs& o) {
                 x.mode = mode;
                 x.files = g_units[i].files;
                 x.addon = true;
+                if (pa.retouch) {   // the outfit it made before: from the game outfit it modifies (its slot moves there)
+                    x.retouch = true;
+                    const auto& u = g_units[i];
+                    if (gi.key == "retouch") {   // named as its outfit was (without an archive's extension)
+                        x.name = trim_ws(mod_label(u.mod_id));
+                        for (const char* ext : {".pak", ".zip", ".rar", ".7z"})
+                            if (x.name.size() > strlen(ext) && str_ends_with(str_lower(x.name), ext)) x.name.resize(x.name.size() - strlen(ext));
+                    }
+                    const auto made = u.costumes.empty() ? detect_mod_costumes(u.files, inv, true) : u.costumes;
+                    if (!made.empty()) { x.from = u.mod_id; x.from_folder = made[0].original_folder; }
+                }
                 return x;
+            };
+            // A retouch choice is named after the model part its options replace ("Body": part 01, "Head": part 00)
+            auto part_name = [&](const std::vector<size_t>& v) {
+                std::string part;
+                for (auto& [p, mf] : g_units[v[0]].files) {
+                    const std::string low = str_lower(p);
+                    std::string pfd, folder;
+                    if (!parse_model_folder(low, pfd, folder)) continue;
+                    if (std::any_of(v.begin() + 1, v.end(), [&](size_t i) { return !slotcheck::mod_file(g_units[i].files, low); }))
+                        continue;
+                    const size_t a = low.find("/" + folder + "/") + folder.size() + 2;
+                    if (low.size() < a + 3 || low[a + 2] != '/') continue;
+                    const std::string pp = low.substr(a, 2);
+                    if (part.empty() || low.find(".mesh.") != std::string::npos)
+                        part = pp == "00" ? "Head" : pp == "01" ? "Body" : "Part " + pp;
+                }
+                return part;
             };
             std::vector<Group> gs;
             size_t main = SIZE_MAX;
@@ -6702,11 +6892,23 @@ static void attach_addons(ScanOutputs& o) {
                 std::map<size_t, std::vector<size_t>> clusters;
                 for (size_t x = 0; x < mem.size(); ++x) clusters[find(x)].push_back(mem[x]);
                 for (auto& [r, v] : clusters) {
+                    if (v.size() == 1 && pa.retouch) {   // a retouch alone on its files: its own row, its own name
+                        RtoOption x = opt(v[0], "toggle");
+                        gs.push_back(Group{key, x.name, {std::move(x)}});
+                        continue;
+                    }
                     if (v.size() == 1) { singles.options.push_back(opt(v[0], "toggle")); continue; }
                     std::vector<std::string> names;
                     for (auto i : v) names.push_back(unit_label(g_units[i]));
                     const std::string w = shared_word(names);
-                    Group g{key, clusters.size() == 1 ? trim_ws(gi.name) : w.empty() ? trim_ws(gi.name) + " - choice" : w, {}};
+                    std::string gname = clusters.size() == 1 ? trim_ws(gi.name) : w.empty() ? trim_ws(gi.name) + " - choice" : w;
+                    if (pa.retouch && gi.key == "retouch") {
+                        const std::string pn = part_name(v), stem = !pn.empty() ? pn : !w.empty() ? w : std::string("Retouch");
+                        gname = stem;
+                        for (int n = 2; std::any_of(gs.begin(), gs.end(), [&](const Group& x) { return x.name == gname; }); ++n)
+                            gname = stem + " (" + std::to_string(n) + ")";
+                    }
+                    Group g{key, gname, {}};
                     for (auto i : v) g.options.push_back(opt(i, "pick"));
                     gs.push_back(std::move(g));
                 }
@@ -6728,12 +6930,7 @@ static void attach_addons(ScanOutputs& o) {
                 continue;
             }
             const int fighter = atoi(fd.c_str() + 3);
-            std::vector<const CostumeInfo*> games;   // the game's outfits of the fighter, one per model folder
-            for (auto& c : inv.costumes) {
-                if (c.fighter != fighter || c.costume_no >= 100 || c.model_dir.empty()) continue;
-                if (std::none_of(games.begin(), games.end(), [&](const CostumeInfo* x) { return folder_of(*x) == folder_of(c); }))
-                    games.push_back(&c);
-            }
+            const std::vector<const CostumeInfo*> games = game_outfits_of(inv, fighter);   // one per model folder
             auto shared = [&](const std::string& lp) {
                 std::string pfd, folder;
                 if (!parse_model_folder(lp, pfd, folder) || folder != "000") return false;
@@ -6751,7 +6948,18 @@ static void attach_addons(ScanOutputs& o) {
             const bool all_shared = std::all_of(paths.begin(), paths.end(), shared);
             std::vector<size_t> mods_hit;
             std::vector<const CostumeInfo*> games_hit;
-            if (all_shared) {
+            auto touches = [&](int cno, const std::string& folder) {
+                return std::any_of(paths.begin(), paths.end(),
+                                   [&](const std::string& lp) { return costume_touches(inv, fighter, cno, folder, lp); });
+            };
+            if (pa.retouch) {
+                // every outfit that wears the files: the game outfits that load them, the mods' outfits made from those
+                // costumes (an option whose files a mod's outfit ships itself is left out there, below)
+                for (auto* c : games) if (touches(c->costume_no, folder_of(*c))) games_hit.push_back(c);
+                for (size_t k = 0; k < o.mods_out.size(); ++k)
+                    for (auto& mc : o.mods_out[k].second)
+                        if (mc.fighter_dir == fd && touches(mc.original_costume_no, mc.original_folder)) { mods_hit.push_back(k); break; }
+            } else if (all_shared) {
                 for (size_t k = 0; k < o.mods_out.size(); ++k)
                     for (auto& mc : o.mods_out[k].second)
                         if (mc.fighter_dir == fd) { mods_hit.push_back(k); break; }
@@ -6774,19 +6982,63 @@ static void attach_addons(ScanOutputs& o) {
                         }
             }
             std::string names;
+            // A retouch's options on one outfit: those that touch it (a file of its costume folder, a 000/ file it
+            // loads), not where the outfit (a mod's: e) ships one of their files itself (it replaces the game's files)
+            auto retouch_here = [&](int cno, const std::string& folder, const std::pair<std::string, std::vector<ModCostume>>* e) {
+                std::vector<Group> here = gs;
+                for (auto& g : here) {
+                    auto& v = g.options;
+                    v.erase(std::remove_if(v.begin(), v.end(), [&](const RtoOption& op) {
+                        bool touch = false;
+                        for (auto& [p, mf] : op.files) touch = touch || costume_touches(inv, fighter, cno, folder, str_lower(p));
+                        if (!touch) return true;
+                        if (e)
+                            for (auto& [p, mf] : op.files)
+                                if (ships(*e, str_lower(p))) {
+                                    printf("    runtime options: %s ships %s itself: %s is not an option there\n",
+                                           mod_label(e->first).c_str(), rel_tail(p).c_str(), op.name.c_str());
+                                    return true;
+                                }
+                        return false;
+                    }), v.end());
+                }
+                here.erase(std::remove_if(here.begin(), here.end(), [](const Group& g) { return g.options.empty(); }), here.end());
+                return here;
+            };
+            auto listed = [](const std::vector<Group>& here) {
+                std::string l;
+                for (auto& g : here) for (auto& op : g.options) l += (l.empty() ? "" : " / ") + op.name;
+                return " (" + l + ")";
+            };
             for (auto k : mods_hit) {
-                add_to(mod_rto(o.mods_out[k]), gs);
-                names += (names.empty() ? "" : ", ") + mod_label(o.mods_out[k].first);
+                std::vector<Group> here = gs;
+                if (pa.retouch)
+                    for (auto& mc : o.mods_out[k].second)
+                        if (mc.fighter_dir == fd) { here = retouch_here(mc.original_costume_no, mc.original_folder, &o.mods_out[k]); break; }
+                if (here.empty()) continue;
+                add_to(mod_rto(o.mods_out[k]), here);
+                names += (names.empty() ? "" : ", ") + mod_label(o.mods_out[k].first) + (pa.retouch ? listed(here) : "");
             }
             for (auto* c : games_hit) {
+                const std::vector<Group> here = pa.retouch ? retouch_here(c->costume_no, folder_of(*c), nullptr) : gs;
+                if (here.empty()) continue;
                 RtoMod& m = game_mod(*c, pa.source);
-                add_to(m, gs);
-                names += (names.empty() ? "" : ", ") + fd + " " + m.name + " (game)";
+                add_to(m, here);
+                names += (names.empty() ? "" : ", ") + fd + " " + m.name + " (game)" + (pa.retouch ? listed(here) : "");
+                // A retouch's own outfit before (made from this game outfit): its slot moves here, the option chosen
+                for (size_t oi = 0; oi < m.options.size(); ++oi) {
+                    const RtoOption& op = m.options[oi];
+                    if (op.from.empty() || op.from_folder != folder_of(*c)
+                        || std::any_of(m.variants.begin(), m.variants.end(), [&](const RtoMod::Variant& v) { return v.mod_id == op.from; }))
+                        continue;
+                    m.variants.push_back({op.from, op.name, {oi}, std::string()});
+                }
             }
             size_t n = 0;
             for (auto& g : gs) n += g.options.size();
             printf("\n  add-on %s, %s: %zu option%s (%s), for %s\n", pa.name.c_str(), trim_ws(gi.name).c_str(), n,
-                   n > 1 ? "s" : "", all_shared ? "files every outfit of the fighter loads"
+                   n > 1 ? "s" : "", pa.retouch ? "a retouch: the outfits that wear its files"
+                                    : all_shared ? "files every outfit of the fighter loads"
                                     : !mods_hit.empty() ? "a mod's outfit ships its mesh or material files" : "files of the game's outfits",
                    names.empty() ? "no outfit: not used" : names.c_str());
         }
@@ -6823,6 +7075,38 @@ static void finalize_units(ScanOutputs& o) {
     }
 
     for (auto& u : g_units) g_mod_source[u.mod_id] = source_of_rel(u.u.rel);
+
+    // Retouches (docs/RUNTIME_OPTIONS.md): with RuntimeOptions, a mod (its whole folder or archive) made of meshes and
+    // textures of costumes only, no material file, keeps the look of the outfit it retouches: no outfit of its own, it
+    // is an option of the outfits that wear the files it replaces, where it fits (attach_addons). One that fits none of
+    // the game outfits it modifies stays as before (an outfit, or an add-on of its mod's outfit). Only a mod that made
+    // an outfit: one with a body mesh, or a lone option applied to the outfit it modifies (C. Viper C2 Glasses
+    // Removed: Outfit 2's head); an add-on mod that makes none ("Mai face accessories") keeps the add-on rules.
+    // (RuntimeOptions=variants keeps the outfits of off: a retouch stays one there)
+    std::set<size_t> retouch;
+    g_retouch_sources.clear();
+    if (g_rto_layout == RtoLayout::One) {
+        std::map<int, std::vector<size_t>> by_source;
+        for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
+        for (auto& [src, idx] : by_source) {
+            if (!std::all_of(idx.begin(), idx.end(), [](size_t i) { return unit_retouch(g_units[i]); })) continue;
+            const bool outfit = std::any_of(idx.begin(), idx.end(), [](size_t i) { return !g_units[i].costumes.empty(); })
+                || (idx.size() == 1 && trim_ws(g_units[idx[0]].addonfor).empty()
+                    && !detect_mod_costumes(g_units[idx[0]].files, o.inv, true).empty());
+            if (!outfit) continue;
+            std::string why;
+            for (auto i : idx)
+                if (why.empty() && !(why = retouch_game_fit(o.inv, g_units[i])).empty() && idx.size() > 1)
+                    why = unit_label(g_units[i]) + ": " + why;
+            if (!why.empty()) {
+                printf("\n  %s: meshes / textures only, no material file, but it fits no game outfit it modifies (%s): "
+                       "not a retouch, made as before\n", g_units[idx[0]].u.rel.c_str(), why.c_str());
+                continue;
+            }
+            g_retouch_sources.insert(src);
+            retouch.insert(idx.begin(), idx.end());
+        }
+    }
 
     // Modular mods: options whose "addonfor" names no option of the same mod
     std::set<size_t> modular;
@@ -6882,10 +7166,10 @@ static void finalize_units(ScanOutputs& o) {
     for (size_t i = 0; i < g_units.size(); ++i) {
         const auto& a = g_units[i];
         const std::string want = trim_ws(a.addonfor);
-        if (a.costumes.empty() || a.files.empty() || modular.count(i) || want.empty()) continue;
+        if (a.costumes.empty() || a.files.empty() || modular.count(i) || retouch.count(i) || want.empty()) continue;
         for (size_t j = 0; j < g_units.size(); ++j) {
             const auto& b = g_units[j];
-            if (j == i || b.source != a.source || b.costumes.empty() || modular.count(j)) continue;
+            if (j == i || b.source != a.source || b.costumes.empty() || modular.count(j) || retouch.count(j)) continue;
             if (eq_ci(trim_ws(b.name), want)) { complete_addon_of[i] = j; break; }
         }
     }
@@ -6894,7 +7178,7 @@ static void finalize_units(ScanOutputs& o) {
 
     for (size_t i = 0; i < g_units.size(); ++i) {
         auto& uf = g_units[i];
-        if (uf.costumes.empty() || modular.count(i) || complete_addon_of.count(i)) continue;
+        if (uf.costumes.empty() || modular.count(i) || retouch.count(i) || complete_addon_of.count(i)) continue;
         o.mods_out.push_back({uf.mod_id, uf.costumes});
         o.all_mod_out.insert(uf.files.begin(), uf.files.end());
         note_mod_paths(uf.mod_id, uf.files);
@@ -6904,12 +7188,12 @@ static void finalize_units(ScanOutputs& o) {
     std::map<size_t, std::vector<size_t>> addons_of;
     for (size_t i = 0; i < g_units.size(); ++i) {
         const auto& a = g_units[i];
-        if (!a.costumes.empty() || a.files.empty() || modular.count(i)) continue;
+        if (!a.costumes.empty() || a.files.empty() || modular.count(i) || retouch.count(i)) continue;
         std::vector<size_t> bases;
         for (int rule = 0; rule < 4 && bases.empty(); ++rule) {
             for (size_t j = 0; j < g_units.size(); ++j) {
                 const auto& b = g_units[j];
-                if (b.costumes.empty() || modular.count(j) || complete_addon_of.count(j)) continue;
+                if (b.costumes.empty() || modular.count(j) || retouch.count(j) || complete_addon_of.count(j)) continue;
                 bool hit = false;
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
@@ -7015,6 +7299,25 @@ static void finalize_units(ScanOutputs& o) {
             for (auto a : v) { parts.push_back(a); label += " + " + unit_label(g_units[a]); }
             push_combined(parts, label, o, b.u.rel + " (with add-ons)", b.info_path);
         }
+    }
+    // Retouches: their options (a modular one's groups were set apart by build_modular), in order of their paths
+    for (auto src : g_retouch_sources) {
+        std::vector<size_t> rest;
+        for (auto i : retouch) if (g_units[i].source == src && !modular.count(i)) rest.push_back(i);
+        if (rest.empty()) continue;
+        std::sort(rest.begin(), rest.end(), [](size_t a, size_t b) { return g_units[a].u.rel < g_units[b].u.rel; });
+        for (auto i : rest)
+            printf("\n  retouch %s: meshes / textures only, no material file: no outfit of its own, an option of the "
+                   "outfits that wear its files\n", g_units[i].u.rel.c_str());
+        RtoGroupIn g;
+        g.key = "retouch";
+        g.name = unit_label(g_units[rest[0]]);
+        g.members = rest;
+        auto pa = std::find_if(g_pending_addons.begin(), g_pending_addons.end(),
+                               [&](const PendingAddon& x) { return x.retouch && x.src == src; });
+        if (pa != g_pending_addons.end()) { pa->groups.push_back(std::move(g)); continue; }
+        auto ms = g_mod_source.find(g_units[rest[0]].mod_id);
+        g_pending_addons.push_back({g.name, ms == g_mod_source.end() ? std::string() : ms->second.source, {g}, true, src});
     }
     attach_addons(o);
     g_units.clear();
@@ -8595,8 +8898,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // 5b. Scan costume_mods folders (merged after paks, alphabetical order), then natives
     if (has_costume_mods || has_loose || !g_fluffy.picks.empty()) {
+        g_scan_base_pak = &base_pak;   // retouches are checked against the game's files
         scan_costume_mods(game_dir, inv, mods_with_costumes, all_mod_files,
                           mod_pak_readers, folder_infos, all_upgraded_tex);
+        g_scan_base_pak = nullptr;
     }
     // 5b'. Variants turned off in variant_choices.json are not built (before 5c: an identical variant
     // that stays on must not be dropped as a copy of one turned off)

@@ -463,6 +463,52 @@ int main(int argc, char** argv) {
               "game outfit: a choice with None (main files / glasses) and an On / Off row");
     }
 
+    {   // retouches (meshes / textures only, no material file) on a game outfit: one choice for the body they all
+        // replace; their former outfits (Battle Settings choices) move to the game outfit with the option chosen
+        const char* j = R"JSON({"format": "sf6-costume-options-1", "generated": "g", "loader": "t", "pak": "p", "layout": "one",
+          "mods": [
+            {"key": "esf030/game outfit 1", "name": "Outfit 1", "source": "", "defaults_from": "game", "groups": [
+              {"name": "Body", "options": [
+                {"id": "b6020e6d", "name": "C. Viper Barefoot C1", "folder": "a", "mode": "pick", "apply": "live"},
+                {"id": "901bccff", "name": "C.Viper coat no mesh C1", "folder": "b", "mode": "pick", "apply": "live"},
+                {"id": "d55fc9b0", "name": "C. Viper - Coatless C1", "folder": "c", "mode": "pick", "apply": "live"}]}],
+             "variants": [{"label": "C. Viper Barefoot C1", "options": ["b6020e6d"]}]}],
+          "slots": [
+            {"fighter": 30, "fighter_dir": "esf030", "costume_no": 0, "folder": "001", "name": "Outfit 1", "label": "Outfit 1",
+             "mod": "esf030/game outfit 1", "game": true, "defaults": [],
+             "options": {
+               "b6020e6d": [{"kind": "mesh", "target": "product/model/esf/esf030/001/01/esf030_001_01.mesh", "path": "product/model/esf/esf030/001/rto/b6020e6d/01/esf030_001_01.mesh"},
+                            {"kind": "texture", "target": "product/model/esf/esf030/001/01/esf030_001_01_body_albd.tex", "path": "product/model/esf/esf030/001/rto/b6020e6d/01/esf030_001_01_body_albd.tex"}],
+               "901bccff": [{"kind": "mesh", "target": "product/model/esf/esf030/001/01/esf030_001_01.mesh", "path": "product/model/esf/esf030/001/rto/901bccff/01/esf030_001_01.mesh"}],
+               "d55fc9b0": [{"kind": "mesh", "target": "product/model/esf/esf030/001/01/esf030_001_01.mesh", "path": "product/model/esf/esf030/001/rto/d55fc9b0/01/esf030_001_01.mesh"}]},
+             "base": [], "required": [],
+             "former": [{"costume_no": 21, "folder": "022", "label": "C. Viper Barefoot C1", "options": ["b6020e6d"]},
+                        {"costume_no": 24, "folder": "025", "label": "C. Viper - Coatless C1", "options": ["d55fc9b0"]}]}]})JSON";
+        Manifest q; std::string e7;
+        check(parse_manifest(j, q, e7) && q.slots.size() == 1, "retouches: manifest parsed");
+        const Slot& t = q.slots[0];
+        const Former* fo = nullptr;
+        const Slot* k = former_of(q, 30, 24, &fo);
+        check(k == &t && k->game && k->costume_no == 0 && fo && fo->ids == std::vector<std::string>{"d55fc9b0"},
+              "retouches: a former retouch outfit moves to the game outfit, its option chosen");
+        check(former_of(q, 30, 23, &fo) == nullptr, "retouches: a number no former names stays unknown");
+        auto r = rows(q, t, {});
+        check(r.size() == 1 && r[0].kind == Row::Pick && r[0].none && r[0].labels.size() == 4 && r[0].value == 1,
+              "retouches: one Body row, None + the three retouches, None chosen");
+        std::vector<std::string> c = fo->ids;
+        auto d = desired(q, t, c);
+        check(path_of(d, "product/model/esf/esf030/001/01/esf030_001_01.mesh") == "product/model/esf/esf030/001/rto/d55fc9b0/01/esf030_001_01.mesh"
+              && is_orig(d, "product/model/esf/esf030/001/01/esf030_001_01_body_albd.tex"), "retouches: Coatless worn, the game's textures");
+        choose(q, t, c, 0, "b6020e6d");
+        d = desired(q, t, c);
+        check(!has(c, "d55fc9b0") && path_of(d, "product/model/esf/esf030/001/01/esf030_001_01_body_albd.tex")
+              == "product/model/esf/esf030/001/rto/b6020e6d/01/esf030_001_01_body_albd.tex", "retouches: Barefoot replaces Coatless");
+        choose(q, t, c, 0, "");
+        d = desired(q, t, c);
+        check(is_orig(d, "product/model/esf/esf030/001/01/esf030_001_01.mesh") && is_orig(d, "product/model/esf/esf030/001/01/esf030_001_01_body_albd.tex"),
+              "retouches: None gives back the game's body");
+    }
+
     {   // the menu title: a long outfit name is cut, UTF-8 aware
         check(clip_name("Ingrid - Fly In A Bucket - Drive Tech", kTitleNameChars) == "Ingrid - Fly In A Bucket - Drive Tech",
               "title: a name of 40 characters or less is kept");

@@ -129,9 +129,9 @@ outfits whose files they replace (next section); with `off` it is not used (WARN
 A separate add-on that makes no outfit of its own becomes runtime options of the outfits whose files it replaces
 (`attach_addons` in the loader): a modular mod none of whose combinations is a complete outfit ("Mai face accessories
 C2 and swap test"), or a lone add-on no outfit of its own mod completes (A.K.I No Sleeves: a material file of
-Outfit 1; Cammy C4 pale skin: textures of Outfit 4). With `off` nothing changes (such add-ons are not used). An
-add-on that makes an outfit of its own today (C. Viper C2 Glasses Removed, "applied to the original outfit it
-modifies") still does.
+Outfit 1; Cammy C4 pale skin: textures of Outfit 4). With `off` nothing changes (such add-ons are not used). A
+retouch that made an outfit of its own (C. Viper C2 Glasses Removed, "applied to the original outfit it modifies") is
+an option too since the retouch rule (next section).
 
 Where each group of the add-on goes (a group = a series of its menu: `!C2 Mai face accessories`):
 
@@ -163,12 +163,47 @@ facial wrinkles" -> "Remove mais facial wrinkles"); the manifest keeps the mod's
 what that outfit wears there; else the log says `runtime options: <option> does not fit this outfit (<file>: why):
 not offered here`.
 
-- a mesh: the outfit wears a mesh at that path; the add-on's mesh has every joint of it (the model keeps its chains);
-  every material of the add-on's mesh is in the part's material file (the option's own, else the outfit's `_v00`);
+- a mesh: the outfit wears a mesh at that path; the add-on's mesh has every joint of it (the model keeps its chains;
+  blend shapes, `BS_<mesh>.<joint>_...` in the same name table, do not count: no chain moves them); every material of
+  the add-on's mesh is in the part's material file (the option's own, else the one the outfit loads for that part:
+  a slot's own copy when it relocated it, C.Viper lace lingerie's head material file);
 - a material file: every material of the part's mesh (the option's, else the outfit's) is in it, and every texture it
   names exists (the option's own textures count);
 - a texture: the outfit loads a texture at that path (any size: "remove wrinkles" is an 8x8 over a 512x256 mask);
 - a chain: the outfit has one at that path.
+
+### Retouches (20/10, loader `2026-10-20-rto-retouch`)
+
+With `on` (not `variants`, which keeps the outfits of `off`), a **retouch** makes no outfit of its own: a mod (its
+whole folder or archive) whose every file is a mesh or a texture of costumes (streaming twins included), **no
+material file**, no chain, colour or other file, that made an outfit (one with a body mesh, or a lone option applied
+to the outfit it modifies). It keeps that outfit's look: it is an option of every outfit that wears the files it
+replaces, where it fits. A mod that ships its own `.mdf2` stays an outfit. Why no chain: a chain swapped on a game
+outfit has no way back that keeps the chain safe (part units exist for a slot's base copies only), so a retouch with
+a chain stays an outfit. Colour and other files cannot be swapped on a live model (they would be lost).
+
+- **Where**: the game outfits that load its files (a file of their folder, a `000/` file they load), and the mods'
+  outfits made from those costumes, except where that outfit ships one of the option's files itself (it replaces the
+  game's files: Bayonetta C2 ships its own `002/00` head, so "Glasses Removed" is not offered there).
+- **One series per fighter**: retouches of different mods that replace a same file are one choice named after the
+  part ("Body": part `01`, "Head": `00`, else "Part NN"), None = the outfit's own file; the others On / Off each,
+  named as their outfit was. A modular retouch keeps its own groups (add-on rules). Option ids: `retouch/<option
+  folder>` (stable when another retouch is added).
+- **A file the outfit does not load is left out** of that outfit's option, not a reason to refuse it: no material file
+  of the outfit names it (C. Viper Barefoot C1 ships four `access*` textures Outfit 1's material file does not name).
+- **Kept as an outfit** when it does not fit the game outfit it was made from (checked while the mods are read,
+  against the game's files): Ken "VEGETA MAJIN" (its hair lacks 95 joints of the game's hair) is still an outfit.
+- An add-on mod that never made an outfit ("Mai face accessories": no body mesh) keeps the add-on rules above.
+- **Former outfits**: the game outfit's `former` lists each retouch's slot of the launch before (its costume number and
+  folder, its option); a Battle Settings choice of it moves to the game outfit with that option chosen (see Saved
+  choices). The other outfits keep their numbers (registry); only their names ("Outfit IV") follow their rank.
+
+Offline (Wael's mods): C. Viper Barefoot C1, coat no mesh C1,
+Coatless C1 (Outfit 1's body; Barefoot also 3 body textures) -> game Outfit 1, one "Body" choice; C2 Glasses
+Removed (Outfit 2's head mesh) -> game Outfit 2, C.Viper Lace lingerie C2 (its own head material file, the game's
+mesh), Battlesuit C2.1, Trench Coat (On / Off each); Cammy "Escape from Shadaloo" (Outfit 2's body mesh) -> game
+Outfit 2 (B Style Bunny, Camo Cammy and Belly ship their own body); Akuma "BARECHEST CLASSIC" (Outfit 2's body
+mesh) -> game Outfit 2. Six outfits fewer (76 -> 70).
 
 **Game outfits** in the manifest: a `slots[]` entry with `"game": true`, the game's costume number (Outfit 2 = 1) and
 folder (`002`), name and label "Outfit 1".."Outfit 4" / "Drive Tech", mod key `<fighter>/game outfit 2` (its groups
@@ -562,7 +597,10 @@ next rebuild no longer lists it (improvement: carry `former` over from the previ
 Built (lot B): `costumes.cpp` `load_state` asks `rto::migrate_former` for every Battle Settings choice whose costume
 number the registry no longer has; with layout `one` and the number in a slot's `former`, the choice moves to the kept
 slot (its colour kept) and that variant's options become the mod's P1 choice (`changed: true`); `state.json` and
-`costume_choices.json` are written, `former_done` notes the manifest. Layout `variants` never migrates (the variant
+`costume_choices.json` are written, `former_done` notes the manifest. A **game outfit's** `former` (a retouch's slot):
+the choice goes to that game outfit, no slot of ours: the save's `MatchingFighterCostume` gets the game's costume
+number (and the colour, when the carrier has it) the first time the save is reached (`safety_net`); until then
+`state.json` keeps the former number, so a session that ends first does it again. Layout `variants` never migrates (the variant
 slots still exist). Not done: Color Mod colours made for a former folder.
 
 ## Presets and "Save as"
@@ -588,9 +626,10 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
 - **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
   are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as
   defaults (`defaults_from: "fluffy"`).
-- Separate add-ons: done (see [Add-ons on other outfits](#add-ons-on-other-outfits-2010-loader-2026-10-20-rto-addons)).
-  Not done: an add-on that makes an outfit of its own today (applied to the game outfit it modifies) stays an
-  outfit; its options are not put on other outfits.
+- Separate add-ons: done (see [Add-ons on other outfits](#add-ons-on-other-outfits-2010-loader-2026-10-20-rto-addons)),
+  and retouches (an add-on applied to the game outfit it modifies included). Not done: a retouch's former outfit
+  migrates for a fighter that still has a slot of ours (the plugin reaches the save entries of those only); the
+  Slotsloader Manager does not see retouches (no outfit, no `variants.json` row).
 - `other` files (cloth, physics user files) cannot be swapped at runtime: their options apply at the next launch
   only (or not at all with `on`, the menu says so).
 - Slotsloader Manager compatibility (`variants.json` / `variant_choices.json`): done, see
