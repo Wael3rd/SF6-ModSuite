@@ -151,8 +151,9 @@ void build() {
         }
         for (int ri : S.pages[static_cast<size_t>(p)]) {
             const Row& r = S.rows[static_cast<size_t>(ri)];
-            std::string desc = r.kind == Row::Pick ? "One option of this group at a time (None: the outfit without it). " + live
-                                                   : "On or off. " + live;
+            std::string desc = r.kind != Row::Pick ? "On or off. " + live
+                             : r.none ? "One option of this group at a time (None: the outfit without it). " + live
+                                      : "One option of this group at a time (this outfit always wears one). " + live;
             if (r.partial) desc += " * Some files of this option (colours, cloth, physics) only change at the next launch, or not at all.";
             Act a; a.kind = Act::Option; a.row = ri;
             put(add_entry(g, SF6CORE_OPT_CHOICE, "row" + std::to_string(ri), r.title, desc, r.labels, r.value), a);
