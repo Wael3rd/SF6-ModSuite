@@ -77,6 +77,14 @@
   game's file there) where it fits; retouches of one file are one choice ("Body": None / Barefoot / Coat no mesh /
   Coatless). One that fits no game outfit it modifies stays an outfit. Its former outfit, chosen in Battle Settings,
   becomes the game outfit with the retouch chosen; the other outfits keep their numbers.
+- Runtime costume options: On / Off options that replace a same file are one choice (Swimsuit Viper C1: "hide
+  accessories" and "hide leg chain" both on brought the bracelets back); the menu never keeps two of them on.
+- Runtime costume options (`on`), decided from the files only: versions of one archive (Aloha Ryu C1 / C2, Lily Jun
+  Kazama No Shawl / Jun's Outfit) and outfits of several archives with the same meshes (Sagat's three Tees) are one
+  outfit with a choice, where each one fits (a version made for another game outfit brings that outfit's head and
+  parts); an outfit that is a game outfit with parts taken off (Ryu Outfit 1 No Cloak, Sagat Outfit 1 Shirtless) is an
+  option of that game outfit. Their former outfits move there with their option chosen. Each build logs a short merge
+  audit (what was merged, what looks related and why it was not).
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

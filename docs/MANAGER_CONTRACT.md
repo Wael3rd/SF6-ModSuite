@@ -136,7 +136,11 @@ the files built into the pak). What the player picked in the in-game options men
 over the default, as it always does. Because the labels are the same in the three layouts, choices made under one
 layout carry over to the others. A mod made of a single outfit is one row (the Manager shows no toggle for it).
 With `on`, a retouch (meshes and textures only, no material file: `RUNTIME_OPTIONS.md`, Retouches) makes no outfit:
-it is an option of the outfits that wear its files and has no row in `variants.json`.
+it is an option of the outfits that wear its files and has no row in `variants.json`; a subset (a game outfit with
+parts taken off: `RUNTIME_OPTIONS.md`, Merges) too. Outfits made one (`RUNTIME_OPTIONS.md`, Merges: versions of one
+archive, outfits of several archives with the same meshes) keep their rows, each under its own archive's `source` and
+with `off`'s label; every row left on shows the one outfit as its slot. The one outfit wears by default the first of
+them (archive order) whose row is left on; every row off: no outfit.
 
 ## What the Manager needs to change
 

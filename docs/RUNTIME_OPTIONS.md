@@ -205,6 +205,73 @@ mesh), Battlesuit C2.1, Trench Coat (On / Off each); Cammy "Escape from Shadaloo
 Outfit 2 (B Style Bunny, Camo Cammy and Belly ship their own body); Akuma "BARECHEST CLASSIC" (Outfit 2's body
 mesh) -> game Outfit 2. Six outfits fewer (76 -> 70).
 
+### Merges (20/10, loader `2026-10-20-rto-merge`)
+
+With `on` only (`off` and `variants` build what they built). Every rule is decided from the files: their bytes, the
+meshes' name tables (materials, joints) and faces, the costume folders. Names only label the options. Each build logs
+a short **merge audit** (`merge audit (RuntimeOptions=on): outfits that look related`): per fighter, what was made one,
+and the outfits that look related but were not (same archive, an identical mesh, a mesh made from a game outfit's)
+with the reason.
+
+**On / Off options of a same file are one choice** (every outfit with options, `variants` too): two toggles that
+replace a same file, in one group or in several (of the mod or of add-ons put on the outfit), become one pick group
+with None, placed where the later of them was, named after the word their names share, else the part ("Body") or the
+texture ("Jewels"); their ids do not change. Swimsuit Viper C1: "hide accessories (bracelets and leg chain)" + "hide
+leg chain" both ship `jewels_atos.tex` (both on, the second one's file brought the bracelets back): "Chain" (None /
+hide accessories / hide leg chain); "hide earings only / hide earings and necklace / hide necklace": "Necklace". The
+plugin is defensive (a manifest of an older loader): a toggle turned on turns off every other chosen toggle that ships
+one of its targets, and a set holding two picks of one group keeps the last one (both logged, `rto: menu: ...`).
+
+**Versions: several outfits made one** (`merge_versions`). Outfits of one fighter that are
+- versions of one archive: the complete options of one folder or archive (Ryu Aloha Bundle: C1 / C2 / C3 for
+  Outfits 1 / 2 / 3; Lily Jun Kazama Cosplay: No Shawl / Jun's Outfit; a mod with a costume per game outfit), or
+- outfits of several archives whose every mesh is the same bytes for the same game outfit (Sagat's Tees: one body
+  mesh, other textures and colours; Viper's Lace / Battlesuit / Trench Coat ship other meshes: not merged)
+
+become **one outfit** with a required choice ("Version", or the word their names end with: "Tee"). The **base** is
+the first of them (archive order; the first one the Slotsloader Manager leaves on): it keeps its slot, number and
+colours; the others are options of it and their slots move to it with their version picked (`former`). Each other
+version is moved onto the base's folder (`esf001/002/01/...` -> `esf001/001/01/...`, its material files' texture
+references follow, `RtoOption::origin`); a version made for another game outfit **carries what that outfit wears at
+the parts it does not ship** (C2 on the C1 base: Outfit 2's head and part 02, mesh and material file, at the paths the
+base loads; not their chains: the base's chains stay). A file the same as what the base wears there is left out (the
+identical body mesh of the Aloha versions, the Tees' mesh and material file), physics files (`other`) too. The base's
+own pick holds the base's files wherever a version ships another one (going back to it; worn by default, so nothing
+is swapped). A version is merged **only where every file fits the base** (`version_fit`, the add-on fit checks against
+the base's files and its game outfit's); else it stays an outfit (Aloha C3: its body chain, the C1 outfit has no chain
+there; AoD replace Ingrid: a texture its material names is missing). A version whose files are all the same as the
+base's is merged without an option; one that differs only in colours stays an outfit (colours are not swapped live).
+Their add-ons are made with it (the same add-on of several versions once). The outfit's name: what the versions' names
+share ("Aloha Ryu"), else the archive's name without its download numbers ("Lily Jun Kazama Cosplay"), else the
+base's; option labels: the words that tell their names apart ("C1" / "C2"; "Muay Thai" / "Tiger Photo" / "Tiger" from
+the archives' names when two names are alike). Not merged: Fluffy installs, modular mods, retouches, outfits put with
+their add-ons in a sub-folder.
+
+**Subsets: a game outfit with parts taken off** (`game_subset`). An outfit (a lone option of its folder or archive)
+whose every mesh is the mesh a game outfit of the fighter wears at that part, either the same bytes or the same
+materials and joints with some materials taken off: left out of the mesh, or every triangle of theirs folded to
+nothing (two corners on one vertex; the other materials keep their triangles as they were), at least one part with
+something taken off. Ryu "Outfit 1 No Cloak - Drive Tech" is the game's Outfit 1 body with `esf_Costume00`, `esf_Ring`
+and `esf_Threads` folded; Sagat "Outfit 1 Shirtless" ships Outfit 1's head as it is and its body with the fur vest
+folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. It makes no outfit: its
+files are moved to the paths that game outfit loads (Drive Tech's `005/01` -> Outfit 1's `001/01`), the ones the same
+as the game's there left out, physics and colour files too (the game outfit's own stay: the subset mesh has all its
+joints), and it is an option of that game outfit and of the mods' outfits that wear those files, where it fits (as a
+retouch: one series per fighter, a choice with retouches of a same file, `former` moves its slot to the game outfit
+with the option chosen). It is named as its outfit was. **Chains**: a subset that ships a changed chain stays an
+outfit. A part unit (stop the chain, set the new chain, the mesh, restart) needs a way back that the loader checked as
+a whole (a base copy of the part); a game outfit's options have no base copy (the game's files are the way back, and
+the plugin goes back to them file by file), so a chain changed on a game outfit could be left bound to joints of the
+other mesh. None of Wael's subsets ships a model chain (their `_chain.user` and joint constraints are physics files,
+left out). A mesh made from a game outfit's with nothing taken off (an edited copy) stays an outfit (audit).
+
+Offline (Wael's mods, `on`): 70 outfits -> 59. Ryu: Aloha Ryu (Version C1 / C2, add-ons No Gloves / No Headband),
+Aloha Ryu C3 stays (its body chain), No Cloak -> an option of game Outfit 1; Sagat: one Tee outfit (Muay Thai / Tiger
+Photo / Tiger), Shirtless -> game Outfit 1; Cammy: Zani Costume (Horn removed / Outfit01) and Mai Outfit 2 PRO
+(PRO / PROmc: its own chain); Lily: Jun Kazama Cosplay (No Shawl / Jun's Outfit); Ken Outfit 2 Shirtless, Alex No
+Vest, Yasmine No Jacket -> their game outfits. The scan takes about 12 s more (meshes read for the subset test, hashed
+for identical meshes).
+
 **Game outfits** in the manifest: a `slots[]` entry with `"game": true`, the game's costume number (Outfit 2 = 1) and
 folder (`002`), name and label "Outfit 1".."Outfit 4" / "Drive Tech", mod key `<fighter>/game outfit 2` (its groups
 are the add-ons' series), `defaults`, `base`, `required` and `former` empty. Options are stored under the game's
@@ -628,8 +695,8 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
   defaults (`defaults_from: "fluffy"`).
 - Separate add-ons: done (see [Add-ons on other outfits](#add-ons-on-other-outfits-2010-loader-2026-10-20-rto-addons)),
   and retouches (an add-on applied to the game outfit it modifies included). Not done: a retouch's former outfit
-  migrates for a fighter that still has a slot of ours (the plugin reaches the save entries of those only); the
-  Slotsloader Manager does not see retouches (no outfit, no `variants.json` row).
+  migrates for a fighter that still has a slot of ours (the plugin reaches the save entries of those only), a subset's
+  too; the Slotsloader Manager does not see retouches and subsets (no outfit, no `variants.json` row).
 - `other` files (cloth, physics user files) cannot be swapped at runtime: their options apply at the next launch
   only (or not at all with `on`, the menu says so).
 - Slotsloader Manager compatibility (`variants.json` / `variant_choices.json`): done, see
