@@ -327,6 +327,30 @@ a pure add-on (no complete outfit) cannot be an outfit: it keeps the add-on rule
 line per mod kept apart (`<mod>: alone in its sub-folder <name>: its own outfit (no merge)`), repeated in the merge audit.
 `RuntimeOptions=variants` and `off` are unchanged.
 
+### NSFW outfits: `costume_mods_nsfw` (20/10)
+
+A second root, `reframework/costume_mods_nsfw/<Character>/`, read like `costume_mods` (same layout, archives in the
+same `costume_mods\.cache`, same `settings.ini`), after every other source, its units marked `nsfw`. The plugin hides
+its outfits while "Display NSFW Outfits" is off (README, NSFW outfits). No mixing, every layout:
+
+- An NSFW mod is merged (versions, identical meshes), grouped (one sub-folder) or given add-ons (`AddonFor`, bundle)
+  with NSFW mods only; a mod alone in its sub-folder has its own key per root (`nsfw:<char>/<sub>`).
+- An NSFW retouch or subset stays an outfit (a retouch is an option of the game's outfits, which are shown whatever
+  the setting); the loader logs `... from costume_mods_nsfw: stays an outfit`.
+- An NSFW add-on that makes no outfit (`attach_addons`) is an option of NSFW outfits only, never of a game outfit;
+  the add-ons of `costume_mods` never go on an NSFW outfit. So no NSFW option is ever offered on, or worn by, an
+  outfit that stays shown while NSFW outfits are hidden: the runtime options need no filter.
+- Manifests: `outfits.json` and the registry (`slots[]`, `possession[]`) carry `"nsfw": true` on NSFW outfits;
+  `costume_options.json` on their `slots[]` and `mods[]`, whose key is `<fighter folder>/nsfw/<name>` (never the
+  choices of a mod of the same name in `costume_mods`). Written only when true: without `costume_mods_nsfw` every
+  file is byte-identical to before. `variants.json` does not list them (the Slotsloader Manager names sources in
+  `costume_mods` only).
+- Numbers (`assign_slots`): a new NSFW outfit goes after every number of the fighter in use, its first one
+  `kNsfwGap` (10) numbers further; a new outfit of `costume_mods` goes after the fighter's other outfits and before
+  its NSFW ones (a free number before them, else after them, logged). Numbers in use are kept; a mod moved between
+  the roots is numbered again (the registry's `nsfw` no longer matches).
+- Fingerprint: the root's entries as `nsfw:<path>` (none without the folder).
+
 ## Storage in the costume pak
 
 For every slot of a modular mod, every option except `base` ones is stored **as that slot would use it**, under the

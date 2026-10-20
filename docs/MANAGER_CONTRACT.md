@@ -142,6 +142,10 @@ archive, outfits of several archives with the same meshes) keep their rows, each
 with `off`'s label; every row left on shows the one outfit as its slot. The one outfit wears by default the first of
 them (archive order) whose row is left on; every row off: no outfit.
 
+Mods in `reframework/costume_mods_nsfw` (NSFW outfits, shown in game only while "Display NSFW Outfits" is on:
+`RUNTIME_OPTIONS.md`, NSFW outfits) have no row in `variants.json` and are not turned off by `variant_choices.json`:
+the Manager names sources below `costume_mods` only. Without that folder nothing changes.
+
 ## What the Manager needs to change
 
 The Manager 1.0.7 refuses our package before reading anything else: `LoaderCostumePak.IsUpstreamBuild` (used by

@@ -61,6 +61,22 @@ private:
     std::map<std::pair<int, int>, State> m_;
 };
 
+// ---- NSFW outfits (costume_mods_nsfw; the registry marks their slots "nsfw": true) ----
+// Shown only while the player's "Display NSFW Outfits" setting is on (off by default). A hidden slot is not owned
+// (the select screens and Battle Settings do not list it), like a slot made from an outfit the player does not own.
+inline bool nsfw_shown(bool nsfw, bool display_nsfw) { return !nsfw || display_nsfw; }
+
+// The colour the save gets when a hidden NSFW outfit's choice goes back to Outfit 1: the colour chosen with the
+// outfit, else the one the save holds, when Outfit 1 has it; else Outfit 1's first colour. -1: leave the save's
+// colour as it is (Outfit 1's colours not known).
+inline int outfit1_colour(int chosen, int in_save, const std::vector<int>& outfit1_colours) {
+    if (outfit1_colours.empty()) return -1;
+    auto has = [&](int c) { return c >= 0 && std::find(outfit1_colours.begin(), outfit1_colours.end(), c) != outfit1_colours.end(); };
+    if (has(chosen)) return chosen;
+    if (has(in_save)) return in_save;
+    return *std::min_element(outfit1_colours.begin(), outfit1_colours.end());
+}
+
 // The outfit's name in log lines: costume 0 -> "Outfit 1", 3 -> "Outfit 4", 4 -> "DriveTech"
 inline std::string outfit_label(int costume) {
     if (costume == 4) return "DriveTech";

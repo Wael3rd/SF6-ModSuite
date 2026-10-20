@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- NSFW outfits: a second mods folder, `reframework\costume_mods_nsfw\<Character>\` (made by the user; same layout and
+  rules as `costume_mods`). Its outfits are hidden until "Display NSFW Outfits" is on (`display_nsfw` in
+  `reframework\data\SF6_CostumeSlots_data\settings.json`, off by default; applied at the next screen that lists
+  outfits, no relaunch); while hidden they are not listed anywhere outfits are, and a Battle Settings choice of one
+  goes back to Outfit 1. They are numbered after the fighter's other outfits, keep their numbers, and are merged or
+  made options only with other NSFW mods (an NSFW retouch stays an outfit; NSFW add-ons go on NSFW outfits only).
+  Marked `"nsfw": true` in `outfits.json`, the registry and `costume_options.json`; not listed in `variants.json`.
+  Without that folder nothing changes (same registry, manifests and pak). Known issue: no in-game switch yet
+  (the option row in Options > Interface needs a core change).
 - Runtime options: a mod alone in its own sub-folder of a character folder is always its own outfit (no retouch, subset, merge or add-on placement on either side); logged and listed in the merge audit.
 
 ### SF6 Slots Loader (fixes ported from ZZtaii's Slotsloader fork, MIT)

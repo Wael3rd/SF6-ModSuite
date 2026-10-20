@@ -66,6 +66,19 @@ int main() {
         check(!b.shown(RYU, 9), "an outfit the game does not have: hidden");
     }
 
+    // NSFW outfits: shown only while "Display NSFW Outfits" is on
+    check(slots::ownership::nsfw_shown(false, false), "other outfit, setting off: shown");
+    check(!slots::ownership::nsfw_shown(true, false), "NSFW outfit, setting off: hidden");
+    check(slots::ownership::nsfw_shown(true, true), "NSFW outfit, setting on: shown");
+    {
+        using slots::ownership::outfit1_colour;
+        const std::vector<int> o1 = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        check(outfit1_colour(3, 0, o1) == 3, "back to Outfit 1: the colour chosen with the outfit");
+        check(outfit1_colour(12, 2, o1) == 2, "back to Outfit 1: a colour Outfit 1 lacks -> the save's");
+        check(outfit1_colour(-1, 15, {1, 2}) == 1, "back to Outfit 1: neither -> Outfit 1's first colour");
+        check(outfit1_colour(3, 0, {}) == -1, "back to Outfit 1: colours not known -> left as is");
+    }
+
     check(outfit_label(0) == "Outfit 1", "label of costume 0");
     check(outfit_label(1) == "Outfit 2", "label of costume 1");
     check(outfit_label(3) == "Outfit 4", "label of costume 3");

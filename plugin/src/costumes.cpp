@@ -40,6 +40,7 @@ struct Slot {
     int fighter = 0, costume_no = 0, record_id = 0;
     int base = -1;                   // the outfit the mod was made for (costume number), -1 unknown
     std::string name, label;         // "Outfit II", the mod's name (log lines)
+    bool nsfw = false;               // from costume_mods_nsfw: shown only while "Display NSFW Outfits" is on
     bool told_hidden = false;
     bool has_sw = false;
     uint32_t sw[10][2] = {};
@@ -57,12 +58,32 @@ bool is_slot(int fid, int cos) {
 // Whether the outfit each slot is made from is the player's, as the game answered (ownership.hpp)
 ownership::Book g_book;
 
-// A slot of the registry the player sees: its outfit is the player's, or not known to be otherwise
+// NSFW outfits (the registry's "nsfw" slots): shown only while settings.json's "display_nsfw" is true (off by
+// default, also when the file is missing). Read at start and again, when the file changed, at every screen that
+// lists outfits (no polling): a change takes effect there, without a relaunch.
+const char* kSettings = "reframework/data/SF6_CostumeSlots_data/settings.json";
+size_t g_nsfw_slots = 0;
+bool g_show_nsfw = false;
+uint64_t g_settings_stamp = 0;       // size and date of settings.json when read (0: never read / missing)
+bool g_nsfw_apply = false;           // a change not applied yet (Battle Settings was open)
+
+bool visible(const Slot& s) {
+    return g_book.shown(s.fighter, s.base) && ownership::nsfw_shown(s.nsfw, g_show_nsfw);
+}
+
+// A slot of the registry the player sees: its outfit is the player's, or not known to be otherwise, and it is not
+// an NSFW outfit while those are hidden
 bool shown(int fid, int cos) {
     auto f = g_slot_of.find(fid);
     if (f == g_slot_of.end()) return false;
     auto c = f->second.find(cos);
-    return c != f->second.end() && g_book.shown(fid, g_slots[c->second].base);
+    return c != f->second.end() && visible(g_slots[c->second]);
+}
+bool nsfw_hidden(int fid, int cos) {
+    auto f = g_slot_of.find(fid);
+    if (f == g_slot_of.end()) return false;
+    auto c = f->second.find(cos);
+    return c != f->second.end() && !ownership::nsfw_shown(g_slots[c->second].nsfw, g_show_nsfw);
 }
 
 // ---- intents (Battle Settings choices), state.json ----
@@ -82,6 +103,7 @@ struct Fighter {
     std::string dst_path;            // the carrier's folder (fighterNNN/esfNNNv04, ...v00)
     Obj* dst_folder = nullptr;
     std::set<int> base_colors; int base_min = 0; bool base_known = false;   // the carrier's colours
+    std::vector<int> o1_colors;      // Outfit 1's colours (an NSFW outfit hidden goes back to it), empty: not known
     // alias
     Obj* src_folder = nullptr;
     uintptr_t swapped_addr = 0;
@@ -175,6 +197,7 @@ void load_registry() {
         s.record_id = r ? static_cast<int>(r->as_int()) : 0;
         if (s.fighter <= 0 || s.costume_no <= 0) continue;
         if (const Json* nm = e.get("name")) s.name = nm->as_str();
+        if (const Json* ns = e.get("nsfw"); ns && ns->kind == Json::Bool && ns->b) { s.nsfw = true; ++g_nsfw_slots; }
         if (auto b = base_of.find({s.fighter, s.costume_no}); b != base_of.end()) s.base = b->second;
         if (auto l = label_of.find({s.fighter, s.costume_no}); l != label_of.end()) s.label = l->second;
         if (const Json* sw = e.get("swatches"); sw && sw->kind == Json::Array) {
@@ -191,7 +214,38 @@ void load_registry() {
         g_slot_of[s.fighter][s.costume_no] = g_slots.size();
         g_slots.push_back(s);
     }
-    logf("costumes: %zu slots, %zu characters", g_slots.size(), g_fighters.size());
+    logf("costumes: %zu slots, %zu characters%s", g_slots.size(), g_fighters.size(),
+         g_nsfw_slots ? (", " + std::to_string(g_nsfw_slots) + " NSFW").c_str() : "");
+}
+
+// settings.json's date and size in one number (0: no file)
+uint64_t settings_stamp() {
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExA(kSettings, GetFileExInfoStandard, &fa)) return 0;
+    return ((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime) ^ fa.nFileSizeLow;
+}
+// Reads "display_nsfw" (false when the file or the key is missing). Returns true when the setting changed.
+bool read_nsfw_setting(const char* why) {
+    if (!g_nsfw_slots) return false;
+    const uint64_t st = settings_stamp();
+    if (st && st == g_settings_stamp) return false;
+    g_settings_stamp = st;
+    bool on = false;
+    Json j;
+    std::string text = st ? read_file(kSettings) : std::string();
+    if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);   // saved by an editor with a BOM
+    if (st && json_parse(text, j))
+        if (const Json* d = j.get("display_nsfw"); d && d->kind == Json::Bool) on = d->b;
+    if (!st) {   // a fresh install: the file, so the setting can be found (off)
+        CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
+        if (write_file(kSettings, "{\n    \"display_nsfw\": false\n}\n")) g_settings_stamp = settings_stamp();
+    }
+    if (on == g_show_nsfw && std::strcmp(why, "start") != 0) return false;
+    const bool changed = on != g_show_nsfw;
+    g_show_nsfw = on;
+    logf("costumes: Display NSFW Outfits %s (%s): %zu NSFW outfit%s %s", on ? "on" : "off", why, g_nsfw_slots,
+         g_nsfw_slots > 1 ? "s" : "", on ? "shown" : "hidden");
+    return changed;
 }
 
 void save_state();
@@ -430,10 +484,33 @@ void on_menu_close() {
     }
 }
 
+// "Display NSFW Outfits" off: a choice of an NSFW outfit (Battle Settings' choice kept as the intent, the save holding
+// its carrier or its number) goes back to the character's Outfit 1, in the colour chosen with it when Outfit 1 has it.
+// A character whose save entry cannot be reached yet keeps its choice until it can (the hidden outfit is never worn:
+// the alias leaves hidden slots out).
+void drop_nsfw_choices(const std::map<int, Obj*>& entries) {
+    if (!g_nsfw_slots || g_show_nsfw) return;
+    for (auto& [fid, in] : g_intent) {
+        if (!in.slot || !nsfw_hidden(fid, in.slot)) continue;
+        auto it = entries.find(fid);
+        if (it == entries.end()) continue;
+        Obj* e = it->second;
+        const int was = in.slot, colour = in.color;
+        const char* why = "NSFW outfit hidden (Display NSFW Outfits off): Outfit 1";
+        logf("[F%d] slot v%02d is an NSFW outfit and NSFW outfits are hidden: the choice goes back to Outfit 1", fid, was);
+        set_intent_slot(fid, 0, why);
+        const int v = get_cos(e);
+        if (v == save_cos_of(fid) || v == was) set_cos(e, carrier::kOutfit1, fid, why);
+        const int c = ownership::outfit1_colour(colour, get_col(e), g_f[fid].o1_colors);
+        if (c >= 0) set_col(e, c, fid, why);
+    }
+}
+
 // Outside the menu the save never keeps a slot number, nor a former carrier
 void safety_net() {
     bool carriers_saved = false;
-    for (auto& [fid, e] : save_entries()) {
+    const auto entries = save_entries();
+    for (auto& [fid, e] : entries) {
         int v = get_cos(e);
         auto& fr = g_f[fid];
         auto& in = g_intent[fid];
@@ -479,6 +556,7 @@ void safety_net() {
         }
     }
     if (carriers_saved) save_state();
+    drop_nsfw_choices(entries);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -639,7 +717,7 @@ bool give_ownership(const char* why) {
         bool has = call_bool(ci, "ExistsSaveData", { arg_i32(s.record_id) }, &ok);
         if (!ok) continue;
         any = true;
-        bool show = g_book.shown(s.fighter, s.base);
+        bool show = visible(s);   // the player's outfit, and not an NSFW outfit while those are hidden
         if (show && !has) {
             call(ci, "AddDlcSaveData", { arg_i32(s.record_id) });
             if (wjournal::on()) wjournal::log("OWN_ADD obj=%p AddDlcSaveData record=%d", (void*)ci, s.record_id);
@@ -780,6 +858,19 @@ void read_carriers() {
         g_carriers_done = true;
     }
     if (!m_cols) return;
+    if (g_nsfw_slots)   // Outfit 1's colours: where a hidden NSFW outfit's choice goes back (drop_nsfw_choices)
+        for (int fid : g_fighters) {
+            auto& fr = g_f[fid];
+            auto r = rid_of[fid].find(carrier::kOutfit1);
+            if (!fr.o1_colors.empty() || r == rid_of[fid].end()) continue;
+            if (auto* cls = call_obj(m_cols, tm, { arg_i32(r->second), arg_bool(false) })) {
+                int n = list_count(cls);
+                for (int j = 0; j < n; ++j) {
+                    int32_t c = 0;
+                    if (auto* cr = list_item(cls, j); cr && get_i32(cr, "colorNo", c)) fr.o1_colors.push_back(c);
+                }
+            }
+        }
     for (int fid : g_fighters) {
         auto& fr = g_f[fid];
         if (fr.carrier < 0 || fr.base_known) continue;
@@ -1202,6 +1293,7 @@ bool g_menu_open = false;
 
 void init() {
     load_registry();
+    read_nsfw_setting("start");
     load_state();
     for (int fid : g_fighters) g_f[fid];
 }
@@ -1253,6 +1345,12 @@ void tick(uint32_t ev) {
     if (g_revoke_cursor >= kStaticMin) revoke_slice();
     if (g_color_cursor >= kColorMin) color_cleanup_slice();
 
+    // ---- NSFW outfits: settings.json read again (when it changed) at every screen that lists outfits, before the
+    // ownership pass below (which then follows the new setting); applied once more below the Battle Settings work
+    if (g_nsfw_slots && (ev & (EV_TITLE_END | EV_SELECT_START | EV_SELECT_END | EV_MENU_OPEN | EV_MENU_CLOSE))
+        && read_nsfw_setting("settings.json changed"))
+        g_nsfw_apply = true;
+
     // ---- ownership back after the title screen (login clears it, 1 slot seen 30/09), and at every
     // screen that lists outfits. (UIFlowTitle is also destroyed when a battle loads: one pass then.)
     // From there on, a slot whose outfit the game does not count as the player's is hidden.
@@ -1268,6 +1366,13 @@ void tick(uint32_t ev) {
     if (ev & EV_MENU_OPEN) { g_menu_open = true; on_menu_open(); }
     if ((ev & EV_MENU_CLOSE) && g_menu_open) { g_menu_open = false; on_menu_close(); safety_net(); }
     if (ev & (EV_SELECT_START | EV_SELECT_END)) safety_net();
+    // A changed NSFW setting, outside Battle Settings: ownership at once (shown / hidden in the next list), and with the
+    // setting off a choice of an NSFW outfit back to Outfit 1 (safety_net, drop_nsfw_choices)
+    if (g_nsfw_apply && g_boot_done && !g_menu_open) {
+        g_nsfw_apply = false;
+        give_ownership("Display NSFW Outfits changed");
+        safety_net();
+    }
 
     // ---- online alias: an outfit was mounted ----
     // Between matches, on a screen that shows the slot as an outfit of its own, its colours are put
