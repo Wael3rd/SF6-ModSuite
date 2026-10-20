@@ -135,13 +135,20 @@ modifies") still does.
 
 Where each group of the add-on goes (a group = a series of its menu: `!C2 Mai face accessories`):
 
-- A **mesh or material file a mod's outfit ships too**: an option of those outfits. The "C1 swap" series
+- **Shared files only** (files of the fighter's `000/` that every game costume of the fighter loads, or that no
+  costume scene names: the props of the option prefabs every costume scene names): an option of **every outfit of
+  the fighter**, ours and the game's. Mai's "3) addon - remove wrinkles" (`000/00/..._facialblend.tex`, loaded by all
+  four game costumes); Ingrid's book (`000/32`, `000/34`) and cat (`000/30`) when they are not in a sub-folder with
+  an outfit.
+- Else, a **mesh or material file a mod's outfit ships too**: an option of those outfits. The "C1 swap" series
   (glasses / piercings on the head `000/00/` that "Mini Dress Mai C1 Swap" ships) goes on the mini dress. The same
   texture paths alone do not count: that is a re-skin of the game's outfit (Cammy C4 pale skin, next to outfits made
   for Cammy's Outfit 4 slot that ship their own textures at those paths).
 - Else, the **game outfits** that load its files (a costume folder `NNN/`: the game outfit of that folder; a `000/`
   file: the costumes whose scene or material files name it, from the vanilla index): options of that game outfit.
   The "C2" series (`002/00/`) goes on Mai's Outfit 2.
+- An add-on put with an outfit in one sub-folder is still that outfit's option only (the folder wins, as before); a
+  copy of an add-on an outfit already has (same paths, same sizes) is not put on it twice.
 
 The options: **none is worn by default** (the outfit stays as installed; the slot's own files, or the game's, are
 the way back: no base copy). A series with a "main files" option (its name says "main file") is one choice with None:
@@ -170,10 +177,20 @@ changes. The plugin finds a model's outfit from the paths it loads, **one of our
 those of a slot. Online, an opponent wearing that game outfit shows P1's options on this screen only (as a
 replacement mod would).
 
-Offline (Wael's mods, `RuntimeOptions=on`): Mai's four game outfits get "remove wrinkles" (its textures are loaded
-by all four), Outfit 2 also the "C2" series (one choice: Main files / Glasses + piercings / Glasses only / Piercings
-only, each with the main files), the mini dress the "C1 swap" series; A.K.I's Outfit 1 "No Sleeves"; Cammy's Outfit 4
-the pale skin.
+**Shared files, checked in the game's files (20/10)**: every Ingrid costume scene (`esf032v00`, `v01`, `v02`, `v04`)
+names the same option prefabs `Product/Event/FGM/esf/esf032/option/prefab/esf032_Option_01.pfb` (cat `000/30`),
+`esf032_Option_02.pfb` (book `000/34` and the `000/32` joint constraints) and `esf032_Continue_00/01.pfb` (`000/31`,
+`000/30` with its chain); no costume scene names `000/30-34` itself (the vanilla index lists them for no costume). So
+the props are one set for every outfit of the fighter: a book or cat add-on made of them is an option of every Ingrid
+outfit, ours and the game's (an outfit that relocated them, Fly In A Bucket, gets them at its own copies). Mai's
+`000/00/` is not one set: its head mesh is loaded by Outfits 1, 3 and Drive Tech (Outfit 2 has `002/00/`), its
+wrinkle masks by all four.
+
+Offline (Wael's mods, `RuntimeOptions=on`): Mai's Outfit 1, 3 and Drive Tech get "remove wrinkles", Outfit 2 the
+"C2" series (one choice: Main files / Glasses + piercings / Glasses only / Piercings only, each with the main files)
+and "remove wrinkles", the mini dress the "C1 swap" series and "remove wrinkles"; A.K.I's Outfit 1 "No Sleeves";
+Cammy's Outfit 4 the pale skin. Ingrid's book and cat put loose in `Ingrid\` (a test copy) go on every Ingrid outfit
+where they fit; in Wael's sub-folders they stay options of the Fly In A Bucket outfits only.
 
 Options of a part the slot does not have in its own folder (Leon as Luke wears the game's hair, `000/02/`; its hair
 add-ons ship `001/02/` and a scene pointing there) target what the slot's scene loads for that part: the mesh and

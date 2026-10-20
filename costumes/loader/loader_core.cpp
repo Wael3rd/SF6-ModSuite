@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rto-addons";
+static const char* LOADER_BUILD_ID = "2026-10-20-rto-shared";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -1439,9 +1439,17 @@ struct RtoGame {
 static std::vector<RtoGame> g_rto_game;
 static std::string rel_tail(const std::string& rel);
 
-// Whether a game costume loads a file (lowercase pak path): its scene or material files name it
+// Whether a game costume loads a file (lowercase pak path): its scene or material files name it, or it is a file of
+// the fighter's 000/ that no costume scene names (a prop of the option prefabs every costume scene names: Ingrid's
+// cat and book, 000/30-34), which every outfit of the fighter loads
 static bool outfit_wears(const VanillaIndex& inv, int fighter, int cno, const std::string& path) {
-    return inv.used_by(pak_path_hash(std::string_view(path)), fighter, cno);
+    const uint64_t h = pak_path_hash(std::string_view(path));
+    if (inv.used_by(h, fighter, cno)) return true;
+    std::string fd, folder;
+    if (!parse_model_folder(path, fd, folder) || folder != "000") return false;
+    if (auto it = inv.users.find(h); it != inv.users.end())
+        for (auto& u : it->second) if (u.first == fighter) return false;
+    return true;
 }
 
 // What the runtime does with a file: swap a mesh, a material, a texture or a chain on the model;
@@ -6448,7 +6456,10 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
 // The groups of the separate add-ons that make no outfit of their own (g_pending_addons) become options of the
 // outfits whose files they replace (docs/RUNTIME_OPTIONS.md, Add-ons on other outfits). Per group of an add-on (a
 // series: "!C2 Mai face accessories"):
-// - a mesh or material file a mod's outfit ships too (the "C1 swap" series replaces the head "Mini Dress Mai C1
+// - made only of shared files (files of 000/ that every game costume of the fighter loads, or none does: Mai's facial
+//   wrinkle textures, the props of Ingrid's option prefabs): an option of every outfit of the fighter, ours and the
+//   game's;
+// - else, a mesh or material file a mod's outfit ships too (the "C1 swap" series replaces the head "Mini Dress Mai C1
 //   Swap" ships): an option of those outfits;
 // - else, the game outfits that load them (the "C2" series: Outfit 2's head, 002/00/): their options, the game's own
 //   files are the way back (no slot of ours, no copy of the outfit).
@@ -6460,6 +6471,22 @@ static void attach_addons(ScanOutputs& o) {
     const VanillaIndex& inv = o.inv;
     struct Group { std::string key, name; std::vector<RtoOption> options; };   // ids made per outfit from the key
     std::set<std::pair<const RtoMod*, std::string>> done;                     // a group goes once on a mod
+    // Two options of the same files (paths and sizes): the outfit already has that add-on (a copy of it was put with
+    // the outfit in its sub-folder: the folder wins, the outfit keeps its own option)
+    auto size_of = [](const ModFileRef& f) -> uint64_t {
+        uint64_t sz = 0, mt = 0;
+        if (f.is_disk()) return file_stat_long(f.disk_path, sz, mt) ? sz : 0;
+        const PakEntry* e = f.pak ? f.pak->find(f.hash) : nullptr;
+        return e ? uint64_t(e->decompressed_size) : 0;
+    };
+    auto same_files = [&](const RtoOption& a, const RtoOption& b) {
+        if (a.files.size() != b.files.size()) return false;
+        for (auto& [p, mf] : a.files) {
+            const ModFileRef* o = slotcheck::mod_file(b.files, str_lower(p));
+            if (!o || size_of(*o) != size_of(mf)) return false;
+        }
+        return true;
+    };
     auto add_to = [&](RtoMod& m, const std::vector<Group>& gs) {
         for (auto& g : gs) {
             if (!done.insert({&m, g.key + "\t" + g.name}).second) continue;
@@ -6468,6 +6495,10 @@ static void attach_addons(ScanOutputs& o) {
             RtoGroup rg;
             rg.name = g.name;
             for (auto& op : g.options) {
+                if (std::any_of(m.options.begin(), m.options.end(), [&](const RtoOption& x) { return same_files(x, op); })) {
+                    printf("    runtime options: %s already has %s (same files): not twice\n", m.name.c_str(), op.name.c_str());
+                    continue;
+                }
                 RtoOption x = op;
                 x.id = rto_option_id(g.key, x.folder, ids);
                 rg.options.push_back(m.options.size());
@@ -6611,29 +6642,45 @@ static void attach_addons(ScanOutputs& o) {
                 if (std::none_of(games.begin(), games.end(), [&](const CostumeInfo* x) { return folder_of(*x) == folder_of(c); }))
                     games.push_back(&c);
             }
+            auto shared = [&](const std::string& lp) {
+                std::string pfd, folder;
+                if (!parse_model_folder(lp, pfd, folder) || folder != "000") return false;
+                const uint64_t h = pak_path_hash(std::string_view(lp));
+                size_t n = 0;
+                for (auto* c : games) if (inv.used_by(h, fighter, c->costume_no)) ++n;
+                return n == 0 || n == games.size();
+            };
             auto ships = [&](const std::pair<std::string, std::vector<ModCostume>>& e, const std::string& lp) {
                 for (auto& mc : e.second)
                     if (mc.fighter_dir == fd && (slotcheck::mod_file(mc.files_in_folder, lp) || slotcheck::mod_file(mc.files_shared, lp)))
                         return true;
                 return false;
             };
+            const bool all_shared = std::all_of(paths.begin(), paths.end(), shared);
             std::vector<size_t> mods_hit;
             std::vector<const CostumeInfo*> games_hit;
-            // a mod's outfit the add-on was made for ships the same mesh or material file (the shape it is made for);
-            // the same texture paths alone are a re-skin of the game's outfit (Cammy C4 pale skin, beside outfits made
-            // for Cammy's Outfit 4 slot that ship their own textures there)
-            for (size_t k = 0; k < o.mods_out.size(); ++k)
-                for (auto& lp : paths)
-                    if ((lp.find(".mesh.") != std::string::npos || lp.find(".mdf2.") != std::string::npos)
-                        && ships(o.mods_out[k], lp)) { mods_hit.push_back(k); break; }
-            if (mods_hit.empty())
-                for (auto* c : games)
-                    for (auto& lp : paths) {
-                        std::string pfd, folder;
-                        if (!parse_model_folder(lp, pfd, folder)) continue;
-                        if (folder == "000" ? inv.used_by(pak_path_hash(std::string_view(lp)), fighter, c->costume_no)
-                                            : folder == folder_of(*c)) { games_hit.push_back(c); break; }
-                    }
+            if (all_shared) {
+                for (size_t k = 0; k < o.mods_out.size(); ++k)
+                    for (auto& mc : o.mods_out[k].second)
+                        if (mc.fighter_dir == fd) { mods_hit.push_back(k); break; }
+                games_hit = games;
+            } else {
+                // a mod's outfit the add-on was made for ships the same mesh or material file (the shape it is made
+                // for); the same texture paths alone are a re-skin of the game's outfit (Cammy C4 pale skin, beside
+                // outfits made for Cammy's Outfit 4 slot that ship their own textures there)
+                for (size_t k = 0; k < o.mods_out.size(); ++k)
+                    for (auto& lp : paths)
+                        if ((lp.find(".mesh.") != std::string::npos || lp.find(".mdf2.") != std::string::npos)
+                            && !shared(lp) && ships(o.mods_out[k], lp)) { mods_hit.push_back(k); break; }
+                if (mods_hit.empty())
+                    for (auto* c : games)
+                        for (auto& lp : paths) {
+                            std::string pfd, folder;
+                            if (shared(lp) || !parse_model_folder(lp, pfd, folder)) continue;
+                            if (folder == "000" ? inv.used_by(pak_path_hash(std::string_view(lp)), fighter, c->costume_no)
+                                                : folder == folder_of(*c)) { games_hit.push_back(c); break; }
+                        }
+            }
             std::string names;
             for (auto k : mods_hit) {
                 add_to(mod_rto(o.mods_out[k]), gs);
@@ -6647,7 +6694,8 @@ static void attach_addons(ScanOutputs& o) {
             size_t n = 0;
             for (auto& g : gs) n += g.options.size();
             printf("\n  add-on %s, %s: %zu option%s (%s), for %s\n", pa.name.c_str(), trim_ws(gi.name).c_str(), n,
-                   n > 1 ? "s" : "", !mods_hit.empty() ? "a mod's outfit ships its mesh or material files" : "files of the game's outfits",
+                   n > 1 ? "s" : "", all_shared ? "files every outfit of the fighter loads"
+                                    : !mods_hit.empty() ? "a mod's outfit ships its mesh or material files" : "files of the game's outfits",
                    names.empty() ? "no outfit: not used" : names.c_str());
         }
     }
