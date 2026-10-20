@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rtofit-zzfixes-134";
+static const char* LOADER_BUILD_ID = "2026-10-20-rtofit-zzfixes-567";
 
 // ============================================================================
 // Utility
@@ -750,15 +750,26 @@ static size_t upgrade_mod_user(std::vector<uint8_t>& data, const std::string& so
 // A file of the game's own natives tree, by pak path (loose files: Fluffy Mod Manager puts the files
 // it installs there), with current type signatures; empty when there is none
 static std::string g_game_dir;
-static std::vector<uint8_t> read_loose_game_file(const std::string& pak_path) {
-    if (g_game_dir.empty()) return {};
+// The loose copy of a game file in the game folder (natives\...), or empty when there is none
+static std::string loose_game_path(const std::string& pak_path) {
+    if (g_game_dir.empty() || str_lower(pak_path).compare(0, 8, "natives/") != 0) return {};
     std::string p = g_game_dir + "\\" + pak_path;
     for (auto& c : p) if (c == '/') c = '\\';
     uint64_t sz = 0, mt = 0;
-    if (!file_stat_long(p, sz, mt)) return {};
+    return file_stat_long(p, sz, mt) ? p : std::string();
+}
+static std::vector<uint8_t> read_loose_game_file(const std::string& pak_path) {
+    std::string p = loose_game_path(pak_path);
+    if (p.empty()) return {};
     auto d = read_file_long(p);
     upgrade_mod_user(d, p);
     return d;
+}
+// A file the game finds under this path: in its paks (re_chunk_000.pak, DLC paks over it), else as a
+// loose copy in its natives folder, where a mod manager's "PAK method" puts a replacement after zeroing
+// the pak entry (from ZZtaii's Slotsloader fork (1.10.1), MIT)
+static bool game_file_exists(const PakReader& base_pak, const std::string& pak_path) {
+    return base_pak.find(pak_path_hash(std::string_view(pak_path))) || !loose_game_path(pak_path).empty();
 }
 
 struct ModFileRef {
@@ -1733,34 +1744,113 @@ static std::vector<uint64_t> scene_instance_table(const std::vector<uint8_t>& b)
     return out;
 }
 
+// Why a mod's scene was not made for this game version, or empty: each instance's type must be one a
+// costume scene of the game uses, with the same type signature (CRC). A scene saved by an older game
+// version keeps the older signature of a type an update changed, and the game cannot read it. The
+// types of every costume scene of the game are read once.
+static std::string scene_version_problem(const std::vector<uint8_t>& mdata, PakReader& base_pak,
+                                         const VanillaIndex& inv) {
+    static std::unordered_map<uint32_t, uint32_t> game_types;   // type id -> type signature
+    static bool read = false;
+    if (!read) {
+        read = true;
+        std::set<std::string> seen;
+        for (auto& ci : inv.costumes) {
+            if (ci.scene.empty() || !seen.insert(ci.scene).second) continue;
+            auto* e = base_pak.find(pak_path_hash(std::string_view(ci.scene)));
+            if (!e) continue;
+            for (uint64_t t : scene_instance_table(base_pak.read(*e)))
+                if (uint32_t(t)) game_types.emplace(uint32_t(t), uint32_t(t >> 32));
+        }
+    }
+    auto mt = scene_instance_table(mdata);
+    if (mt.empty()) return "not a scene";
+    char buf[128];
+    for (uint64_t t : mt) {
+        const uint32_t id = uint32_t(t), crc = uint32_t(t >> 32);
+        if (!id) continue;
+        auto it = game_types.find(id);
+        if (it == game_types.end()) {
+            snprintf(buf, sizeof buf, "type %08x is used by no costume scene of the game", id);
+            return buf;
+        }
+        if (it->second != crc) {
+            snprintf(buf, sizeof buf, "type %08x has signature %08x, the game's is %08x", id, crc, it->second);
+            return buf;
+        }
+    }
+    return {};
+}
+
+// The fighters whose body a costume scene uses: the fighter of its costume prefab
+// ("Product/CharParam/esf/esf016/prefab/esf016v00.pfb") and of its body shape
+// ("Product/Model/esf/esf016/001/esf016_001_shape.user"), as "prefab esf016", "shape esf016".
+// From ZZtaii's Slotsloader fork (1.10.3), MIT.
+static std::set<std::string> scene_body(const std::vector<uint8_t>& d) {
+    std::set<std::string> out;
+    for (size_t i = 0; i + 1 < d.size(); i += 2) {
+        size_t j = i;
+        std::string s;
+        while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
+        i = j;
+        size_t lead = s.find_first_not_of("@ ");
+        if (lead == std::string::npos) continue;
+        std::string low = str_lower(s.substr(lead));
+        static const std::string cp = "product/charparam/esf/esf", md = "product/model/esf/esf";
+        if (low.compare(0, cp.size(), cp) == 0 && str_ends_with(low, ".pfb")
+            && low.find("/prefab/") != std::string::npos) {
+            std::string fn = low.substr(low.rfind('/') + 1);   // "esf016v00.pfb"
+            if (fn.size() == 13 && fn.compare(0, 3, "esf") == 0 && fn[6] == 'v') out.insert("prefab " + fn.substr(0, 6));
+        } else if (low.compare(0, md.size(), md) == 0 && str_ends_with(low, "_shape.user")) {
+            out.insert("shape " + low.substr(md.size() - 3, 6));
+        }
+    }
+    return out;
+}
+
 // A mod that ships the scene of the costume it replaces can point a part at other files than the
 // game's scene does: Mummy Dhalsim keeps its head in 001/0L/ instead of 001/00/, so that the game's
 // head file stays as it is. The slot scene is built from the game's scene (a mod's scene may date from
 // an older game version), so only those model references are taken over from the mod's scene, in
 // place, when both scenes list the same number of model references, the file exists (in the mod or
 // in the game) and the path keeps its length. The slot relocation then applies as usual.
-// A mod scene that cannot be followed in place (another number of model references, a path of
-// another length: a part the game's scene leaves empty given a mesh, Sagat's Drive Tech hair part,
-// 04/10) is used whole when it is laid out like the game's scene (same instances, same type
-// signatures, so made for this game version) and every file it names exists: the tool that wrote it
-// laid out its strings.
+// A mod scene that cannot be followed in place because of a path of another length (a part the game's
+// scene leaves empty given a mesh, Sagat's Drive Tech hair part, 04/10) is used whole when it is laid
+// out like the game's scene (same instances, same type signatures, so made for this game version) and
+// every file it names exists: the tool that wrote it laid out its strings.
+// A mod scene that is another layout of the outfit is used whole when it was made for this game version
+// (scene_version_problem: every type signature the game's) and every file it names exists, whatever its
+// instances (from ZZtaii's Slotsloader fork (1.10.1, 1.10.3), MIT; the fork takes it unconditionally):
+// - it lists another number of model parts than the game's scene (SF5 Sakura over Ryu's Outfit 1: 7 parts
+//   against 8, with its own hair chain and havok files): the game's scene cannot take it over part by part;
+// - it puts the outfit on another fighter's body (Sakura as Ryu: Juri's costume prefab, body shape and joint
+//   constraints with Ryu's 8 parts): taken over part by part, the slot kept Ryu's prefab and shape and the
+//   outfit came out on Ryu's skeleton.
 static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8_t>& mdata,
-                            const ModCostume& mc, PakReader& base_pak,
-                            const std::unordered_map<std::string, std::string>& suffixes) {
+                            const ModCostume& mc, PakReader& base_pak, const VanillaIndex& inv) {
+    const auto& suffixes = inv.suffixes;
     auto v = scene_model_refs(vdata), m = scene_model_refs(mdata);
     if (m.empty()) return 0;
     auto exists = [&](const std::string& p) {
         for (auto* files : {&mc.files_in_folder, &mc.files_shared, &mc.files_other})
             if (files->count(p)) return true;
-        return base_pak.find(pak_path_hash(std::string_view(p))) != nullptr;
+        return game_file_exists(base_pak, p);
     };
-    auto use_whole = [&](const std::string& why) -> int {
+    // same_layout: the mod's scene must have the game's scene's instances (a path of another length);
+    // else it must have been made for this game version (another layout of the outfit)
+    auto use_whole = [&](const std::string& why, bool same_layout) -> int {
         auto vt = scene_instance_table(vdata), mt = scene_instance_table(mdata);
-        if (vt.empty() || vt != mt) {
+        if (same_layout && (vt.empty() || vt != mt)) {
             printf("      mod scene: %s, and it is not laid out like the game's scene (made for another "
                    "game version?): not followed\n", why.c_str());
             return -1;
         }
+        if (!same_layout)
+            if (std::string vp = scene_version_problem(mdata, base_pak, inv); !vp.empty()) {
+                printf("      mod scene: %s, and it was not made for this game version (%s): not followed\n",
+                       why.c_str(), vp.c_str());
+                return -1;
+            }
         std::set<std::string> game_refs;
         for (auto& r : v) game_refs.insert(str_lower(r.text));
         for (auto& r : scene_model_refs(vdata, true)) game_refs.insert(str_lower(r.text));
@@ -1779,18 +1869,30 @@ static int follow_mod_scene(std::vector<uint8_t>& vdata, const std::vector<uint8
             own++;
         }
         vdata = mdata;
-        printf("      mod scene used whole (%s; laid out like the game's): %d model references of its own\n",
-               why.c_str(), own);
+        printf("      mod scene used whole (%s; %s): %d model references of its own\n", why.c_str(),
+               same_layout ? "laid out like the game's" : "made for this game version", own);
         return own;
     };
+    {
+        // Another body: a fighter's prefab or body shape the game's scene does not use
+        const auto gb = scene_body(vdata), mb = scene_body(mdata);
+        std::string other;
+        for (auto& b : mb) if (!gb.count(b)) other += (other.empty() ? "" : ", ") + b;
+        if (!other.empty()) {
+            std::string game;
+            for (auto& b : gb) game += (game.empty() ? "" : ", ") + b;
+            int r = use_whole("it puts the outfit on another body (" + other + "; the game's scene: " + game + ")", false);
+            if (r >= 0) return r;
+        }
+    }
     if (v.size() != m.size()) {
         char why[96];
         snprintf(why, sizeof(why), "%zu model references against %zu in the game's scene", m.size(), v.size());
-        return std::max(0, use_whole(why));
+        return std::max(0, use_whole(why, false));
     }
     for (size_t k = 0; k < v.size(); k++)
         if (str_lower(v[k].text) != str_lower(m[k].text) && v[k].text.size() != m[k].text.size()) {
-            int r = use_whole("a path of another length");
+            int r = use_whole("a path of another length", true);
             if (r >= 0) return r;
             break;
         }
@@ -1992,12 +2094,18 @@ static void add_slot_files(PakWriter& writer,
     // is not there. private_users: the .user files the slot wrote, repaired once all are known.
     std::unordered_map<std::string, std::string> physics_resources;
     std::unordered_set<std::string> private_users;
+    // Files of the slot that name its resources (scene, model parts, physics user files): a joint
+    // constraint or physics file of the mod that none of them names is reported (from ZZtaii's
+    // Slotsloader fork (1.9.8), MIT)
+    std::vector<std::string> slot_ref_files;
+    std::vector<std::pair<std::string, std::string>> mod_constraint_files;   // mod path, slot path
     auto record_relocation = [&](const std::string& source, const std::string& target) {
         if (source == target || !writer.find(pak_path_hash(std::string_view(target)))) return;
         std::string src = str_lower(source), dst = str_lower(target);
         if (dst.find(".user.") != std::string::npos) private_users.insert(target);
         const char* ext = nullptr;
-        for (const char* candidate : {".chain.", ".havokcloth."})
+        // .jcns: the joint constraints a _jcs.user names (from ZZtaii's Slotsloader fork (1.9.8), MIT)
+        for (const char* candidate : {".chain.", ".havokcloth.", ".jcns."})
             if (src.rfind(candidate) != std::string::npos) { ext = candidate; break; }
         if (!ext && (src.find("_chain.user.") != std::string::npos
                      || src.find("_havok.user.") != std::string::npos
@@ -2127,6 +2235,8 @@ static void add_slot_files(PakWriter& writer,
         record_relocation(path, new_path);
         note_target(path, new_path);
         g_relocated_mod_paths.insert(path);
+        if (!is_streaming && (is_chain_file || fn_low.find(".jcns.") != std::string::npos))
+            mod_constraint_files.push_back({path, new_path});
         count++;
         if (low.find(".tex.") != std::string::npos && !is_streaming)
             tex_pairs.push_back({path, new_path});
@@ -2456,6 +2566,7 @@ static void add_slot_files(PakWriter& writer,
             uint64_t th = pak_path_hash(std::string_view(cu_target));
             writer.add_uncompressed(th, std::move(cu_data));
             written_paths.insert(cu_target);
+            slot_ref_files.push_back(cu_target);
             record_relocation(cu_orig, cu_target);
             count++; patched++;
         }
@@ -2492,6 +2603,7 @@ static void add_slot_files(PakWriter& writer,
             if (!repointed) continue;   // the cloth did not follow: the game's file stays in use
             writer.add_uncompressed(pak_path_hash(std::string_view(hu_target)), std::move(hu_data));
             written_paths.insert(hu_target);
+            slot_ref_files.push_back(hu_target);
             record_relocation(hu_orig, hu_target);
             count++; patched++;
             printf("      havok cloth of part %s: the mod's, through its own copy of %s_havok.user\n",
@@ -2613,6 +2725,63 @@ static void add_slot_files(PakWriter& writer,
             printf("      %d extra-model files relocated\n", ext_count);
     }
 
+    // ---- Phase 3a: joint constraints (.jcns) the mod ships ----
+    // From ZZtaii's Slotsloader fork (1.9.8), MIT. The scene does not name the .jcns files:
+    // <fd>_<old>_<part>_jcs.user does (A.K.I.: 002/esf013_002_01_jcs.user names 002/esf013_002_01_drv_RPY.jcns).
+    // A replacement install puts the mod's .jcns in place of the game's, so the outfit uses it. Here the mod's
+    // .jcns moved into the slot folder above; a jcs.user of the outfit that names it gets a copy in the slot
+    // folder pointing at it (the mod's own jcs.user, relocated above, is repaired with the other user files
+    // below), and the scene follows that copy. Left alone, the slot drove the mod's mesh with the game's
+    // constraints and shipped the mod's file unused. The jcs.user files are those the game's scene names, and
+    // the mod's own scene (the slot may be built from it).
+    {
+        bool mod_jcns = false;
+        for (auto& [mp, sp] : mod_constraint_files)
+            if (str_lower(mp).find(".jcns.") != std::string::npos) { mod_jcns = true; break; }
+        auto* oc = inv.get_costume(slot.fighter, slot.original_costume_no);
+        if (mod_jcns && oc && !oc->scene.empty()) {
+            std::vector<std::vector<uint8_t>> scenes;
+            if (auto* se0 = base_pak.find(pak_path_hash(std::string_view(oc->scene)))) scenes.push_back(base_pak.read(*se0));
+            for (auto& [sp, smf] : mc->files_scene) scenes.push_back(smf.read_data());
+            std::string user_ver = "2";
+            { auto it = inv.suffixes.find("user"); if (it != inv.suffixes.end()) user_ver = it->second; }
+            const std::string folder_dir = "/" + fd + "/" + old_f + "/";
+            std::set<std::string> jcs_refs;
+            for (auto& sd : scenes)
+                for (size_t i = 0; i + 1 < sd.size(); ) {
+                    std::string ref;
+                    while (i + 1 < sd.size() && sd[i + 1] == 0 && sd[i] >= 0x20 && sd[i] < 0x7f) {
+                        ref += (char)tolower(sd[i]); i += 2;
+                    }
+                    i += 2;
+                    auto p0 = ref.find_first_not_of("@ ");
+                    if (p0 == std::string::npos) continue;
+                    ref = ref.substr(p0);
+                    if (ref.find(folder_dir) != std::string::npos && str_ends_with(ref, "_jcs.user"))
+                        jcs_refs.insert(ref);
+                }
+            for (auto& ref : jcs_refs) {
+                std::string ju_orig = "natives/stm/" + ref + "." + user_ver;
+                std::string ju_target = relocate_dir_only(ju_orig);
+                if (ju_target == ju_orig || written_paths.count(ju_target)) continue;   // the mod's own copy
+                if (mc->files_in_folder.count(ju_orig)) continue;
+                auto* je = base_pak.find(pak_path_hash(std::string_view(ju_orig)));
+                if (!je) continue;
+                auto ju_data = base_pak.read(*je);
+                size_t n = patch_resource_references(ju_data, physics_resources);
+                if (!n) continue;   // it names no .jcns of the mod: the game's file stays in use
+                writer.add_uncompressed(pak_path_hash(std::string_view(ju_target)), std::move(ju_data));
+                written_paths.insert(ju_target);
+                slot_ref_files.push_back(ju_target);
+                record_relocation(ju_orig, ju_target);
+                count++; patched++;
+                auto sl = ref.rfind('/');
+                printf("      joint constraints: the mod's .jcns, through the slot's own copy of %s (%zu references)\n",
+                       ref.substr(sl + 1).c_str(), n);
+            }
+        }
+    }
+
     // ---- Phase 3b: model parts (weapons, props) ----
     // The costume scene does not name weapon meshes itself: it references
     // battle_ud/<fd>vNN_model_parts.user, which lists them (Lily's clubs: 001/30 and 001/31).
@@ -2683,6 +2852,7 @@ static void add_slot_files(PakWriter& writer,
                     std::string dst_pak = "natives/stm/" + dst_rel + "." + user_ver;
                     writer.add_uncompressed(pak_path_hash(std::string_view(dst_pak)), std::move(vd));
                     written_paths.insert(dst_pak);
+                    slot_ref_files.push_back(dst_pak);
                     count++; patched++;
                     mp_old_s = fd + "/battle_ud/" + fd + "v";
                     mp_new_s = fd + "/battle" + new_f + "/" + fd + "v";
@@ -2850,6 +3020,7 @@ static void add_slot_files(PakWriter& writer,
     // other user files too (shape, jcs).
     size_t physics_repointed = 0;
     for (const auto& path : private_users) {
+        slot_ref_files.push_back(path);
         const uint64_t h = pak_path_hash(std::string_view(path));
         auto data = writer.get(h);
         const size_t n = patch_resource_references(data, physics_resources);
@@ -2867,11 +3038,33 @@ static void add_slot_files(PakWriter& writer,
     if (orig_costume && !orig_costume->scene.empty()) {
         uint64_t sh = pak_path_hash(std::string_view(orig_costume->scene));
         auto* se = base_pak.find(sh);
+        std::vector<uint8_t> vdata;
         if (se) {
             auto scene_data = base_pak.read(*se);
-            auto vdata = std::vector<uint8_t>(scene_data.begin(), scene_data.end());
+            vdata.assign(scene_data.begin(), scene_data.end());
             for (auto& [sp, smf] : mc->files_scene)
-                patched += follow_mod_scene(vdata, smf.read_data(), *mc, base_pak, inv.suffixes);
+                patched += follow_mod_scene(vdata, smf.read_data(), *mc, base_pak, inv);
+        } else if (!mc->files_scene.empty()) {
+            // The game's scene cannot be read: its pak entry is turned off, which a mod manager's "PAK method"
+            // does when it installs a replacement that ships that scene. The mod's own scene of that outfit is
+            // then what the game shows for it: the slot is built from it, when it was made for this game
+            // version (from ZZtaii's Slotsloader fork (1.9.9), MIT; the fork takes it unconditionally).
+            auto md = mc->files_scene.begin()->second.read_data();
+            std::string vp = scene_version_problem(md, base_pak, inv);
+            if (vp.empty()) {
+                vdata = std::move(md);
+                printf("      scene: the game's %s cannot be read (its pak entry is turned off, a replacement "
+                       "installed over the pak?): the slot uses the mod's own scene\n", orig_costume->scene.c_str());
+            } else {
+                printf("      WARN: the game's %s cannot be read (its pak entry is turned off?) and the mod's scene "
+                       "was not made for this game version (%s): the slot has no scene\n",
+                       orig_costume->scene.c_str(), vp.c_str());
+            }
+        } else {
+            printf("      WARN: the game's %s cannot be read (its pak entry is turned off?): the slot has no scene\n",
+                   orig_costume->scene.c_str());
+        }
+        if (!vdata.empty()) {
             patched += donate_parts(writer, written_paths, vdata, *mc, slot, base_pak, inv.suffixes);
             patch_scene_minimal(vdata, fd, old_f, new_f,
                                 &written_paths, &inv.suffixes);
@@ -2984,7 +3177,45 @@ static void add_slot_files(PakWriter& writer,
             uint64_t nh = pak_path_hash(std::string_view(new_scene));
             writer.add_uncompressed(nh, std::move(vdata));
             written_paths.insert(new_scene);
+            slot_ref_files.push_back(new_scene);
             count++; patched++;
+        }
+    }
+
+    // A joint constraint or physics file of the mod that nothing the slot loads names: the slot is kept,
+    // but it does not use that file (a replacement install would, in place of the game's). From ZZtaii's
+    // Slotsloader fork (1.9.8), MIT.
+    if (!mod_constraint_files.empty()) {
+        auto ref_stem = [](const std::string& p) {
+            std::string s = str_lower(p);
+            if (s.compare(0, 12, "natives/stm/") == 0) s = s.substr(12);
+            auto hc = s.rfind(".havokcloth.");
+            if (hc != std::string::npos) return s.substr(0, hc + 11);
+            auto dot = s.rfind('.');
+            if (dot != std::string::npos && dot + 1 < s.size()
+                && s.find_first_not_of("0123456789", dot + 1) == std::string::npos) s = s.substr(0, dot);
+            return s;
+        };
+        std::unordered_set<std::string> named;
+        std::set<std::string> seen_files;
+        for (auto& f : slot_ref_files) {
+            if (!seen_files.insert(f).second) continue;
+            auto d = writer.get(pak_path_hash(std::string_view(f)));
+            for (size_t i = 0; i + 1 < d.size(); ) {
+                std::string ref;
+                while (i + 1 < d.size() && d[i + 1] == 0 && d[i] >= 0x20 && d[i] < 0x7f) {
+                    ref += (char)tolower(d[i]); i += 2;
+                }
+                i += 2;
+                auto p0 = ref.find_first_not_of("@ ");
+                if (p0 != std::string::npos) named.insert(ref.substr(p0));
+            }
+        }
+        for (auto& [mp, sp] : mod_constraint_files) {
+            if (named.count(ref_stem(sp))) continue;
+            printf("  WARN: slot %s/v%02d (%s): the mod's %s is referenced by none of the slot's scene, model "
+                   "parts or physics files (kept, unused)\n",
+                   fd.c_str(), slot.new_costume_no, slot.outfit_name.c_str(), mp.c_str());
         }
     }
 
@@ -3119,6 +3350,14 @@ static void add_slot_files(PakWriter& writer,
             const ModFileMaps twins = {&op.files};
             auto& files = out.files[oi];
             for (auto& p : paths) files.push_back(store(op.id, p, &op.files.at(p), rebind, &twins));
+            // Joint constraints (.jcns and the _jcs.user naming them) are not swapped on a live model: such an
+            // option is applied at the next launch, when the slot is built with it ("other" files)
+            for (auto& p : paths) {
+                const std::string low = str_lower(p);
+                if (low.find(".jcns.") != std::string::npos || low.find("_jcs.user.") != std::string::npos)
+                    printf("      runtime options: %s ships joint constraints (%s): applied at the next launch\n",
+                           op.name.c_str(), p.c_str());
+            }
         }
         std::set<std::string> chosen;   // files of the options the slot is made of
         for (auto oi : out.selected)
@@ -3523,7 +3762,11 @@ static std::vector<std::string> material_textures(const std::vector<uint8_t>& md
     return uniq;
 }
 
-// What the game will find at a path: our pak first, then the game's paks by priority
+// What the game will find at a path: our pak first, then the game's paks by priority, then the loose
+// copy in the game folder. A file whose pak entry a replacement switched off (a mod manager's "PAK
+// method": its loose copy in natives\ is what the game loads) is there and nowhere in the paks; without
+// it every slot using such a shared texture was left out as "texture missing" (from ZZtaii's Slotsloader
+// fork (1.10.1), MIT).
 struct GameFiles {
     PakWriter* writer = nullptr;
     std::vector<PakReader*> paks;
@@ -3531,15 +3774,19 @@ struct GameFiles {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return true;
         for (auto* pk : paks) if (pk->find(h)) return true;
-        return false;
+        return !loose_game_path(p).empty();
     }
     std::vector<uint8_t> load(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return writer->get(h);
         for (auto* pk : paks) if (auto* e = pk->find(h)) return pk->read(*e);
-        return {};
+        std::string full = loose_game_path(p);
+        return full.empty() ? std::vector<uint8_t>{} : read_file_long(full);
     }
 };
+// The patch paks of other tools the game loads over its own, highest first (set before the slots are
+// built): the runtime options' fit checks look where the slot check looks
+static std::vector<PakReader*> g_game_patch_paks;
 
 // "Product/Model/..../x.mesh" -> "natives/stm/product/model/..../x.mesh.230110883", or empty
 static std::string resource_path(std::string ref, const std::unordered_map<std::string, std::string>& suffixes) {
@@ -3594,8 +3841,9 @@ static std::string pair_problem(const Ctx& c, const std::vector<uint8_t>& mesh, 
 static std::string material_fit(PakWriter& writer, PakReader& base_pak,
                                 const std::unordered_map<std::string, std::string>& suffixes,
                                 const std::vector<uint8_t>& mesh, const std::vector<uint8_t>& mdf) {
-    Ctx c;
+    Ctx c;   // the slot check's lookup: our pak, other tools' patch paks, the game's paks (DLC too), loose copies
     c.gf.writer = &writer;
+    c.gf.paks = g_game_patch_paks;
     c.gf.paks.push_back(&base_pak);
     c.suffixes = &suffixes;
     if (mesh.empty()) {
@@ -6726,6 +6974,28 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::vector<std::unique_ptr<PakReader>> dlc_readers;
     open_dlc_paks(game_dir, base_pak, dlc_readers);
     if (!dlc_readers.empty()) logf("  + %zu DLC paks read over it\n", dlc_readers.size());
+    {
+        // Tests only: game files whose pak entries read as turned off (a replacement installed over the pak
+        // by a mod manager's PAK method), one path per line in the file this variable names. From ZZtaii's
+        // Slotsloader fork (1.9.9), MIT.
+        char zf[MAX_PATH];
+        DWORD zn = GetEnvironmentVariableA("SF6_COSTUME_TEST_TURNED_OFF", zf, MAX_PATH);
+        if (zn > 0 && zn < MAX_PATH) {
+            FILE* f = fopen(zf, "rb");
+            int n = 0;
+            char line[1024];
+            while (f && fgets(line, sizeof line, f)) {
+                std::string p = str_lower(trim_ws(line));
+                if (p.empty()) continue;
+                uint64_t h = pak_path_hash(std::string_view(p));
+                base_pak.forget(h);
+                for (auto& r : dlc_readers) r->forget(h);
+                n++;
+            }
+            if (f) fclose(f);
+            logf("  test: %d game files read as turned off\n", n);
+        }
+    }
     load_current_crcs(base_pak);
 
     // 4b. Structural files from the game's own: every fighter of the game gets its slots, new ones included
@@ -6894,6 +7164,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     g_relocated_mod_paths.clear();
     g_donated_meshes.clear();
+    std::sort(game_patch_readers.begin(), game_patch_readers.end(),
+              [](auto& a, auto& b) { return a.first > b.first; });
+    slotcheck::g_game_patch_paks.clear();
+    for (auto& [num, r] : game_patch_readers) slotcheck::g_game_patch_paks.push_back(r);
     for (auto& sl : slots)
         add_slot_files(writer, written_paths, sl, inv, base_pak, all_mod_files);
 
@@ -6904,8 +7178,6 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     {
         slotcheck::Ctx ctx;
         ctx.gf.writer = &writer;
-        std::sort(game_patch_readers.begin(), game_patch_readers.end(),
-                  [](auto& a, auto& b) { return a.first > b.first; });
         for (auto& [num, r] : game_patch_readers) ctx.gf.paks.push_back(r);
         ctx.gf.paks.push_back(&base_pak);   // with the DLC paks over it
         ctx.suffixes = &inv.suffixes;

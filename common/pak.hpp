@@ -84,6 +84,9 @@ public:
     // this pak first, then in the added paks in the order they were added, and read() reads an
     // entry from the pak it came from. The added pak must outlive this reader.
     void add_overlay(PakReader* over) { over_.push_back(over); }
+    // Tests only: the entry reads as turned off (zeroed by a mod manager's PAK method). From ZZtaii's
+    // Slotsloader fork (1.9.9), MIT.
+    void forget(uint64_t hash) { entries_.erase(hash); }
 
     // Returns the raw (possibly compressed) blob.
     std::vector<uint8_t> read_raw(const PakEntry& e);

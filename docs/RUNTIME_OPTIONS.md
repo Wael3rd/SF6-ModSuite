@@ -83,7 +83,8 @@ fork 1.9.7-custom, MIT).
   slot's `required` (with the groups that have no base copy, see Storage).
 - An option is **a set of files: (original path -> stored copy)**. Each file has a **kind**: `mesh`, `material`
   (`.mdf2`), `texture`, `chain` (all four swapped on the model at runtime), `colour` (colour files, for the Color
-  Mod) or `other` (user files, cloth, scenes: only at the next launch). Per option, `apply` sums it up: `live`,
+  Mod) or `other` (user files, cloth, joint constraints `.jcns` / `_jcs.user`, scenes: only at the next launch;
+  the loader logs `runtime options: <option> ships joint constraints (...)`). Per option, `apply` sums it up: `live`,
   `colour` or `relaunch`.
 - Options of different groups can ship the same file (Mai: the NSFW, SFW and Skimpy groups all ship the body mesh).
   When an option is chosen, the menu turns off the chosen options of other groups that come **later** in the

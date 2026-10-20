@@ -24,6 +24,21 @@
   (unless its options share files with another group's); an option for a part the outfit takes from another folder
   (Leon's hair add-ons, the game's hair in `000/02/`) now replaces that part. A modular mod none of whose options
   has a body mesh (Mai face accessories) still makes no outfit, with a WARN instead of nothing.
+- Joint constraints a mod ships (`.jcns`) are used by its outfit, as a replacement install uses them: the outfit gets
+  its own copy of the game's `_jcs.user` naming them (or the mod's own, repointed), and its scene follows it. Before,
+  the outfit drove the mod's mesh with the game's constraints (A.K.I. bare-legs mods with added toe bones). A
+  constraint or physics file of the mod that nothing the outfit loads names is reported with a WARN (fork 1.9.8). A
+  runtime option that ships joint constraints is applied at the next launch (logged).
+- A mod's own scene of the outfit is used whole when it is another layout of the outfit (another number of model
+  parts than the game's: SF5 Sakura over Ryu) or puts it on another fighter's body (another prefab / body shape), and
+  when the game's scene cannot be read (its pak entry turned off by a mod manager's "PAK method"); before, the outfit
+  lost its own hair and cloth physics, came out on the wrong skeleton, or was left out ("slot scene missing") (fork
+  1.9.9, 1.10.1, 1.10.3). Unlike the fork, only a scene made for this game version (every type signature the game's)
+  is taken; another is left as before, with its reason in the log.
+- A game file whose pak entry a mod manager's "PAK method" turned off is read from its loose copy in the game's
+  `natives` folder: outfits that use such a texture are no longer left out as "texture missing"; runtime options
+  check their base copies against the same files (our pak, other tools' patch paks, the game's paks with the DLC,
+  loose copies) (fork 1.10.1).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite
 

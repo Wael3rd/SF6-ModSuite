@@ -68,6 +68,8 @@ Fluffy Mod Manager: C:\Users\you\Documents\FluffyModManager (found in 7 ms)
 | `Fluffy Mod Manager: not found` | Give its folder in `settings.ini`. |
 | `<mod>: its archive is not in Fluffy's Mods folder` | The archive was deleted or renamed after the install: the loader uses the copy in the game, which can be mixed with another mod's files. Put the archive back, or reinstall the mod. |
 | `check: colour file ... is not in the game's paks` | The game's pak lacks one of the outfit's colour files (Fluffy can take files out of it). The slot gets the copy in the game folder, or another colour of the outfit. |
+| `scene: the game's ... cannot be read (its pak entry is turned off ...): the slot uses the mod's own scene` | A mod manager installed a replacement of that outfit over the pak ("PAK method": the game's entry is zeroed, the replacement is a loose file in `natives`). The slot is built from the mod's own scene of the outfit. Other files whose entry was zeroed (textures a slot shares) are read from their loose copy. |
+| `WARN: slot ...: the mod's ... is referenced by none of the slot's scene, model parts or physics files (kept, unused)` | The mod ships a joint constraint or physics file that nothing of the slot names: the slot does not use it (a replacement install would, in place of the game's). Usually a leftover of the mod. |
 
 `reframework\costume_mods\SF6_CostumeAudit.bat` lists the mods ticked in Fluffy under "Fluffy Mod
 Manager (mods ticked in Fluffy, read from their archives)", each with the slots made from it.
