@@ -757,6 +757,56 @@ int main(int argc, char** argv) {
         check(odd.size() == 2 && odd[0].size() == 1 && flat(odd) == seq(3), "pages: a head larger than a page still takes a row");
     }
 
+    {   // the character select's panel: option rows through its 4 rows, the window and its wrap (rto_select.cpp)
+        const char* up = "\xE2\x96\xB2 ";
+        const char* down = "\xE2\x96\xBC ";
+        auto eq = [](PanelWindow w, int c, int v) { return w.cur == c && w.win == v; };
+        PanelWindow w;
+        w = panel_move(w, 6, 1); check(eq(w, 1, 0), "panel: Down inside the window, the window stays");
+        w = panel_move(w, 6, 1); w = panel_move(w, 6, 1); check(eq(w, 3, 0), "panel: Down to the last shown row");
+        w = panel_move(w, 6, 1); check(eq(w, 4, 1), "panel: Down past the last shown row, the window slides");
+        w = panel_move(w, 6, 1); check(eq(w, 5, 2), "panel: Down to the last row, window at the bottom");
+        w = panel_move(w, 6, 1); check(eq(w, 0, 0), "panel: Down on the last row wraps to the first, window at the top");
+        w = panel_move(w, 6, -1); check(eq(w, 5, 2), "panel: Up on the first row wraps to the last, window at the bottom");
+        w = panel_move(w, 6, -1); w = panel_move(w, 6, -1); w = panel_move(w, 6, -1); check(eq(w, 2, 2), "panel: Up inside the window");
+        w = panel_move(w, 6, -1); check(eq(w, 1, 1), "panel: Up past the first shown row, the window slides");
+        PanelWindow s2;
+        s2 = panel_move(s2, 2, 1); check(eq(s2, 1, 0), "panel: 2 rows, Down");
+        s2 = panel_move(s2, 2, 1); check(eq(s2, 0, 0), "panel: 2 rows, Down on the last wraps");
+        s2 = panel_move(s2, 2, -1); check(eq(s2, 1, 0), "panel: 2 rows, Up on the first wraps, no window move");
+        PanelWindow one;
+        check(eq(panel_move(one, 1, 1), 0, 0) && eq(panel_move(one, 1, -1), 0, 0), "panel: 1 row, Up / Down stay");
+        check(eq(panel_move(one, 0, 1), 0, 0), "panel: no row, nothing");
+        check(eq(panel_clamp({ 9, 7 }, 6), 5, 2) && eq(panel_clamp({ 1, 3 }, 6), 1, 1), "panel: clamp after the rows changed");
+        check(eq(panel_clamp({ 3, 1 }, 2), 1, 0), "panel: clamp to fewer rows than the panel shows");
+        check(eq(panel_focus({ 4, 1 }, 6, 0), 1, 1) && eq(panel_focus({ 4, 1 }, 6, 3), 4, 1), "panel: a focused screen row sets the cursor");
+        check(eq(panel_focus({ 1, 0 }, 2, 3), 1, 0), "panel: a focused screen row with no option row: unchanged");
+        check(std::string(panel_arrow(0, 0, 6)).empty() && std::string(panel_arrow(3, 0, 6)) == down, "arrows: top window, Down arrow on the last row");
+        check(std::string(panel_arrow(0, 1, 6)) == up && std::string(panel_arrow(3, 1, 6)) == down, "arrows: middle window, both");
+        check(std::string(panel_arrow(0, 2, 6)) == up && std::string(panel_arrow(3, 2, 6)).empty(), "arrows: bottom window, Up arrow on the first row");
+        check(std::string(panel_arrow(1, 1, 6)).empty() && std::string(panel_arrow(2, 1, 6)).empty(), "arrows: none on the middle rows");
+        check(std::string(panel_arrow(0, 0, 3)).empty() && std::string(panel_arrow(2, 0, 3)).empty(), "arrows: none when every row shows");
+        check(step_value(1, 3, 1) == 2 && step_value(3, 3, 1) == 1 && step_value(1, 3, -1) == 3, "step: wraps at both ends");
+        check(step_value(2, 2, 1) == 1 && step_value(1, 2, -1) == 2 && step_value(7, 2, 0) == 2, "step: On / Off, out of range clamped");
+        // the rows of the test outfit through the panel: 6 rows, the window over them
+        const auto rs = rows(m, s, s.defaults);
+        PanelWindow pw;
+        for (int i = 0; i < 5; ++i) pw = panel_move(pw, static_cast<int>(rs.size()), 1);
+        check(rs.size() == 6 && eq(pw, 5, 2) && pw.cur == static_cast<int>(rs.size()) - 1, "panel over the test outfit: 5 Downs reach the last of its 6 rows");
+    }
+
+    {   // settings.json written back with its other keys (costumes.cpp, the NSFW row)
+        slots::Json j;
+        check(slots::json_parse("{\"display_nsfw\": false, \"select_options_button\": \"R1\", \"select_options_key\": \"C\", \"n\": 2.5, \"a\": [1, true]}", j),
+              "settings: parsed");
+        const std::string w = slots::json_write(j);
+        slots::Json k;
+        check(slots::json_parse(w, k) && k.get("select_options_key") && k.get("select_options_key")->as_str() == "C"
+              && k.get("n") && k.get("n")->num == 2.5 && k.get("a") && k.get("a")->arr.size() == 2,
+              "settings: written back and read again, every key kept");
+        check(w.find("\"select_options_button\": \"R1\"") != std::string::npos, "settings: the written text");
+    }
+
     int rc = 0;
     if (argc > 1) rc = real_manifest(argv[1]);
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }

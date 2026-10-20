@@ -681,6 +681,11 @@ void install() {
 }
 
 bool service() { return g_svc; }
+int tab_key(bool next, std::string* sym) {
+    const PageKeys& k = page_keys();
+    if (sym) *sym = k.sym[next ? 1 : 0];
+    return k.vk[next ? 1 : 0];
+}
 bool active() { return S.active; }
 int side() { return S.side; }
 bool busy() { return S.active || camera::active(); }   // the camera is closed on the next frame, by tick

@@ -172,6 +172,24 @@ std::vector<std::vector<int>> split_pages(int total, int per_page, int head);
 int preset_of(const Mod& mod, const std::vector<std::string>& chosen);
 std::string preset_label(const Mod& mod, size_t k);   // a variant's label without the mod's name
 
+// ---- the character select's panel (rto_select.cpp): the option rows through the panel's own rows ----
+// The panel has kPanelRows rows (Costume, Color, Control Type, Button Preset); `n` option rows go through them as a
+// window: `cur` is the option row with the cursor (0..n-1), `win` the first one shown (the screen row of the cursor is
+// cur - win). Up / Down move the cursor and the window follows it; at the ends they wrap: Down on the last row goes to
+// the first (window at the top), Up on the first to the last (window at the bottom). The CRSM recording slots' rule.
+constexpr int kPanelRows = 4;
+struct PanelWindow { int cur = 0, win = 0; };
+PanelWindow panel_move(PanelWindow w, int n, int dir, int shown = kPanelRows);
+// The window made valid for n rows (after the rows changed, or the cursor set from the screen row the game focused)
+PanelWindow panel_clamp(PanelWindow w, int n, int shown = kPanelRows);
+// The screen row k (0-based) focused by the game (a mouse hover): the cursor goes there, the window stays
+PanelWindow panel_focus(PanelWindow w, int n, int k, int shown = kPanelRows);
+// The arrow put before the title of screen row k: "\xE2\x96\xB2 " (U+25B2) on the first row while rows lie above,
+// "\xE2\x96\xBC " (U+25BC) on the last shown row while rows lie below, else ""
+const char* panel_arrow(int k, int win, int n, int shown = kPanelRows);
+// A spin step on a row's value (1-based, `labels` values): wraps at both ends
+int step_value(int value, int labels, int dir);
+
 // ---- former variant slots (the launch that turned RuntimeOptions on) ----
 // The kept slot of a fighter's former variant slot number, and that variant's options
 const Slot* former_of(const Manifest& m, int fighter, int costume_no, const Former** out);

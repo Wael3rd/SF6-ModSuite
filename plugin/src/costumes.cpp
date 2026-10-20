@@ -241,6 +241,25 @@ void load_registry() {
          g_nsfw_slots ? (", " + std::to_string(g_nsfw_slots) + " NSFW").c_str() : "");
 }
 
+// A fresh settings.json: every key with its default (select_options_*: rto_select.cpp, the costume options on the
+// character select)
+const char* kSettingsDefault = "{\n    \"display_nsfw\": false,\n    \"select_options_button\": \"R1\",\n"
+                               "    \"select_options_key\": \"C\"\n}\n";
+// settings.json with display_nsfw set, the other keys kept as they are
+std::string settings_with_nsfw(bool on) {
+    Json j;
+    std::string text = read_file(kSettings);
+    if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);
+    if (text.empty() || !json_parse(text, j) || j.kind != Json::Object) json_parse(kSettingsDefault, j);
+    Json v;
+    v.kind = Json::Bool;
+    v.b = on;
+    bool set = false;
+    for (auto& kv : j.obj) if (kv.first == "display_nsfw") { kv.second = v; set = true; }
+    if (!set) j.obj.insert(j.obj.begin(), { "display_nsfw", v });
+    return json_write(j) + "\n";
+}
+
 // settings.json's date and size in one number (0: no file)
 uint64_t settings_stamp() {
     WIN32_FILE_ATTRIBUTE_DATA fa;
@@ -261,7 +280,7 @@ bool read_nsfw_setting(const char* why) {
         if (const Json* d = j.get("display_nsfw"); d && d->kind == Json::Bool) on = d->b;
     if (!st) {   // a fresh install: the file, so the setting can be found (off)
         CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
-        if (write_file(kSettings, "{\n    \"display_nsfw\": false\n}\n")) g_settings_stamp = settings_stamp();
+        if (write_file(kSettings, kSettingsDefault)) g_settings_stamp = settings_stamp();
     }
     if (on == g_show_nsfw && std::strcmp(why, "start") != 0) return false;
     const bool changed = on != g_show_nsfw;
@@ -1374,7 +1393,7 @@ void nsfw_row_present(bool on) {
 // (ownership and the Outfit 1 fallback run on the next tick, outside Battle Settings).
 void set_display_nsfw(bool on) {
     CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
-    const bool ok = write_file(kSettings, on ? "{\n    \"display_nsfw\": true\n}\n" : "{\n    \"display_nsfw\": false\n}\n");
+    const bool ok = write_file(kSettings, settings_with_nsfw(on));
     if (ok) g_settings_stamp = settings_stamp();
     logf("costumes: Display NSFW Outfits %s (option row)%s", on ? "on" : "off", ok ? "" : ": settings.json NOT written");
     if (on == g_show_nsfw) return;

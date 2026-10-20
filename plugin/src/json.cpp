@@ -118,4 +118,32 @@ std::string json_escape(const std::string& s) {
     return o;
 }
 
+std::string json_write(const Json& j, int indent) {
+    const std::string pad(static_cast<size_t>(indent + 4), ' '), end(static_cast<size_t>(indent), ' ');
+    switch (j.kind) {
+    case Json::Bool: return j.b ? "true" : "false";
+    case Json::Number: {
+        char b[32];
+        if (j.num == static_cast<double>(static_cast<int64_t>(j.num))) snprintf(b, sizeof b, "%lld", static_cast<long long>(j.num));
+        else snprintf(b, sizeof b, "%.17g", j.num);
+        return b;
+    }
+    case Json::String: return "\"" + json_escape(j.s) + "\"";
+    case Json::Array: {
+        if (j.arr.empty()) return "[]";
+        std::string o = "[\n";
+        for (size_t i = 0; i < j.arr.size(); ++i) o += pad + json_write(j.arr[i], indent + 4) + (i + 1 < j.arr.size() ? ",\n" : "\n");
+        return o + end + "]";
+    }
+    case Json::Object: {
+        if (j.obj.empty()) return "{}";
+        std::string o = "{\n";
+        for (size_t i = 0; i < j.obj.size(); ++i)
+            o += pad + "\"" + json_escape(j.obj[i].first) + "\": " + json_write(j.obj[i].second, indent + 4) + (i + 1 < j.obj.size() ? ",\n" : "\n");
+        return o + end + "}";
+    }
+    default: return "null";
+    }
+}
+
 } // namespace slots

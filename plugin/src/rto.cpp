@@ -911,6 +911,7 @@ void select_tick() {
         if (g_frame - g_sel_start > 120 && !costumes::select_active()) {
             logf("rto: character select no longer up: its models are no longer followed");
             g_select = false;
+            select::leave_all("character select no longer up");
             reset(*sm[0]); reset(*sm[1]);
             return;
         }
@@ -985,7 +986,7 @@ void fault(const char* where) {
     ++g_faults;
     logf("rto: EXCEPTION in %s (%d)", where, g_faults);
     for (auto& md : g_models) reset(md);
-    if (g_faults >= 5) { g_disabled = true; logf("rto: 5 faults, runtime options off for this session"); }
+    if (g_faults >= 5) { g_disabled = true; select::leave_all("runtime options off"); logf("rto: 5 faults, runtime options off for this session"); }
 }
 
 } // namespace
@@ -1023,6 +1024,13 @@ int preview_since() {
 int preview_fighter(uint32_t* at) {
     if (at) *at = g_prev_fighter_at;
     return g_prev_fighter;
+}
+const Slot* select_slot(int side, uint32_t* since) {
+    if (side < 1 || side > 2 || !g_select) return nullptr;
+    const Model& md = g_models[2 + side];
+    if (!(md.root && md.slot && has_rows(md.slot) && alive_as(md.root, T.go))) return nullptr;
+    if (since) *since = md.since;
+    return md.slot;
 }
 const Slot* preview_slot() {
     const Model& md = g_models[0];
@@ -1122,11 +1130,13 @@ void tick(uint32_t ev) {
             choices_changed();
         }
         if (ev & EV_SELECT_START) {
+            select::leave_all("character select started");   // a visit whose end was missed: its panels let go
             g_select = true; g_watch_until = 0; g_sel_scan = g_sel_next = 0; g_sel_start = g_frame; g_sel_log.clear();
             for (auto& md : g_models) reset(md);
         }
         if ((ev & EV_SELECT_END) && g_select) {
             g_select = false;
+            select::leave_all("character select ended");
             reset(g_models[3]); reset(g_models[4]);
         }
         if (ev & EV_MENU_OPEN) {
@@ -1150,7 +1160,7 @@ void tick(uint32_t ev) {
                 logf("rto: PlayerBehavior.SetupAppearance is called all the time: not a build event, ignored from now on");
             }
         }
-        if (g_select) { select_tick(); return; }
+        if (g_select) { select::tick(); select_tick(); return; }
         bool fs = false;
         if (g_bs) {
             fs = fighter_settings_visible();

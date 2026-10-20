@@ -853,6 +853,65 @@ does, the fallback above is the next step.
   AutoRegionFit, scale, position, visibility. Logs: `fs name: ...` in `native_log.txt` (source of the name, geometry
   once per change with the copy's global x and region as found, shown / hidden and why).
 
+## Options on the character select: `plugin/src/rto_select.cpp` (no new core capability)
+
+- **What**: in a side's panel of the character select (agents `ui10505` P1, `ui10507` P2; rows Costume, Color,
+  Control Type, Button Preset), **R1** on that player's pad or **C** on the keyboard (the keyboard's player, as the
+  game assigns it) shows the options of the outfit that side's model wears, in the panel's own four rows: the rows
+  of the Battle Settings menu (`rows()`: one choice row per pick group, one On / Off row per toggle; no Player side,
+  no Restore defaults: the side is the panel's). Left / Right change the focused row (wrapping), Up / Down move
+  through them; more than four rows: a window over them, "▲ " before the first title while rows lie above, "▼ "
+  before the last while rows lie below, Down on the last row goes to the first and Up on the first to the last (the
+  CRSM recording slots' rule; `panel_move` / `panel_arrow` in `rto_data.cpp`, unit-tested). Fewer than four rows:
+  the others are hidden. R1 / C again, B / Esc or Decide put the panel back (Esc leaves the mode only: the press is
+  not a Back for the screen, IsDecide / IsCancel answer false 15 frames after).
+- **Offered** only while the side's model wears an outfit with options (rto.cpp `select_slot`: the select model was
+  identified as wearing it after the panel's fighter / costume last changed), the panel has been active 20 frames
+  and one of its rows has the focus, no option window is open (the Color Mod's colour editor uses C), and the Color
+  Mod's DI mode does not hold the panel. Online: only when one panel alone is active (taken as the player's own), and
+  the options edited are P1's (the player's own fighter wears P1's options online, as in a fight).
+- **Saved and shown** like the Battle Settings menu's (`costume_choices.json`, offline the panel's side, `keep_hidden`
+  for hidden NSFW choices); `choices_changed()` makes the side's select model (`FighterVisual_01 / _02`, `select_tick`)
+  wear it on its next pass (at most 10 frames).
+- **Keys**: `reframework\data\SF6_CostumeSlots_data\settings.json`: `"select_options_button"`: `R1` (default), `L1`,
+  `R2`, `L2`, `R3`, `L3` or `off`; `"select_options_key"`: `C` (default, the user's choice 20/10), any letter or
+  digit, `auto` (the game's keyboard key of its UI tab action UITabR, the keyboard twin of R1: E on AZERTY) or `off`.
+  Read each time the screen opens. A fresh settings.json lists them; the NSFW row keeps them when it writes the file.
+  R1 is the game's `UITabR` (input id 74): nothing in the game data at hand says the select screen uses it, but its
+  input table could not be read offline, so the plugin logs the game's own guide bars of the screen once a visit and
+  warns when they already show the button or the key (`rto select: the game's guide on the character select`).
+- **How** (the Color Mod's DI mode technique on this same panel, `colormod/src/screens/dipanel*.cpp`): the four rows
+  are borrowed, nothing is created or added to the pool (R12, R13). Entering: each row's spin range / `_Num` /
+  IsDisable, visibility, value text, list position, text region, arrows' ForceInvisible and title message id are
+  kept; the titles' message link is cut (a title already showing what we write gets one differing write first, R7).
+  Each frame while on (LateUpdateBehavior, through the core): titles and values (compare-before-write), spins 0 ..
+  labels + 1 with `_Num` = the value, chips hidden, arrows shown, lists and regions aligned on the Costume row's. Hooks
+  (installed the first time the mode is used; they only store numbers, R1): `UIPartsSpin` Add / Sub / AddNum /
+  SubNum / MouseAdd / MouseSub / InputLeft / InputRight / InputDirection, `UIFlowUI10505.Param` SelectChange* /
+  SetMessage* / setCostume / setColor / setCostumeAndColor skipped, IsDecide / IsCancel / isSelectOperationType false,
+  getCostume / getColor = the indexes it had, `UIAgent` InputLeft / Right / Up / Down / Direction / Decide / Cancel,
+  `UIPartsGroup.MoveFocus`; each acts only for the addresses of a side that is on. Leaving: spins, message ids,
+  visibility, chips, positions, regions, arrows put back, the cache indexes, then the game's repaint
+  (`SetMessageCostume`, `SetMessageColor`, `SelectChangeColorChip`, `setCostumeAndColor`), then the value texts it
+  did not put back (R36), never the Color row's (a native fault). A panel rebuilt meanwhile: left the same way; a
+  panel gone: dropped without a write.
+- **One owner per panel** (two writers on one UI crashed the game before): the Color Mod's DI mode (X) borrows the
+  same rows. The plugin keeps each side's owner: `int SF6Slots_SelectPanelClaim(int side, int who, int op)` (who 1
+  the plugin's mode, 2 the Color Mod's DI mode; op 1 take: 1 granted / 0 held by the other, op 0 give back, op -1 the
+  owner). Each mode takes it before borrowing the rows and gives it back last; the Color Mod (0.22.5+) refuses X while
+  the plugin holds the panel (journal "the Slots Loader's costume options hold this panel, X ignored"), the plugin
+  refuses R1 / C while the DI mode holds it. The Color Mod exports `int SF6ColorMod_DiPanelActive(int side)`: a claim
+  of the Color Mod without a DI mode for 60 frames is freed, and a Color Mod without that export (older) turns the
+  plugin's mode off (logged once). The Color Mod's colour tracker does not paint the Color row of a panel the plugin
+  holds (as during its DI mode).
+- **Guide**: the Color Mod writes each side's corner of the select guide ("X Edit Drive Colors") alone and adds the
+  plugin's entry after it: `int SF6Slots_SelectGuideEntry(int side, int pad, char* buf, int cap)` gives
+  "<ICON BtnR1> Costume options" (pad glyphs, as the bar's own glyph mode) or "<ICON KeyC> Costume options" while that
+  side's outfit has options and the panel is ready (or shows them); while the plugin holds the panel the X entry is
+  left out. Without the Color Mod there is no select entry (the mode works, unannounced).
+- Logs: `rto select: ...` in `native_log.txt` (keys read, hooks installed, ON / OFF with the outfit and whose options,
+  each change, each refused press and why).
+
 ## Saved choices and slot numbers
 
 With `on`, the single outfit of a modular mod is its first combination: same files and same id as the first

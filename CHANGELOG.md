@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Runtime options on the character select: R1 (pad) or C (keyboard) in a side's panel shows the options of the outfit
+  that side wears in place of Costume / Color / Control Type / Button Preset (Left / Right change, Up / Down move, a
+  "▲ / ▼" window wrapping at the ends when there are more than four rows); saved like the Battle Settings menu's and
+  shown at once on that side's model; R1 / C again, B / Esc or Decide go back. Each side its own options in local
+  versus; online the player's own (P1's). Keys in `SF6_CostumeSlots_data\settings.json` (`select_options_button`,
+  `select_options_key`). One owner per panel with the Color Mod's DI mode (X), which now refuses X while the options
+  show (and the other way round); "R1 Costume options" in the select guide corner, written by the Color Mod.
+  Needs Color Mod 0.22.5+ when the Color Mod is installed (an older one keeps this mode off).
 - NSFW outfits: a second mods folder, `reframework\costume_mods_nsfw\<Character>\` (made by the user; same layout and
   rules as `costume_mods`). Its outfits are hidden until "Display NSFW Outfits" is on (`display_nsfw` in
   `reframework\data\SF6_CostumeSlots_data\settings.json`, off by default; applied at the next screen that lists

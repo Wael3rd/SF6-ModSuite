@@ -22,5 +22,7 @@ struct Json {
 };
 bool json_parse(const std::string& text, Json& out);
 std::string json_escape(const std::string& s);
+// A value written back as JSON text (objects and arrays indented by 4 per level)
+std::string json_write(const Json& j, int indent = 0);
 
 } // namespace slots

@@ -3,7 +3,7 @@
 // rto.cpp: the manifest and the choices, the models (the Battle Settings preview, each fighter), the
 // resources each one needs (created ahead, applied once ready), when to apply.
 // rto_menu.cpp: the F hint on the costume row of Fighter Settings and the options menu (the core's
-// option service).
+// option service). rto_select.cpp: the same options in a side's panel of the character select.
 //
 // Rules (slots.hpp): game objects only from LateUpdateBehavior; nothing while the character select
 // is open; in a fight, work only after an event (a fighter's model built), never per frame. Models,
@@ -42,6 +42,9 @@ int preview_since();                  // the frame the preview was last identifi
 // The fighter of the last Battle Settings preview model (its name, "esf001v00" = 1), -1 none; at: the frame it was seen
 int preview_fighter(uint32_t* at = nullptr);
 int frame_now();
+// The outfit a side's model on the character select wears (side 1 / 2) when it has options, nullptr otherwise;
+// since: the frame the model was last identified as wearing it
+const Slot* select_slot(int side, uint32_t* since);
 
 namespace menu {
 void install();                       // the core's option service (first frame)
@@ -51,6 +54,19 @@ int side();                           // the player side the menu edits (0 P1, 1
 bool busy();
 // fs_visible: Fighter Settings (Battle Settings > character) is on screen
 void tick(bool fs_visible);
+// The game's keyboard key of its UI tab action (next: UITabR, the keyboard twin of R1; else UITabL): its virtual key,
+// and its glyph ("<ICON KeyE>" on an AZERTY keyboard)
+int tab_key(bool next, std::string* sym);
+}
+
+// rto_select.cpp: the costume options on the character select (R1 / C in a side's panel: its four rows show the
+// outfit's options, the Color Mod's DI mode technique); one owner per panel with the Color Mod's DI mode
+namespace select {
+void tick();                          // each frame while the character select is up (rto::tick)
+void leave_all(const char* why);      // the screen left: the panels given back (when still alive), state reset
+bool active(int side);                // side 1 / 2 shows the options
+int claim(int side, int who, int op); // SF6Slots_SelectPanelClaim
+int guide_entry(int side, int pad, char* buf, int cap);   // SF6Slots_SelectGuideEntry
 }
 
 // rto_camera.cpp: the preview's turn / zoom / pan and the Move / Zoom hints while the menu is open, the same as

@@ -651,6 +651,53 @@ std::vector<std::vector<int>> split_pages(int total, int per_page, int head) {
     return pages;
 }
 
+PanelWindow panel_clamp(PanelWindow w, int n, int shown) {
+    shown = std::max(1, shown);
+    if (n <= 0) return {};
+    w.cur = std::max(0, std::min(w.cur, n - 1));
+    w.win = std::max(0, std::min(w.win, std::max(0, n - shown)));
+    if (w.cur < w.win) w.win = w.cur;
+    if (w.cur >= w.win + shown) w.win = w.cur - shown + 1;
+    return w;
+}
+
+PanelWindow panel_move(PanelWindow w, int n, int dir, int shown) {
+    shown = std::max(1, shown);
+    if (n <= 0) return {};
+    w = panel_clamp(w, n, shown);
+    if (dir > 0) {
+        if (w.cur >= n - 1) return { 0, 0 };                              // Down on the last row: the first
+        ++w.cur;
+        if (w.cur >= w.win + shown) w.win = w.cur - shown + 1;
+    } else if (dir < 0) {
+        if (w.cur <= 0) return { n - 1, std::max(0, n - shown) };         // Up on the first row: the last
+        --w.cur;
+        if (w.cur < w.win) w.win = w.cur;
+    }
+    return w;
+}
+
+PanelWindow panel_focus(PanelWindow w, int n, int k, int shown) {
+    w = panel_clamp(w, n, shown);
+    if (n <= 0 || k < 0 || k >= std::max(1, shown) || w.win + k >= n) return w;
+    w.cur = w.win + k;
+    return w;
+}
+
+const char* panel_arrow(int k, int win, int n, int shown) {
+    const int last = std::min(std::max(1, shown), n - win) - 1;          // the last screen row in use
+    if (k == 0 && win > 0) return "\xE2\x96\xB2 ";
+    if (k == last && win + shown < n) return "\xE2\x96\xBC ";
+    return "";
+}
+
+int step_value(int value, int labels, int dir) {
+    if (labels <= 0) return 1;
+    value = std::max(1, std::min(value, labels));
+    if (dir == 0) return value;
+    return ((value - 1 + (dir > 0 ? 1 : -1)) % labels + labels) % labels + 1;
+}
+
 int preset_of(const Mod& mod, const std::vector<std::string>& chosen) {
     for (size_t k = 0; k < mod.variants.size(); ++k) if (same_set(mod.variants[k].ids, chosen)) return static_cast<int>(k) + 1;
     return 0;
