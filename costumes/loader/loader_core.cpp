@@ -3903,7 +3903,12 @@ static void add_slot_files(PakWriter& writer,
                     const std::vector<uint8_t> gamen = n == "000" ? std::vector<uint8_t>{} : game_colour(n);
                     std::vector<std::string> added;
                     std::string why;
-                    if (!cmd_add_missing_clusters(d, {&ownn, &own0, &gamen, &game0}, want, added, &why)) {
+                    // a colour file (not the default cmd_000): each added slot as the game shows it, enabled (SetColor
+                    // is all a material swapped in at runtime gets: Aloha C2's eyebrows stayed the material's light
+                    // grey with the default file's #0C0C0C left disabled)
+                    const std::vector<const std::vector<uint8_t>*> bases{&own0, &own0, &game0, &game0};
+                    if (!cmd_add_missing_clusters(d, {&ownn, &own0, &gamen, &game0}, want, added, &why,
+                                                  n == "000" ? nullptr : &bases)) {
                         printf("      runtime options: %s/v%02d: colour file %s left as it is (%s)\n", fd.c_str(),
                                slot.new_costume_no, rel_tail(target).c_str(), why.c_str());
                         continue;

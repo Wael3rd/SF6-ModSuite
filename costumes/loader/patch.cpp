@@ -876,6 +876,22 @@ size_t cmd_cluster_count(const CmdDoc& doc) {
     for (uint32_t m : cmd_parts(doc)) n += doc.inst[m].fields[1].refs.size();
     return n;
 }
+constexpr uint32_t T_CUSTOMIZE_COLOR = 0x123a0e06;   // CustomizeColorData: Enable, Color, Option
+// The CustomizeColorData instances of a material's cluster of a part type in a colour file (empty when not named)
+std::vector<const CmdInst*> cmd_slots(const CmdDoc& doc, uint32_t type, const std::string& name) {
+    std::vector<const CmdInst*> out;
+    for (uint32_t m : cmd_parts(doc)) {
+        if (cmd_part_type(doc.inst[m]) != type) continue;
+        for (uint32_t c : doc.inst[m].fields[1].refs) {
+            if (!c || c >= doc.inst.size() || cmd_name(doc.inst[c]) != name || doc.inst[c].fields.size() < 2) continue;
+            for (uint32_t k : doc.inst[c].fields[1].refs)
+                out.push_back(k && k < doc.inst.size() && doc.inst[k].type == T_CUSTOMIZE_COLOR &&
+                              doc.inst[k].fields.size() >= 2 && doc.inst[k].fields[1].raw.size() == 4 ? &doc.inst[k] : nullptr);
+            return out;
+        }
+    }
+    return out;
+}
 // Inserts instances at index pos (their references already numbered as they will be), every reference to pos and
 // after moving with them
 void cmd_insert(CmdDoc& doc, uint32_t pos, std::vector<CmdInst> block) {
@@ -890,7 +906,7 @@ void cmd_insert(CmdDoc& doc, uint32_t pos, std::vector<CmdInst> block) {
 
 bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<const std::vector<uint8_t>*>& sources,
                               const std::vector<std::string>& materials, std::vector<std::string>& added,
-                              std::string* why) {
+                              std::string* why, const std::vector<const std::vector<uint8_t>*>* bases) {
     auto fail = [&](const char* w) { if (why) *why = w; return false; };
     CmdDoc doc;
     if (!cmd_parse(data, doc) || cmd_parts(doc).empty()) return fail("colour file layout not understood");
@@ -909,6 +925,10 @@ bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<cons
     std::vector<bool> src_ok(sources.size(), false);
     for (size_t s = 0; s < sources.size(); s++)
         src_ok[s] = sources[s] && cmd_parse(*sources[s], src[s]) && !cmd_parts(src[s]).empty();
+    std::vector<CmdDoc> base(sources.size());       // each source's default colour file (bases given)
+    std::vector<bool> base_ok(sources.size(), false);
+    for (size_t s = 0; bases && s < sources.size() && s < bases->size(); s++)
+        base_ok[s] = (*bases)[s] && cmd_parse(*(*bases)[s], base[s]) && !cmd_parts(base[s]).empty();
     std::vector<std::string> done;
     for (auto& name : materials) {
         if (std::find(done.begin(), done.end(), name) != done.end()) continue;
@@ -957,6 +977,21 @@ bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<cons
                         block.push_back(std::move(in));
                     }
                     const uint32_t cl = pos + (uint32_t)sub.size() - 1;
+                    if (base_ok[s]) {
+                        // each colour slot as the game shows it (the default file's colour unless the source
+                        // enables its own), enabled: SetColor gives it to a material swapped in at runtime
+                        const std::vector<const CmdInst*> def = cmd_slots(base[s], type, name);
+                        const CmdInst& bc = block[cl - pos];
+                        const std::vector<uint32_t> slots = bc.fields.size() >= 2 ? bc.fields[1].refs : std::vector<uint32_t>{};
+                        for (size_t k = 0; k < slots.size(); k++) {
+                            if (slots[k] < pos || slots[k] - pos >= block.size()) continue;
+                            CmdInst& cc = block[slots[k] - pos];
+                            if (cc.type != T_CUSTOMIZE_COLOR || cc.fields.size() < 2 || cc.fields[0].raw.size() != 1 ||
+                                cc.fields[1].raw.size() != 4) continue;
+                            if (!cc.fields[0].raw[0] && k < def.size() && def[k]) cc.fields[1].raw = def[k]->fields[1].raw;
+                            cc.fields[0].raw[0] = 1;
+                        }
+                    }
                     if (!md) {
                         if (auto it = crc.find(sd.inst[sm].type); it != crc.end() && it->second != sd.inst[sm].crc) continue;
                         CmdInst m = sd.inst[sm];

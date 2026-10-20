@@ -254,7 +254,13 @@ names keeps its material file's default (Aloha C2 on the C1 slot: Outfit 2's hea
 material of an option's material file that **no material file of the slot's scene has** gets its entries (the
 cluster and its tree, per part type) appended to each of the slot's colour files `cmd_NNN`, taken from the option's
 `cmd_NNN`, else its `cmd_000`, else the game outfit's it was made for (the folder its moved files come from), same
-number then `cmd_000`. Existing entries are never changed, removed or moved (a new cluster goes at the end of its
+number then `cmd_000`. In `cmd_001..010` every colour slot of an added entry is written as the game shows it and
+**enabled**: the source's colour where it enables the slot, else the default file's (`cmd_000`) colour of that slot.
+The game colours a material with every slot of the default file whatever its Enable flag, a colour file replaces only
+the slots it enables (read from the game's files: Ryu's, Juri's), and a material swapped in at runtime only gets what
+`SetColor` applies. Copied disabled (20/10, first build), Aloha C2's eyebrows stayed the material's own light grey
+(`CustomizeColor_0` 0.502 = sRGB #BBBBBB, "white") where the game's Outfit 2 shows its default file's #0C0C0C.
+Existing entries are never changed, removed or moved (a new cluster goes at the end of its
 part, a new part at the end of the parts: the Color Mod lays its colour trees over the live data by position and
 name); a material the slot has is never added, so the slot looks as before. Each file is read back with the same
 parser (entry count). Log: `runtime options: esf001/v05: colour files: +22 entries (esf_Beard, esf_Eyebrow) from C2,

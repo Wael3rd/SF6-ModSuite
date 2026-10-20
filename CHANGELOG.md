@@ -90,7 +90,8 @@
 - Fighter Settings shows the name of the outfit on the preview (our outfits: the mod's name; the game's: its own)
   at the right end of the bottom input guide bar.
 - Runtime costume options (`on`): materials an option brings that the outfit itself has not get their colour entries
-  in the outfit's colour files (Aloha Ryu C2's head: eyebrows and beard are coloured again); nothing else changes.
+  in the outfit's colour files, each colour slot as the game shows it (Aloha Ryu C2's head: dark eyebrows and beard
+  as on the game's Outfit 2, no longer light grey); nothing else changes.
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

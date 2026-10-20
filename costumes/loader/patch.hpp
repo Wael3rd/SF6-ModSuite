@@ -135,9 +135,15 @@ bool upgrade_costume_material_layout(std::vector<uint8_t>& data,
 // taken from a source whose type signatures differ from the file's. The result is read back with the same parser
 // (entry count). added: one material name per entry added. False (data untouched, why set) when the file or the
 // result is not understood.
+// bases (a colour file cmd_001.., not the default cmd_000): for each source, the default colour file of its outfit
+// (null allowed). The game colours a material with every slot of the default file, whatever its Enable flag, and a
+// colour file replaces only the slots it enables; a material swapped in at runtime only gets what SetColor applies
+// (the enabled slots of the colour file). So each slot of an added entry is written as the game would show it: the
+// source's colour where it enables the slot, else the default's colour of that slot, and enabled.
 bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<const std::vector<uint8_t>*>& sources,
                               const std::vector<std::string>& materials, std::vector<std::string>& added,
-                              std::string* why = nullptr);
+                              std::string* why = nullptr,
+                              const std::vector<const std::vector<uint8_t>*>* bases = nullptr);
 
 // Test hook: parses a colour file and writes it back unchanged. False if the layout is not understood.
 bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<uint8_t>& out);
