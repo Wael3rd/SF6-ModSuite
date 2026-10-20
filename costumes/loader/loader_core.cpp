@@ -865,26 +865,55 @@ static std::string source_key(const char* how, const ModFileRef& mf) {
     snprintf(buf, sizeof buf, "|%p|%016llx", (const void*)mf.pak, (unsigned long long)mf.hash);
     return how + std::string(buf);
 }
+// The same source named so that the name means the same bytes at the next build (pak_sources.tsv): a
+// file by its path, size and date, a mod pak's entry by the pak's and its hash. Empty when it cannot be.
+static std::unordered_map<const PakReader*, std::string> g_pak_ident;   // mod paks: "<path>|<size>|<date>"
+static void note_pak_ident(const PakReader* r, const std::string& path) {
+    uint64_t sz = 0, mt = 0;
+    if (file_stat_long(path, sz, mt)) g_pak_ident[r] = str_lower(path) + "|" + std::to_string(sz) + "|" + std::to_string(mt);
+}
+static std::string lasting_key(const char* how, const ModFileRef& mf) {
+    if (mf.is_disk()) {
+        uint64_t sz = 0, mt = 0;
+        if (!file_stat_long(mf.disk_path, sz, mt)) return {};
+        return std::string(how) + "|d|" + str_lower(mf.disk_path) + "|" + std::to_string(sz) + "|" + std::to_string(mt);
+    }
+    auto it = g_pak_ident.find(mf.pak);
+    if (it == g_pak_ident.end()) return {};
+    char hx[24];
+    snprintf(hx, sizeof hx, "%016llx", (unsigned long long)mf.hash);
+    return std::string(how) + "|p|" + it->second + "|" + hx;
+}
+
 static void put_mod_raw(PakWriter& w, uint64_t h, const ModFileRef& mf) {
     const std::string key = source_key("raw", mf);
     if (w.add_same_source(h, key)) return;
-    std::vector<uint8_t> raw; int64_t att, ds;
-    mf.read_raw(raw, att, ds);
-    w.add_raw(h, std::move(raw), att, ds);
-    w.note_source(key);
+    const std::string lasting = lasting_key("raw", mf);
+    if (!w.add_previous(h, lasting)) {
+        std::vector<uint8_t> raw; int64_t att, ds;
+        mf.read_raw(raw, att, ds);
+        w.add_raw(h, std::move(raw), att, ds);
+    }
+    w.note_source(key, lasting);
 }
 static void put_mod_data(PakWriter& w, uint64_t h, const ModFileRef& mf) {
     const std::string key = source_key("data", mf);
     if (w.add_same_source(h, key)) return;
-    w.add_uncompressed(h, mf.read_data());
-    w.note_source(key);
+    const std::string lasting = lasting_key("data", mf);
+    if (!w.add_previous(h, lasting)) w.add_uncompressed(h, mf.read_data());
+    w.note_source(key, lasting);
 }
+// The game's paks are named in the header of pak_sources.tsv: an entry by its pak (base pak, DLC paks
+// in order) and place
 static void put_game_raw(PakWriter& w, uint64_t h, PakReader& pak, const PakEntry& e) {
-    char key[48];
+    char key[48], lasting[128];
     snprintf(key, sizeof key, "game|%p", (const void*)&e);
     if (w.add_same_source(h, key)) return;
-    w.add_raw(h, pak.read_raw(e), e.attributes, e.decompressed_size);
-    w.note_source(key);
+    snprintf(lasting, sizeof lasting, "game|%d|%lld|%lld|%lld|%llx", pak.source_of(e), (long long)e.offset,
+             (long long)e.compressed_size, (long long)e.decompressed_size, (unsigned long long)e.attributes);
+    if (pak.source_of(e) < 0) lasting[0] = 0;
+    if (!w.add_previous(h, lasting)) w.add_raw(h, pak.read_raw(e), e.attributes, e.decompressed_size);
+    w.note_source(key, lasting);
 }
 
 // A file directly in product/model/ (no sub-folder): the game keeps none there, so a mod that ships one
@@ -6079,6 +6108,7 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
             printf("    WARN: cannot open %s, skipping\n", u.pak.c_str());
             return false;
         }
+        note_pak_ident(reader.get(), pak_path);
         printf("    %zu entries\n", reader->entry_count());
         uf.mod_id = identify_mod_pak(pak_path.c_str());
         std::vector<uint64_t> unknown;
@@ -9145,7 +9175,11 @@ static const char* kSettingsTemplate =
     "; is an NSFW option. Left out: the default list (nsfw, nude, naked, topless, bottomless, pubic, pubes,\r\n"
     "; nipple, pasties, lewd, futa, see through, see thru, no panties, no underwear, erotic). A comma list\r\n"
     "; replaces it; given empty (NsfwKeywords=) the names are not looked at.\r\n"
-    "; Example: NsfwKeywords=nsfw, nude, lingerie\r\n";
+    "; Example: NsfwKeywords=nsfw, nude, lingerie\r\n"
+    ";\r\n"
+    "; IncrementalPak: on (default): when mods change, the files of the others are taken from the costume pak\r\n"
+    "; already built instead of being read again (the pak comes out the same). off: every file is read again.\r\n"
+    "IncrementalPak=on\r\n";
 
 // A setting's value; *found: whether the key is there at all (a key given empty is not a key left out)
 static std::string read_setting(const std::string& path, const char* key, bool* found = nullptr) {
@@ -10040,6 +10074,69 @@ static std::string base_pak_fingerprint(const std::string& base_path) {
 }
 
 // ============================================================================
+// Previous pak as a source (incremental build)
+// ============================================================================
+// After each build pak_sources.tsv (beside the registry) lists where the pak holds the data of every file
+// put in it exactly as read (put_mod_raw / put_mod_data / put_game_raw), by a key naming the same bytes at
+// the next build (lasting_key). Its header names the loader's pak id, the game's paks and the pak itself
+// (name, size, date). The next build takes that data from the pak in place instead of reading the sources
+// again, for every outfit whose files did not change; the pak comes out the same as a full build
+// (costumes/tools/fastpak_test checks it byte for byte). IncrementalPak=off (costume_mods\settings.ini)
+// reads every source again.
+static const char* PAK_SOURCES_FORMAT = "sf6-pak-sources-1";   // change it when what a key means changes
+static const char* PAK_SOURCES_FILE = "pak_sources.tsv";
+
+static std::string pak_sources_header(const std::string& game_fp, const std::string& pak_path) {
+    uint64_t sz = 0, mt = 0;
+    if (!file_stat_long(pak_path, sz, mt)) return {};
+    return std::string(PAK_SOURCES_FORMAT) + "\t" + LOADER_PAK_ID + "\t" + game_fp + "\t"
+         + str_lower(pak_path.substr(pak_path.find_last_of("\\/") + 1)) + "\t" + std::to_string(sz) + "\t" + std::to_string(mt);
+}
+
+static bool load_pak_sources(const std::string& file, const std::string& header,
+                             std::unordered_map<std::string, PakWriter::SourceData>& out) {
+    if (header.empty()) return false;
+    const std::string txt = read_text_file(file);
+    size_t a = txt.find('\n');
+    if (a == std::string::npos || txt.compare(0, a, header) != 0) return false;
+    for (a++; a < txt.size();) {
+        size_t b = txt.find('\n', a);
+        if (b == std::string::npos) b = txt.size();
+        const std::string line = txt.substr(a, b - a);
+        a = b + 1;
+        const size_t t = line.find('\t');
+        if (t == std::string::npos) continue;
+        PakWriter::SourceData s;
+        unsigned long long off, size, sig;
+        long long attr, ds;
+        if (sscanf(line.c_str() + t + 1, "%llu\t%llu\t%lld\t%lld\t%llx", &off, &size, &attr, &ds, &sig) != 5) return false;
+        s.offset = off; s.size = size; s.attributes = attr; s.decompressed_size = ds; s.sig = sig;
+        out[line.substr(0, t)] = s;
+    }
+    return true;
+}
+
+static void save_pak_sources(const std::string& file, const std::string& header,
+                             const std::vector<std::pair<std::string, PakWriter::SourceData>>& sources) {
+    const std::string tmp = file + ".tmp";
+    FILE* f = header.empty() ? nullptr : fopen(tmp.c_str(), "wb");
+    bool ok = f != nullptr;
+    if (f) {
+        std::setvbuf(f, nullptr, _IOFBF, 1 << 20);
+        fprintf(f, "%s\n", header.c_str());
+        for (auto& [key, s] : sources)
+            fprintf(f, "%s\t%llu\t%llu\t%lld\t%lld\t%llx\n", key.c_str(), (unsigned long long)s.offset,
+                    (unsigned long long)s.size, (long long)s.attributes, (long long)s.decompressed_size,
+                    (unsigned long long)s.sig);
+        ok = fclose(f) == 0;
+    }
+    if (!ok || !MoveFileExA(tmp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileA(tmp.c_str());
+        DeleteFileA(file.c_str());   // an old list would not name this pak: never read anyway
+    }
+}
+
+// ============================================================================
 // Structural files, built from the game's own
 // ============================================================================
 // The costume pak replaces some game files to declare the slots: the root fighter scene and one version
@@ -10579,6 +10676,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         printf("\n  patch_%03d: %s\n", pi.num, pi.path.c_str());
         auto reader = std::make_unique<PakReader>();
         if (!reader->open(pi.path.c_str())) continue;
+        note_pak_ident(reader.get(), pi.path);
         printf("    %zu entries\n", reader->entry_count());
 
         std::string mod_id = identify_mod_pak(pi.path.c_str());
@@ -10738,6 +10836,19 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                  ms.ullAvailPhys / double(gb), target_name);
         else
             logf("  WARN: cannot create %s.spill, the pak is built in memory\n", target_path.c_str());
+    }
+    // The files that did not change since the last build are taken from the pak in place
+    const std::string game_fp = base_pak_fingerprint(base_path) + dlc_fingerprint(game_dir);
+    const std::string sources_path = registry_dir + "\\" + PAK_SOURCES_FILE;
+    {
+        const std::string v = str_lower(read_setting(costume_mods_dir + "\\settings.ini", "incrementalpak"));
+        std::unordered_map<std::string, PakWriter::SourceData> prev;
+        if (v == "off" || v == "0")
+            logf("  IncrementalPak=off: every file read from its source\n");
+        else if (our_paks.size() == 1
+                 && load_pak_sources(sources_path, pak_sources_header(game_fp, our_paks[0].path), prev)
+                 && writer.use_previous(our_paks[0].path.c_str(), std::move(prev)))
+            logf("  files unchanged since the last build taken from %s\n", our_paks[0].path.c_str());
     }
     std::unordered_set<std::string> written_paths;
 
@@ -10998,6 +11109,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
              writer.source_hits(), writer.source_bytes() / 1048576.0);
     if (writer.spilled_bytes())
         logf("  %.1f MB held in the spill file while building, not in memory\n", writer.spilled_bytes() / 1048576.0);
+    if (writer.previous_hits())
+        logf("  %zu entries taken from the previous pak, not read from their sources (%.1f MB)\n",
+             writer.previous_hits(), writer.previous_bytes() / 1048576.0);
+    if (write_pak) save_pak_sources(sources_path, pak_sources_header(game_fp, target_path), writer.lasting_sources());
 
     // 10. Save registry with fingerprint
     registry.fingerprint = new_fp + meta_tag;

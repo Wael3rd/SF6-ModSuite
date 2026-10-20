@@ -212,6 +212,16 @@ PakReader* PakReader::owner_of(const PakEntry& e) {
     return nullptr;
 }
 
+int PakReader::source_of(const PakEntry& e) const {
+    auto it = entries_.find(e.combined_hash());
+    if (it != entries_.end() && &it->second == &e) return 0;
+    for (size_t i = 0; i < over_.size(); i++) {
+        auto jt = over_[i]->entries_.find(e.combined_hash());
+        if (jt != over_[i]->entries_.end() && &jt->second == &e) return int(i) + 1;
+    }
+    return -1;
+}
+
 std::vector<uint8_t> PakReader::read_raw(const PakEntry& e) {
     if (auto* o = owner_of(e)) return o->read_raw(e);
     if (!fp_) return {};
@@ -322,6 +332,54 @@ static uint64_t blob_signature(const std::vector<uint8_t>& b, int64_t attrib) {
 
 PakWriter::~PakWriter() {
     if (spill_) CloseHandle(HANDLE(spill_));   // FILE_FLAG_DELETE_ON_CLOSE: the spill file goes with it
+    if (prev_) CloseHandle(HANDLE(prev_));
+}
+
+bool PakWriter::use_previous(const char* pak_path, std::unordered_map<std::string, SourceData> sources) {
+    if (prev_) return true;
+    // shared for deletion: the loader replaces or retires that pak once write() has closed it
+    HANDLE h = CreateFileA(pak_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    prev_ = h;
+    prev_sources_ = std::move(sources);
+    return true;
+}
+
+bool PakWriter::add_previous(uint64_t hash, const std::string& lasting) {
+    if (!prev_ || lasting.empty()) return false;
+    auto it = prev_sources_.find(lasting);
+    if (it == prev_sources_.end()) return false;
+    const SourceData& s = it->second;
+    RawEntry e;
+    e.hash = hash;
+    e.attributes = s.attributes;
+    e.decompressed_size = s.decompressed_size;
+    e.size = s.size;
+    e.sig = s.sig;
+    e.prev_at = int64_t(s.offset);
+    previous_hits_++;
+    previous_bytes_ += s.size;
+    push_stored(std::move(e));
+    return true;
+}
+
+std::vector<std::pair<std::string, PakWriter::SourceData>> PakWriter::lasting_sources() const {
+    std::vector<std::pair<std::string, SourceData>> out;
+    if (written_at_.size() != entries_.size()) return out;
+    for (auto& [key, i] : lasting_) {
+        const RawEntry& e = entries_[i];
+        if (e.replaced) continue;   // its data is not the source's any more
+        const size_t holder = e.alias >= 0 ? size_t(e.alias) : i;
+        SourceData s;
+        s.offset = uint64_t(written_at_[holder]);
+        s.size = entries_[holder].size;
+        s.attributes = e.attributes;
+        s.decompressed_size = e.decompressed_size;
+        s.sig = e.sig;
+        out.push_back({key, s});
+    }
+    return out;
 }
 
 bool PakWriter::spill_to(const char* path, uint64_t min_size, uint64_t keep_in_memory) {
@@ -362,33 +420,36 @@ void PakWriter::store(RawEntry& e) {
 
 bool PakWriter::read_stored(const RawEntry& o, uint64_t at, void* dst, size_t n) const {
     if (at + n > o.size) return false;
-    if (o.spill_at < 0) {
+    if (in_memory(o)) {
         if (n) std::memcpy(dst, o.blob.data() + at, n);
         return true;
     }
-    if (uint64_t(o.spill_at) < given_back_) return false;   // given back by write()
+    if (o.spill_at >= 0 && uint64_t(o.spill_at) < given_back_) return false;   // given back by write()
+    if (o.spill_at < 0 && !prev_) return false;   // closed by write()
+    const HANDLE file = HANDLE(o.spill_at >= 0 ? spill_ : prev_);
+    const uint64_t base = uint64_t(o.spill_at >= 0 ? o.spill_at : o.prev_at);
     for (size_t got = 0; got < n;) {
-        const uint64_t pos = uint64_t(o.spill_at) + at + got;
+        const uint64_t pos = base + at + got;
         OVERLAPPED ov{};
         ov.Offset = DWORD(pos);
         ov.OffsetHigh = DWORD(pos >> 32);
         const DWORD want = DWORD(std::min<size_t>(n - got, size_t(64) << 20));
         DWORD r = 0;
-        if (!ReadFile(HANDLE(spill_), static_cast<uint8_t*>(dst) + got, want, &r, &ov) || r != want) return false;
+        if (!ReadFile(file, static_cast<uint8_t*>(dst) + got, want, &r, &ov) || r != want) return false;
         got += r;
     }
     return true;
 }
 
 void PakWriter::stored_data(const RawEntry& o, std::vector<uint8_t>& out) const {
-    if (o.spill_at < 0) { out = o.blob; return; }
+    if (in_memory(o)) { out = o.blob; return; }
     out.resize(size_t(o.size));
     if (!read_stored(o, 0, out.data(), out.size())) out.clear();
 }
 
 bool PakWriter::stored_equals(const RawEntry& o, const std::vector<uint8_t>& d) const {
     if (o.size != d.size()) return false;
-    if (o.spill_at < 0) return d.empty() || std::memcmp(o.blob.data(), d.data(), d.size()) == 0;
+    if (in_memory(o)) return d.empty() || std::memcmp(o.blob.data(), d.data(), d.size()) == 0;
     std::vector<uint8_t> buf(std::min<size_t>(d.size(), size_t(4) << 20));
     for (size_t at = 0; at < d.size(); at += buf.size()) {
         const size_t n = std::min(buf.size(), d.size() - at);
@@ -399,8 +460,9 @@ bool PakWriter::stored_equals(const RawEntry& o, const std::vector<uint8_t>& d) 
 
 bool PakWriter::stored_equal(const RawEntry& a, const RawEntry& b) const {
     if (a.size != b.size) return false;
-    if (a.spill_at < 0) return stored_equals(b, a.blob);
-    if (b.spill_at < 0) return stored_equals(a, b.blob);
+    if (a.prev_at >= 0 && a.prev_at == b.prev_at) return true;   // the same bytes of the previous pak
+    if (in_memory(a)) return stored_equals(b, a.blob);
+    if (in_memory(b)) return stored_equals(a, b.blob);
     const size_t chunk = size_t(std::min<uint64_t>(a.size, uint64_t(4) << 20));
     std::vector<uint8_t> x(chunk), y(chunk);
     for (uint64_t at = 0; at < a.size; at += chunk) {
@@ -430,6 +492,25 @@ void PakWriter::push(RawEntry e) {
     }
     same.push_back(entries_.size());
     store(e);
+    entries_.push_back(std::move(e));
+}
+
+void PakWriter::push_stored(RawEntry e) {
+    by_hash_[e.hash] = entries_.size();
+    auto& same = by_sig_[e.sig];
+    for (size_t idx : same) {
+        const RawEntry& o = entries_[idx];
+        if (o.size == e.size && o.attributes == e.attributes
+            && o.decompressed_size == e.decompressed_size && stored_equal(o, e)) {
+            dedup_count_++;
+            dedup_bytes_ += e.size;
+            e.alias = int64_t(idx);
+            e.prev_at = -1;
+            entries_.push_back(std::move(e));
+            return;
+        }
+    }
+    same.push_back(entries_.size());
     entries_.push_back(std::move(e));
 }
 
@@ -466,8 +547,10 @@ bool PakWriter::add_same_source(uint64_t hash, const std::string& source) {
     return false;   // no entry holds that data any more: read the source
 }
 
-void PakWriter::note_source(const std::string& source) {
-    if (!entries_.empty()) by_source_[source] = entries_.size() - 1;
+void PakWriter::note_source(const std::string& source, const std::string& lasting) {
+    if (entries_.empty()) return;
+    by_source_[source] = entries_.size() - 1;
+    if (!lasting.empty()) lasting_.push_back({lasting, entries_.size() - 1});
 }
 
 const PakWriter::RawEntry* PakWriter::find(uint64_t hash) const {
@@ -519,6 +602,7 @@ bool PakWriter::replace(uint64_t hash, std::vector<uint8_t> data) {
                 RawEntry& h = entries_[j];
                 h.blob = std::move(e.blob);
                 h.spill_at = e.spill_at;
+                h.prev_at = e.prev_at;
                 h.size = e.size;
                 h.alias = -1;
                 same.push_back(j);
@@ -532,6 +616,7 @@ bool PakWriter::replace(uint64_t hash, std::vector<uint8_t> data) {
     e.decompressed_size = int64_t(e.blob.size());
     e.alias = -1;
     e.spill_at = -1;
+    e.prev_at = -1;
     e.replaced = true;
     e.sig = blob_signature(e.blob, e.attributes);
     store(e);
@@ -608,7 +693,7 @@ bool PakWriter::write(const char* path, bool durable) {
     for (size_t i = 0; i < entries_.size() && ok; ++i) {
         const RawEntry& re = entries_[i];
         if (re.alias >= 0 || re.size == 0) continue;
-        if (re.spill_at < 0) {
+        if (in_memory(re)) {
             ok = std::fwrite(re.blob.data(), 1, re.blob.size(), fp) == re.blob.size();
             continue;
         }
@@ -617,6 +702,7 @@ bool PakWriter::write(const char* path, bool durable) {
             const size_t k = size_t(std::min<uint64_t>(buf.size(), re.size - at));
             ok = read_stored(re, at, buf.data(), k) && std::fwrite(buf.data(), 1, k, fp) == k;
         }
+        if (re.spill_at < 0) continue;   // from the previous pak
         copied[i] = 1;
         while (next_live < live.size() && copied[live[next_live].second]) next_live++;
         const uint64_t upto = next_live < live.size() ? uint64_t(live[next_live].first) : spill_end_;
@@ -631,11 +717,20 @@ bool PakWriter::write(const char* path, bool durable) {
         }
     }
 
+    if (prev_) {   // the previous pak is replaced or retired next
+        CloseHandle(HANDLE(prev_));
+        prev_ = nullptr;
+    }
     if (ok && durable) {
         ok = std::fflush(fp) == 0;
         ok = ok && FlushFileBuffers(HANDLE(_get_osfhandle(_fileno(fp))));
     }
     ok = (std::fclose(fp) == 0) && ok;
+    if (ok) {
+        written_at_.assign(entries_.size(), 0);
+        for (size_t i = 0; i < entries_.size(); ++i)
+            written_at_[i] = entries_[i].alias >= 0 ? offs[size_t(entries_[i].alias)] : offs[i];
+    }
     return ok;
 }
 
