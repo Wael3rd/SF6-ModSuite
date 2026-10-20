@@ -1,7 +1,8 @@
 # Slots Loader 1.13.0: what changed, for tool authors
 
 This page lists everything the SF6 Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0) adds or changes compared with 1.12.0
-(Mod Suite 1.16.3). It is written for authors of tools that install mods for the loader or read its files, first of
+(Mod Suite 1.16.3). Slots Loader 1.13.1 (SF6 Mod Suite 1.17.1) changes one thing: `RuntimeOptions` is `on` by default
+([section 4](#4-settings)). It is written for authors of tools that install mods for the loader or read its files, first of
 all **ZZtaii**, who maintains the Slotsloader Manager and the Slotsloader fork; several changes below are ports of his
 fork's fixes (MIT) and of his Manager's NSFW filter (with his permission).
 
@@ -37,7 +38,7 @@ Related pages: [RUNTIME_OPTIONS.md](RUNTIME_OPTIONS.md) (the design and every ru
 
 ## 1. Summary
 
-- **Runtime costume options** (`RuntimeOptions=on`, off by default): a modular mod, an outfit with add-ons, versions
+- **Runtime costume options** (`RuntimeOptions`; off by default in 1.13.0, **on by default since 1.13.1**): a modular mod, an outfit with add-ons, versions
   of one archive... become **one** outfit whose options are chosen in game, live, per player. New files:
   `costume_options.json` (loader), `costume_choices.json` (plugin). Option files are stored in the pak under
   `<slot folder>/rto/<option id>/`.
@@ -52,8 +53,9 @@ Related pages: [RUNTIME_OPTIONS.md](RUNTIME_OPTIONS.md) (the design and every ru
 - **Plugin**: Battle Settings and character select options menus, options worn on the select / VS / fight models,
   the outfit's name on Fighter Settings, three new exports for the SF6 Color Mod.
 
-With `RuntimeOptions=off` (the default), no `costume_mods_nsfw` content and no NSFW keyword hit, the loader builds
-the same outfits as 1.12.0, under the same numbers; the pak is rebuilt once because the loader id changed.
+With `RuntimeOptions=off` (the default of 1.13.0; since 1.13.1 it must be written), no `costume_mods_nsfw` content and
+no NSFW keyword hit, the loader builds the same outfits as 1.12.0, under the same numbers; the pak is rebuilt once
+because the loader id changed.
 
 ## 2. Identifying the loader
 
@@ -65,7 +67,9 @@ the same outfits as 1.12.0, under the same numbers; the pak is rebuilt once beca
 | Package | `modinfo.ini` of `SF6_SlotsLoader_v1.13.0.zip` | `name=SF6 Slots Loader`, `version=1.13.0`, `author=Wael` |
 
 1.12.0 had a single `LOADER_BUILD_ID`; 1.13.0 splits it (see [section 8](#8-when-the-pak-is-rebuilt)). Treat the
-ids as opaque strings: compare them for equality only.
+ids as opaque strings: compare them for equality only. 1.13.1 keeps both ids of 1.13.0: with the same setting it builds
+the same pak, and a 1.13.0 install that switches to `on` (the new default) is rebuilt anyway, `RuntimeOptions` being
+part of the fingerprint.
 
 ## 3. Folders
 
@@ -99,13 +103,15 @@ Layout of each root, as before: `<root>/<Character>/<archive | folder mod | .pak
 INI lines `Key=value`; keys case-insensitive; lines starting with `;` ignored; surrounding quotes stripped; the first
 line of a key wins. The loader writes a commented template listing every key when the file is missing, **but only on
 a launch that looks for Fluffy** (the game folder holds a foreign patch pak or loose files); it never edits an
-existing file, so an older file gets no new keys. A Manager may add or change a key line and must keep the others.
+existing file, so an older file gets no new keys. One exception since 1.13.1: the `RuntimeOptions` block of 1.13.0's
+template (its comment lines and `RuntimeOptions=off`), when left untouched, is replaced by the current template's
+block (`RuntimeOptions=on`); any edit of those lines keeps the file as it is. A Manager may add or change a key line and must keep the others.
 
 | Key | Values (default first) | Effect | In the fingerprint |
 |---|---|---|---|
 | `FluffyModManager` | empty / a folder | Fluffy's folder (as 1.12.0) | no (Fluffy's `installed.ini` and archives are) |
 | `SlotsloaderManager` | **new**; empty / a folder | the Manager's folder (the one holding its `Data` folder); empty: searched ([section 6](#6-files-the-loader-reads)) | no (the record it finds is) |
-| `RuntimeOptions` | **new**; `off` / `on` (or `1`) / `variants`; anything else = `off` | `off`: outfits as 1.12.0, no options file (`costume_options.json` is deleted). `on`: one outfit per modular mod / outfit with add-ons / merged versions, options stored. `variants`: the outfits of `off` plus the options stored | `;options=sf6-costume-options-1:one` or `:variants` (nothing for `off`) |
+| `RuntimeOptions` | **new**; since 1.13.1: `on` (key or file missing, empty, `1`, any other value) / `off` (or `0`, `false`, `no`) / `variants`; 1.13.0: `off` / `on` (or `1`) / `variants`, anything else = `off` | `off`: outfits as 1.12.0, no options file (`costume_options.json` is deleted). `on`: one outfit per modular mod / outfit with add-ons / merged versions, options stored. `variants`: the outfits of `off` plus the options stored | `;options=sf6-costume-options-1:one` or `:variants` (nothing for `off`) |
 | `NsfwKeywords` | **new**; key absent = the built-in list; a comma list replaces it; present and empty = no detection | NSFW detection by names ([section 10](#10-nsfw)) | `;nsfwkw=<hash>` only when the key is present |
 | `IncrementalPak` | **new**; `on` / `off` (or `0`) | `off`: every file is read from its source at each build | no (the pak is the same either way) |
 

@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.17.1 (2026-10-20) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.13.1 | runtime costume options on by default |
+| SF6 Color Mod | 0.22.6 | unchanged |
+| SF6 Native Core | 0.9.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.13.0 first, then install 1.13.1. The other
+packages are the files of 1.17.0: nothing to do if they are installed. Coming from an older version, install the Slots
+Loader, Color Mod and Native Core packages of this release together (see 1.17.0 below). The first launch with costume
+options on rebuilds the costume pak once.
+
+### SF6 Slots Loader 1.13.1
+- **Runtime costume options are on by default**: with no `RuntimeOptions` line in
+  `reframework\costume_mods\settings.ini` (or no such file), a modular mod or an outfit with add-ons is one outfit whose
+  options you choose in game: `F` (pad: A / Cross) or a click on the Costume row of Fighter Settings, R1 (pad) or C
+  (keyboard) in your panel of the character select. What they do: 1.17.0 below and
+  [docs/RUNTIME_OPTIONS.md](docs/RUNTIME_OPTIONS.md).
+- The `settings.ini` that 1.13.0 created says `RuntimeOptions=off` (then the default). Left untouched, that block is
+  replaced at the first launch by the new one (`RuntimeOptions=on`), with a line in `SF6_CostumeLoader.log`; any edit
+  of those lines keeps the file as it is.
+- A mod's former outfits (variants, retouches, merged versions) move to its one outfit with their options chosen: a
+  Battle Settings choice of one follows, as when the setting was turned on in 1.13.0.
+- **To turn them off**: write `RuntimeOptions=off` in `reframework\costume_mods\settings.ini` (create the file if it is
+  not there). The next launch rebuilds the costume pak with one outfit per combination of a modular mod's options, the
+  same pak as 1.13.0 with `off`. `RuntimeOptions=variants` keeps those outfits and adds the options, as before. `0`,
+  `false` and `no` mean `off`; an empty value or any other value means `on`.
+- The `settings.ini` the loader writes when it is missing describes `on` (default), `off` and `variants`.
+- For tool authors: the loader ids (`LOADER_PAK_ID`, `LOADER_META_ID`) are those of 1.13.0; `RuntimeOptions` is part
+  of the fingerprint, so a 1.13.0 install that switches to `on` is rebuilt and one that stays `off` keeps its pak.
+  [docs/SLOTS_LOADER_1.13_CHANGES.md](docs/SLOTS_LOADER_1.13_CHANGES.md), section 4.
+
+### Known issues
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only. The Training pause menu's character popup
+  has no options menu.
+- Slots Loader, character select: the costume options menu (R1 / C) and the Color Mod's Drive colours (L1) use
+  buttons the game may also use on that screen; this is not confirmed either way. If the game's own guide there shows
+  them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, character select: the "▲" / "▼" arrows of the costume options menu may flicker and are drawn below the
+  focused row's highlight.
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- The pencil-like outline around the fighter during Drive Impact, Drive Reversal (red) and Drive Rush (green) keeps
+  the game's colours: it is drawn by the game's camera filter, not by an effect.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
+
 ## 1.17.0 (2026-10-20) — SF6 Mod Suite
 
 | Package | Version | |

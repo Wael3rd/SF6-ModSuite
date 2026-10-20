@@ -127,9 +127,9 @@ when no Replace-original mod is installed.
 
 | Layout | Outfits | Variants listed | A variant turned off |
 |---|---|---|---|
-| `off` (default) | one per variant (as the fork) | one row per outfit, label = `outfits.json`'s `label` | its outfit is not built |
+| `off` (the default of 1.13.0) | one per variant (as the fork) | one row per outfit, label = `outfits.json`'s `label` | its outfit is not built |
 | `variants` | as `off`, options stored too | as `off` | as `off` |
-| `on` | one per modular mod / outfit with add-ons | the outfits `off` would make, with `off`'s labels; every row left on shows the one outfit as its slot | the one outfit wears by default the first row left on (same outfit number); every row off: no outfit |
+| `on` (the default since 1.13.1) | one per modular mod / outfit with add-ons | the outfits `off` would make, with `off`'s labels; every row left on shows the one outfit as its slot | the one outfit wears by default the first row left on (same outfit number); every row off: no outfit |
 
 With `on`, the Manager's choice only sets the outfit's **default options** (`costume_options.json`, `defaults`,
 the files built into the pak). What the player picked in the in-game options menu (`costume_choices.json`) wins

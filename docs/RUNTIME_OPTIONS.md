@@ -1,9 +1,9 @@
 # Runtime costume options (design, in progress)
 
-Status: released in Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0), behind a setting that is **off by default**: lot A
-(the loader part) and lot B (the plugin: runtime swaps, the Battle Settings and character select menus, the `former`
-migration), tested in game. Nothing changes for a user who does not set `RuntimeOptions` (no manifest: the plugin's
-runtime-options code stays idle). Everything 1.13.0 changed, file by file: [SLOTS_LOADER_1.13_CHANGES.md](SLOTS_LOADER_1.13_CHANGES.md).
+Status: released in Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0) behind a setting off by default, **on by default
+since Slots Loader 1.13.1** (SF6 Mod Suite 1.17.1): lot A (the loader part) and lot B (the plugin: runtime swaps, the
+Battle Settings and character select menus, the `former` migration), tested in game. `RuntimeOptions=off` builds what
+the loader built before 1.13 (no manifest: the plugin's runtime-options code stays idle). Everything 1.13.0 changed, file by file: [SLOTS_LOADER_1.13_CHANGES.md](SLOTS_LOADER_1.13_CHANGES.md).
 
 ## Goal
 
@@ -45,13 +45,15 @@ On a fighter's model (Training) and on the Battle Settings preview, per model:
 
 | `RuntimeOptions=` | Outfits of a modular mod | Options stored + `costume_options.json` |
 |---|---|---|
-| `off` (default, also when missing) | one per combination, as before | no (the manifest is deleted) |
-| `on` | **one** (the mod's first combination) | yes |
+| `on` (default since 1.13.1: key or file missing, empty, any other value) | **one** (the mod's first combination) | yes |
+| `off` (or `0`, `false`, `no`; the default of 1.13.0) | one per combination, as before | no (the manifest is deleted) |
 | `variants` | one per combination, as before | yes |
 
 `on` is the target layout. `variants` is the fallback: the options are available in game while the old outfits stay.
-The default stays `off` in 1.13.0 (opt-in). `off` builds exactly what the loader built
-before (same pak bytes, same `outfits.json`, same registry).
+The default was `off` in 1.13.0 (opt-in) and is `on` since 1.13.1. `off` builds exactly what the loader built
+before (same pak bytes, same `outfits.json`, same registry). The `RuntimeOptions=off` block 1.13.0 wrote into the
+`settings.ini` it created (its template), left untouched, is replaced at the next launch by the current template's
+block (`on`); a user who wants `off` writes it again (any edit of those lines keeps the file as it is).
 
 ## Data model
 
@@ -1025,7 +1027,7 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
 
 ## Phases
 
-- **A (done, setting off by default)**: options stored per slot, base copies, material rebinding,
+- **A (done; setting off by default in 1.13.0, on since 1.13.1)**: options stored per slot, base copies, material rebinding,
   `costume_options.json` (options, defaults, presets, former slots), `RuntimeOptions=off|on|variants`.
 - **B (built, to test in game)**: plugin runtime (load, preload, apply per model, rebuild moments), the
   texture-sharing check (offline: per model; the fallback is not built), choices file, Battle Settings menu,
