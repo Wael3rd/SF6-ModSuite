@@ -1,7 +1,7 @@
 # Slotsloader Manager contract
 
 ZZtaii's Slotsloader Manager installs costume mods for the Slots Loader and reads what
-the loader wrote at the last launch. This page says what our loader (`amd_ags_x64.dll` + `costume_loader.exe`,
+the loader wrote at the last launch. This page says what our loader (`amd_ags_x64.dll`,
 `costumes/loader/loader_core.cpp`) provides to the Manager, under which **contract number**, and what the Manager
 needs to change to accept our loader. The variant code below comes from ZZtaii's Slotsloader fork (1.10.0, MIT);
 the Replace-original record follows the Manager's own `replace-state.json` (ZZtaii).
