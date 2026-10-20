@@ -68,6 +68,12 @@
   or material is worn only when its model loads that file (A.K.I's Outfit 4 shares Outfit 1's folder, not its mdf2).
 - Runtime costume options: a series' "main files" alone are no longer a choice (the mod always pairs them with one
   of its other options); the menu shows names without the prefixes mods use for Fluffy's order ("!", "1)", "addon -").
+- Runtime costume options (`on`): a retouch (a mod of meshes and textures only, no material file: C. Viper Barefoot,
+  Coatless, coat no mesh, C2 Glasses Removed) makes no outfit of its own any more: it is an option of every outfit
+  that wears the files it replaces (the game outfit it was made from, the mods' outfits made from it that keep the
+  game's file there) where it fits; retouches of one file are one choice ("Body": None / Barefoot / Coat no mesh /
+  Coatless). One that fits no game outfit it modifies stays an outfit. Its former outfit, chosen in Battle Settings,
+  becomes the game outfit with the retouch chosen; the other outfits keep their numbers.
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

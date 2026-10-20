@@ -68,6 +68,11 @@ bool shown(int fid, int cos) {
 // ---- intents (Battle Settings choices), state.json ----
 struct Intent { int slot = 0; int color = -1; };       // slot 0: none
 std::map<int, Intent> g_intent;
+// A Battle Settings choice of a retouch's former outfit (RuntimeOptions=on): the retouch is an option of the game
+// outfit it was made from (rto.cpp chose it for P1); the save gets that game outfit once it can be reached. Until
+// then state.json keeps the former slot, so a session that ends before does it again.
+struct ToGame { int costume = 0, color = -1, from = 0; };
+std::map<int, ToGame> g_to_game;
 
 // ---- per character ----
 struct Fighter {
@@ -206,8 +211,10 @@ void load_state() {
         // A variant slot of a modular mod folded into one outfit with options (RuntimeOptions=on): the
         // choice moves to the kept slot, the variant's options become the P1 choice (rto.cpp)
         if (in.slot && !is_slot(fid, in.slot)) {
-            int kept = rto::migrate_former(fid, in.slot);
-            if (kept > 0 && is_slot(fid, kept)) { in.slot = kept; migrated = true; }
+            bool game = false;
+            int kept = rto::migrate_former(fid, in.slot, &game);
+            if (kept >= 0 && game) { g_to_game[fid] = {kept, in.color, in.slot}; in = Intent{}; }
+            else if (kept > 0 && is_slot(fid, kept)) { in.slot = kept; migrated = true; }
         }
         if (in.slot && !is_slot(fid, in.slot)) in = Intent{};   // the slot's mod is gone
         g_intent[fid] = in;
@@ -223,7 +230,10 @@ void save_state() {
         char b[128], car[32] = "";
         // the carrier the save was given, when it is not DriveTech (what a file without it means)
         if (int sc = saved_carrier_of(fid); sc != carrier::kDriveTech) snprintf(car, sizeof car, ", \"carrier\": %d", sc);
-        if (in.slot) {
+        if (auto tg = g_to_game.find(fid); tg != g_to_game.end()) {   // not done yet: the former slot stays
+            if (tg->second.color >= 0) snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d, \"color\": %d%s }", first ? "" : ",", fid, tg->second.from, tg->second.color, car);
+            else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d%s }", first ? "" : ",", fid, tg->second.from, car);
+        } else if (in.slot) {
             if (in.color >= 0) snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d, \"color\": %d%s }", first ? "" : ",", fid, in.slot, in.color, car);
             else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d%s }", first ? "" : ",", fid, in.slot, car);
         } else snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": false%s }", first ? "" : ",", fid, car);
@@ -427,6 +437,18 @@ void safety_net() {
         int v = get_cos(e);
         auto& fr = g_f[fid];
         auto& in = g_intent[fid];
+        // A retouch's former outfit chosen in Battle Settings: the game outfit it is an option of now, in the
+        // colour chosen when the carrier has it (load_state, rto::migrate_former)
+        if (auto tg = g_to_game.find(fid); tg != g_to_game.end()) {
+            const ToGame t = tg->second;
+            g_to_game.erase(tg);
+            const std::string why = ownership::outfit_label(t.costume) + ": outfit " + std::to_string(t.from)
+                                  + " was a retouch, now an option of it";
+            set_cos(e, t.costume, fid, why.c_str());
+            if (t.color >= 0 && (!fr.base_known || fr.base_colors.count(t.color))) set_col(e, t.color, fid, why.c_str());
+            v = get_cos(e);
+            carriers_saved = true;   // state.json: the former slot goes
+        }
         // The carrier changed since the save was given one (a DriveTech added by a game update, or
         // DriveTech written for a character that has none by 1.11.1 and before): the save gets the
         // carrier, in the colour the menu would have given it
