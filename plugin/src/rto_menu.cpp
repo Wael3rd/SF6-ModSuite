@@ -116,6 +116,23 @@ uint32_t pad_mask() {
     return mask;
 }
 bool key_down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+// The glyph set of the game's own guide for player 1: app.InputGuideManager.GetMode(0) (static; app.InputGuideMode
+// 1 GamePad, 2 KeyboardAndMouse). -1: not readable (the last device used is guessed instead). Same source as the
+// Color Mod's entries, so both follow the game's guide and switch with it.
+int game_guide_pad() {
+    static Method* m_get = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        if (auto* td = api().tdb()->find_type("app.InputGuideManager")) m_get = method_of(td, "GetMode(System.Int32)", 1);
+        logf("rto: guide glyphs %s", m_get ? "follow the game's guide mode (InputGuideManager.GetMode)" : "by the last device used (GetMode not found)");
+    }
+    if (!m_get || !api().get_managed_singleton("app.InputGuideManager")) return -1;
+    auto r = m_get->invoke(nullptr, std::vector<void*>{ arg_i32(0) });
+    if (r.exception_thrown) return -1;
+    const int32_t m = static_cast<int32_t>(r.dword);
+    return m == 1 ? 1 : m == 2 ? 0 : -1;
+}
 bool game_has_focus() {
     DWORD pid = 0;
     HWND w = GetForegroundWindow();
@@ -562,9 +579,10 @@ void hint_tick() {
             logf("rto: Fighter Settings: costume row %s", found ? "text found" : spin ? "found, no e_text in it" : "(p_Spin_costume) not found");
         }
     }
-    // the device last used (the Color Mod's rule, so both show the same glyphs): a pad button; else a menu key,
-    // a mouse button or a cursor move of more than 2 px = keyboard / mouse
-    if (pad_mask()) H.pad = true;
+    // the glyphs of the game's guide; without them, the device last used (the Color Mod's rule, so both show the same
+    // glyphs): a pad button; else a menu key, a mouse button or a cursor move of more than 2 px = keyboard / mouse
+    if (const int gp = game_guide_pad(); gp >= 0) H.pad = gp == 1;
+    else if (pad_mask()) H.pad = true;
     else {
         bool kb = key_down(0x01) || key_down(0x02) || key_down(0x04);
         for (int vk : { 0x25, 0x26, 0x27, 0x28, 0x1B, 0x08, 0x20, 0x41, 0x45, 0x43, 0x46, 0x5A, 0x51, 0x53, 0x44, 0x56, 0x58, 0x57 })
