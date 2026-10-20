@@ -4,12 +4,17 @@
 
 - Runtime options on the character select: R1 (pad) or C (keyboard) in a side's panel shows the options of the outfit
   that side wears in place of Costume / Color / Control Type / Button Preset (Left / Right change, Up / Down move, a
-  "▲ / ▼" window wrapping at the ends when there are more than four rows); saved like the Battle Settings menu's and
-  shown at once on that side's model; R1 / C again, B / Esc or Decide go back. Each side its own options in local
-  versus; online the player's own (P1's). Keys in `SF6_CostumeSlots_data\settings.json` (`select_options_button`,
-  `select_options_key`). One owner per panel with the Color Mod's DI mode (X), which now refuses X while the options
-  show (and the other way round); "R1 Costume options" in the select guide corner, written by the Color Mod.
-  Needs Color Mod 0.22.5+ when the Color Mod is installed (an older one keeps this mode off).
+  window wrapping at the ends when there are more than four rows, with "▲" / "▼" in the left margin of the first /
+  last row, the row names untouched); saved like the Battle Settings menu's and shown at once on that side's model;
+  B / Esc or Decide go back (R1 / C do nothing while the options show, and the guide corner no longer offers them).
+  Each side its own options in local versus; online the player's own (P1's). Keys in
+  `SF6_CostumeSlots_data\settings.json` (`select_options_button`, `select_options_key`). One owner per panel with the
+  Color Mod's DI mode (L1 / X), which refuses its key while the options show (and the other way round); "R1 Costume
+  options" in the select guide corner, written by the Color Mod. Needs Color Mod 0.22.5+ when the Color Mod is
+  installed (an older one keeps this mode off).
+- Runtime options on the VS screen: the two models of the versus intro (after the character / stage select, before
+  the fight) wear the chosen options too, each side its own (online the player's own, P1's), loaded ahead and swapped
+  once ready like the select's; followed only while that screen's models are there, never into the fight.
 - NSFW outfits: a second mods folder, `reframework\costume_mods_nsfw\<Character>\` (made by the user; same layout and
   rules as `costume_mods`). Its outfits are hidden until "Display NSFW Outfits" is on (`display_nsfw` in
   `reframework\data\SF6_CostumeSlots_data\settings.json`, off by default; applied at the next screen that lists
@@ -128,6 +133,13 @@
   in the outfit's colour files, each colour slot as the game shows it (Aloha Ryu C2's head: dark eyebrows and beard
   as on the game's Outfit 2, no longer light grey); nothing else changes.
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
+
+### SF6 Color Mod 0.22.6
+- Character select: the Drive colour mode of a side's panel opens with **L1** on the pad (X / Square before; X on the
+  keyboard as before) and the guide corner shows "L1 Edit Drive Colors" (X on the keyboard). While that mode is on,
+  L1 / X do nothing (A validates, B goes back, as before) and the corner shows nothing. Fighter Settings and the
+  Training popup keep X / Square. The game's guide on that screen is read once a visit: a warning in the journal if
+  it shows L1 too.
 
 ### SF6 Native Core 0.9.0
 - `opt_group_place`, appended at the end of the API: a client's option group shown as rows of a section of the game's

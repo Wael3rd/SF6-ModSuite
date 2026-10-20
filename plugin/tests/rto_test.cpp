@@ -786,6 +786,20 @@ int main(int argc, char** argv) {
         check(std::string(panel_arrow(0, 2, 6)) == up && std::string(panel_arrow(3, 2, 6)).empty(), "arrows: bottom window, Up arrow on the first row");
         check(std::string(panel_arrow(1, 1, 6)).empty() && std::string(panel_arrow(2, 1, 6)).empty(), "arrows: none on the middle rows");
         check(std::string(panel_arrow(0, 0, 3)).empty() && std::string(panel_arrow(2, 0, 3)).empty(), "arrows: none when every row shows");
+        // the arrow in the row's left margin (the title stays where it is)
+        check(panel_arrow_left(100, 160, 20, 8) == 108, "arrow: room for the glyph and two margins, near the outline");
+        check(panel_arrow_left(100, 125, 20, 8) == 102.5, "arrow: room for the glyph only, centred left of the title");
+        check(panel_arrow_left(100, 110, 20, 8) == 88, "arrow: no room, just left of the title");
+        check(panel_arrow_left(100, 160, -5, -1) == 100, "arrow: a negative width or margin counts as 0");
+        // the VS screen's models: esfNNNvMM < Pos < Left | Right < FighterEmoteCtrl
+        int root = 9;
+        check(vs_model_side({ "esf002v00", "Pos", "Left", "FighterEmoteCtrl", "VS" }, &root) == 1 && root == 2, "vs: Left under FighterEmoteCtrl = P1, root Left");
+        check(vs_model_side({ "esf002v00", "Pos", "Right", "FighterEmoteCtrl" }, &root) == 2 && root == 2, "vs: Right = P2");
+        check(vs_model_side({ "Right", "FighterEmoteCtrl" }, &root) == 2 && root == 0, "vs: the controller on Right itself");
+        check(vs_model_side({ "esf002v00", "Pos", "Left", "Menu" }, &root) == 0 && root == -1, "vs: a Left not under FighterEmoteCtrl is not one");
+        check(vs_model_side({ "esf001v00", "FighterVisual_01" }, &root) == 0, "vs: the select / intro rigs are not");
+        check(vs_model_side({ "a", "b", "c", "d", "e", "Left", "FighterEmoteCtrl" }, &root) == 0, "vs: deeper than five names: not");
+        check(vs_model_side({ "esf002v00", "Pos", "Left" }, nullptr) == 0, "vs: no parent above Left: not");
         check(step_value(1, 3, 1) == 2 && step_value(3, 3, 1) == 1 && step_value(1, 3, -1) == 3, "step: wraps at both ends");
         check(step_value(2, 2, 1) == 1 && step_value(1, 2, -1) == 2 && step_value(7, 2, 0) == 2, "step: On / Off, out of range clamped");
         // the rows of the test outfit through the panel: 6 rows, the window over them

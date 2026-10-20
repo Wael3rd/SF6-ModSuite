@@ -658,7 +658,7 @@ options in the set (see `slots[].required`).
   `outfits.json`), else the plugin would take the manifest for stale.
 - **Models**: the preview (`CaptureRoomFighter.FighterObj` once `IsSetUpEnd`), each side's model on the character
   select (the GameObject `FighterVisual_01` / `FighterVisual_02` that holds its `PlayerColorController`, or a parent
-  of that name) and each fighter (`PlayerBehavior`, `_PlayerID` 0 / 1, once `IsAppliedResource`). Its components are walked once (transform tree, 400 nodes at most):
+  of that name), each side's model on the VS screen (below) and each fighter (`PlayerBehavior`, `_PlayerID` 0 / 1, once `IsAppliedResource`). Its components are walked once (transform tree, 400 nodes at most):
   `via.render.Mesh`, `via.motion.Chain`, `app.PlayerColorController`. Its **slot is found from the paths its
   meshes load** (`product/model/esf/<fighter>/<folder>/`), so the online alias (a slot over its carrier) needs
   nothing more. Game objects are never `add_ref`'d (R21): checked alive (`is_managed_object` + type) before use.
@@ -700,6 +700,18 @@ options in the set (see `slots[].required`).
   options, online P1's; one log line per search result (`rto: character select: ...`). If the screen's end event
   is missed, the models stop being followed once the screen is no longer in the game's flow list (never in a
   fight: the intro's rigs also hang under `FighterVisual_0N`).
+- **VS screen** (the versus intro between the character / stage select and the fight; `vs_tick`): each side's model
+  (`esfNNNvMM`) sits under `Pos` < `Left` (P1) / `Right` (P2) < `FighterEmoteCtrl` (the Color Mod's finding; the
+  intro's rigs hang under `FighterVisual_0N`, the fighters under nothing). The root followed is that `Left` / `Right`
+  GameObject, found from a `PlayerColorController`'s parents (`vs_model_side` in `rto_data.cpp`, unit-tested; a
+  `Left` / `Right` not under `FighterEmoteCtrl` is not followed and is logged once). Looked for (every 30 frames)
+  from the end of the character select (90 s: the stage select comes between) or the start of a fighters watch
+  (20 s: online, where there is no select screen), then followed like the select's models (every 10 frames, the
+  same passes: preload, swap once ready, never half loaded), offline with that side's options, online P1's. Let go
+  (models reset, no more scans) when the screen's models are gone, 20 s after they came at the latest, 5 s after both
+  fighters are built when no VS model came (Training), or when the character select opens: never into the fight.
+  Logs: `rto: VS screen models looked for (...)`, `rto: VS screen: N colour controllers, P1 model found|none, P2
+  model found|none` (on change), `rto: VS P1 wears ...`, `rto: VS screen models no longer followed (...)`.
 - **Ahead**: 30 s after start, the files of the choices made in the menu (both sides, 64 at most) are loaded and
   kept, so a fight shows them at once; other holders are given back 10 s after their last use.
 - 5 exceptions: the runtime options stop for the session (one log line).
@@ -860,11 +872,27 @@ does, the fallback above is the next step.
   game assigns it) shows the options of the outfit that side's model wears, in the panel's own four rows: the rows
   of the Battle Settings menu (`rows()`: one choice row per pick group, one On / Off row per toggle; no Player side,
   no Restore defaults: the side is the panel's). Left / Right change the focused row (wrapping), Up / Down move
-  through them; more than four rows: a window over them, "▲ " before the first title while rows lie above, "▼ "
-  before the last while rows lie below, Down on the last row goes to the first and Up on the first to the last (the
-  CRSM recording slots' rule; `panel_move` / `panel_arrow` in `rto_data.cpp`, unit-tested). Fewer than four rows:
-  the others are hidden. R1 / C again, B / Esc or Decide put the panel back (Esc leaves the mode only: the press is
-  not a Back for the screen, IsDecide / IsCancel answer false 15 frames after).
+  through them; more than four rows: a window over them, "▲" in the first row's left margin while rows lie above,
+  "▼" in the last row's while rows lie below (the titles untouched), Down on the last row goes to the first and Up on
+  the first to the last (the CRSM recording slots' rule; `panel_move` / `panel_arrow` / `panel_arrow_left` in
+  `rto_data.cpp`, unit-tested). Fewer than four rows: the others are hidden. B / Esc or Decide put the panel back
+  (Esc leaves the mode only: the press is not a Back for the screen, IsDecide / IsCancel answer false 15 frames
+  after); R1 / C do nothing while the options show (Wael 20/10; logged).
+- **Arrows**: a copy of the row's title (`e_text_slots_arrow`, the core's `ui_clone_control`, core 0.8.2+) next to
+  it (same parent, font, size and colour), on the title's line (its control point row), its left edge 8 units (root
+  space, 1080p) right of the row's outline: the leftmost visible non-text element of the row at least 40 wide; when
+  the space left of the title is narrower than the glyph and two margins the glyph is centred in it, with no room
+  just left of the title (`panel_arrow_left`); no outline found: left of the title by the glyph and two margins.
+  `set_AutoRegionFit(true)`, the control point moved to the left of the title's row. Placed once a visit (the
+  glyph's drawn width read on the next frames, then placed again), logged once (`rto select: P1 arrow row 3:
+  outline x .., title x .., glyph .. wide, arrow x ..`). R19: the copy is made inside a post-hook of
+  `app.UIFlowUI10505.CharaSetting.OnUpdate` (the type's own method only; the place LL's row clones on this panel
+  use), installed with the mode's hooks; the frame asks (one copy per row, under the title's parent, it lives and
+  dies with the panel's tree), the hook body is the core's guarded copy, made hidden and ForceInvisible. R35: found
+  again by name under the title's live parent, every write through the core. Hidden + ForceInvisible when its row
+  has no arrow and when leaving. Fallback: no hook, no `ui_clone_control`, 3 copies refused, or a copy still missing
+  a second after it was asked: the arrows go before the titles ("▲ " / "▼ ") for the session (one log line with the
+  counts).
 - **Offered** only while the side's model wears an outfit with options (rto.cpp `select_slot`: the select model was
   identified as wearing it after the panel's fighter / costume last changed), the panel has been active 20 frames
   and one of its rows has the focus, no option window is open (the Color Mod's colour editor uses C), and the Color
@@ -898,17 +926,21 @@ does, the fallback above is the next step.
 - **One owner per panel** (two writers on one UI crashed the game before): the Color Mod's DI mode (X) borrows the
   same rows. The plugin keeps each side's owner: `int SF6Slots_SelectPanelClaim(int side, int who, int op)` (who 1
   the plugin's mode, 2 the Color Mod's DI mode; op 1 take: 1 granted / 0 held by the other, op 0 give back, op -1 the
-  owner). Each mode takes it before borrowing the rows and gives it back last; the Color Mod (0.22.5+) refuses X while
-  the plugin holds the panel (journal "the Slots Loader's costume options hold this panel, X ignored"), the plugin
+  owner). Each mode takes it before borrowing the rows and gives it back last; the Color Mod (0.22.5+) refuses its key
+  (X; L1 / X since 0.22.6) while the plugin holds the panel (journal "the Slots Loader's costume options hold this panel, X ignored"), the plugin
   refuses R1 / C while the DI mode holds it. The Color Mod exports `int SF6ColorMod_DiPanelActive(int side)`: a claim
   of the Color Mod without a DI mode for 60 frames is freed, and a Color Mod without that export (older) turns the
   plugin's mode off (logged once). The Color Mod's colour tracker does not paint the Color row of a panel the plugin
   holds (as during its DI mode).
-- **Guide**: the Color Mod writes each side's corner of the select guide ("X Edit Drive Colors") alone and adds the
-  plugin's entry after it: `int SF6Slots_SelectGuideEntry(int side, int pad, char* buf, int cap)` gives
-  "<ICON BtnR1> Costume options" (pad glyphs, as the bar's own glyph mode) or "<ICON KeyC> Costume options" while that
-  side's outfit has options and the panel is ready (or shows them); while the plugin holds the panel the X entry is
-  left out. Without the Color Mod there is no select entry (the mode works, unannounced).
+- **Guide**: the Color Mod writes each side's corner of the select guide ("L1 Edit Drive Colors" on the pad, "X Edit
+  Drive Colors" on the keyboard, 0.22.6) alone and adds the plugin's entry after it: `int SF6Slots_SelectGuideEntry(int
+  side, int pad, char* buf, int cap)` gives "<ICON BtnR1> Costume options" (pad glyphs, as the bar's own glyph mode)
+  or "<ICON KeyC> Costume options" while that side's outfit has options and the panel is ready; nothing while the
+  options show (R1 / C do nothing then). While the plugin holds the panel the Color Mod's entry is left out, and the
+  whole corner while its DI mode is on (L1 / X do nothing then): the corner is empty in both modes. Without the Color
+  Mod there is no select entry (the mode works, unannounced). The plugin's check of the game's guide skips the corner
+  (`e_text_0`, the Color Mod's and its own entries) and warns when the configured button is L1 or the key X (the
+  Color Mod's DI keys there); the Color Mod warns in its journal when the game's own guide there shows L1.
 - Logs: `rto select: ...` in `native_log.txt` (keys read, hooks installed, ON / OFF with the outfit and whose options,
   each change, each refused press and why).
 

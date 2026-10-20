@@ -184,9 +184,19 @@ PanelWindow panel_move(PanelWindow w, int n, int dir, int shown = kPanelRows);
 PanelWindow panel_clamp(PanelWindow w, int n, int shown = kPanelRows);
 // The screen row k (0-based) focused by the game (a mouse hover): the cursor goes there, the window stays
 PanelWindow panel_focus(PanelWindow w, int n, int k, int shown = kPanelRows);
-// The arrow put before the title of screen row k: "\xE2\x96\xB2 " (U+25B2) on the first row while rows lie above,
-// "\xE2\x96\xBC " (U+25BC) on the last shown row while rows lie below, else ""
+// The arrow of screen row k: "\xE2\x96\xB2 " (U+25B2) on the first row while rows lie above, "\xE2\x96\xBC " (U+25BC)
+// on the last shown row while rows lie below, else "". Drawn in the row's left margin (panel_arrow_left), the title
+// untouched; put before the title only when that row has no arrow copy (the copy could not be made)
 const char* panel_arrow(int k, int win, int n, int shown = kPanelRows);
+// The left edge of a row's arrow, in the row's own units: the row's outline starts at row_left, its title at
+// title_left, the glyph is glyph_w wide. Near the outline (a margin from it) when the space left of the title holds
+// the glyph and two margins; centred in that space when it holds only the glyph; else just left of the title.
+double panel_arrow_left(double row_left, double title_left, double glyph_w, double margin);
+// A model on the VS screen (the versus intro before a fight): its GameObject sits under Pos < Left | Right <
+// FighterEmoteCtrl (the Color Mod's finding). `up` = the names of a colour controller's GameObject (up[0]) and of its
+// parents (up[1] its parent, ...). The side (1 Left, 2 Right) when a Left / Right within the first five names has a
+// parent named FighterEmoteCtrl, else 0; *root = that Left / Right's index in `up` (the model's root), -1 if none.
+int vs_model_side(const std::vector<std::string>& up, int* root);
 // A spin step on a row's value (1-based, `labels` values): wraps at both ends
 int step_value(int value, int labels, int dir);
 

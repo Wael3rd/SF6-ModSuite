@@ -1,7 +1,8 @@
 // SF6 Slots — runtime costume options, the game side (rto.hpp, docs/RUNTIME_OPTIONS.md).
 //
 // A model is the Battle Settings preview (CaptureRoomFighter.FighterObj), a side's model on the character
-// select (GameObject FighterVisual_01 / _02) or a fighter (PlayerBehavior, _PlayerID 0 / 1). Its slot is
+// select (GameObject FighterVisual_01 / _02), on the VS screen (under Pos < Left / Right < FighterEmoteCtrl) or a
+// fighter (PlayerBehavior, _PlayerID 0 / 1). Its slot is
 // found from the paths its meshes load (the slot's folder), so the online alias (a slot shown over its
 // carrier) needs nothing more. For the side's chosen options the manifest
 // says what each target must be (rto_data: desired); a pass compares that with what the model's
@@ -16,8 +17,8 @@
 // part that is not ready goes back at once to what it wore (a holder of that file, made before the
 // swap) and is tried again later. Never shown half loaded.
 //
-// When: the preview while Battle Settings is up and each side's model while the character select is up
-// (polled every 10 frames, menu screens); a fighter after an event (its model built:
+// When: the preview while Battle Settings is up, each side's model while the character select is up and on the VS
+// screen that follows (polled every 10 frames, menu screens); a fighter after an event (its model built:
 // PlayerBehavior.SetupAppearance, or an outfit mounted for a fight): a watch of 10 s, then nothing until the
 // next event.
 #include "rto.hpp"
@@ -237,9 +238,10 @@ struct Model {
     uint32_t ver = 0, next = 0, walk_at = 0, check_at = 0, since = 0;
     std::set<std::string> told;                  // log lines given once
 };
-Model g_models[5];                                // preview, P1, P2 (fighters), select P1, select P2
-// The character select builds a side's model under the same GameObject (its root stays): looked at more often
-bool select_model(const Model& md) { return &md == &g_models[3] || &md == &g_models[4]; }
+Model g_models[7];                                // preview, P1, P2 (fighters), select P1, select P2, VS P1, VS P2
+// The character select builds a side's model under the same GameObject (its root stays): looked at more often, and the
+// VS screen's (shown a few seconds)
+bool select_model(const Model& md) { return &md >= &g_models[3] && &md <= &g_models[6]; }
 uint32_t check_every(const Model& md) { return select_model(md) ? 10 : 30; }
 
 // The last write of this module on a preview model (frame, what): told when the preview stays empty (preview_tick)
@@ -861,6 +863,7 @@ void preview_tick() {
     if (!md.units.empty()) g_prev_next = g_frame + 1;     // a part unit in flight: its chain stays stopped one frame only
 }
 
+uint32_t g_fighters_at = 0;         // both fighters seen built since the VS screen's models were looked for (vs_tick)
 void watch_tick() {
     if (g_frame >= g_watch_until) {
         g_watch_until = 0;
@@ -886,6 +889,7 @@ void watch_tick() {
         if (!md.units.empty()) g_watch_next = g_frame + 1;
     }
     for (int i = 0; i < 2; ++i) if (!seen[i] && g_models[1 + i].root) reset(g_models[1 + i]);
+    if (seen[0] && seen[1] && !g_fighters_at) g_fighters_at = g_frame;   // the fight is built (vs_tick: no VS screen to wait for)
 }
 
 // The character select's models: each side's PlayerColorController sits on the GameObject FighterVisual_01 (P1) /
@@ -899,6 +903,7 @@ int visual_side(Obj* go) {
     const std::string nm = str(call_obj(T.go_name, go));
     return nm == "FighterVisual_01" ? 1 : nm == "FighterVisual_02" ? 2 : 0;
 }
+void vs_open(uint32_t frames, const char* why);
 void select_tick() {
     if (!T.pcc_go || g_frame < g_sel_next) return;
     g_sel_next = g_frame + 10;
@@ -913,6 +918,7 @@ void select_tick() {
             g_select = false;
             select::leave_all("character select no longer up");
             reset(*sm[0]); reset(*sm[1]);
+            vs_open(60 * 90, "character select no longer up");
             return;
         }
         Obj* found[2] = {};
@@ -947,6 +953,88 @@ void select_tick() {
         process(md, net ? 0 : i, true);
         if (!md.units.empty()) g_sel_next = g_frame + 1;     // a part unit in flight: its chain stays stopped one frame only
         else if (!md.settled && md.next && md.next < g_sel_next) g_sel_next = md.next;
+    }
+}
+
+// The VS screen's models (the versus intro between the select / stage select and the fight): each side's model sits
+// under Pos < Left (P1) / Right (P2) < FighterEmoteCtrl (the Color Mod's finding, rto_data vs_model_side); never a
+// fight's (the intro's rigs hang under FighterVisual_0N, the fighters under nothing). Looked for from the end of the
+// character select (90 s: the stage select comes between) or the start of a fighters watch (20 s: online, no select
+// here), followed like the select's models (polled every 10 frames, preload then apply), and let go when the screen's
+// models are gone, 20 s after they were first seen at the latest, or 5 s after both fighters are built without a VS
+// screen (Training): never into the fight. Online the player's own side wears P1's options (as in a fight).
+uint32_t g_vs_until = 0, g_vs_scan = 0, g_vs_next = 0, g_vs_first = 0;
+std::string g_vs_log;
+std::set<std::string> g_vs_odd;       // Left / Right chains not under FighterEmoteCtrl, told once a session
+void vs_open(uint32_t frames, const char* why) {
+    if (!g_vs_until) {
+        g_vs_scan = g_vs_next = g_vs_first = g_fighters_at = 0;
+        g_vs_log.clear();
+        logf("rto: VS screen models looked for (%s)", why);
+    }
+    g_vs_until = std::max(g_vs_until, g_frame + frames);
+}
+void vs_close(const char* why) {
+    if (!g_vs_until) return;
+    g_vs_until = 0;
+    reset(g_models[5]); reset(g_models[6]);
+    logf("rto: VS screen models no longer followed (%s)", why);
+}
+void vs_tick() {
+    if (!T.pcc_go || !T.tr_parent || g_frame < g_vs_next) return;
+    g_vs_next = g_frame + 10;
+    Model* vm[2] = { &g_models[5], &g_models[6] };
+    if (g_vs_first && g_frame - g_vs_first > 60 * 20) { vs_close("20 s after they came"); return; }
+    if (!g_vs_first && g_fighters_at && g_frame - g_fighters_at > 300) { vs_close("both fighters built, no VS screen"); return; }
+    if (!g_vs_first && g_frame >= g_vs_until) { vs_close("none came"); return; }
+    const bool both = vm[0]->root && vm[1]->root;
+    if (g_frame - g_vs_scan >= (both ? 120u : 30u)) {
+        g_vs_scan = g_frame;
+        Obj* found[2] = {};
+        Obj* list = find_components(T.pcc);
+        const int n = list_count(list);
+        for (int i = 0; i < n; ++i) {
+            Obj* c = list_item(list, i);
+            Obj* go = c ? call_obj(T.pcc_go, c) : nullptr;
+            std::vector<std::string> up;
+            std::vector<Obj*> objs;
+            Obj* tr = go ? call_obj(T.go_tr, go) : nullptr;
+            for (int d = 0; go && d < 7; ++d) {
+                up.push_back(str(call_obj(T.go_name, go)));
+                objs.push_back(go);
+                tr = tr ? call_obj(T.tr_parent, tr) : nullptr;
+                go = tr ? call_obj(T.tr_go, tr) : nullptr;
+            }
+            int root = -1;
+            const int side = vs_model_side(up, &root);
+            if (side && !found[side - 1]) found[side - 1] = objs[static_cast<size_t>(root)];
+            if (!side) {                               // a Left / Right elsewhere: told once (a layout the rule misses)
+                std::string chain;
+                bool lr = false;
+                for (size_t k = 0; k < up.size(); ++k) { chain += (k ? " < " : "") + up[k]; lr = lr || (k < 5 && (up[k] == "Left" || up[k] == "Right")); }
+                if (lr && g_vs_odd.size() < 8 && g_vs_odd.insert(chain).second)
+                    logf("rto: VS screen: a colour controller under %s: not under FighterEmoteCtrl, not followed", chain.c_str());
+            }
+        }
+        char b[120];
+        snprintf(b, sizeof b, "%d colour controllers, P1 model %s, P2 model %s", n, found[0] ? "found" : "none",
+                 found[1] ? "found" : "none");
+        if (g_vs_log != b) { g_vs_log = b; logf("rto: VS screen: %s", b); }
+        if ((found[0] || found[1]) && !g_vs_first) g_vs_first = g_frame;
+        if (g_vs_first && !found[0] && !found[1]) { vs_close("the screen ended"); return; }
+        for (int i = 0; i < 2; ++i) {
+            if (found[i] == vm[i]->root) continue;
+            reset(*vm[i]);
+            vm[i]->root = found[i];
+        }
+    }
+    const bool net = costumes::online();
+    for (int i = 0; i < 2; ++i) {
+        Model& md = *vm[i];
+        if (!md.root) continue;
+        process(md, net ? 0 : i, true);
+        if (!md.units.empty()) g_vs_next = g_frame + 1;      // a part unit in flight: its chain stays stopped one frame only
+        else if (!md.settled && md.next && md.next < g_vs_next) g_vs_next = md.next;
     }
 }
 
@@ -1039,6 +1127,7 @@ const Slot* preview_slot() {
 
 void init() {
     g_models[0].name = "preview"; g_models[1].name = "P1"; g_models[2].name = "P2";
+    g_models[3].name = "select P1"; g_models[4].name = "select P2"; g_models[5].name = "VS P1"; g_models[6].name = "VS P2";
     std::string err;
     if (!parse_manifest(read_file(kManifest, 64u << 20), g_m, err)) {
         if (err != "no file") logf("rto: costume_options.json not used: %s", err.c_str());
@@ -1113,7 +1202,7 @@ void install_hooks() {
 
 bool busy() {
     if (!on()) return false;
-    if (g_bs || g_select || g_watch_until || menu::busy()) return true;
+    if (g_bs || g_select || g_watch_until || g_vs_until || menu::busy()) return true;
     return !g_warm_done && g_frame < 60 * 120;
 }
 
@@ -1131,6 +1220,7 @@ void tick(uint32_t ev) {
         }
         if (ev & EV_SELECT_START) {
             select::leave_all("character select started");   // a visit whose end was missed: its panels let go
+            vs_close("character select started");
             g_select = true; g_watch_until = 0; g_sel_scan = g_sel_next = 0; g_sel_start = g_frame; g_sel_log.clear();
             for (auto& md : g_models) reset(md);
         }
@@ -1138,6 +1228,7 @@ void tick(uint32_t ev) {
             g_select = false;
             select::leave_all("character select ended");
             reset(g_models[3]); reset(g_models[4]);
+            vs_open(60 * 90, "character select ended");
         }
         if (ev & EV_MENU_OPEN) {
             if (!g_bs || g_bs_closed) logf("rto: Battle Settings open: its preview is followed");
@@ -1153,6 +1244,7 @@ void tick(uint32_t ev) {
                 }
                 logf("rto: fighters watch");
                 g_watch_start = g_frame;
+                vs_open(60 * 20, "fighters watch");
             }
             if ((ev & EV_HOLDER) || g_frame - g_watch_start < 60 * 30) g_watch_until = g_frame + 600;
             else if (!g_model_noisy) {
@@ -1182,6 +1274,7 @@ void tick(uint32_t ev) {
         menu::tick(fs);
         if (g_bs || menu::active()) preview_tick();
         if (g_watch_until) watch_tick();
+        if (g_vs_until) vs_tick();
         if (!g_warm_done && g_frame > 60 * 30 && !g_watch_until && !g_bs) warm();
     } catch (...) {
         fault("tick");

@@ -691,6 +691,26 @@ const char* panel_arrow(int k, int win, int n, int shown) {
     return "";
 }
 
+double panel_arrow_left(double row_left, double title_left, double glyph_w, double margin) {
+    glyph_w = std::max(0.0, glyph_w);
+    margin = std::max(0.0, margin);
+    const double space = title_left - row_left;
+    if (space >= glyph_w + 2 * margin) return row_left + margin;
+    if (space >= glyph_w) return row_left + (space - glyph_w) / 2;
+    return title_left - glyph_w - std::min(margin, 2.0);
+}
+
+int vs_model_side(const std::vector<std::string>& up, int* root) {
+    if (root) *root = -1;
+    for (size_t i = 0; i < up.size() && i < 5; ++i) {
+        const int side = up[i] == "Left" ? 1 : up[i] == "Right" ? 2 : 0;
+        if (!side || i + 1 >= up.size() || up[i + 1] != "FighterEmoteCtrl") continue;
+        if (root) *root = static_cast<int>(i);
+        return side;
+    }
+    return 0;
+}
+
 int step_value(int value, int labels, int dir) {
     if (labels <= 0) return 1;
     value = std::max(1, std::min(value, labels));

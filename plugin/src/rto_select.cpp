@@ -5,9 +5,18 @@
 // keyboard (settings.json "select_options_button" / "select_options_key"), while the outfit has options (the select model wears one of the manifest's outfits). The four
 // rows then show the option rows of the Battle Settings menu (rto_data rows: one choice row per pick group, one On /
 // Off row per toggle), Left / Right change the focused one, Up / Down move through them (more rows than four: a window
-// with "▲" / "▼" before the first / last title, wrapping at the ends like the CRSM recording slots). A change is saved
-// in costume_choices.json for that side (online: P1's, the player's own fighter wears P1's options) and shown at once
-// on that side's select model (rto.cpp select_tick). R1 / the key again, B / Esc or Decide put the panel back.
+// wrapping at the ends like the CRSM recording slots, "▲" / "▼" in the left margin of the first / last row while rows
+// lie above / below). A change is saved in costume_choices.json for that side (online: P1's, the player's own fighter
+// wears P1's options) and shown at once on that side's select model (rto.cpp select_tick). B / Esc or Decide put the
+// panel back; R1 / the key do nothing while the options show (and the guide corner no longer offers them).
+//
+// The arrows: a copy of the row's title (ui_clone_control, core 0.8.2+) named e_text_slots_arrow, added next to the
+// title (same parent, font, size and colour), placed left of it near the row's outline; the title is never moved nor
+// prefixed. R19: the copy is made inside the select flow's own update (post-hook of app.UIFlowUI10505.CharaSetting
+// OnUpdate, the place LL's row clones on this panel use); the frame only asks for it (one per row, it lives and dies
+// with the panel's tree, never again after 3 refusals). R35: the copy is not a managed object, found again by name
+// under the title's live parent, every write through the core. Hidden (and ForceInvisible) when not wanted. When the
+// copy cannot be made (refused, or that update never seen within a second) the arrows go before the titles instead.
 //
 // The technique is the Color Mod's DI mode on this very panel (colormod/src/screens/dipanel.cpp, dipanel_mode.cpp):
 // the panel's own four rows are borrowed (no row is created, nothing added to the pool, R12 / R13): their spins get
@@ -221,8 +230,57 @@ int pre_group_move(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned 
     } catch (...) { g_hook_faults.fetch_add(1); return kCall; }
 }
 
+// ---- the arrows' copies, made inside the select flow's update (any thread; the frame asks, header) ----
+constexpr const char* kArrowName = "e_text_slots_arrow";   // not "p_...": never taken for a UI part (R20)
+constexpr int kArrowRows[2] = { 0, kPanelRows - 1 };       // ▲ on the first row, ▼ on the last
+constexpr int kArrowMaxRefused = 3;
+struct CopyReq { uintptr_t agent = 0; uint32_t frame = 0; };
+std::mutex g_copy_mx;
+CopyReq g_copy_req[3];
+std::atomic<bool> g_copy_on{ false };
+std::atomic<int> g_copy_refused{ 0 }, g_copy_made{ 0 }, g_copy_status{ 1000 };
+std::atomic<uint32_t> g_flow_updates{ 0 };                  // the flow's update seen (its post-hook ran)
+
+void make_copies() {
+    CopyReq req[3];
+    {
+        std::lock_guard<std::mutex> lk(g_copy_mx);
+        for (int s = 1; s <= 2; ++s) {
+            if (g_copy_req[s].agent && g_frame - g_copy_req[s].frame <= 2) req[s] = g_copy_req[s];   // older: asked again
+            g_copy_req[s] = CopyReq{};
+        }
+        g_copy_on.store(false, std::memory_order_release);
+    }
+    for (int s = 1; s <= 2; ++s) {
+        Obj* agent = reinterpret_cast<Obj*>(req[s].agent);
+        if (!agent || !alive(agent)) continue;
+        void* cm = call_obj(agent, "get_ControlMain");
+        for (int k : kArrowRows) {
+            void* row = cm ? A()->ui_find_child(cm, kRowNames[k], 8) : nullptr;
+            void* title = row ? A()->ui_find_child(row, "e_text_title", 4) : nullptr;
+            Obj* parent = title ? call_obj(reinterpret_cast<Obj*>(title), "get_Parent") : nullptr;
+            if (!parent) { ++g_copy_refused; g_copy_status.store(-3000, std::memory_order_release); continue; }
+            if (A()->ui_find_child(parent, kArrowName, 0)) continue;
+            void* c = nullptr;
+            const SF6CoreStatus st = A()->ui_clone_control(C(), title, parent, kArrowName, &c);
+            g_copy_status.store(st == SF6CORE_OK && !c ? -1000 : static_cast<int>(st), std::memory_order_release);
+            if (st != SF6CORE_OK || !c) { ++g_copy_refused; continue; }
+            ++g_copy_made;
+            A()->ui_set_visible(C(), c, 0);                 // placed and shown by the frame
+            A()->ui_set_force_invisible(C(), c, 1);
+        }
+    }
+}
+void post_flow_update(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return;
+    g_flow_updates.fetch_add(1, std::memory_order_relaxed);
+    if (!g_copy_on.load(std::memory_order_acquire)) return;
+    try { make_copies(); } catch (...) { ++g_copy_refused; g_copy_status.store(-2000, std::memory_order_release); }   // /EHa: SEH too
+}
+
 // Installed the first time a side is borrowed (a player who never uses the mode pays nothing): the DI mode's set
 bool g_hooks_tried = false, g_hooks_ok = false;
+bool g_arrow_hook = false;                          // the flow's update hooked: arrow copies can be made
 void install_hooks() {
     g_hooks_tried = true;
     auto* tdb = api().tdb();
@@ -262,6 +320,15 @@ void install_hooks() {
     g_hooks_ok = spin && param && agent && n >= 20;
     logf("rto select: %d hooks installed, %d not found: the costume options mode on the character select %s", n, missing,
          g_hooks_ok ? "is ready" : "is off");
+    // the arrows' copies (R19: inside the select flow's own update); without it the arrows go before the titles
+    // Its own OnUpdate only (never a parent's: that one runs for every flow of the game)
+    TD* cs = tdb->find_type("app.UIFlowUI10505.CharaSetting");
+    Method* upd = nullptr;
+    if (cs) for (auto* m : cs->get_methods()) if (m && m->get_name() && std::strcmp(m->get_name(), "OnUpdate") == 0) { upd = m; break; }
+    g_arrow_hook = SF6CORE_HAS(A(), ui_clone_control) && upd && upd->get_function_raw() && upd->add_hook(hook_pass, post_flow_update, false);
+    logf("rto select: arrows %s", g_arrow_hook ? "in the rows' left margin (copies made in app.UIFlowUI10505.CharaSetting.OnUpdate)"
+         : !SF6CORE_HAS(A(), ui_clone_control) ? "before the titles (the core has no ui_clone_control, 0.8.2)"
+         : "before the titles (app.UIFlowUI10505.CharaSetting.OnUpdate not hooked)");
 }
 
 // ---- the tick's side (LateUpdateBehavior only) ----
@@ -365,11 +432,23 @@ struct Side {
     float ref_pos[3] = {}; bool has_ref_pos = false;
     float ref_region[2] = { 300, 0 }; bool has_ref_region = false;
     uint32_t entered_at = 0;
+    // the arrows (kArrowRows): where each copy goes, measured once a visit (the glyph's width until it is drawn)
+    struct Arrow {
+        bool geo = false, failed = false, styled = false, shown = false, measured = false, logged = false;
+        int passes = 0;
+        float x = 0, y = 0, z = 0;                  // the title's place (its parent's space)
+        int cp = 0;
+        double title_l = 0, title_lg = 0, row_lg = 0, k = 1, gsx = 1, glyph = 0;
+        const char* row_how = "";
+        std::string text, row_el;
+    } arrow[2];
+    uint32_t arrow_asked = 0;                       // the first frame a copy was asked for and not found since
 };
 Side g_s[3];
 bool g_was_up = false;                              // the character select was up last frame
 int g_faults = 0;
 bool g_off = false;
+bool g_arrows_off = false;                          // no arrow copy can be made: the arrows go before the titles
 
 // ---- the trigger: R1 / the key, read per player ----
 struct Keys {
@@ -418,10 +497,15 @@ void read_keys() {
     }
     const std::string sig = k.pad_name + "/" + k.key_cfg + "/" + std::to_string(k.pad_bit) + "/" + std::to_string(k.vk);
     const std::string old = g_keys.read ? g_keys.pad_name + "/" + g_keys.key_cfg + "/" + std::to_string(g_keys.pad_bit) + "/" + std::to_string(g_keys.vk) : "";
-    if (sig != old)
+    if (sig != old) {
         logf("rto select: costume options key: pad %s (%s), keyboard %s (%s)", k.pad_bit ? k.pad_name.c_str() : "none",
              k.pad_bit ? k.pad_icon.c_str() : "off or unknown", k.vk ? k.key_icon.c_str() : "none",
              k.key_cfg.c_str());
+        // the Color Mod (0.22.6+) opens its DI mode with L1 / X on this screen: the same press would do both
+        if ((k.pad_bit && k.pad_name == "L1") || (k.vk == 'X'))
+            logf("rto select: WARNING: %s is the Color Mod's Drive colours key on the character select (change "
+                 "select_options_button / select_options_key in settings.json)", k.vk == 'X' ? "X" : "L1");
+    }
     g_keys = k;
 }
 
@@ -568,7 +652,155 @@ void commit(Side& st) {
 
 std::string row_title(const Side& st, int k) {
     const int i = st.w.win + k;
-    return std::string(panel_arrow(k, st.w.win, static_cast<int>(st.rows.size()))) + clip_name(st.rows[static_cast<size_t>(i)].title, kTitleChars);
+    // the arrow is a copy in the row's left margin (paint_arrows); in the title only when no copy can be made
+    const char* a = g_arrows_off ? panel_arrow(k, st.w.win, static_cast<int>(st.rows.size())) : "";
+    return std::string(a) + clip_name(st.rows[static_cast<size_t>(i)].title, kTitleChars);
+}
+
+// ---- the arrows: copies of a row's title in its left margin (header) ----
+constexpr double kArrowMargin = 8;                  // from the row's outline (1080p units)
+constexpr uint32_t kArrowWait = 60;                 // frames a copy may be waited for, then the arrows go in the titles
+constexpr int kArrowPasses = 6;                     // placements while the glyph's drawn width is not read yet
+
+bool shown_el(Obj* o) {
+    bool ok = false;
+    const bool v = call_bool(o, "get_ActualVisible", {}, &ok);
+    if (ok) return v;
+    return call_bool(o, "get_Visible", {}, &ok) && ok;
+}
+int cp_of(Obj* o) {
+    const Ret r = call(o, "get_ControlPoint");
+    int cp = r.exception_thrown ? 0 : static_cast<int>(r.dword);
+    return (cp < 0 || cp > 10 || cp % 4 > 2) ? 0 : cp;
+}
+// The row's outline: the leftmost left edge (root space) of the row's visible elements drawn as a shape (not a text,
+// at least 40 wide: its background / frame), NAN when none is found
+void outline_walk(Obj* o, int depth, int& budget, double& best, std::string& what) {
+    for (; o && budget > 0; o = call_obj(o, "get_Next")) {
+        --budget;
+        if (!shown_el(o)) continue;
+        const std::string nm = str(call_obj(o, "get_Name"));
+        if (nm == kArrowName) continue;
+        if (type_name(o) != "via.gui.Text") {
+            float sz[2] = {}, gp[3] = {}, gs[3] = { 1, 1, 1 };
+            if (ret_floats(o, "get_Size", sz, 2) && std::isfinite(sz[0]) && sz[0] >= 40 && ret_floats(o, "get_GlobalPosition", gp, 2)) {
+                if (!ret_floats(o, "get_GlobalScale", gs, 2) || !(std::fabs(gs[0]) > 1e-3)) gs[0] = 1;
+                const double l = gp[0] - (cp_of(o) % 4) * 0.5 * sz[0] * gs[0];
+                if (std::isfinite(l) && (std::isnan(best) || l < best)) { best = l; what = nm; }
+            }
+        }
+        if (depth < 5) outline_walk(call_obj(o, "get_Child"), depth + 1, budget, best, what);
+    }
+}
+// Where the arrow goes, read once a visit: the title's place and left edge, the row's outline (root space)
+bool arrow_geo(Side::Arrow& ar, void* row, void* title) {
+    Obj* t = reinterpret_cast<Obj*>(title);
+    float p[3] = {}, sc[3] = { 1, 1, 1 }, gp[3] = {}, gs[3] = { 1, 1, 1 }, dw[2] = {}, fs[2] = {};
+    if (!ret_floats(t, "get_Position", p, 3) || !ret_floats(t, "get_GlobalPosition", gp, 2)) return false;
+    if (!ret_floats(t, "get_Scale", sc, 2) || !(std::fabs(sc[0]) > 1e-3)) sc[0] = 1;
+    if (!ret_floats(t, "get_GlobalScale", gs, 2) || !(std::fabs(gs[0]) > 1e-3)) gs[0] = sc[0];
+    const double tw = ret_floats(t, "get_DisplaySize", dw, 2) && std::isfinite(dw[0]) && dw[0] > 0 ? dw[0] : 0.0;
+    ar.x = p[0]; ar.y = p[1]; ar.z = p[2];
+    ar.cp = cp_of(t);
+    ar.gsx = gs[0];
+    ar.k = sc[0] / gs[0];                           // root units -> the title's parent's units
+    ar.title_l = p[0] - (ar.cp % 4) * 0.5 * tw * sc[0];
+    ar.title_lg = gp[0] - (ar.cp % 4) * 0.5 * tw * gs[0];
+    ar.glyph = (ret_floats(t, "get_FontSize", fs, 2) && std::isfinite(fs[0]) && fs[0] > 0 ? fs[0] : 24.0) * std::fabs(gs[0]);
+    double best = NAN;
+    std::string what;
+    int budget = 96;
+    outline_walk(call_obj(reinterpret_cast<Obj*>(row), "get_Child"), 0, budget, best, what);
+    ar.row_el = what;
+    if (!std::isnan(best) && best < ar.title_lg) { ar.row_lg = best; ar.row_how = "the row's outline"; }
+    else { ar.row_lg = ar.title_lg - ar.glyph - 2 * kArrowMargin; ar.row_how = "no outline found: next to the title"; }
+    ar.geo = true;
+    return true;
+}
+void arrow_hide(void* c, Side::Arrow& ar) {
+    if (!ar.shown) return;
+    A()->ui_set_visible(C(), c, 0);
+    A()->ui_set_force_invisible(C(), c, 1);
+    ar.shown = false;
+}
+void* arrow_copy(void* title) {
+    Obj* parent = title ? call_obj(reinterpret_cast<Obj*>(title), "get_Parent") : nullptr;
+    return parent ? A()->ui_find_child(parent, kArrowName, 0) : nullptr;
+}
+// Each frame while on: each arrow row's copy shown with its glyph (or hidden), asked for when missing
+void paint_arrows(Side& st, int s, void* cm) {
+    if (g_arrows_off) {                             // a copy already shown on the other row goes too
+        for (int a = 0; a < 2; ++a)
+            if (st.arrow[a].shown) if (void* c = arrow_copy(parts_of(cm, kArrowRows[a]).title)) arrow_hide(c, st.arrow[a]);
+        return;
+    }
+    const int n = static_cast<int>(st.rows.size());
+    bool missing = false;
+    for (int a = 0; a < 2; ++a) {
+        Side::Arrow& ar = st.arrow[a];
+        const int k = kArrowRows[a];
+        RowParts p = parts_of(cm, k);
+        std::string glyph = panel_arrow(k, st.w.win, n);
+        while (!glyph.empty() && glyph.back() == ' ') glyph.pop_back();
+        void* c = arrow_copy(p.title);
+        if (!c) { if (!glyph.empty()) missing = true; continue; }
+        if (glyph.empty() || ar.failed) { arrow_hide(c, ar); continue; }
+        if (!ar.styled) {                           // its text settings, once a visit
+            ar.styled = true;
+            SF6CoreArg on{}; on.type = SF6CORE_ARG_BOOL; on.v.i = 1;
+            A()->obj_invoke(C(), c, "set_AutoRegionFit(System.Boolean)", &on, 1, nullptr);   // the region is the glyph
+        }
+        if (!ar.geo && !arrow_geo(ar, p.ctrl, p.title)) { ar.failed = true; logf("rto select: P%d arrow row %d: the title's place unread, no arrow", s, k); continue; }
+        if (glyph != ar.text && A()->ui_set_text(C(), c, glyph.c_str()) == SF6CORE_OK) { ar.text = glyph; ar.passes = 0; ar.measured = false; }
+        // the glyph's drawn width once shown (the copy keeps the title's scale): placed again with it
+        if (ar.shown && !ar.measured) {
+            float dw[2] = {};
+            if (ret_floats(reinterpret_cast<Obj*>(c), "get_DisplaySize", dw, 2) && std::isfinite(dw[0]) && dw[0] > 0) {
+                ar.measured = true;
+                const double g = dw[0] * std::fabs(ar.gsx);
+                if (std::fabs(g - ar.glyph) > 0.5) { ar.glyph = g; ar.passes = 0; }
+            }
+        }
+        if (ar.passes < kArrowPasses) {
+            ++ar.passes;
+            const double left = panel_arrow_left(ar.row_lg, ar.title_lg, ar.glyph, kArrowMargin);
+            const float x = static_cast<float>(ar.title_l + (left - ar.title_lg) * ar.k);
+            SF6CoreArg pc{}; pc.type = SF6CORE_ARG_I64; pc.v.i = (ar.cp / 4) * 4;              // the title's row, its left point
+            A()->obj_invoke(C(), c, "set_ControlPoint(via.gui.ControlPoint)", &pc, 1, nullptr);
+            A()->ui_set_position(C(), c, x, ar.y, ar.z);
+            if (!ar.logged && (ar.measured || ar.passes == kArrowPasses)) {
+                ar.logged = true;
+                logf("rto select: P%d arrow row %d: outline x %.0f (%s %s), title x %.0f, glyph %.0f wide (%s), arrow x %.0f "
+                     "(root units; %.1f in the title's parent, control point %d)", s, k, ar.row_lg, ar.row_how,
+                     ar.row_el.c_str(), ar.title_lg, ar.glyph, ar.measured ? "drawn" : "font size", left, x, (ar.cp / 4) * 4);
+            }
+        }
+        if (!ar.shown) {
+            A()->ui_set_force_invisible(C(), c, 0);     // the copy's lock, put on when it was made
+            A()->ui_set_visible(C(), c, 1);
+            ar.shown = true;
+        }
+    }
+    if (!missing) { st.arrow_asked = 0; return; }
+    if (!st.arrow_asked) st.arrow_asked = g_frame;
+    const int refused = g_copy_refused.load();
+    if (!g_arrow_hook || refused >= kArrowMaxRefused || g_frame - st.arrow_asked > kArrowWait) {
+        g_arrows_off = true;
+        logf("rto select: arrows before the titles from now on (%s; copies made %d, refused %d, last status %d, flow updates seen %u)",
+             !g_arrow_hook ? "no hook" : refused >= kArrowMaxRefused ? "copies refused" : "no copy within a second",
+             g_copy_made.load(), refused, g_copy_status.load(), g_flow_updates.load());
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_copy_mx);
+    g_copy_req[s] = { reinterpret_cast<uintptr_t>(st.agent), g_frame };
+    g_copy_on.store(true, std::memory_order_release);
+}
+// Leaving: both copies hidden (and locked)
+void hide_arrows(Side& st, void* cm) {
+    for (int a = 0; a < 2; ++a) {
+        RowParts p = parts_of(cm, kArrowRows[a]);
+        if (void* c = arrow_copy(p.title)) { st.arrow[a].shown = true; arrow_hide(c, st.arrow[a]); }
+    }
 }
 std::string row_value(const Row& r) {
     const int v = std::max(1, std::min(r.value, static_cast<int>(r.labels.size())));
@@ -576,7 +808,7 @@ std::string row_value(const Row& r) {
 }
 
 // Each frame while on (the game's own refresh rewrites the rows: the DI mode's repaint)
-void paint(Side& st) {
+void paint(Side& st, int s) {
     void* cm = control_main(st.agent);
     if (!cm) return;
     const int n = static_cast<int>(st.rows.size());
@@ -600,6 +832,7 @@ void paint(Side& st) {
         if (p.text && st.has_ref_region) A()->ui_set_region_size(C(), p.text, st.ref_region[0], st.ref_region[1]);   // compares
         spin_set(st.rs[k].spin, 0, 1 + static_cast<int32_t>(r.labels.size()), r.value);
     }
+    paint_arrows(st, s, cm);
 }
 
 // The focus row the game shows -> the cursor (a mouse hover moves the focus without our hooks)
@@ -684,7 +917,7 @@ bool enter(int s, const char** why) {
     }
     for (int k = 0; k < kPanelRows; ++k) inv_b(st.rs[k].spin, "set_IsDisable", false);
     if (st.w.cur - st.w.win != fk) focus_row(st, st.w.cur - st.w.win);
-    paint(st);
+    paint(st, s);
     logf("rto select: P%d costume options mode ON: %s/%s (%s), %zu rows, options of %s%s", s, slot->fighter_dir.c_str(),
          slot->folder.c_str(), slot->label.c_str(), st.rows.size(), st.opt ? "P2" : "P1", costumes::online() ? " (online)" : "");
     return true;
@@ -698,6 +931,7 @@ void leave(int s, const char* why) {
     g_s[s].fighter = st.fighter; g_s[s].costume = st.costume; g_s[s].changed_at = st.changed_at; g_s[s].key_was = st.key_was;
     hook_side_clear(s);                             // the game's own calls below must run (and IsCancel blocked 15 frames)
     void* cm = control_main(st.agent);
+    if (cm) hide_arrows(st, cm);
     for (int k = 0; k < kPanelRows; ++k) {
         const RowSave& rs = st.rs[k];
         spin_set(rs.spin, rs.smin, rs.smax, rs.snum);
@@ -768,6 +1002,7 @@ void log_game_guide() {
             Obj* ctrl = get_obj(part, "<Control>k__BackingField");
             Obj* btn = ctrl ? reinterpret_cast<Obj*>(A()->ui_find_child(ctrl, "c_guideBtn", 8)) : nullptr;
             for (Obj* c = btn ? call_obj(btn, "get_Child") : nullptr; c; c = call_obj(c, "get_Next")) {
+                if (str(call_obj(c, "get_Name")) == "e_text_0") continue;   // the corner: the Color Mod's (and our) entries
                 const std::string m = message(c);
                 if (!m.empty()) all += (all.empty() ? "" : " | ") + m;
             }
@@ -824,9 +1059,10 @@ void side_tick(int s, bool net) {
                 if (st.rows.empty()) { leave(s, "no option row left"); publish(s, false); return; }
             }
         }
-        if (press && g_frame - st.entered_at > 10) { leave(s, "the key again"); publish(s, true); return; }
-        paint(st);
-        publish(s, true);
+        // R1 / the key do nothing while the options show (Decide or Back leave); the guide corner offers nothing
+        if (press) logf("rto select: P%d %s pressed while the options show: nothing (Decide / Back leave)", s, g_keys.pad_name.c_str());
+        paint(st, s);
+        publish(s, false);
         return;
     }
 
@@ -934,7 +1170,8 @@ extern "C" __declspec(dllexport) int SF6Slots_SelectPanelClaim(int side, int who
 // ("X Edit Drive Colors") alone and adds this after its own: "<ICON BtnR1> Costume options" (pad != 0) or the keyboard
 // key's glyph ("<ICON KeyE> Costume options" on AZERTY), UTF-8, NUL-terminated, copied into buf; its length, or 0
 // (buf empty) when that side's outfit has no options, its panel is not ready or held by the DI mode, or cap is too
-// small. While the side's panel shows the options it stays (the same key closes them). Cheap, any thread, no game call.
+// small. Empty too while the side's panel shows the options (the key does nothing then; Decide / Back leave). Cheap, any
+// thread, no game call.
 extern "C" __declspec(dllexport) int SF6Slots_SelectGuideEntry(int side, int pad, char* buf, int cap) {
     try { return slots::rto::select::guide_entry(side, pad, buf, cap); } catch (...) { return 0; }
 }
