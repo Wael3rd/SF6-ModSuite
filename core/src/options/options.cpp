@@ -13,6 +13,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "../perf.hpp"
@@ -241,16 +242,22 @@ bool load_enums() {
     return ok;
 }
 
-// The General tab's unit list: mgr.UnitLists:call("get_Item", TabType.General) (:271, :596)
-MO* general_list() {
+// A tab's unit list: mgr.UnitLists:call("get_Item", tab) (:271, :596)
+MO* tab_list(int32_t tab) {
     auto* mgr = API::get()->get_managed_singleton("app.OptionManager");
-    if (!mgr || !load_enums()) return nullptr;
+    if (!mgr) return nullptr;
     MO* unit_lists = ll::read_field_object(mgr, "UnitLists");
     if (!unit_lists) return nullptr;
     auto* get_item = ll::find_method_full(unit_lists->get_type_definition(), "get_Item");
     if (!get_item) return nullptr;
-    auto ret = get_item->invoke(unit_lists, std::vector<void*>{ ll::arg_i32(g_TabType_General) });
+    auto ret = get_item->invoke(unit_lists, std::vector<void*>{ ll::arg_i32(tab) });
     return (!ret.exception_thrown && ret.ptr) ? reinterpret_cast<MO*>(ret.ptr) : nullptr;
+}
+
+// The General tab's unit list (:271, :596)
+MO* general_list() {
+    if (!API::get()->get_managed_singleton("app.OptionManager") || !load_enums()) return nullptr;
+    return tab_list(g_TabType_General);
 }
 
 // :210-219 new_setting
@@ -370,6 +377,118 @@ void purge_pause_menu_rows() {
     }
 }
 
+// ---- increment 11: a group's entries as rows of a section of the game's Options screen ----
+// The units are the engine's (built below, the same as a page's rows); only their parent changes: the section's
+// ChildUnits (and its setting's ChildUnitList, as attach_unit does) instead of a group unit of the core. The game
+// draws them with its own rows. Their values never reach the game's save: LoadValueEvent / ResetEvent skip our ids
+// (as for every entry) and SaveEvent skips the placed ones (hooked on the first build that places a group).
+
+struct Section { int32_t tab; int32_t group_type; };
+std::vector<Section> g_sections;              // every section a group was placed in (its stale rows are removed)
+std::unordered_set<int32_t> g_placed_tids;   // the TypeIds the core put in a game section
+bool g_save_hook = false, g_save_hook_tried = false;
+size_t g_placed_live = 0;                    // placed rows in their section after the last sync
+bool g_section_missing_logged = false;
+
+int32_t list_count(MO* list) {
+    auto* m = list ? ll::find_method_noargs(list->get_type_definition(), "get_Count") : nullptr;
+    if (!m) return 0;
+    auto r = m->invoke(list, std::vector<void*>{});
+    return r.exception_thrown ? 0 : (int32_t)r.dword;
+}
+MO* list_item(MO* list, int32_t i) {
+    auto* m = list ? ll::find_method_full(list->get_type_definition(), "get_Item") : nullptr;
+    if (!m) return nullptr;
+    auto r = m->invoke(list, std::vector<void*>{ ll::arg_i32(i) });
+    return (!r.exception_thrown && r.ptr) ? reinterpret_cast<MO*>(r.ptr) : nullptr;
+}
+MO* call_obj(MO* o, const char* name) {
+    auto* m = o ? ll::find_method_noargs(o->get_type_definition(), name) : nullptr;
+    if (!m) return nullptr;
+    auto r = m->invoke(o, std::vector<void*>{});
+    return (!r.exception_thrown && r.ptr) ? reinterpret_cast<MO*>(r.ptr) : nullptr;
+}
+
+// The OptionGroupUnit whose get_GroupType() is group_type, in a tab's list or under its groups (sections nest).
+MO* find_group_in(MO* list, int32_t group_type, int depth) {
+    if (!list || depth > 4) return nullptr;
+    const int32_t n = list_count(list);
+    for (int32_t i = 0; i < n; ++i) {
+        MO* u = list_item(list, i);
+        auto* ggt = u ? ll::find_method_noargs(u->get_type_definition(), "get_GroupType") : nullptr;
+        if (!ggt) continue;                                      // a value unit
+        auto r = ggt->invoke(u, std::vector<void*>{});
+        if (!r.exception_thrown && (int32_t)r.dword == group_type) return u;
+        if (MO* f = find_group_in(call_obj(u, "get_ChildUnits"), group_type, depth + 1)) return f;
+    }
+    return nullptr;
+}
+
+// One section: the rows of ours that are not live go (all of them when !keep_live), then the live rows the section
+// lacks are added at its end, in entry order. The game's own rows are never touched.
+void sync_section(const Section& sec, bool keep_live) {
+    MO* group = find_group_in(tab_list(sec.tab), sec.group_type, 0);
+    if (!group) {
+        if (keep_live && !g_section_missing_logged) {
+            g_section_missing_logged = true;
+            cmn::journal("[options] game section tab %d / group %d not found (yet): its placed rows wait", sec.tab, sec.group_type);
+        }
+        return;
+    }
+    MO* units = call_obj(group, "get_ChildUnits");
+    MO* gsetting = call_obj(group, "get_Setting");
+    MO* settings = gsetting ? ll::read_field_object(gsetting, "ChildUnitList") : nullptr;
+    if (!units) return;
+
+    std::vector<std::pair<MO*, MO*>> live;                       // unit, its setting
+    if (keep_live) {
+        for (auto& gp : core::groups()) {
+            if (gp->place_tab != sec.tab || gp->place_section != sec.group_type) continue;
+            for (auto& e : gp->entries) if (e->placed && e->unit) live.push_back({ mo(e->unit), call_obj(mo(e->unit), "get_Setting") });
+        }
+    }
+    auto* remove_at = ll::find_method_full(units->get_type_definition(), "RemoveAt");
+    auto* add_m = ll::find_method_full(units->get_type_definition(), "Add");
+    std::vector<bool> seen(live.size(), false);
+    for (int32_t i = list_count(units) - 1; i >= 0; --i) {
+        MO* u = list_item(units, i);
+        int32_t tid = 0;
+        if (!u || !unit_setting(u, tid) || !g_placed_tids.count(tid)) continue;
+        bool keep = false;
+        for (size_t k = 0; k < live.size(); ++k) if (live[k].first == u) { keep = true; seen[k] = true; }
+        if (!keep && remove_at) remove_at->invoke(units, std::vector<void*>{ ll::arg_i32(i) });
+    }
+    std::vector<bool> seen_s(live.size(), false);
+    auto* remove_at_s = settings ? ll::find_method_full(settings->get_type_definition(), "RemoveAt") : nullptr;
+    auto* add_s = settings ? ll::find_method_full(settings->get_type_definition(), "Add") : nullptr;
+    for (int32_t i = settings ? list_count(settings) - 1 : -1; i >= 0; --i) {
+        MO* st = list_item(settings, i);
+        int32_t tid = 0;
+        if (!st || !ll::read_field_i32(st, "TypeId", tid) || !g_placed_tids.count(tid)) continue;
+        bool keep = false;
+        for (size_t k = 0; k < live.size(); ++k) if (live[k].second == st) { keep = true; seen_s[k] = true; }
+        if (!keep && remove_at_s) remove_at_s->invoke(settings, std::vector<void*>{ ll::arg_i32(i) });
+    }
+    for (size_t k = 0; k < live.size(); ++k) {
+        if (!seen[k] && add_m) add_m->invoke(units, std::vector<void*>{ live[k].first });
+        if (!seen_s[k] && add_s && live[k].second) add_s->invoke(settings, std::vector<void*>{ live[k].second });
+        ++g_placed_live;
+    }
+}
+
+void be_sync_placed(bool keep_live) {
+    if (g_sections.empty()) return;                              // no group was ever placed: no game call
+    g_placed_live = 0;
+    for (const auto& sec : g_sections) sync_section(sec, keep_live);
+}
+
+void note_section(int32_t tab, int32_t group_type) {
+    for (const auto& s : g_sections) if (s.tab == tab && s.group_type == group_type) return;
+    g_sections.push_back({ tab, group_type });
+}
+
+void install_save_hook();
+
 // :262-392 (radio groups and the composite window are not ported)
 bool be_build_units() {
     if (!API::get()->get_managed_singleton("app.OptionManager")) return false;
@@ -415,23 +534,33 @@ bool be_build_units() {
     core::build_set_root(root);
 
     // groups and entries (:284-332)
+    bool any_placed = false;
     for (auto& gp : core::groups()) {
         auto& g = *gp;
         const std::string gkey = core::id_key_of(g);
-        MO* gd = create_setting("g:" + gkey, tid);
-        if (!gd) return false;
-        guid_text::set_field(gd, "TitleMessage", guid_text::alloc(g.title));
-        ll::write_field_i32(gd, "InputType", g_InputType_Button1);
-        ll::write_field_i32(gd, "EventType", g_EventType_OpenBattleHud);     // HUD window over the fight
-        MO* gunit = make_unit(gd, g.desc, {}, nullptr);
-        if (!gunit) return false;
-        attach_unit(root, gunit);
-        core::build_set_group(g, gunit);
+        const bool placed = g.place_tab >= 0;                    // increment 11: rows of a game section, no page
+        MO* gunit = nullptr;
+        if (placed) {
+            any_placed = true;
+            note_section(g.place_tab, g.place_section);
+            core::build_set_group(g, nullptr);
+        } else {
+            MO* gd = create_setting("g:" + gkey, tid);
+            if (!gd) return false;
+            guid_text::set_field(gd, "TitleMessage", guid_text::alloc(g.title));
+            ll::write_field_i32(gd, "InputType", g_InputType_Button1);
+            ll::write_field_i32(gd, "EventType", g_EventType_OpenBattleHud);     // HUD window over the fight
+            gunit = make_unit(gd, g.desc, {}, nullptr);
+            if (!gunit) return false;
+            attach_unit(root, gunit);
+            core::build_set_group(g, gunit);
+        }
 
         std::vector<std::shared_ptr<core::Entry>> ordered;
         for (auto& e : g.entries) if (e->kind != core::Kind::Button) ordered.push_back(e);
         for (auto& e : g.entries) if (e->kind == core::Kind::Button) ordered.push_back(e);   // buttons at the bottom
         for (auto& e : ordered) {
+            if (placed && e->kind == core::Kind::Button) continue;   // a section row holds a value
             MO* ed = create_setting("e:" + gkey + "/" + e->key, tid);
             if (!ed) return false;
             const auto title_guid = guid_text::alloc(e->title);
@@ -473,8 +602,13 @@ bool be_build_units() {
                 }
             }
             core::build_set_entry(e, tid, u);
+            if (placed) {
+                u->add_ref();                                        // held: the game may rebuild its lists without it
+                g_placed_tids.insert(tid);
+            }
         }
     }
+    if (any_placed) { install_save_hook(); be_sync_placed(true); }
     cmn::journal("[options] built: %zu groups, guid_text %s", core::groups().size(), guid_text::status().c_str());
     return true;
 }
@@ -502,6 +636,7 @@ void be_purge_roots(bool keep_live) {
             }
         }
     }
+    be_sync_placed(keep_live);                                   // increment 11 (nothing without a placed group)
     guid_text::purge(keep_live);
 }
 
@@ -664,6 +799,28 @@ int pre_skip_ours(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned l
 }
 void post_skip_ours(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
+// SaveEvent (increment 11): a placed row is never written into the game's save. Its PrevValue follows its value, as
+// the game's save would make it (no pending change left on the screen). Every other unit: the game's, untouched.
+int pre_save_ours_inner(void** argv) {
+    MO* u = reinterpret_cast<MO*>(argv[1]);
+    int32_t tid = 0;
+    if (!unit_setting(u, tid) || !core::placed_type(tid)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int32_t v = 0;
+    if (be_get_value(u, v)) {
+        if (auto* set_pv = ll::find_method_full(u->get_type_definition(), "set_PrevValue")) set_pv->invoke(u, std::vector<void*>{ ll::arg_i32(v) });
+    }
+    return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
+}
+int pre_save_ours(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int64_t pt = perf::begin();
+    int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    __try { rc = pre_save_ours_inner(argv); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { fault("save_ours_pre"); }
+    perf::end(perf::OptHooks, pt);
+    return rc;
+}
+
 // TrainingManager.OpenMenu (:666-673): the Esc / Start that closes our dialog also reaches the training pause menu
 int pre_open_menu(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_on && !cmn::closing() && core::suppress_open_menu()) return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
@@ -672,6 +829,17 @@ int pre_open_menu(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long l
 void post_open_menu(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
 #pragma warning(pop)
+
+// Once, on the first build that places a group: a core whose clients place nothing hooks nothing more.
+void install_save_hook() {
+    if (g_save_hook_tried) return;
+    g_save_hook_tried = true;
+    auto* tdb = API::get()->tdb();
+    auto* vu_td = tdb ? tdb->find_type("app.Option.OptionValueUnit") : nullptr;
+    auto* ms = vu_td ? vu_td->find_method("SaveEvent") : nullptr;
+    g_save_hook = ms && ms->get_function_raw() && ms->add_hook(pre_save_ours, post_skip_ours, false);
+    cmn::journal("[options] placed rows: SaveEvent hook %s", g_save_hook ? "installed" : "NOT installed (the game may save them)");
+}
 
 }  // namespace
 
@@ -687,6 +855,7 @@ bool install() {
     be.agent_present = be_agent_present; be.request_pause = be_request_pause;
     be.build_units = be_build_units; be.purge_roots = be_purge_roots;
     be.get_value = be_get_value; be.set_value = be_set_value; be.type_id_base = be_type_id_base;
+    be.sync_placed = be_sync_placed;
     core::set_backend(be);
 
     int total = 0;
@@ -770,7 +939,12 @@ bool set_option_text(int64_t entry_id, int index, const std::string& text) {
 std::string status() {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "on=%d faults=%d ", (int)g_on, g_faults);
-    return std::string(buf) + core::status() + " | guid_text " + guid_text::status();
+    std::string out = std::string(buf) + core::status() + " | guid_text " + guid_text::status();
+    if (!g_sections.empty()) {                                   // increment 11, once a group was placed
+        std::snprintf(buf, sizeof(buf), " | placed sections=%zu rows=%zu save_hook=%d", g_sections.size(), g_placed_live, (int)g_save_hook);
+        out += buf;
+    }
+    return out;
 }
 
 }  // namespace dialogs::options

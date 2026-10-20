@@ -436,3 +436,16 @@ uint32_t SF6CORE_CALL api_opt_status(char* buf, uint32_t cap) {
     if (buf && cap) { const uint32_t k = n < cap - 1 ? n : cap - 1; std::memcpy(buf, b, k); buf[k] = 0; return k; }
     return n;
 }
+
+// ---- increment 11 (ADR-0021): a group's entries as rows of a section of the game's Options screen ----------------
+SF6CoreStatus SF6CORE_CALL api_opt_group_place(SF6CoreClient* client, int64_t group, int32_t tab, int32_t section) {
+    auto g = group_by_id(client, group);
+    if (!g) return SF6CORE_ERR_NOT_FOUND;
+    const bool off = tab < 0 && section < 0;
+    if (!off && (tab < 0 || section < 0)) return SF6CORE_ERR_INVALID_ARG;
+    bool done = false;
+    guard("opt_group_place", [&] { oc::set_group_place(g->gid, off ? -1 : tab, off ? -1 : section); done = true; });
+    if (done) core_log(SF6CORE_LOG_INFO, nullptr, "[options] group %lld placed: %s", (long long)group,
+                       off ? "the core's window" : ("tab " + std::to_string(tab) + " / section " + std::to_string(section)).c_str());
+    return done ? SF6CORE_OK : SF6CORE_ERR_FAULTED;
+}

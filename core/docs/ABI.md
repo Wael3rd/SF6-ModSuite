@@ -327,6 +327,14 @@ once, `ERR_NOT_FOUND`). `System.Single` values travel through the invoke wrapper
 | 90 | `ui_get_texture_state` | `SF6CoreStatus (client, void* texture_ctrl, SF6CoreTextureState* out)` | **Game thread** | `out->struct_size` set by the caller. Asset type, texture holder (one reference owned by the caller: release it; accepted back by `ui_set_texture_rect`), UV-sequence holder (identity only, no reference), sequence and pattern numbers, UV type and rectangle, size, colour |
 | 91 | `ui_clone_control` | `SF6CoreStatus (client, void* template_ctrl, void* parent_ctrl, const char* name, void** out_ctrl)` | Advisory, as `ui_clone_row` | `duplicate(name)` of a plain element (no UIParts) added as the last child of `parent_ctrl` (drawn over its siblings). Checked before `addChild` (template's type, name asked: `ERR_NOT_READY`, nothing attached) and after (`get_Parent`: `ERR_FAULTED`). The copy is not a managed object: no reference to release, it lives with the parent's tree (find it again with `ui_find_child`). Call it from the screen's own update hook, as `ui_clone_row` (e.g. a post-hook of `app.UIFlowOptionBGDialog.Main.OnUpdate` for the option window): from REFramework's UpdateBehavior / LateUpdateBehavior the copy comes back unfinished (`ERR_NOT_READY`, "stopped at step 2" in the log) |
 
+## Function list (increment 11 -- option rows in a game Options section, ADR-0021, appended)
+
+Probe with `SF6CORE_HAS(api, opt_group_place)`. Details: `OPTIONS.md`, "Rows in a section of the game's Options screen".
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 92 | `opt_group_place` | `SF6CoreStatus (client, int64_t group, int32_t tab, int32_t section)` | As the other `opt_*` | The group's entries become rows of a section of the game's Options screen (`tab` = `app.Option.TabType`, `section` = `app.Option.GroupType`, e.g. 1 / 290 = Interface > Other Settings); `-1, -1` = back to the core's window. Applied at the next build. Never loaded, reset or saved by the game. `ERR_NOT_FOUND`: not the client's group; `ERR_INVALID_ARG`: one of the two negative |
+
 ## Lua bridge API
 
 The Lua bridge registers `_G.SF6Core` in REFramework's Lua state with:

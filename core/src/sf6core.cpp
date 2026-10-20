@@ -2020,6 +2020,8 @@ SF6CoreStatus SF6CORE_CALL api_ui_get_material_texture(SF6CoreClient*, void*, co
 SF6CoreStatus SF6CORE_CALL api_ui_set_texture_rect(SF6CoreClient*, void*, void*, float, float, float, float);
 SF6CoreStatus SF6CORE_CALL api_ui_get_texture_state(SF6CoreClient*, void*, SF6CoreTextureState*);
 SF6CoreStatus SF6CORE_CALL api_ui_clone_control(SF6CoreClient*, void*, void*, const char*, void**);
+// Increment 11: option rows in a game Options section (ADR-0021, options/options_service.cpp)
+SF6CoreStatus SF6CORE_CALL api_opt_group_place(SF6CoreClient*, int64_t, int32_t, int32_t);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2639,7 +2641,9 @@ static const SF6CoreAPI s_api = {
     // Increment 10
     api_ui_set_texture_rect,
     api_ui_get_texture_state,
-    api_ui_clone_control
+    api_ui_clone_control,
+    // Increment 11
+    api_opt_group_place
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)

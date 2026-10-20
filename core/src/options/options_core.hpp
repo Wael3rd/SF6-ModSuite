@@ -32,6 +32,7 @@ constexpr int kDeferredStable     = 5;    // :805  ticks with both flags false b
 constexpr int kValueFullPass      = 10;   // :945  cadence of the close detection and of the full value pass
 constexpr int kBuildRetry         = 60;   // :798  cadence of the first build attempts
 constexpr int kCloseDetectMin     = 10;   // :946  ticks after an open before the close detection may fire
+constexpr int kPlaceCheck          = 60;   // cadence of the check of the rows placed in a game section (increment 11)
 constexpr const char* kComposite  = "SF6 Tools";      // :147 COMPOSITE (the composite window itself is not ported)
 constexpr const char* kAgentName  = "OptionDialog";   // :828 agent_present("OptionDialog")
 
@@ -50,13 +51,16 @@ struct Entry {
     Obj unit = nullptr;
     uint64_t title_guid[2] = {0, 0};
     std::vector<uint64_t> option_guids; // hi, lo per option
+    bool placed = false;                // its group is placed in a section of the game's Options screen (increment 11)
 };
 
 struct Group {
     int64_t id = -1;
     std::string title, desc, key;       // key: "" when the caller gave none (:140 g.key == nil)
     std::vector<std::shared_ptr<Entry>> entries;
-    Obj unit = nullptr;
+    Obj unit = nullptr;                 // a placed group has none: its entries are rows of the game's section
+    int32_t place_tab = -1;             // increment 11: app.Option.TabType, -1 = the core's own window
+    int32_t place_section = -1;         // increment 11: app.Option.GroupType of the section
 };
 
 // The game operations. `false` from a bool-returning call = the call failed (the Lua's pcall returned false).
@@ -73,6 +77,7 @@ struct Backend {
     bool (*get_value)(Obj unit, int32_t& out) = nullptr;
     void (*set_value)(Obj unit, int32_t value, bool refresh) = nullptr;
     int32_t (*type_id_base)() = nullptr;              // :110-118 first id of this load
+    void (*sync_placed)(bool keep_live) = nullptr;    // increment 11: the placed rows in their game sections (re-insert / remove)
 };
 void set_backend(const Backend& b);
 
@@ -80,6 +85,9 @@ void set_backend(const Backend& b);
 int64_t add_group(const std::string& key);                    // key "" = the caller gave none
 void remove_group(int64_t group_id);
 int64_t add_entry(int64_t group_id, Kind kind, const std::string& key);
+// Increment 11: the group's entries become rows of a section of the game's Options screen (tab = app.Option.TabType,
+// section = app.Option.GroupType) at the next build, instead of a page of the core's window; -1, -1 = back to the window.
+void set_group_place(int64_t group_id, int32_t tab, int32_t section);
 // What build() reads from the Lua tables, pushed by the wrapper before each build (titles and option lists may be
 // functions there): :291 group title, :302 entry title, :227 descriptions, :309-315 options, :326 range and value.
 void set_group_def(int64_t group_id, const std::string& title, const std::string& desc);
@@ -88,6 +96,7 @@ void set_entry_def(int64_t entry_id, const std::string& title, const std::string
 std::shared_ptr<Entry> entry_by_id(int64_t entry_id);          // nullptr once nothing references it any more
 std::shared_ptr<Entry> entry_by_type(int32_t type_id);         // known_ids[TypeId]
 bool known(int32_t type_id);
+bool placed_type(int32_t type_id);                             // known and placed in a game section (increment 11)
 void set_value(int64_t entry_id, int64_t value, bool refresh); // Group:set / M.set_value (:193-197, :1095-1101)
 
 // ---- build (:262-392, :608-612) ------------------------------------------------------------------------------

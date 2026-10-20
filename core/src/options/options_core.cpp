@@ -37,6 +37,7 @@ bool g_type_id_inited = false;
 bool g_built = false;
 Obj g_root = nullptr;
 bool g_any_root = false;                // a root was added to the game's list since the last reset (:598 ids_by_key["__root"])
+bool g_any_placed = false;              // a group was ever placed in a game section (increment 11): its rows are checked
 
 // dialog lifecycle (:655-665, :681, :714, :730)
 std::string g_open_request;  bool g_has_request = false;
@@ -217,9 +218,22 @@ int64_t add_entry(int64_t group_id, Kind kind, const std::string& key) {
     if (!g) return -1;
     auto e = std::make_shared<Entry>();
     e->id = g_next_entry_id++; e->kind = kind; e->key = key;
+    e->placed = g->place_tab >= 0;
     g->entries.push_back(e);
     g_entries_by_id[e->id] = e;
     return e->id;
+}
+
+// Increment 11. Applied at the next build (the units are made there); the rows a group leaves are removed from the
+// game's section by the backend's sync_placed.
+void set_group_place(int64_t group_id, int32_t tab, int32_t section) {
+    std::lock_guard lk(mx);
+    Group* g = find_group(group_id);
+    if (!g) return;
+    const bool on = tab >= 0 && section >= 0;
+    g->place_tab = on ? tab : -1; g->place_section = on ? section : -1;
+    for (auto& e : g->entries) e->placed = on;
+    if (on) g_any_placed = true;
 }
 
 void set_group_def(int64_t group_id, const std::string& title, const std::string& desc) {
@@ -249,6 +263,11 @@ std::shared_ptr<Entry> entry_by_type(int32_t type_id) {
     return it == g_known_ids.end() ? nullptr : it->second;
 }
 bool known(int32_t type_id) { std::lock_guard lk(mx); return g_known_ids.count(type_id) != 0; }
+bool placed_type(int32_t type_id) {
+    std::lock_guard lk(mx);
+    auto it = g_known_ids.find(type_id);
+    return it != g_known_ids.end() && it->second->placed;
+}
 
 // :193-197 Group:set and :1095-1101 M.set_value: the value is the game's int here
 void set_value(int64_t entry_id, int64_t value, bool refresh) {
@@ -452,6 +471,9 @@ void tick_b() {
     // :989-995 every entry, every 10 ticks (the deferred callbacks of :996-999 are the wrapper's)
     const auto all = g_groups;
     for (auto& g : all) { const auto es = g->entries; for (auto& e : es) poll(e); }
+    // increment 11: the rows placed in a game section are still there (the game may rebuild its lists), the rows of
+    // removed / moved groups are gone. Nothing to do for a tree that never placed a group.
+    if (g_any_placed && g_tick % kPlaceCheck == 0 && be.sync_placed) be.sync_placed(true);
 }
 
 // :1003-1015, then what a fresh Lua state starts from
@@ -459,7 +481,7 @@ void reset() {
     std::lock_guard lk(mx);
     end_dialog();
     if (g_any_root && be.purge_roots) be.purge_roots(false);        // nothing of ours in the list: nothing to purge
-    g_any_root = false;
+    g_any_root = false; g_any_placed = false;
     g_groups.clear(); g_entries_by_id.clear(); g_next_group_id = 1; g_next_entry_id = 1;
     g_known_ids.clear(); g_ids_by_key.clear(); g_type_id_inited = false;
     g_built = false; g_root = nullptr;
@@ -500,7 +522,7 @@ bool on_page_setup(Obj param, const std::vector<PagePart>& parts) {
     std::string rec = "S"; rec += kFieldSep; rec += addr(param);
     for (auto& p : parts) {
         auto it = g_known_ids.find(p.type_id);
-        if (it == g_known_ids.end()) continue;
+        if (it == g_known_ids.end() || it->second->placed) continue;   // a placed row is in a game page, not one of ours
         ours = true; shown.push_back(it->second);
         rec += kFieldSep; rec += std::to_string(it->second->id); rec += kFieldSep; rec += addr(p.part);
     }

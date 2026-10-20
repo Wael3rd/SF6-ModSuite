@@ -767,6 +767,18 @@ typedef struct SF6CoreAPI {
     SF6CoreStatus (SF6CORE_CALL *ui_clone_control)(SF6CoreClient* client, void* template_ctrl, void* parent_ctrl,
                                                    const char* name, void** out_ctrl);
 
+    /* -- Increment 11: option rows in a section of the game's Options screen (ADR-0021, append-only) --
+     *
+     * Probe with SF6CORE_HAS(api, opt_group_place) (core >= 0.9.0). */
+
+    /* The group's entries become rows of an existing section of the game's Options screen instead of a page of the
+     * core's window: tab = app.Option.TabType (1 = Interface), section = app.Option.GroupType of the section (290 =
+     * OthersSettings_Interface, "Other Settings"); -1, -1 = back to the core's window. Applied at the next build
+     * (opt_rebuild + opt_ensure_built, or the first build). Same entries, values and on_value as a page (choice
+     * 1-based, slider raw); buttons of a placed group are not shown. The game never loads, resets or saves these
+     * rows: the client stores the value itself. ERR_NOT_FOUND: not one of the client's groups. */
+    SF6CoreStatus (SF6CORE_CALL *opt_group_place)(SF6CoreClient* client, int64_t group, int32_t tab, int32_t section);
+
 } SF6CoreAPI;
 
 #ifdef __cplusplus
