@@ -988,6 +988,23 @@ static bool retire_pak(const PakInfo& op, int top_foreign, bool* kept_as_stub = 
     return false;
 }
 
+// A pak being written is <pak>.tmp until it is complete, its big files wait in <pak>.spill (deleted with
+// the loader's handle): what a crash or a power cut left of them is removed. The stage loader, which runs
+// before, has finished with its own .tmp files by then.
+static void drop_temp_paks(const std::string& pak_dir) {
+    for (const char* ext : {".pak.tmp", ".pak.spill"}) {
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((pak_dir + "\\re_chunk_000.pak.patch_*" + ext).c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (!str_ends_with(str_lower(fd.cFileName), ext)) continue;
+            const std::string full = pak_dir + "\\" + fd.cFileName;
+            if (DeleteFileA(full.c_str())) logf("  removed %s (left by a build cut short)\n", full.c_str());
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+}
+
 // Marker-only placeholders with nothing foreign above them any more are not needed: they would
 // otherwise sit where the real pak goes, or above it.
 static void drop_stale_stubs(const std::vector<PakInfo>& stubs, int top_foreign) {
@@ -10294,6 +10311,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::vector<PakInfo> our_paks, our_stubs, mod_paks;
     int stage_pak_num = 0;
     classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num);
+    drop_temp_paks(pak_dir);
     int top_foreign = stage_pak_num;   // our pak goes above these
     for (auto& pi : mod_paks) top_foreign = std::max(top_foreign, pi.num);
     drop_stale_stubs(our_stubs, top_foreign);
@@ -10869,14 +10887,29 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         written_paths.insert(MARKER_PATH);
     }
 
-    // 8. Delete old our-paks. A Street Fighter 6 that was just closed often keeps running for a while
-    // with the pak open, which can then be neither deleted nor rewritten (27/09: the pak stayed the old
-    // one while the log said "wrote", and the saved fingerprint kept it for good). Up to ~10 s of
-    // waiting covers a normal exit; past that nothing is changed, the old pak and the old registry
-    // still match, and the next launch tries again.
+    // 8. Write the new pak beside the old ones (<pak>.tmp) and flush it to the disk before anything is
+    // removed: a full disk, a crash or a power cut while writing leaves the previous pak and registry
+    // as they were (the old pak used to be deleted first, and a write cut short left no costumes).
+    const std::string tmp_path = target_path + ".tmp";
+    if (!writer.write(tmp_path.c_str(), true)) {
+        DeleteFileA(tmp_path.c_str());
+        logf("ERROR: could not write %s (disk full or access denied), costumes not updated.\n",
+             tmp_path.c_str());
+        log_close(); return 1;
+    }
+    log_step("new pak written");
+
+    // 9. Old our-paks out, the new one in. A Street Fighter 6 that was just closed often keeps running
+    // for a while with the pak open, which can then be neither deleted nor rewritten (27/09: the pak
+    // stayed the old one while the log said "wrote", and the saved fingerprint kept it for good). Up to
+    // ~10 s of waiting covers a normal exit; past that nothing more is changed, the registry is not
+    // saved, and the next launch tries again. An old pak at the new pak's number is replaced in one
+    // step by the rename.
     for (auto& op : our_paks) {
+        if (_stricmp(op.path.c_str(), target_path.c_str()) == 0) continue;
         bool stub = false;
         if (!retire_pak(op, top_foreign, &stub)) {
+            DeleteFileA(tmp_path.c_str());
             logf("ERROR: %s is in use by another Street Fighter 6 process, costumes not updated. "
                  "Close every Street Fighter 6 (see the Task Manager) and launch the game again.\n",
                  op.path.c_str());
@@ -10892,15 +10925,24 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         warn_fluffy_archive_list(registry_dir, pak_names);
     }
 
-    // 9. Write output pak; the registry is saved only once it is on disk
-    if (!writer.write(target_path.c_str())) {
-        DeleteFileA(target_path.c_str());
-        logf("ERROR: could not write %s (disk full or access denied), costumes not updated.\n",
-             target_path.c_str());
-        log_close(); return 1;
+    // The registry is saved only once the new pak is in place
+    {
+        bool moved = false;
+        for (int i = 0; i < 20 && !moved; i++) {
+            moved = MoveFileExA(tmp_path.c_str(), target_path.c_str(),
+                                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+            if (!moved) Sleep(500);
+        }
+        if (!moved) {
+            DeleteFileA(tmp_path.c_str());
+            logf("ERROR: %s is in use by another Street Fighter 6 process, costumes not updated. "
+                 "Close every Street Fighter 6 (see the Task Manager) and launch the game again.\n",
+                 target_path.c_str());
+            log_close(); return 1;
+        }
     }
     logf("  wrote %s (%zu entries)\n", target_path.c_str(), writer.entry_count());
-    log_step("pak written");
+    log_step("pak in place");
     if (writer.dedup_count())
         logf("  %zu entries share data with an identical one (%.1f MB not written twice)\n",
              writer.dedup_count(), writer.dedup_bytes() / 1048576.0);
