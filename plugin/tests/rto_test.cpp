@@ -786,6 +786,10 @@ int main(int argc, char** argv) {
         check(std::string(panel_arrow(0, 2, 6)) == up && std::string(panel_arrow(3, 2, 6)).empty(), "arrows: bottom window, Up arrow on the first row");
         check(std::string(panel_arrow(1, 1, 6)).empty() && std::string(panel_arrow(2, 1, 6)).empty(), "arrows: none on the middle rows");
         check(std::string(panel_arrow(0, 0, 3)).empty() && std::string(panel_arrow(2, 0, 3)).empty(), "arrows: none when every row shows");
+        check(std::string(panel_arrow(0, 1, 6, kPanelRows, true)) == "\xE2\x96\xB3 " && std::string(panel_arrow(3, 1, 6, kPanelRows, true)) == "\xE2\x96\xBD ",
+              "arrows: hollow ones for a row not focused");
+        check(std::string(panel_arrow(1, 1, 6, kPanelRows, true)).empty() && std::string(panel_arrow(0, 0, 6, kPanelRows, true)).empty(),
+              "arrows: hollow, still none where no rows lie beyond");
         // the arrow in the row's left margin: 45 left of the title, its right edge at least 8 from it
         check(panel_arrow_left(85, 18, 45, 8) == 40, "arrow: 45 left of the title (in game 20/10: title at 85, arrow at 40)");
         check(panel_arrow_left(85, 40, 45, 8) == 37, "arrow: a wide glyph ends 8 left of the title");

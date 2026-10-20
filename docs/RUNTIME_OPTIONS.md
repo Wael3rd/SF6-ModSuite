@@ -892,28 +892,35 @@ does, the fallback above is the next step.
   (Esc leaves the mode only: the press is not a Back for the screen, IsDecide / IsCancel answer false 15 frames
   after); R1 / C do nothing while the options show (Wael 20/10; logged).
 - **Arrows**: a copy of the row's title (`e_text_slots_arrow`, the core's `ui_clone_control`, core 0.8.2+) next to
-  it (same parent, font, size and colour), on the title's line (its control point row), its left edge 45 units (root
-  space, 1080p) left of the title's left edge, further left when the glyph would end less than 8 units from the title
-  (`panel_arrow_left`, unit-tested): x 40 for a title at 85, about 12 inside the row's visible frame (x 28). The row's
-  outline is no reference: its leftmost wide element is the glow `e_tex_glow`, which reaches off the panel (x -32);
-  the leftmost non-glow element is only logged. 20/10 19:59: placed six times when shown and then left alone, the
-  arrows were drawn on the titles' first letters: the copy inherits the title's layout / animation (R31) and the game
-  puts it back at the title's place. Now written every frame while shown (left point, `set_AutoRegionFit(true)`),
-  its drawn place read 3 frames after it shows and logged once a visit (`rto select: P1 arrow row 3: drawn at x ..,
-  meant .. (title x .. - 45, glyph .. wide ..; row frame x .. <element>, for reference; placed every frame | anchored;
-  its position found moved by the game on N of M frames)`). Drawn more than 4 units from where it was meant (the
-  game's own write comes after ours): from then on, for the session, **anchored**: its position kept on the title's
-  own point (what moves the title moves it), its control point on the right of the title's row,
-  `set_AutoRegionFit(false)`, a region reaching from that point left to the arrow's place, the glyph drawn at the
-  region's left (`via.gui.PageAlignment` of the same row on the left, read by name from the game's types; logged:
-  `rto select: P1 arrow row 3: anchored, page alignment ..`). R19: the copy is made inside a post-hook of
+  it (same parent, font, size and colour), on the title's line (its control point row), its glyph's left edge 45 units
+  (root space, 1080p) left of the title's left edge, further left when the glyph would end less than 8 units from the
+  title (`panel_arrow_left`, unit-tested): x 40 for a title at 85, about 12 inside the row's visible frame (x 28). The
+  row's outline is no reference: its leftmost wide element is the glow `e_tex_glow`, which reaches off the panel
+  (x -32); the leftmost non-glow element is only logged. **Anchored** on the title: the copy inherits
+  the title's layout / animation (R31) and the game puts its position back at the title's place (20/10 19:59: placed
+  six times then left alone, drawn on the titles' first letters; 20/10 night: written every frame, it flickered, our
+  write and the game's alternating). So its position is only ever the title's own point (the game's write and ours
+  are the same value: nothing to alternate, whatever their order in a frame), and the arrow's place comes from what
+  the game does not lay out: its control point on the right of the title's row, `set_AutoRegionFit(false)`, a fixed
+  region reaching from that point left to the arrow's place, the glyph drawn at the region's left
+  (`via.gui.PageAlignment` of the same row on the left, read by name from the game's types). Drawn above the row's
+  focus highlight: `set_Priority` at least 10 (the Color Mod's colour grid copies) and above the highest priority
+  found among the row's elements; only while it shows (hidden + ForceInvisible otherwise). Hollow "△" / "▽" (U+25B3 /
+  U+25BD) while its row is not focused, filled "▲" / "▼" on the focused row, the rule of the game's own ◁ ▷ on the
+  rows; the text is written only when it changes. The hollow glyph's drawn width is read once (`get_DisplaySize`, two
+  frames after it is written): 0 = the game's font does not draw it, the arrows stay filled for the session (logged
+  once). Logged once a visit: `rto select: P1 arrow row 3: anchored, page alignment .., priority .. (was ..; row's
+  highest .., <element>)` and, 3 frames after it shows, `.. drawn at x <region> , glyph at .. (title x .. - 45, glyph
+  .. wide ..; row frame x .. <element>, for reference; anchored, priority ..; colour .., title's .., row focused | not
+  focused; its layout found changed by the game on N of M frames)` (control point, region or position found changed
+  before our write: should stay 0). R19: the copy is made inside a post-hook of
   `app.UIFlowUI10505.CharaSetting.OnUpdate` (the type's own method only; the place LL's row clones on this panel
   use), installed with the mode's hooks; the frame asks (one copy per row, under the title's parent, it lives and
-  dies with the panel's tree), the hook body is the core's guarded copy, made hidden and ForceInvisible. R35: found
-  again by name under the title's live parent, every write through the core. Hidden + ForceInvisible when its row
-  has no arrow and when leaving. Fallback: no hook, no `ui_clone_control`, 3 copies refused, or a copy still missing
-  a second after it was asked: the arrows go before the titles ("▲ " / "▼ ") for the session (one log line with the
-  counts).
+  dies with the panel's tree), the hook body is the core's guarded copy, made hidden and ForceInvisible. Every other
+  write from the frame (LateUpdateBehavior, R1). R35: found again by name under the title's live parent, every write
+  through the core. Hidden + ForceInvisible when its row has no arrow and when leaving. Fallback: no hook, no
+  `ui_clone_control`, 3 copies refused, or a copy still missing a second after it was asked: the arrows go before the
+  titles ("▲ " / "▼ ") for the session (one log line with the counts).
 - **Offered** only while the side's model wears an outfit with options (rto.cpp `select_slot`: the select model was
   identified as wearing it after the panel's fighter / costume last changed), the panel has been active 20 frames
   and one of its rows has the focus, no option window is open (the Color Mod's colour editor uses C), and the Color

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- SF6 Slots Loader (plugin): the costume options' scroll arrows on the character select no longer flicker (anchored
+  on their row's title), are drawn above the focused row's highlight, and are hollow (△ / ▽) on a row that is not
+  focused, filled (▲ / ▼) on the focused one, like the game's own row arrows.
+
 ## 1.17.1 (2026-10-20) — SF6 Mod Suite
 
 | Package | Version | |

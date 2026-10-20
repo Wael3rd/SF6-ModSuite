@@ -186,8 +186,9 @@ PanelWindow panel_clamp(PanelWindow w, int n, int shown = kPanelRows);
 PanelWindow panel_focus(PanelWindow w, int n, int k, int shown = kPanelRows);
 // The arrow of screen row k: "\xE2\x96\xB2 " (U+25B2) on the first row while rows lie above, "\xE2\x96\xBC " (U+25BC)
 // on the last shown row while rows lie below, else "". Drawn in the row's left margin (panel_arrow_left), the title
-// untouched; put before the title only when that row has no arrow copy (the copy could not be made)
-const char* panel_arrow(int k, int win, int n, int shown = kPanelRows);
+// untouched; put before the title only when that row has no arrow copy (the copy could not be made). `hollow`: the
+// outlined ones, "\xE2\x96\xB3 " (U+25B3) / "\xE2\x96\xBD " (U+25BD), like the game's own row arrows on a row not focused
+const char* panel_arrow(int k, int win, int n, int shown = kPanelRows, bool hollow = false);
 // The left edge of a row's arrow (root units, 1080p): `offset` left of the title's left edge (inside the row's visible
 // frame, well left of the title), moved further left when the glyph (glyph_w wide) would end less than `gap` from
 // the title. Negative widths, offsets and gaps count as 0.

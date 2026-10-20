@@ -684,10 +684,10 @@ PanelWindow panel_focus(PanelWindow w, int n, int k, int shown) {
     return w;
 }
 
-const char* panel_arrow(int k, int win, int n, int shown) {
+const char* panel_arrow(int k, int win, int n, int shown, bool hollow) {
     const int last = std::min(std::max(1, shown), n - win) - 1;          // the last screen row in use
-    if (k == 0 && win > 0) return "\xE2\x96\xB2 ";
-    if (k == last && win + shown < n) return "\xE2\x96\xBC ";
+    if (k == 0 && win > 0) return hollow ? "\xE2\x96\xB3 " : "\xE2\x96\xB2 ";
+    if (k == last && win + shown < n) return hollow ? "\xE2\x96\xBD " : "\xE2\x96\xBC ";
     return "";
 }
 

@@ -12,8 +12,10 @@
 //
 // The arrows: a copy of the row's title (ui_clone_control, core 0.8.2+) named e_text_slots_arrow, added next to the
 // title (same parent, font, size and colour), its left edge 45 units (root, 1080p) left of the title's, on the title's
-// line, placed every frame (the game puts a copy back at its title's place: anchored at the title's point instead when
-// a written place is found not to hold, paint_arrows); the title is never moved nor prefixed. R19: the copy is made inside the select flow's own update (post-hook of app.UIFlowUI10505.CharaSetting
+// line, anchored on the title's own point (the game puts a copy back at its title's place: a position written
+// elsewhere flickered; a fixed region reaching left instead, arrow_place), drawn above the row's focus highlight
+// (Priority), hollow while its row is not focused like the game's own row arrows; the title is never moved nor
+// prefixed. R19: the copy is made inside the select flow's own update (post-hook of app.UIFlowUI10505.CharaSetting
 // OnUpdate, the place LL's row clones on this panel use); the frame only asks for it (one per row, it lives and dies
 // with the panel's tree, never again after 3 refusals). R35: the copy is not a managed object, found again by name
 // under the title's live parent, every write through the core. Hidden (and ForceInvisible) when not wanted. When the
@@ -434,19 +436,18 @@ struct Side {
     float ref_pos[3] = {}; bool has_ref_pos = false;
     float ref_region[2] = { 300, 0 }; bool has_ref_region = false;
     uint32_t entered_at = 0;
-    // the arrows (kArrowRows): where each copy goes, read once a visit (the glyph's width until it is drawn), written
-    // every frame while shown
+    // the arrows (kArrowRows): where each copy goes, read once a visit (the glyph's width until it is drawn), its
+    // anchored layout written every frame while shown (the same values the game puts back: never a fight)
     struct Arrow {
-        bool geo = false, failed = false, styled = false, styled_anchor = false, shown = false, measured = false;
-        bool checked = false, written = false;
-        uint32_t shown_at = 0;
-        int frames = 0, resets = 0;                 // frames written, frames its position was found moved since
+        bool geo = false, failed = false, styled = false, shown = false, measured = false, checked = false, laid = false;
+        uint32_t shown_at = 0, text_at = 0;
+        int frames = 0, resets = 0;                 // frames laid out, frames its layout was found changed by the game
         float x = 0, y = 0, z = 0;                  // the title's place (its parent's space)
-        float wx = 0;                               // the x last written (its parent's space)
-        float region_h = 0;                         // the title's region height (anchored copies)
-        int cp = 0;
+        float region_h = 0;                         // the title's region height
+        float rw = 0;                               // the region width last written (the copy's units)
+        int cp = 0, prio = -1, row_prio = 0;
         double title_l = 0, title_lg = 0, title_gx = 0, row_lg = 0, k = 1, gsx = 1, glyph = 0;
-        std::string text, row_el;
+        std::string text, row_el, prio_el;
     } arrow[2];
     uint32_t arrow_asked = 0;                       // the first frame a copy was asked for and not found since
 };
@@ -455,7 +456,7 @@ bool g_was_up = false;                              // the character select was 
 int g_faults = 0;
 bool g_off = false;
 bool g_arrows_off = false;                          // no arrow copy can be made: the arrows go before the titles
-bool g_arrow_anchor = false;                        // a written position did not hold: copies anchored at the title's point
+int g_hollow = -1;                                  // the hollow glyphs drawn by the game's font: -1 unknown, 0 no, 1 yes
 
 // ---- the trigger: R1 / the key, read per player ----
 struct Keys {
@@ -669,7 +670,7 @@ constexpr double kArrowOffset = 45;                 // the arrow's left edge, le
 constexpr double kArrowGap = 8;                     // at least this between the glyph and the title
 constexpr uint32_t kArrowWait = 60;                 // frames a copy may be waited for, then the arrows go in the titles
 constexpr uint32_t kArrowCheck = 3;                 // frames shown before where it is drawn is read (logged once a visit)
-constexpr double kArrowTolerance = 4;               // drawn farther than this from where it was meant: it did not hold
+constexpr uint16_t kArrowAbove = 10;                // its draw priority at least this (the Color Mod's grid copies: 10)
 
 bool shown_el(Obj* o) {
     bool ok = false;
@@ -704,6 +705,19 @@ void outline_walk(Obj* o, int depth, int& budget, double& best, std::string& wha
         if (depth < 5) outline_walk(call_obj(o, "get_Child"), depth + 1, budget, best, what);
     }
 }
+// The highest draw priority (set_Priority) of the row's elements, shown or not (the focus highlight shows on the focused
+// row only), the arrow's copy left out
+void prio_walk(Obj* o, int depth, int& budget, int& best, std::string& what) {
+    for (; o && budget > 0; o = call_obj(o, "get_Next")) {
+        --budget;
+        const std::string nm = str(call_obj(o, "get_Name"));
+        if (nm == kArrowName) continue;
+        const Ret r = call(o, "get_Priority");
+        const int p = r.exception_thrown ? -1 : static_cast<int>(r.dword & 0xFFFF);
+        if (p > best) { best = p; what = nm; }
+        if (depth < 5) prio_walk(call_obj(o, "get_Child"), depth + 1, budget, best, what);
+    }
+}
 // Where the arrow goes, read once a visit: the title's place, point and left edge (root space), its region's height
 bool arrow_geo(Side::Arrow& ar, void* row, void* title) {
     Obj* t = reinterpret_cast<Obj*>(title);
@@ -727,6 +741,11 @@ bool arrow_geo(Side::Arrow& ar, void* row, void* title) {
     outline_walk(call_obj(reinterpret_cast<Obj*>(row), "get_Child"), 0, budget, best, what);
     ar.row_lg = std::isnan(best) ? 0 : best;
     ar.row_el = std::isnan(best) ? std::string("none found") : what;
+    int top = 0;
+    budget = 96;
+    ar.prio_el = "none";
+    prio_walk(call_obj(reinterpret_cast<Obj*>(row), "get_Child"), 0, budget, top, ar.prio_el);
+    ar.row_prio = top;
     ar.geo = true;
     return true;
 }
@@ -759,14 +778,12 @@ void set_cp(void* c, int cp) {
     SF6CoreArg pc{}; pc.type = SF6CORE_ARG_I64; pc.v.i = cp;
     A()->obj_invoke(C(), c, "set_ControlPoint(via.gui.ControlPoint)", &pc, 1, nullptr);
 }
-// Its text settings, once a visit and when the way it is placed changes: a placed copy's region is its glyph; an
-// anchored copy's region is fixed, its glyph drawn at the region's left
+// Its settings, once a visit: no text fitting, the left alignment of the title's row (the glyph drawn at the region's
+// left), drawn above every element of its row and above the row's focus highlight (Priority, at least kArrowAbove)
 void arrow_style(void* c, Side::Arrow& ar, int s, int k) {
     ar.styled = true;
-    ar.styled_anchor = g_arrow_anchor;
-    SF6CoreArg fit{}; fit.type = SF6CORE_ARG_BOOL; fit.v.i = g_arrow_anchor ? 0 : 1;
+    SF6CoreArg fit{}; fit.type = SF6CORE_ARG_BOOL; fit.v.i = 0;
     A()->obj_invoke(C(), c, "set_AutoRegionFit(System.Boolean)", &fit, 1, nullptr);
-    if (!g_arrow_anchor) return;
     const Ret r = call(reinterpret_cast<Obj*>(c), "get_PageAlignment");
     const int64_t cur = r.exception_thrown ? -1 : static_cast<int32_t>(r.dword);
     std::string how;
@@ -775,7 +792,15 @@ void arrow_style(void* c, Side::Arrow& ar, int s, int k) {
         SF6CoreArg pa{}; pa.type = SF6CORE_ARG_I64; pa.v.i = left;
         A()->obj_invoke(C(), c, "set_PageAlignment(via.gui.PageAlignment)", &pa, 1, nullptr);
     }
-    logf("rto select: P%d arrow row %d: anchored, page alignment %s", s, k, left < 0 ? "unread (the title's kept)" : how.c_str());
+    const Ret rp = call(reinterpret_cast<Obj*>(c), "get_Priority");
+    const int had = rp.exception_thrown ? -1 : static_cast<int>(rp.dword & 0xFFFF);
+    ar.prio = std::min(0xFFFF, std::max<int>(kArrowAbove, ar.row_prio + 1));
+    if (had != ar.prio) {
+        SF6CoreArg pr{}; pr.type = SF6CORE_ARG_I64; pr.v.i = ar.prio;
+        A()->obj_invoke(C(), c, "set_Priority(System.UInt16)", &pr, 1, nullptr);
+    }
+    logf("rto select: P%d arrow row %d: anchored, page alignment %s, priority %d (was %d; row's highest %d, %s)", s, k,
+         left < 0 ? "unread (the title's kept)" : how.c_str(), ar.prio, had, ar.row_prio, ar.prio_el.c_str());
 }
 void arrow_hide(void* c, Side::Arrow& ar) {
     if (!ar.shown) return;
@@ -787,57 +812,55 @@ void* arrow_copy(void* title) {
     Obj* parent = title ? call_obj(reinterpret_cast<Obj*>(title), "get_Parent") : nullptr;
     return parent ? A()->ui_find_child(parent, kArrowName, 0) : nullptr;
 }
-// The arrow placed, every frame while it shows. 20/10 19:59: placed six times when shown, then left alone, the arrows
-// were drawn on their titles' first letters (the copy inherits the title's layout and animation, R31: the game puts
-// it back at the title's place).
-//   - placed (first): its left point written at the arrow's place every frame, after the game's update (this tick);
-//   - anchored (for the session, once a placed copy is found drawn elsewhere than meant): its position left on the
-//     title's own point (written there too), its control point on the right of the title's row and a fixed region
-//     reaching left to the arrow's place, the glyph drawn at the region's left: what moves the title moves the arrow.
-void arrow_place(void* c, Side::Arrow& ar, void* title, int s, int k) {
+// The arrow laid out, every frame while it shows: ANCHORED on its title. The copy inherits the title's layout and
+// animation (R31): the game puts its position back at the title's place (20/10 19:59, placed six times then left
+// alone: drawn on the titles' first letters), and a position written every frame elsewhere flickered (20/10 night:
+// our write and the game's alternate, whatever their order in a frame). So the position is never moved off the
+// title's own point: the game's write and ours are the same value, there is nothing to alternate. The arrow's place
+// comes from what the game does not lay out: the control point on the right of the title's row, a fixed region
+// reaching from that point left to the arrow's place, the glyph drawn at the region's left (arrow_style). A control
+// point, region or position found changed by the game before our write is counted (logged once a visit).
+void arrow_place(void* c, Side::Arrow& ar, void* title, int s, int k, bool focused) {
     const double left = panel_arrow_left(ar.title_lg, ar.glyph, kArrowOffset, kArrowGap);
-    const int row_cp = (ar.cp / 4) * 4;                                            // the title's row, its left point
+    const int cp = (ar.cp / 4) * 4 + 2;                                            // the title's row, its right point
     Obj* co = reinterpret_cast<Obj*>(c);
-    // where the last frames' writes were drawn: read once a visit, a few frames after it shows
+    float tp[3] = {};                                                              // the title's place now
+    if (!ret_floats(reinterpret_cast<Obj*>(title), "get_Position", tp, 3)) { tp[0] = ar.x; tp[1] = ar.y; tp[2] = ar.z; }
+    const float w = static_cast<float>(std::max(1.0, (ar.title_gx - left) / std::max(1e-3, std::fabs(ar.gsx))));   // copy units
+    const float h = ar.region_h > 0 ? ar.region_h : 40.0f;
+    if (ar.laid) {
+        float pos[3] = {}, rs[2] = {};
+        const bool moved = ret_floats(co, "get_Position", pos, 3) && (std::fabs(pos[0] - tp[0]) > 0.5f || std::fabs(pos[1] - tp[1]) > 0.5f);
+        const bool region = ret_floats(co, "get_RegionSize", rs, 2) && std::fabs(rs[0] - ar.rw) > 0.5f;
+        if (moved || region || cp_of(co) != cp) ++ar.resets;
+    }
+    set_cp(c, cp);
+    A()->ui_set_region_size(C(), c, w, h);                                         // compared first by the core
+    A()->ui_set_position(C(), c, tp[0], tp[1], tp[2]);                             // compared first by the core
+    ar.laid = true; ar.rw = w;
+    ++ar.frames;
+    // where it is drawn: read once a visit, a few frames after it shows
     if (ar.shown && !ar.checked && g_frame - ar.shown_at >= kArrowCheck) {
         ar.checked = true;
-        float gp[3] = {}, dw[2] = {};
-        const bool have = ret_floats(co, "get_GlobalPosition", gp, 2);
-        const double w = ret_floats(co, "get_DisplaySize", dw, 2) && std::isfinite(dw[0]) ? dw[0] * std::fabs(ar.gsx) : 0.0;
-        const double drawn = gp[0] - (cp_of(co) % 4) * 0.5 * w;
-        char at[96];
-        if (!have) std::snprintf(at, sizeof at, "?");
-        else if (g_arrow_anchor) std::snprintf(at, sizeof at, "%.0f (anchored at the title's point x %.0f)", left, gp[0]);
-        else std::snprintf(at, sizeof at, "%.0f", drawn);
-        logf("rto select: P%d arrow row %d: drawn at x %s, meant %.0f (title x %.0f - %.0f, glyph %.0f wide %s; row frame "
-             "x %.0f %s, for reference; %s; its position found moved by the game on %d of %d frames)", s, k, at, left,
-             ar.title_lg, kArrowOffset, ar.glyph, ar.measured ? "drawn" : "font size", ar.row_lg, ar.row_el.c_str(),
-             g_arrow_anchor ? "anchored" : "placed every frame", ar.resets, ar.frames);
-        if (have && !g_arrow_anchor && std::fabs(drawn - left) > kArrowTolerance) {
-            g_arrow_anchor = true;
-            logf("rto select: the arrows' written position does not hold (drawn %.0f from where it was meant): from now on "
-                 "anchored at their title's point", drawn - left);
-            arrow_style(c, ar, s, k);
-        }
+        float gp[3] = {};
+        uint32_t tc = 0, cc = 0;
+        const Ret rt = call(reinterpret_cast<Obj*>(title), "get_Color"), rc = call(co, "get_Color");
+        if (!rt.exception_thrown) std::memcpy(&tc, rt.bytes.data(), 4);
+        if (!rc.exception_thrown) std::memcpy(&cc, rc.bytes.data(), 4);
+        char at[48] = "?";
+        if (ret_floats(co, "get_GlobalPosition", gp, 2))
+            std::snprintf(at, sizeof at, "%.0f .. %.0f", gp[0] - w * std::fabs(ar.gsx), gp[0]);
+        logf("rto select: P%d arrow row %d: drawn at x %s, glyph at %.0f (title x %.0f - %.0f, glyph %.0f wide %s; row frame "
+             "x %.0f %s, for reference; anchored, priority %d; colour %08x, title's %08x, row %s; its layout found changed "
+             "by the game on %d of %d frames)", s, k, at, left, ar.title_lg, kArrowOffset, ar.glyph,
+             ar.measured ? "drawn" : "font size", ar.row_lg, ar.row_el.c_str(), ar.prio, cc, tc,
+             focused ? "focused" : "not focused", ar.resets, ar.frames);
     }
-    if (!g_arrow_anchor) {
-        const float x = static_cast<float>(ar.title_l + (left - ar.title_lg) * ar.k);
-        float cur[3] = {};
-        if (ar.written && ret_floats(co, "get_Position", cur, 3) && std::fabs(cur[0] - ar.wx) > 0.5f) ++ar.resets;
-        set_cp(c, row_cp);
-        A()->ui_set_position(C(), c, x, ar.y, ar.z);                               // compared first by the core
-        ar.written = true; ar.wx = x;
-    } else {
-        float tp[3] = {};                                                          // the title's place now
-        if (!ret_floats(reinterpret_cast<Obj*>(title), "get_Position", tp, 3)) { tp[0] = ar.x; tp[1] = ar.y; tp[2] = ar.z; }
-        set_cp(c, row_cp + 2);                                                     // its right point, the title's row
-        const double w = (ar.title_gx - left) / std::max(1e-3, std::fabs(ar.gsx)); // to the arrow's place (copy units)
-        A()->ui_set_region_size(C(), c, static_cast<float>(std::max(1.0, w)), ar.region_h > 0 ? ar.region_h : 40.0f);
-        A()->ui_set_position(C(), c, tp[0], tp[1], tp[2]);
-    }
-    ++ar.frames;
 }
-// Each frame while on: each arrow row's copy shown with its glyph (or hidden) and placed, asked for when missing
+// Each frame while on: each arrow row's copy shown with its glyph (or hidden) and laid out, asked for when missing.
+// The glyph follows the game's own arrows on the rows: hollow (U+25B3 / U+25BD) while its row is not focused, filled
+// (U+25B2 / U+25BC) on the focused row; filled only when the game's font does not draw the hollow ones (measured
+// once, logged once)
 void paint_arrows(Side& st, int s, void* cm) {
     if (g_arrows_off) {                             // a copy already shown on the other row goes too
         for (int a = 0; a < 2; ++a)
@@ -845,28 +868,43 @@ void paint_arrows(Side& st, int s, void* cm) {
         return;
     }
     const int n = static_cast<int>(st.rows.size());
+    const int focus = st.w.cur - st.w.win;          // the focused screen row
     bool missing = false;
     for (int a = 0; a < 2; ++a) {
         Side::Arrow& ar = st.arrow[a];
         const int k = kArrowRows[a];
         RowParts p = parts_of(cm, k);
-        std::string glyph = panel_arrow(k, st.w.win, n);
+        const bool hollow = k != focus && g_hollow != 0;
+        std::string glyph = panel_arrow(k, st.w.win, n, kPanelRows, hollow);
         while (!glyph.empty() && glyph.back() == ' ') glyph.pop_back();
         void* c = arrow_copy(p.title);
         if (!c) { if (!glyph.empty()) missing = true; continue; }
         if (glyph.empty() || ar.failed) { arrow_hide(c, ar); continue; }
         if (!ar.geo && !arrow_geo(ar, p.ctrl, p.title)) { ar.failed = true; logf("rto select: P%d arrow row %d: the title's place unread, no arrow", s, k); continue; }
-        if (!ar.styled || ar.styled_anchor != g_arrow_anchor) arrow_style(c, ar, s, k);
-        if (glyph != ar.text && A()->ui_set_text(C(), c, glyph.c_str()) == SF6CORE_OK) { ar.text = glyph; ar.measured = false; }
-        // the glyph's drawn width once shown (the copy keeps the title's scale; an anchored copy's region is not its glyph)
-        if (ar.shown && !ar.measured && !g_arrow_anchor) {
+        if (!ar.styled) arrow_style(c, ar, s, k);
+        // written only when it changes (never an identical set_Message; the core compares too)
+        if (glyph != ar.text && A()->ui_set_text(C(), c, glyph.c_str()) == SF6CORE_OK) { ar.text = glyph; ar.text_at = g_frame; ar.measured = false; }
+        // the glyph's drawn width, read once drawn: shown, two frames after its text changed
+        if (ar.shown && !ar.measured && g_frame - ar.text_at >= 2 && g_frame - ar.shown_at >= 2) {
             float dw[2] = {};
-            if (ret_floats(reinterpret_cast<Obj*>(c), "get_DisplaySize", dw, 2) && std::isfinite(dw[0]) && dw[0] > 0) {
+            if (ret_floats(reinterpret_cast<Obj*>(c), "get_DisplaySize", dw, 2) && std::isfinite(dw[0]) && dw[0] >= 0) {
                 ar.measured = true;
-                ar.glyph = dw[0] * std::fabs(ar.gsx);
+                const bool drawn = dw[0] > 0.5f;
+                // the region's width read back: the text's size is not readable here, nothing learnt (never a glyph
+                // as wide as the region: the region would grow with it)
+                const bool region = ar.laid && std::fabs(dw[0] - ar.rw) <= 0.5f;
+                if (drawn && !region) ar.glyph = dw[0] * std::fabs(ar.gsx);
+                if (hollow && g_hollow < 0) {
+                    g_hollow = drawn ? 1 : 0;
+                    logf(!drawn ? "rto select: the game's font does not draw the hollow arrows (U+25B3 / U+25BD, %.0f wide): "
+                                  "the arrows stay filled"
+                         : region ? "rto select: the hollow arrows (U+25B3 / U+25BD) kept, their width unread (%.0f = the region)"
+                                  : "rto select: the hollow arrows (U+25B3 / U+25BD) are drawn by the game's font (%.0f wide)",
+                         dw[0] * std::fabs(ar.gsx));
+                }
             }
         }
-        arrow_place(c, ar, p.title, s, k);
+        arrow_place(c, ar, p.title, s, k, k == focus);
         if (!ar.shown) {
             A()->ui_set_force_invisible(C(), c, 0);     // the copy's lock, put on when it was made
             A()->ui_set_visible(C(), c, 1);
