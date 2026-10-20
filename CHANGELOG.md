@@ -1,10 +1,44 @@
 # Changelog
 
-## Unreleased
+## 1.17.2 (2026-10-20) — SF6 Mod Suite
 
-- SF6 Slots Loader (plugin): the costume options' scroll arrows on the character select no longer flicker (anchored
-  on their row's title), are drawn above the focused row's highlight, and are hollow (△ / ▽) on a row that is not
-  focused, filled (▲ / ▼) on the focused one, like the game's own row arrows.
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.13.2 | costume options menu of the character select: steady, visible, hollow / filled arrows |
+| SF6 Color Mod | 0.22.6 | unchanged |
+| SF6 Native Core | 0.9.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.13.1 first, then install 1.13.2. The other
+packages are the files of 1.17.0: nothing to do if they are installed. Coming from an older version, install the Slots
+Loader, Color Mod and Native Core packages of this release together (see 1.17.0 below). Only the plugin
+(`SF6_CostumeSlotsNative.dll`) changed: the costume pak is not rebuilt.
+
+### SF6 Slots Loader 1.13.2
+- The costume options' scroll arrows on the character select no longer flicker (anchored on their row's title),
+  are drawn above the focused row's highlight, and are hollow (△ / ▽) on a row that is not focused, filled
+  (▲ / ▼) on the focused one, like the game's own row arrows. When the game's font has no hollow arrow, the
+  filled ones stay (logged once).
+
+### Known issues
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only. The Training pause menu's character popup
+  has no options menu.
+- Slots Loader, character select: the costume options menu (R1 / C) and the Color Mod's Drive colours (L1) use
+  buttons the game may also use on that screen; this is not confirmed either way. If the game's own guide there shows
+  them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- The pencil-like outline around the fighter during Drive Impact, Drive Reversal (red) and Drive Rush (green) keeps
+  the game's colours: it is drawn by the game's camera filter, not by an effect.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
 
 ## 1.17.1 (2026-10-20) — SF6 Mod Suite
 
