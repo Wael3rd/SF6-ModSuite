@@ -298,6 +298,62 @@ int main(int argc, char** argv) {
         check(!parse_manifest("{\"format\": \"sf6-costume-options-0\"}", x, e3), "another manifest format is refused");
         check(!parse_manifest("", x, e3), "no manifest");
     }
+    {   // an outfit with add-ons, as the loader writes it (Leon Requiem On Luke, 20/10): the outfit is the base,
+        // "More muscles" a toggle, two hairs replacing the same files one pick group with None; the hairs target
+        // the part the slot's scene loads (the game's hair in 000/02/), one required group from the author
+        const char* j = R"JSON({"format": "sf6-costume-options-1", "layout": "one", "mods": [
+          {"key": "esf002/leon as luke", "name": "Leon as Luke", "groups": [
+            {"name": "Leon as Luke", "options": [{"id": "c47d9bac", "name": "Leon as Luke", "mode": "base"}]},
+            {"name": "Add-ons", "options": [{"id": "cf9f838f", "name": "Optional - More muscles", "mode": "toggle"}]},
+            {"name": "Hair", "options": [{"id": "84fa84c5", "name": "Optional - Leon Hair", "mode": "pick"},
+                                         {"id": "87a803a0", "name": "Optional - Trimmed Hair", "mode": "pick"}]},
+            {"name": "2! Eyes", "options": [{"id": "e0000001", "name": "blue", "mode": "pick"},
+                                            {"id": "e0000002", "name": "grey", "mode": "pick"}]}],
+           "variants": [{"label": "Leon as Luke", "options": ["c47d9bac"]},
+                        {"label": "Leon as Luke + Optional - Leon Hair", "options": ["c47d9bac", "84fa84c5"]}]}],
+          "slots": [{"fighter": 2, "fighter_dir": "esf002", "costume_no": 5, "folder": "006", "mod": "esf002/leon as luke",
+            "defaults": ["c47d9bac", "e0000001"],
+            "options": {
+              "cf9f838f": [{"kind": "mesh", "target": "product/model/esf/esf002/006/01/esf002_006_01.mesh", "path": "product/model/esf/esf002/006/rto/cf9f838f/01/esf002_006_01.mesh"}],
+              "84fa84c5": [{"kind": "mesh", "target": "product/model/esf/esf002/000/02/esf002_000_02.mesh", "path": "product/model/esf/esf002/006/rto/84fa84c5/_/000/02/esf002_000_02.mesh"},
+                           {"kind": "material", "target": "product/model/esf/esf002/000/02/esf002_000_02.mdf2", "path": "product/model/esf/esf002/006/rto/84fa84c5/_/000/02/esf002_000_02.mdf2"}],
+              "87a803a0": [{"kind": "mesh", "target": "product/model/esf/esf002/000/02/esf002_000_02.mesh", "path": "product/model/esf/esf002/006/rto/87a803a0/_/000/02/esf002_000_02.mesh"},
+                           {"kind": "material", "target": "product/model/esf/esf002/000/02/esf002_000_02.mdf2", "path": "product/model/esf/esf002/006/rto/87a803a0/_/000/02/esf002_000_02.mdf2"}],
+              "e0000001": [{"kind": "texture", "target": "product/model/esf/esf002/006/00/eye.tex", "path": "product/model/esf/esf002/006/rto/e0000001/00/eye.tex"}],
+              "e0000002": [{"kind": "texture", "target": "product/model/esf/esf002/006/00/eye.tex", "path": "product/model/esf/esf002/006/rto/e0000002/00/eye.tex"}]},
+            "base": [], "required": [3], "former": [{"costume_no": 7, "folder": "008", "label": "Leon as Luke + Optional - Leon Hair", "options": ["c47d9bac", "84fa84c5"]}]}]})JSON";
+        Manifest q; std::string e4;
+        check(parse_manifest(j, q, e4), "add-on manifest parsed");
+        const Slot& t = q.slots[0];
+        auto c = t.defaults;
+        complete(q, t, c);
+        check(same_set(c, t.defaults), "add-ons: the outfit alone by default (the required group has its default)");
+        auto d = desired(q, t, c);
+        bool all = true;
+        for (auto& [k, w] : d) all = all && w.orig;
+        check(all, "add-ons: defaults change nothing on the model");
+        choose(q, t, c, 2, "84fa84c5");
+        toggle(q, t, c, "cf9f838f", true);
+        d = desired(q, t, c);
+        check(path_of(d, "product/model/esf/esf002/000/02/esf002_000_02.mesh") == "product/model/esf/esf002/006/rto/84fa84c5/_/000/02/esf002_000_02.mesh"
+              && path_of(d, "product/model/esf/esf002/006/01/esf002_006_01.mesh") == "product/model/esf/esf002/006/rto/cf9f838f/01/esf002_006_01.mesh",
+              "add-ons: a hair on the game's hair part, the muscles on the body");
+        choose(q, t, c, 2, "87a803a0");
+        check(!has(c, "84fa84c5") && has(c, "87a803a0") && has(c, "cf9f838f"), "add-ons: the other hair replaces it, the toggle stays");
+        choose(q, t, c, 2, "");
+        d = desired(q, t, c);
+        check(is_orig(d, "product/model/esf/esf002/000/02/esf002_000_02.mesh"), "add-ons: hair None -> the slot's own hair");
+        auto r = rows(q, t, t.defaults);
+        check(r.size() == 3 && r[0].kind == Row::Toggle && r[0].title == "Optional - More muscles", "add-ons: a toggle row");
+        check(r.size() == 3 && r[1].kind == Row::Pick && r[1].none && r[1].labels.size() == 3 && r[1].value == 1, "add-ons: hair row None + 2, None chosen");
+        check(r.size() == 3 && r[2].kind == Row::Pick && !r[2].none && r[2].labels.size() == 2 && r[2].value == 1, "author's 'exactly one' group: no None");
+        Choices ch;
+        ch.mods["esf002/leon as luke"][0] = Side{true, {"c47d9bac"}, {}};   // saved without any eyes option
+        auto cc = chosen_of(q, t, ch, 0);
+        check(has(cc, "e0000001"), "a required group gets its default back");
+        const Former* fo = nullptr;
+        check(former_of(q, 2, 7, &fo) == &t && fo && fo->ids.size() == 2, "the former add-on outfit's slot moves to the outfit");
+    }
 
     int rc = 0;
     if (argc > 1) rc = real_manifest(argv[1]);
