@@ -647,6 +647,8 @@ std::atomic<uint32_t> g_builds{0};   // PlayerBehavior.SetupAppearance calls (ev
 uint32_t g_holders = 0;              // frames with an outfit's visual manifest created (EV_HOLDER: the game loads an outfit)
 uint32_t g_gone_at = 0, g_gone_builds = 0, g_gone_holders = 0;   // the preview without a model since this frame (0: it has one)
 bool g_gone_told = false;
+int g_prev_fighter = -1;             // the fighter of the last preview model (its name "esfNNNvMM"), -1 none
+uint32_t g_prev_fighter_at = 0;      // the frame that model was seen
 void preview_tick() {
     if (g_frame < g_prev_next) return;
     g_prev_next = g_frame + 10;
@@ -691,7 +693,15 @@ void preview_tick() {
     if (root && T.crf_setup && !ret_bool(T.crf_setup, g_crf)) root = nullptr;   // still building
     if (root != md.root) {
         reset(md); md.root = root;
-        if (root) logf("rto: preview model %s", str(call_obj(T.go_name, root)).c_str());
+        if (root) {
+            const std::string nm = str(call_obj(T.go_name, root));
+            logf("rto: preview model %s", nm.c_str());
+            if (nm.size() >= 6 && nm.compare(0, 3, "esf") == 0 && isdigit(static_cast<unsigned char>(nm[3])) &&
+                isdigit(static_cast<unsigned char>(nm[4])) && isdigit(static_cast<unsigned char>(nm[5]))) {
+                g_prev_fighter = (nm[3] - '0') * 100 + (nm[4] - '0') * 10 + (nm[5] - '0');
+                g_prev_fighter_at = g_frame;
+            }
+        }
     }
     if (!root) return;
     process(md, menu::active() ? menu::side() : 0, true);
@@ -795,6 +805,10 @@ void choices_changed() {
 int preview_since() {
     const Model& md = g_models[0];
     return (md.root && md.slot && !g_no_rows.count(md.slot)) ? static_cast<int>(md.since) : -1;
+}
+int preview_fighter(uint32_t* at) {
+    if (at) *at = g_prev_fighter_at;
+    return g_prev_fighter;
 }
 const Slot* preview_slot() {
     const Model& md = g_models[0];
@@ -909,6 +923,7 @@ void tick(uint32_t ev) {
                 reset(g_models[0]);
                 g_crf = nullptr;
                 g_gone_at = 0;
+                g_prev_fighter = -1;
                 res_gc();
             }
         }

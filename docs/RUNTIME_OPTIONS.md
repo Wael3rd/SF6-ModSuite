@@ -671,10 +671,14 @@ does, the fallback above is the next step.
 ### Outfit name on Fighter Settings: `plugin/src/fs_name.cpp` (no new core capability)
 
 - **What**: on Fighter Settings, the name of the outfit on the preview, right-aligned at the right end of the bottom
-  input guide bar's line (the bar's left margin mirrored). One of our outfits: its label (`outfits.json`, the mod's
-  name, e.g. "Aloha Ryu"), read from the screen's `app.UIPartsMatchingFighterSetting` (`FighterId`,
-  `GetCostumeId()`); a game outfit (or that part not found): the costume row's own text, i.e. the game's name. Cut at
-  40 characters ("..."). Works with `RuntimeOptions` off too (its own module, not the options menu).
+  input guide bar's line (the bar's left margin mirrored). The options menu's title without "- P1": an outfit of
+  the options manifest = its label (the mod's name, e.g. "Aloha Ryu"; a game outfit with options: "Outfit 1"),
+  another of ours = its label in `outfits.json`, any other game outfit = the costume row's own text (the game's
+  name, e.g. "DriveTech Wear"). Cut at 40 characters ("..."). The outfit: an `app.UIPartsMatchingFighterSetting`
+  (`FighterId`, `GetCostumeId()`) in the screen's parts list or its flow's settings, else the fighter of the
+  preview model built since the screen came up (`esfNNNv..`) and the outfit by the costume row's name ("Outfit II"
+  = the registry's name of a slot of ours). Works with `RuntimeOptions` off too (its own module; the preview's
+  fighter then only comes from the screen).
 - **Shown** while Fighter Settings is on screen and no option window is open; **hidden** under our options menu and
   the Color Mod's colour editor (their own guide bar and camera hints are there), off that screen, and when it would
   come within 48 px of the bar's own text (its entries change with the focused row).
@@ -684,9 +688,12 @@ does, the fallback above is the next step.
   `app.UIPartsInputGuideList.OnLateUpdate`, that list only (its template and parent found from `this`), hidden; the
   frame only asks. One copy per bar (it lives and dies with the bar's tree), no new copy after 3 refusals in a
   session. Everything else from LateUpdateBehavior, by the plugin only, through the core (R1, R35: found again by
-  name under its live parent): text (tags shown as typed), ControlPoint = the bar text's row at its right point,
+  name under its live parent): text (tags shown as typed), ControlPoint = the bar text's row at its LEFT point,
+  placed at (right end - drawn width): the copy keeps the template's region (about the bar's width) and a text is
+  laid out from its region's left, so a right point drew it at the screen's far left (20/10). The drawn width is
+  the copy's `get_DisplaySize` once drawn (read on the next frames), estimated from the bar's glyph width before.
   AutoRegionFit, scale, position, visibility. Logs: `fs name: ...` in `native_log.txt` (source of the name, geometry
-  once per change, shown / hidden and why).
+  once per change with the copy's global x and region as found, shown / hidden and why).
 
 ## Saved choices and slot numbers
 

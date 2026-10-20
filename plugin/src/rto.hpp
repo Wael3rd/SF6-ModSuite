@@ -38,6 +38,8 @@ void save_choices();                  // written at once (small file)
 void choices_changed();               // the models re-apply (the preview now, fighters at their next build)
 const Slot* preview_slot();           // the slot the Battle Settings preview wears, nullptr = none with options
 int preview_since();                  // the frame the preview was last identified (-1: no slot with options)
+// The fighter of the last Battle Settings preview model (its name, "esf001v00" = 1), -1 none; at: the frame it was seen
+int preview_fighter(uint32_t* at = nullptr);
 int frame_now();
 
 namespace menu {

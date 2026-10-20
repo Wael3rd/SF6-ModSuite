@@ -2,8 +2,10 @@
 // (docs/RUNTIME_OPTIONS.md, "Outfit name on Fighter Settings").
 //
 // Battle Settings > character (Fighter Settings, agent MatchingFighterSetting): the costume row shows the game's
-// name of a slot ("Outfit VII"); the bar's line gets, right-aligned, the outfit's real name: one of ours = its label
-// in outfits.json (the mod's name, "Aloha Ryu"), a game outfit = the costume row's own text (what the game shows).
+// name of a slot ("Outfit VII"); the bar's line gets, right-aligned, the outfit's real name, the one the options
+// menu's title shows: an outfit of the options manifest = its label (the mod's name, "Aloha Ryu"; a game outfit
+// with options: its name, "Outfit 1"), another of ours = its label in outfits.json, any other game outfit = the
+// costume row's own text (what the game shows).
 //
 // Our own text, never the bar's: that text has ONE writer (the Color Mod 0.22.4+, else the plugin, rto_menu.cpp;
 // two writers crashed the game on 20/10). The name is a copy of the bar's item template (e_text_0 of c_guideBtn:
@@ -22,7 +24,7 @@
 // bar's own text.
 #include "slots.hpp"
 #include "slots_ui.hpp"
-#include "rto_data.hpp"
+#include "rto.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -37,6 +39,7 @@ constexpr int kMaxRefused = 3;                    // copies refused per session,
 constexpr uint32_t kPassFrames = 10;              // placement, overlap and the bar's text re-read
 constexpr uint32_t kNameFrames = 5;               // the outfit shown re-read
 constexpr float kGap = 48.0f;                     // free space kept between the bar's text and the name (1080p units)
+constexpr int kQuickPasses = 10;                  // passes on the next frames while the name's drawn width is not read yet
 
 const SF6CoreAPI* A() { return ui::core(); }
 SF6CoreClient* C() { return ui::client(); }
@@ -45,6 +48,9 @@ bool g_on = false;                                // installed (core with ui_clo
 bool g_off_logged = false, g_lost_logged = false;
 bool g_bs = false, g_bs_closed = false, g_select = false;
 uint32_t g_bs_seen = 0;
+bool g_fs_vis = false;                            // Fighter Settings on screen at the last frame
+uint32_t g_fs_since = 0;                          // the frame it came on screen
+int g_fid = -1;                                   // its fighter, kept while it is up (a screen shows one fighter)
 
 // ---- the copy request, taken by the guide list's update (any thread) ----
 struct Req { uintptr_t part = 0; uint32_t frame = 0; };   // the bar's list (its address, matched to `this`), when
@@ -113,6 +119,7 @@ int g_status_log = 1000;
 std::string g_src_log, g_geo_log;
 std::string g_meas_name;                          // the name whose drawn width was last measured, and that width
 double g_meas_w = 0;
+int g_quick = 0;                                  // passes left on the next frames (the drawn width not read yet)
 
 bool visible(Obj* o) {
     Obj* cm = o ? call_obj(o, "get_ControlMain") : nullptr;
@@ -184,20 +191,39 @@ Obj* fs_agent() {
     void* buf[4] = {};
     return A()->ui_agents("MatchingFighterSetting", buf, 4) ? reinterpret_cast<Obj*>(buf[0]) : nullptr;
 }
-// The fighter and costume Fighter Settings shows (its app.UIPartsMatchingFighterSetting part)
-bool fs_selection(Obj* agent, int& fid, int& cos) {
+// The fighter and outfit Fighter Settings shows: an app.UIPartsMatchingFighterSetting (the screen's parts list, else
+// its flow's settings, as the Training popup keeps one), else the fighter of the preview model built since the
+// screen came up (kept for the screen: it shows one fighter) and the outfit found by the costume row's name (one of
+// ours, or a game outfit of the options manifest). On 20/10 the screen's parts list had no such part.
+struct Sel { int fid = -1, cos = -1; const char* how = "nothing"; };
+bool mfs_read(Obj* mfs, Sel& s, const char* how) {
+    if (!alive(mfs) || type_name(mfs) != "app.UIPartsMatchingFighterSetting") return false;
+    int32_t f = -1;
+    if (!get_i32(mfs, "FighterId", f) || f <= 0) return false;
+    const Ret r = call(mfs, "GetCostumeId");
+    if (r.exception_thrown) return false;
+    s.fid = f; s.cos = static_cast<int32_t>(r.dword); s.how = how;
+    return true;
+}
+Sel fs_selection(Obj* agent, const std::string& row) {
+    Sel s;
     Obj* lst = get_obj(get_obj(agent, "_PartsManager"), "_List");
     for (int k = 0, cnt = list_count(lst); k < cnt; ++k) {
         Obj* part = list_item(lst, k);
-        if (!part || type_name(part) != "app.UIPartsMatchingFighterSetting") continue;
-        int32_t f = -1;
-        if (!get_i32(part, "FighterId", f)) return false;
-        const Ret r = call(part, "GetCostumeId");
-        if (r.exception_thrown) return false;
-        fid = f; cos = static_cast<int32_t>(r.dword);
-        return true;
+        if (part && type_name(part) == "app.UIPartsMatchingFighterSetting" && mfs_read(part, s, "the screen's part")) return s;
     }
-    return false;
+    Obj* flow = get_obj(get_obj(agent, "<InputDelegates>k__BackingField"), "<Flow>k__BackingField");
+    Obj* prm = alive(flow) ? get_obj(flow, "_Param") : nullptr;
+    if (alive(prm) && mfs_read(get_obj(prm, "MatchingFighterSetting"), s, "its flow's settings")) return s;
+    uint32_t at = 0;
+    const int f = rto::preview_fighter(&at);
+    if (f > 0 && at >= g_fs_since) g_fid = f;
+    if (g_fid <= 0) return s;
+    s.fid = g_fid; s.how = "the preview's fighter, the outfit by the costume row's name";
+    s.cos = costumes::slot_by_name(g_fid, row);
+    if (s.cos < 0 && rto::on())
+        for (auto& k : rto::manifest().slots) if (k.fighter == g_fid && k.name == row) { s.cos = k.costume_no; break; }
+    return s;
 }
 std::string read_name(Obj* agent) {
     const SF6CoreAPI* a = A();
@@ -206,12 +232,24 @@ std::string read_name(Obj* agent) {
     Obj* text = spin ? reinterpret_cast<Obj*>(a->ui_find_cached(spin, "e_text")) : nullptr;
     std::string row = text ? str(call_obj(text, "get_Message")) : std::string();
     if (const size_t at = row.find("  <ICON"); at != std::string::npos) row.resize(at);   // a key icon of ours (rto_menu.cpp)
-    int fid = -1, cos = -1;
-    const bool sel = fs_selection(agent, fid, cos);
-    const std::string label = sel ? costumes::slot_label(fid, cos) : std::string();
-    char src[160];
-    if (!sel) std::snprintf(src, sizeof src, "Fighter Settings' part not found: the costume row's text");
-    else std::snprintf(src, sizeof src, "F%d outfit %d: %s", fid, cos, label.empty() ? "the costume row's text (the game's)" : "our outfit's label");
+    const Sel sel = fs_selection(agent, row);
+    // the options menu's title: the manifest's label, else its name (rto_menu.cpp); else our outfits.json label
+    std::string label;
+    const char* what = "the costume row's text (the game's)";
+    if (sel.fid > 0 && sel.cos >= 0) {
+        if (rto::on())
+            if (const rto::Slot* k = rto::manifest().slot_of(sel.fid, sel.cos)) {
+                label = k->label.empty() ? k->name : k->label;
+                what = k->game ? "the options manifest (a game outfit)" : "the options manifest";
+            }
+        if (label.empty()) {
+            label = costumes::slot_label(sel.fid, sel.cos);
+            if (!label.empty()) what = "our outfit's label (outfits.json)";
+        }
+    }
+    char src[256];
+    if (sel.fid <= 0) std::snprintf(src, sizeof src, "fighter not found (no settings part, no preview model yet): %s", what);
+    else std::snprintf(src, sizeof src, "F%d outfit %d from %s: %s", sel.fid, sel.cos, sel.how, what);
     if (g_src_log != src) { g_src_log = src; logf("fs name: %s", src); }
     return rto::clip_name(label.empty() ? row : label, kNameChars);
 }
@@ -293,9 +331,26 @@ void pass(const std::string& name) {
     double left = off + sc * (b.x + b.sx * text_l_btn);                      // in root space
     if (!(left >= 16 && left <= canvas * 0.25)) left = 96;                  // the bar's margin, mirrored right
     const double right = canvas - left;
-    const float x = static_cast<float>((right - off) / sc);
+
+    // The name's drawn width: the copy's own once drawn (get_DisplaySize), else the bar's glyph width times the name's
+    // glyphs (then the next frames read it and place again)
+    const double k = sc * b.sx * t.sx;                                      // copy units -> root space
+    const double bar_glyphs = glyphs(str(call_obj(text, "get_Message")));
+    if (g_shown && name == g_written) {           // the copy: reached by name under its live parent (R35)
+        float cw = 0;
+        const Ret r = call(reinterpret_cast<Obj*>(c), "get_DisplaySize");
+        if (!r.exception_thrown) std::memcpy(&cw, r.bytes.data(), sizeof cw);
+        if (std::isfinite(cw) && cw > 0) { g_meas_name = name; g_meas_w = cw; }
+    }
+    const bool measured = name == g_meas_name && g_meas_w > 0;   // no show / hide back and forth once measured
+    const double nw = measured ? g_meas_w : bar_glyphs > 0 ? tw / bar_glyphs * glyphs(name) : 0;
+    // Placed by its LEFT point at (right - drawn width): a text is laid out from the left of its region, and the copy
+    // keeps the template's region (about the bar's width). Placed by its right point it was drawn at that region's
+    // far left, off screen (20/10: "...ch Wea" left of "Esc Back" while the name was meant to end at x 1759).
+    const double name_l = right - k * nw;
+    const float x = static_cast<float>((name_l - off) / sc);
     const float y = static_cast<float>(b.y + b.sy * t.y);
-    const int cp = (t.cp / 4) * 4 + 2;                                      // the text's row, its right point
+    const int cp = (t.cp / 4) * 4;                                          // the bar text's row, its left point
 
     if (reinterpret_cast<uintptr_t>(c) != g_styled) {      // a new copy: its text settings, once
         g_styled = reinterpret_cast<uintptr_t>(c);
@@ -313,29 +368,28 @@ void pass(const std::string& name) {
     a->ui_set_scale(C(), c, b.sx * t.sx, b.sy * t.sy, 1.0f);           // compared first by the core
     a->ui_set_position(C(), c, x, y, t.z);
 
-    // Into the bar's own text (its entries change with the focused row): hidden. The name's width is the copy's
-    // drawn width while it is shown, else the bar's own glyph width times the name's glyphs.
-    const double k = sc * b.sx * t.sx;
+    // Into the bar's own text (its entries change with the focused row): hidden
     const double text_r = left + k * tw;
-    const double bar_glyphs = glyphs(str(call_obj(text, "get_Message")));
-    double nw = bar_glyphs > 0 ? tw / bar_glyphs * glyphs(name) : 0;
-    if (g_shown && name == g_written) {           // the copy: reached by name under its live parent (R35)
-        float cw = 0;
-        const Ret r = call(reinterpret_cast<Obj*>(c), "get_DisplaySize");
-        if (!r.exception_thrown) std::memcpy(&cw, r.bytes.data(), sizeof cw);
-        if (std::isfinite(cw) && cw > 0) { g_meas_name = name; g_meas_w = cw; }
-    }
-    if (name == g_meas_name && g_meas_w > 0) nw = g_meas_w;   // measured once drawn: no show / hide back and forth
-    const double name_l = right - k * nw;
     const bool overlap = tw > 0 && nw > 0 && name_l < text_r + kGap;
-    char geo_s[200];
-    std::snprintf(geo_s, sizeof geo_s, "canvas %.0f, bar text %.0f-%.0f, name %.0f-%.0f (cp %d, scale %.2f)",
-                  canvas, left, text_r, name_l, right, cp, b.sx * t.sx);
-    if (g_geo_log != geo_s && (!g_shown || overlap)) { g_geo_log = geo_s; logf("fs name: '%s': %s", name.c_str(), geo_s); }
+    // Logged once per change: the rectangle meant (root space), how it was written, and where the copy was found
+    // drawn (its region and global position, as they were before this pass's writes)
+    float gp[3] = {}, rs[2] = {};
+    const bool have_gp = floats(reinterpret_cast<Obj*>(c), "get_GlobalPosition", gp, 2);
+    const bool have_rs = floats(reinterpret_cast<Obj*>(c), "get_RegionSize", rs, 2);
+    char geo_s[400];
+    std::snprintf(geo_s, sizeof geo_s, "canvas %.0f, bar text %.0f-%.0f, name %.0f-%.0f (width %.0f %s, cp %d, x %.1f y %.1f "
+                  "in a parent at %.1f scale %.2f, copy scale %.2f; found at global x %s, region %s)",
+                  canvas, left, text_r, name_l, right, k * nw, measured ? "drawn" : "estimated", cp, x, y, off, sc,
+                  b.sx * t.sx, have_gp ? std::to_string(static_cast<int>(std::lround(gp[0]))).c_str() : "?",
+                  have_rs ? (std::to_string(static_cast<int>(std::lround(rs[0]))) + "x" +
+                             std::to_string(static_cast<int>(std::lround(rs[1])))).c_str() : "?");
+    if (g_geo_log != geo_s) { g_geo_log = geo_s; logf("fs name: '%s': %s", name.c_str(), geo_s); }
     if (name.empty() || overlap) { hide(name.empty() ? "no name" : "it would run into the bar's text"); return; }
     a->ui_set_force_invisible(C(), c, 0);         // the template's lock, copied with it
     a->ui_set_visible(C(), c, 1);
     if (!g_shown) { g_shown = true; logf("fs name: shown '%s'", name.c_str()); }
+    if (!measured && g_quick < kQuickPasses) ++g_quick;   // read its drawn width on the next frames, then place again
+    else g_quick = kQuickPasses;
 }
 
 void update(Obj* agent) {
@@ -350,9 +404,9 @@ void update(Obj* agent) {
     if (g_frame - g_name_at >= kNameFrames || g_name_at == 0) {
         g_name_at = g_frame;
         const std::string n = read_name(agent);
-        if (n != g_name) { g_name = n; g_pass_at = 0; }
+        if (n != g_name) { g_name = n; g_pass_at = 0; g_quick = 0; }
     }
-    if (g_pass_at && g_frame - g_pass_at < kPassFrames) return;
+    if (g_pass_at && g_frame - g_pass_at < kPassFrames && !(g_quick > 0 && g_quick < kQuickPasses)) return;
     g_pass_at = g_frame;
     pass(g_name);
 }
@@ -396,7 +450,10 @@ void tick(uint32_t ev) {
         if ((ev & EV_MENU_CLOSE) && g_bs) g_bs_closed = true;
         if (!g_bs || g_select) { hide(g_select ? "character select" : "Battle Settings closed"); return; }
         Obj* agent = fs_agent();
-        if (!agent || !visible(agent)) {
+        const bool fs_vis = agent && visible(agent);
+        if (fs_vis && !g_fs_vis) { g_fs_since = g_frame; g_fid = -1; }   // a new screen: its fighter found again
+        g_fs_vis = fs_vis;
+        if (!fs_vis) {
             // closed (HidObject also comes when a sub-screen hides it, rto.cpp): followed until gone 3 s
             if (g_bs_closed && g_frame - g_bs_seen > 180) { g_bs = false; g_bar = Bar{}; g_name.clear(); g_name_at = 0; }
             hide("Fighter Settings not on screen");

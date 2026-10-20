@@ -1321,5 +1321,11 @@ std::string slot_label(int fighter, int costume_no) {
     auto c = f->second.find(costume_no);
     return c == f->second.end() ? std::string() : g_slots[c->second].label;
 }
+int slot_by_name(int fighter, const std::string& name) {
+    auto f = g_slot_of.find(fighter);
+    if (f == g_slot_of.end() || name.empty()) return -1;
+    for (auto& [cos, i] : f->second) if (g_slots[i].name == name) return cos;
+    return -1;
+}
 
 } // namespace slots::costumes
