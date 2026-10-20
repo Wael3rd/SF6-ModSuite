@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rtofit";
+static const char* LOADER_BUILD_ID = "2026-10-20-rtofit-zzfixes";
 
 // ============================================================================
 // Utility
@@ -3413,6 +3413,56 @@ static bool mdf2_materials(const std::vector<uint8_t>& b, std::vector<std::strin
     return true;
 }
 
+// Textures a material file binds (.mdf2.31: 100-byte material headers as mdf2_materials() reads them,
+// the texture count at +20 and the texture table offset at +60, then per texture a 32-byte entry with the
+// path offset at +16). Only these are loaded: a material file can keep strings no material uses in its
+// string pool (the "Leon Requiem On Luke" mods keep paths of a "LeonPort" folder they never shipped).
+// From ZZtaii's Slotsloader fork (1.9.9), MIT. False when the file cannot be read this way.
+static bool mdf2_texture_paths(const std::vector<uint8_t>& b, std::vector<std::string>& out) {
+    if (b.size() < 16 || memcmp(b.data(), "MDF\0", 4) != 0) return false;
+    int16_t count;
+    memcpy(&count, b.data() + 6, 2);
+    const size_t H = 100, tex_at = 60;
+    if (count < 0 || 16 + H * size_t(count) > b.size()) return false;
+    auto u64 = [&](size_t o) { uint64_t v; memcpy(&v, b.data() + o, 8); return v; };
+    std::vector<std::string> found;
+    for (size_t i = 0; i < size_t(count); i++) {
+        const size_t mh = 16 + H * i;
+        int32_t tc; memcpy(&tc, b.data() + mh + 20, 4);
+        const uint64_t th = u64(mh + tex_at);
+        if (tc < 0 || tc > 4096 || (tc > 0 && (th < 16 || th + 32ull * tc > b.size()))) return false;
+        for (int32_t k = 0; k < tc; k++) {
+            const uint64_t po = u64(size_t(th) + 32ull * k + 16);
+            if (po == 0) continue;                              // an empty binding
+            if (po >= b.size() || (po & 1)) return false;
+            std::string s;
+            for (size_t q = size_t(po); q + 1 < b.size(); q += 2) {
+                uint16_t c = uint16_t(b[q] | (b[q + 1] << 8));
+                if (!c) break;
+                if (c < 0x20 || c >= 0x7F) return false;
+                s += char(c);
+            }
+            if (!s.empty()) found.push_back(s);
+        }
+    }
+    out.insert(out.end(), found.begin(), found.end());
+    return true;
+}
+
+// Texture references of a material file, as the game loads them: the bound ones when the file can be
+// read, else (an unknown layout) every ".tex" string, as before
+static std::vector<std::string> material_textures(const std::vector<uint8_t>& mdf) {
+    std::vector<std::string> out;
+    if (!mdf2_texture_paths(mdf, out)) {
+        out.clear();
+        for (auto& s : utf16_strings(mdf)) if (str_ends_with(str_lower(s), ".tex")) out.push_back(s);
+    }
+    std::vector<std::string> uniq;
+    std::unordered_set<std::string> seen;
+    for (auto& s : out) if (seen.insert(str_lower(s)).second) uniq.push_back(s);
+    return uniq;
+}
+
 // What the game will find at a path: our pak first, then the game's paks by priority
 struct GameFiles {
     PakWriter* writer = nullptr;
@@ -3452,8 +3502,7 @@ struct Ctx {
 
 // A texture a material file names that the game will not find, or one with a broken mip table
 static std::string texture_problem(const Ctx& c, const std::vector<uint8_t>& mdf) {
-    for (auto& s : utf16_strings(mdf)) {
-        if (!str_ends_with(str_lower(s), ".tex")) continue;
+    for (auto& s : material_textures(mdf)) {
         std::string p = resource_path(s, *c.suffixes);
         if (!p.empty() && !c.gf.exists(p)) return "texture missing: " + s;
         if (!p.empty())
@@ -3505,8 +3554,7 @@ static int restore_missing_textures(Ctx& c, const std::vector<uint8_t>& mdf, con
     const std::string od = "/" + slot.fighter_dir + "/" + slot.original_folder + "/";
     const std::string ss = slot.fighter_dir + "_" + slot.new_folder + "_";
     const std::string os = slot.fighter_dir + "_" + slot.original_folder + "_";
-    for (auto& s : utf16_strings(mdf)) {
-        if (!str_ends_with(str_lower(s), ".tex")) continue;
+    for (auto& s : material_textures(mdf)) {
         std::string p = resource_path(s, *c.suffixes);
         if (p.empty() || c.gf.exists(p)) continue;
         std::vector<uint8_t> data;
@@ -4335,7 +4383,7 @@ static std::string ensure_archive_extracted(const std::string& archive_path) {
              fnv1a32(std::string("v2:") + fname + idbuf));
     g_archive_cache_used.insert(key);
     std::string final_dir = g_archive_cache_root + "\\" + key;
-    if (GetFileAttributesA((final_dir + "\\.complete").c_str()) != INVALID_FILE_ATTRIBUTES) {
+    if (GetFileAttributesW(long_w(a2w_path(final_dir + "\\.complete")).c_str()) != INVALID_FILE_ATTRIBUTES) {
         printf("    archive: %s (already extracted)\n", fname.c_str());
         return final_dir;
     }
@@ -4363,12 +4411,22 @@ static std::string ensure_archive_extracted(const std::string& archive_path) {
         delete_tree_w(tmp_w);
         return {};
     }
-    HANDLE hm = CreateFileW((tmp_w + L"\\.complete").c_str(), GENERIC_WRITE, 0, nullptr,
+    HANDLE hm = CreateFileW(long_w(tmp_w + L"\\.complete").c_str(), GENERIC_WRITE, 0, nullptr,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hm != INVALID_HANDLE_VALUE) CloseHandle(hm);
-    if (!MoveFileExW(tmp_w.c_str(), fin_w.c_str(), 0)) {
+    // A virus scanner reading the files just extracted briefly blocks the folder's rename (error 5 / 32);
+    // the outfit used to be skipped. Try again for about 2 s (from ZZtaii's Slotsloader fork (1.10.4), MIT).
+    BOOL moved = FALSE; DWORD move_error = 0;
+    for (int attempt = 0; attempt < 20; attempt++) {
+        moved = MoveFileExW(long_w(tmp_w).c_str(), long_w(fin_w).c_str(), 0);
+        if (moved) break;
+        move_error = GetLastError();
+        if (move_error != ERROR_ACCESS_DENIED && move_error != ERROR_SHARING_VIOLATION) break;
+        Sleep(100);
+    }
+    if (!moved) {
         printf("    archive: %s extracted but its cache folder could not be finalised (error %lu)\n",
-               fname.c_str(), (unsigned long)GetLastError());
+               fname.c_str(), (unsigned long)move_error);
         delete_tree_w(tmp_w);
         return {};
     }
@@ -4421,17 +4479,19 @@ struct ScanOutputs {
 };
 
 // Finds every costume under `dir`. Archives met on the way are extracted and searched too, with
-// two levels of nesting at most; folders are searched four levels deep.
+// two levels of nesting at most; folders are searched four levels deep. Wide API with the long_w
+// prefix (from ZZtaii's Slotsloader fork (1.9.7), MIT): the options of an archive unpacked under a
+// deep game folder pass MAX_PATH, and the whole archive was skipped as "no natives folder".
 static void collect_mod_units(const std::string& dir, const std::string& rel,
                               int depth, int nest, std::vector<ModUnit>& out) {
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(long_w(a2w_path(dir) + L"\\*").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     std::vector<std::string> subdirs, paks, archives;
     bool has_natives = false;
     do {
-        std::string name = fd.cFileName;
-        if (name == "." || name == "..") continue;
+        std::string name = w2a(fd.cFileName);
+        if (name == "." || name == ".." || name.empty()) continue;
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             if (str_lower(name) == "natives") has_natives = true;
             else if (name[0] != '.') subdirs.push_back(name);
@@ -4440,7 +4500,7 @@ static void collect_mod_units(const std::string& dir, const std::string& rel,
         } else if (is_archive_name(name)) {
             archives.push_back(name);
         }
-    } while (FindNextFileA(h, &fd));
+    } while (FindNextFileW(h, &fd));
     FindClose(h);
     std::sort(subdirs.begin(), subdirs.end());
     std::sort(paks.begin(), paks.end());
@@ -4494,7 +4554,7 @@ static uint64_t fnv1a64(const std::string& s) {
 }
 
 static void read_modinfo(const std::string& dir, UnitFiles& uf) {
-    FILE* f = fopen((dir + "\\modinfo.ini").c_str(), "rb");
+    FILE* f = _wfopen(long_w(a2w_path(dir + "\\modinfo.ini")).c_str(), L"rb");   // long path: ZZtaii fork 1.9.7
     if (!f) return;
     char line[2048];
     while (fgets(line, sizeof(line), f)) {
@@ -5644,25 +5704,30 @@ static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
                 continue;
             }
         }
-        // Walk all files in abs_path, include relative path + size + mtime
-        std::function<void(const std::string&, const std::string&)> walk;
-        walk = [&](const std::string& dir, const std::string& prefix) {
-            WIN32_FIND_DATAA fd;
-            HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+        // Walk all files in abs_path, include relative path + size + mtime. Wide calls with the long-path
+        // prefix (from ZZtaii's Slotsloader fork (1.9.7), MIT): a folder mod with long option names under a
+        // deep game folder goes past MAX_PATH (its files were missing from the fingerprint), and the
+        // entry has no fixed size.
+        std::function<void(const std::wstring&, const std::string&)> walk;
+        walk = [&](const std::wstring& dir, const std::string& prefix) {
+            WIN32_FIND_DATAW fd;
+            HANDLE h = FindFirstFileW(long_w(dir + L"\\*").c_str(), &fd);
             if (h == INVALID_HANDLE_VALUE) return;
-            std::vector<std::string> entries;
+            std::vector<std::wstring> entries;
             do {
-                if (fd.cFileName[0] == '.') continue;
+                if (fd.cFileName[0] == L'.') continue;
                 entries.push_back(fd.cFileName);
-            } while (FindNextFileA(h, &fd));
+            } while (FindNextFileW(h, &fd));
             FindClose(h);
-            std::sort(entries.begin(), entries.end());
+            std::sort(entries.begin(), entries.end(),
+                      [](const std::wstring& a, const std::wstring& b) { return w2a(a.c_str()) < w2a(b.c_str()); });
             for (auto& e : entries) {
-                std::string full = dir + "\\" + e;
-                std::string rel = prefix.empty() ? fi.rel_path + "/" + e
-                                                 : prefix + "/" + e;
+                std::wstring full = dir + L"\\" + e;
+                std::string name = w2a(e.c_str());
+                std::string rel = prefix.empty() ? fi.rel_path + "/" + name
+                                                 : prefix + "/" + name;
                 WIN32_FILE_ATTRIBUTE_DATA fa2;
-                if (!GetFileAttributesExA(full.c_str(), GetFileExInfoStandard, &fa2)) continue;
+                if (!GetFileAttributesExW(long_w(full).c_str(), GetFileExInfoStandard, &fa2)) continue;
                 if (fa2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                     walk(full, rel);
                 } else {
@@ -5670,13 +5735,11 @@ static std::string compute_fingerprint(const std::vector<PakInfo>& mod_paks,
                     uint64_t mt = (uint64_t(fa2.ftLastWriteTime.dwHighDateTime) << 32)
                                 | fa2.ftLastWriteTime.dwLowDateTime;
                     if (!fp.empty()) fp += ";";
-                    char buf[512]; sprintf(buf, "%s:%llu:%llu", rel.c_str(),
-                                           (unsigned long long)sz, (unsigned long long)mt);
-                    fp += buf;
+                    fp += rel + ":" + std::to_string((unsigned long long)sz) + ":" + std::to_string((unsigned long long)mt);
                 }
             }
         };
-        walk(fi.abs_path, "");
+        walk(a2w_path(fi.abs_path), "");
     }
     return fp;
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Slots Loader (fixes ported from ZZtaii's Slotsloader fork, MIT)
+- A slot check reads only the textures a material actually binds, not every `.tex` string of a material file: leftover
+  paths no material uses (the "Leon Requiem On Luke" mods keep some) no longer count as "texture missing" (fork 1.9.9).
+- Archives and folder mods whose paths pass MAX_PATH: the options of an archive, its `modinfo.ini` and the cache
+  fingerprint are read with the wide API and the long-path prefix (fork 1.9.7).
+- An antivirus briefly locking a freshly unpacked archive no longer makes the loader skip it: the cache folder rename
+  is retried for about 2 s (fork 1.10.4).
+
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite
 
 | Package | Version | |
