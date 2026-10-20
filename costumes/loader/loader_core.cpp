@@ -12,6 +12,7 @@
 #include "fighter_names.hpp"
 #include "loader_core.hpp"
 #include "archive.hpp"
+#include "nsfw_keywords.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -114,7 +115,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rto-merge";
+static const char* LOADER_BUILD_ID = "2026-10-20-nsfw-keywords";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -1370,7 +1371,7 @@ struct SlotInfo {
     int fighter=0, original_costume_no=0, new_costume_no=0;
     int record_id=0, manage_id=0;
     const ModCostume* mod_costume = nullptr;
-    bool nsfw = false;         // from costume_mods_nsfw
+    bool nsfw = false;         // from costume_mods_nsfw, or NSFW by keywords (outfit_is_nsfw)
 };
 
 // Mod names by mod_id, for the log (the modinfo name, else the mod's folder or archive)
@@ -1381,13 +1382,28 @@ static std::string mod_label(const std::string& id) {
 }
 // Where each mod comes from, for outfits.json: kind ("fluffy pak", "archive", "folder", "pak") and the
 // file or folder the user installed ("re_chunk_000.pak.patch_002.pak", "Ken/KenSFV.zip", "Ryu/Vagrant")
-// nsfw: read from costume_mods_nsfw (shown in game only while the plugin's "Display NSFW Outfits" is on)
-struct ModSource { std::string kind, source; bool nsfw = false; };
+// nsfw: read from costume_mods_nsfw, or a mod whose name has an NSFW keyword (shown in game only while the plugin's
+// "Display NSFW Outfits" is on); nsfw_dir: read from costume_mods_nsfw (a folder the Slotsloader Manager cannot name)
+struct ModSource { std::string kind, source; bool nsfw = false, nsfw_dir = false; };
 static std::unordered_map<std::string, ModSource> g_mod_source;
 static bool mod_is_nsfw(const std::string& mod_id) {
     auto it = g_mod_source.find(mod_id);
     return it != g_mod_source.end() && it->second.nsfw;
 }
+static bool mod_in_nsfw_dir(const std::string& mod_id) {
+    auto it = g_mod_source.find(mod_id);
+    return it != g_mod_source.end() && it->second.nsfw_dir;
+}
+// NSFW keywords (common/nsfw_keywords.hpp; costume_mods\settings.ini NsfwKeywords=, empty: detection off) and the
+// outfits made NSFW by their options (an option whose name has a keyword worn by default, a combination with one)
+static std::vector<std::string> g_nsfw_keywords;
+static std::set<std::string> g_nsfw_ids;
+static size_t g_nsfw_kw_mods = 0, g_nsfw_kw_options = 0;   // counts, for the merge audit
+static bool outfit_is_nsfw(const std::string& mod_id) { return mod_is_nsfw(mod_id) || g_nsfw_ids.count(mod_id) > 0; }
+// Outfits of an existing install numbered again because they became NSFW (or stopped being NSFW): the plugin moves a
+// Battle Settings choice of the old number to the new one (outfits.json "moved")
+struct MovedSlot { int fighter = 0, from = 0, to = 0; std::string label; };
+static std::vector<MovedSlot> g_moved_slots;
 struct LeftOut { int fighter; std::string label, reason; };
 static std::vector<LeftOut> g_left_out;
 
@@ -1415,6 +1431,9 @@ struct RtoOption {
     // own outfit before (its mod id), from_folder: the folder of the game outfit it modified (its slot migrates there)
     bool retouch = false;
     std::string from, from_folder;
+    // Its name or folder has an NSFW keyword (UnitFiles::kw): offered and worn only while the plugin's "Display NSFW
+    // Outfits" is on; never worn by default when its group can do without it (RuntimeOptions=on)
+    bool nsfw = false;
     // Files moved from another costume folder (a version made for another outfit, a subset of a game outfit):
     // path in `files` (or a file of the outfit's own it equals, left out) -> its path in the mod. A material file
     // names the textures by their path in the mod: they are pointed at the outfit's (or the option's) copies.
@@ -1559,7 +1578,20 @@ static void write_outfits_json(const std::string& path, const std::vector<SlotIn
                 lo.fighter, json_escape(lo.label).c_str(), json_escape(lo.reason).c_str());
         first = false;
     }
-    fprintf(f, "\n  ]\n}\n");
+    fprintf(f, "\n  ]");
+    // Outfits numbered again in this run because they became NSFW or stopped being NSFW: the plugin moves a Battle
+    // Settings choice of the old number to the new one (only when there is one: the file is as before otherwise)
+    if (!g_moved_slots.empty()) {
+        fprintf(f, ",\n  \"moved\": [");
+        first = true;
+        for (auto& mv : g_moved_slots) {
+            fprintf(f, "%s\n    {\"fighter\": %d, \"from\": %d, \"to\": %d, \"label\": \"%s\"}", first ? "" : ",", mv.fighter,
+                    mv.from, mv.to, json_escape(mv.label).c_str());
+            first = false;
+        }
+        fprintf(f, "\n  ]");
+    }
+    fprintf(f, "\n}\n");
     fclose(f);
 }
 
@@ -1577,7 +1609,8 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
                "  \"layout\": \"%s\",\n  \"mods\": [", RTO_FORMAT, when, json_escape(LOADER_BUILD_ID).c_str(),
             json_escape(pak_name).c_str(), layout);
     // Each mod once, keyed by fighter folder and root name (stable across mod updates); "<fighter folder>/nsfw/<name>"
-    // for a mod of costume_mods_nsfw (its own choices, never those of a mod of the same name in costume_mods)
+    // for a mod of costume_mods_nsfw (its own choices, never those of a mod of the same name in costume_mods; a mod NSFW
+    // by keywords keeps its key: its choices stay)
     auto key_of = [](const std::string& fd, const RtoMod& rm, bool nsfw) {
         return !rm.key.empty() ? rm.key : fd + (nsfw ? "/nsfw/" : "/") + str_lower(rm.name);
     };
@@ -1599,7 +1632,7 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
     for (auto& sl : slots)
         if (has_out(sl))
             outs.push_back({sl.fighter, sl.new_costume_no, sl.fighter_dir, sl.new_folder, sl.outfit_name, mod_label(sl.mod_id),
-                            key_of(sl.fighter_dir, *sl.mod_costume->rto, sl.nsfw), sl.mod_id,
+                            key_of(sl.fighter_dir, *sl.mod_costume->rto, mod_in_nsfw_dir(sl.mod_id)), sl.mod_id,
                             &g_rto_slots.at({sl.fighter_dir, sl.new_costume_no}), false, sl.nsfw});
     for (auto& g : g_rto_game)
         if (g.stored && !g.out.files.empty())
@@ -1630,9 +1663,9 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
                     std::string kd = rto_kind(str_lower(p));
                     if (kd == "other") other = true; else if (kd == "colour") colour = true;
                 }
-                fprintf(f, "%s\n        {\"id\": \"%s\", \"name\": \"%s\", \"folder\": \"%s\", \"mode\": \"%s\", \"apply\": \"%s\"}",
+                fprintf(f, "%s\n        {\"id\": \"%s\", \"name\": \"%s\", \"folder\": \"%s\", \"mode\": \"%s\", \"apply\": \"%s\"%s}",
                         fo ? "" : ",", op.id.c_str(), json_escape(op.name).c_str(), json_escape(op.folder).c_str(),
-                        op.mode.c_str(), other ? "relaunch" : colour ? "colour" : "live");
+                        op.mode.c_str(), other ? "relaunch" : colour ? "colour" : "live", op.nsfw ? ", \"nsfw\": true" : "");
                 fo = false;
             }
             fprintf(f, "\n      ]}");
@@ -1965,9 +1998,10 @@ static bool variant_chosen_off(const std::string& source, const std::string& lab
 }
 
 // A source the Manager can name: something put in costume_mods (not a Fluffy pak, not Fluffy's own
-// archives, not the game's loose natives files, not costume_mods_nsfw)
+// archives, not the game's loose natives files, not costume_mods_nsfw; a mod of costume_mods NSFW by its keywords is
+// one)
 static bool choice_source(const ModSource& ms) {
-    return !ms.source.empty() && !ms.nsfw && ms.kind != "fluffy pak"
+    return !ms.source.empty() && !ms.nsfw_dir && ms.kind != "fluffy pak"
         && ms.source.compare(0, 19, "Fluffy Mod Manager/") != 0
         && ms.source.compare(0, 7, "natives") != 0;
 }
@@ -2039,17 +2073,26 @@ static std::vector<SlotInfo> assign_slots(
     std::unordered_set<std::string> present_mod_ids;
     for (auto& [mid, cs] : mods) present_mod_ids.insert(mid);
 
-    // Build existing assignments from registry (only for mods still present). A mod moved between costume_mods and
-    // costume_mods_nsfw is numbered again (an NSFW outfit comes after the others, below).
+    // Build existing assignments from registry (only for mods still present). An outfit that became NSFW (moved into
+    // costume_mods_nsfw, or NSFW by keywords) or stopped being NSFW is numbered again, once (an NSFW outfit comes after
+    // the others, below); its old number stays unused in this run and a Battle Settings choice of it follows it
+    // (g_moved_slots, outfits.json "moved").
     std::unordered_map<std::string, const RegSlot*> existing;
+    std::map<std::string, int> renumbered;   // key -> old number
+    std::unordered_map<int, std::set<int>> reserved;
     for (auto& s : reg.slots) {
         if (!present_mod_ids.count(s.mod_id)) continue; // mod removed -> slot freed
-        if (s.nsfw != mod_is_nsfw(s.mod_id)) {
-            printf("  %s: moved %s costume_mods_nsfw, numbered again\n", mod_label(s.mod_id).c_str(), s.nsfw ? "out of" : "into");
-            continue;
-        }
         std::string key = s.mod_id + "\t" + std::to_string(s.fighter) + "\t"
                         + std::to_string(s.original_costume_no);
+        if (s.nsfw != outfit_is_nsfw(s.mod_id)) {
+            const bool dir = mod_in_nsfw_dir(s.mod_id);
+            printf("  %s: %s, numbered again\n", mod_label(s.mod_id).c_str(),
+                   s.nsfw ? (dir ? "moved out of costume_mods_nsfw" : "no longer NSFW")
+                          : (dir ? "moved into costume_mods_nsfw" : "NSFW now (keywords)"));
+            renumbered[key] = s.new_costume_no;
+            reserved[s.fighter].insert(s.new_costume_no);
+            continue;
+        }
         existing[key] = &s;
     }
 
@@ -2076,7 +2119,7 @@ static std::vector<SlotInfo> assign_slots(
         for (auto& mc : costumes) {
             SlotInfo si;
             si.mod_id = mod_id;
-            si.nsfw = mod_is_nsfw(mod_id);
+            si.nsfw = outfit_is_nsfw(mod_id);
             si.fighter = mc.fighter;
             si.fighter_dir = mc.fighter_dir;
             si.original_costume_no = mc.original_costume_no;
@@ -2131,8 +2174,15 @@ static std::vector<SlotInfo> assign_slots(
                     else printf("  %s: no free number before %s's NSFW outfits, listed after them\n",
                                 mod_label(mod_id).c_str(), mc.fighter_dir.c_str());
                 }
-                if (cno > meta.slot_max || !meta.find(mc.fighter, cno))
-                    cno = smallest_free(t, meta.slot_min, meta.slot_max);
+                // the old number of an outfit numbered again stays unused in this run (a Battle Settings choice of it
+                // moves to the new one)
+                const std::set<int>& rv = reserved[mc.fighter];
+                if (rv.count(cno)) while ((rv.count(cno) || t.count(cno)) && cno <= meta.slot_max) ++cno;
+                if (cno > meta.slot_max || !meta.find(mc.fighter, cno)) {
+                    std::set<int> busy = t;
+                    busy.insert(rv.begin(), rv.end());
+                    cno = smallest_free(busy, meta.slot_min, meta.slot_max);
+                }
                 if (cno < 0) {
                     printf("  WARN: %s has no free outfit slot left (%d to %d all used), %s not installed\n",
                            mc.fighter_dir.c_str(), meta.slot_min, meta.slot_max, mod_label(mod_id).c_str());
@@ -2149,6 +2199,11 @@ static std::vector<SlotInfo> assign_slots(
                 si.new_folder = buf;
                 sprintf(buf, "%sv%02d", mc.fighter_dir.c_str(), cno);
                 si.scene_name = buf;
+                if (auto rn = renumbered.find(key); rn != renumbered.end() && rn->second != cno) {
+                    printf("  nsfw: %s: outfit number %d -> %d (%s)\n", mod_label(mod_id).c_str(), rn->second, cno,
+                           si.nsfw ? "NSFW outfits after the others" : "no longer NSFW");
+                    g_moved_slots.push_back({mc.fighter, rn->second, cno, mod_label(mod_id)});
+                }
             }
             auto* sr = meta.find(mc.fighter, si.new_costume_no);
             if (sr) {
@@ -5384,8 +5439,10 @@ static void ensure_mod_dirs(const std::string& base) {
     }
     for (auto& d : g_extra_character_dirs) mkdirW(base + "\\" + d);
 }
+// costume_mods and costume_mods_nsfw, made at install like costume_mods (empty, costume_mods_nsfw changes nothing)
 static void ensure_costume_mods_dirs(const std::string& game_dir) {
     ensure_mod_dirs(game_dir + "\\reframework\\costume_mods");
+    ensure_mod_dirs(game_dir + "\\reframework\\costume_mods_nsfw");
 }
 
 struct FolderModInfo {
@@ -5779,7 +5836,9 @@ struct ModUnit {
     std::string rel;   // path shown in the log
     bool game_install = false;   // the game's own natives tree (mods Fluffy copied there)
     bool menu = false;           // a modinfo.ini without natives or .pak: a Fluffy menu (dummy) entry, no files
-    bool nsfw = false;           // found in costume_mods_nsfw: merged / made an option only with other NSFW mods
+    bool nsfw = false;           // found in costume_mods_nsfw, or its mod's name has an NSFW keyword: merged / made an
+                                 // option only with other NSFW mods
+    bool nsfw_dir = false;       // found in costume_mods_nsfw
 };
 
 struct ScanOutputs {
@@ -5838,7 +5897,7 @@ static void collect_mod_units(const std::string& dir, const std::string& rel,
 }
 
 static void mark_nsfw(std::vector<ModUnit>& units, bool nsfw) {
-    for (auto& u : units) u.nsfw = nsfw;
+    for (auto& u : units) u.nsfw = u.nsfw_dir = nsfw;
 }
 
 // ============================================================================
@@ -5857,6 +5916,9 @@ struct UnitFiles {
     std::set<std::string> targets;       // costume folders touched, e.g. "esf001/001"
     // A unit made by the loader from another one's files moved to another costume folder (RtoOption::origin)
     std::unordered_map<std::string, std::string> origin;
+    // An option of its mod whose own name, folder or menu group has an NSFW keyword (the mod's name has none):
+    // "<where>: \"<keyword>\"", empty otherwise (nsfw_detect)
+    std::string kw;
 };
 static std::vector<UnitFiles> g_units;
 static int g_unit_source = 0;
@@ -6033,6 +6095,98 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     return true;
 }
 
+// NSFW keywords (docs/RUNTIME_OPTIONS.md, NSFW outfits): a mod whose NAME has a keyword is NSFW as a whole, exactly as
+// if it were in costume_mods_nsfw (ModUnit::nsfw); else each option whose own name, folders or menu groups have one is an
+// NSFW option (UnitFiles::kw). The mod's name: its archive, folder or pak in the character folder (or in the root), the
+// folders around all its options, its Fluffy root menu entry ("(mini dress Mai C1 Swap)"), and every name of a mod made
+// of one option. An option's: its modinfo name, its folders below those, the Fluffy menu groups it hangs from ("4! NSFW
+// style options c1"). Matching: common/nsfw_keywords.hpp (ZZtaii's Slotsloader Manager 1.0.8 rule). Mods of
+// costume_mods_nsfw are NSFW already; the game's own natives files have no name.
+static void nsfw_detect(int source, const std::string& rel_path) {
+    if (g_nsfw_keywords.empty()) return;
+    std::vector<size_t> us;
+    for (size_t i = 0; i < g_units.size(); ++i) if (g_units[i].source == source) us.push_back(i);
+    if (us.empty() || g_units[us[0]].u.game_install || g_units[us[0]].u.nsfw) return;
+    auto split = [](const std::string& rel) {
+        std::vector<std::string> parts;
+        size_t a = 0;
+        while (a <= rel.size()) {
+            size_t b = rel.find('/', a);
+            if (b == std::string::npos) b = rel.size();
+            if (b > a) parts.push_back(rel.substr(a, b - a));
+            a = b + 1;
+        }
+        return parts;
+    };
+    auto hit = [](const std::string& text) { return nsfw::match(g_nsfw_keywords, text); };
+    const std::vector<std::string> base = split(rel_path);
+    // the folders every option of the mod is in (below the mod's own entry)
+    std::vector<std::string> common;
+    for (size_t k = 0; k < us.size(); ++k) {
+        auto p = split(g_units[us[k]].u.rel);
+        p.erase(p.begin(), p.begin() + std::min(p.size(), base.size()));
+        if (us.size() > 1 && !p.empty() && k == 0) common = p;
+        else if (us.size() > 1) {
+            size_t n = 0;
+            while (n < common.size() && n < p.size() && common[n] == p[n]) ++n;
+            common.resize(n);
+        } else common = p;
+    }
+    std::vector<int> menus;
+    for (int k = 0; k < (int)g_menus.size(); ++k) if (g_menus[k].source == source) menus.push_back(k);
+
+    // ---- the mod's name ----
+    std::vector<std::pair<std::string, std::string>> names;   // (where, text)
+    if (!base.empty() && (base.size() >= 2 || is_archive_name(base[0]))) {
+        const std::string low = str_lower(base.back());
+        names.push_back({is_archive_name(low) ? "archive name" : str_ends_with(low, ".pak") ? "pak name" : "folder name", base.back()});
+    }
+    for (auto& f : common) names.push_back({"folder name", f});
+    for (auto k : menus) if (trim_ws(g_menus[k].addonfor).empty()) names.push_back({"modinfo name", g_menus[k].name});
+    if (us.size() == 1) names.push_back({"modinfo name", g_units[us[0]].name});
+    for (auto& [where, text] : names) {
+        const std::string kw = hit(text);
+        if (kw.empty()) continue;
+        printf("  nsfw: %s (%s \"%s\": \"%s\"): an NSFW mod, as if in costume_mods_nsfw\n", rel_path.c_str(), where.c_str(),
+               trim_ws(text).c_str(), kw.c_str());
+        for (auto i : us) g_units[i].u.nsfw = true;
+        ++g_nsfw_kw_mods;
+        return;
+    }
+    if (us.size() == 1) return;
+
+    // ---- its options ----
+    for (auto i : us) {
+        UnitFiles& u = g_units[i];
+        std::vector<std::pair<std::string, std::string>> texts{{"option name", u.name}};
+        auto p = split(u.u.rel);
+        p.erase(p.begin(), p.begin() + std::min(p.size(), base.size() + common.size()));
+        std::string folders;
+        for (auto& f : p) folders += (folders.empty() ? "" : "/") + f;
+        texts.push_back({"option folder", folders});
+        // the menu groups it hangs from (not the mod's root entry: the mod's name)
+        std::string cur = trim_ws(u.addonfor);
+        std::vector<int> seen;
+        while (!cur.empty()) {
+            int m = -1;
+            for (auto k : menus) if (eq_ci(g_menus[k].name, cur)) { m = k; break; }
+            if (m < 0 || std::find(seen.begin(), seen.end(), m) != seen.end() || trim_ws(g_menus[m].addonfor).empty()) break;
+            seen.push_back(m);
+            texts.push_back({"menu group", g_menus[m].name});
+            cur = trim_ws(g_menus[m].addonfor);
+        }
+        for (auto& [where, text] : texts) {
+            const std::string kw = hit(text);
+            if (kw.empty()) continue;
+            u.kw = where + " \"" + trim_ws(text) + "\": \"" + kw + "\"";
+            printf("  nsfw: %s / %s (%s): an NSFW option\n", rel_path.c_str(), trim_ws(u.name.empty() ? folders : u.name).c_str(),
+                   u.kw.c_str());
+            ++g_nsfw_kw_options;
+            break;
+        }
+    }
+}
+
 static bool process_units(const std::vector<ModUnit>& all_units, const std::string& rel_path,
                           ScanOutputs& o) {
     std::vector<ModUnit> units, menus;
@@ -6053,6 +6207,7 @@ static bool process_units(const std::vector<ModUnit>& all_units, const std::stri
         if (units.size() > 1 || u.rel != rel_path) printf("  option: %s\n", u.rel.c_str());
         if (load_unit(u, source, o)) any = true;
     }
+    if (any) nsfw_detect(source, rel_path);
     return any;
 }
 
@@ -6140,6 +6295,21 @@ static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
 static std::string unit_label(const UnitFiles& u) { return trim_ws(u.name.empty() ? u.u.rel : u.name); }
 
 // Id of a costume made of several options: from their ids, in order
+// The first option of an outfit made of `parts` (merge order: a later part's file wins) that has an NSFW keyword
+// (UnitFiles::kw) and is worn: one of its files is not replaced by a later part. nullptr when none.
+static const UnitFiles* worn_kw(const std::vector<size_t>& parts) {
+    for (size_t k = 0; k < parts.size(); ++k) {
+        const UnitFiles& u = g_units[parts[k]];
+        if (u.kw.empty()) continue;
+        for (auto& [p, mf] : u.files) {
+            bool replaced = false;
+            for (size_t j = k + 1; j < parts.size() && !replaced; ++j) replaced = g_units[parts[j]].files.count(p) > 0;
+            if (!replaced) return &u;
+        }
+    }
+    return nullptr;
+}
+
 static std::string combined_mod_id(const std::vector<size_t>& parts) {
     std::string id_src;
     for (auto i : parts) id_src += (id_src.empty() ? "" : "+") + g_units[i].mod_id;
@@ -6170,6 +6340,10 @@ static void push_combined(const std::vector<size_t>& parts, const std::string& l
     printf("    mod_id: %s\n", idb);
     g_mod_names[idb] = label;
     if (!parts.empty()) g_mod_source[idb] = g_mod_source[g_units[parts[0]].mod_id];
+    if (const UnitFiles* kw = worn_kw(parts)) {   // wears an NSFW option (keywords): an NSFW outfit
+        g_nsfw_ids.insert(idb);
+        printf("    nsfw: wears %s (%s): an NSFW outfit\n", unit_label(*kw).c_str(), kw->kw.c_str());
+    }
     o.mods_out.push_back({idb, std::move(costumes)});
     for (auto i : parts) o.all_mod_out.insert(g_units[i].files.begin(), g_units[i].files.end());
     for (auto i : parts) note_mod_paths(idb, g_units[i].files);
@@ -6440,6 +6614,7 @@ static std::shared_ptr<RtoMod> rto_from_groups(const std::vector<RtoGroupIn>& gr
             op.id = rto_option_id(gi.key, op.folder, ids);
             op.files = g_units[i].files;
             op.origin = g_units[i].origin;
+            op.nsfw = !g_units[i].kw.empty();
             unit_option[i] = m->options.size();
             g.options.push_back(m->options.size());
             m->options.push_back(std::move(op));
@@ -6825,13 +7000,78 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
         const std::string source = src == g_mod_source.end() ? std::string() : src->second.source;
         size_t k = 0;
         while (k < combos.size() && variant_chosen_off(source, combos[k].label)) ++k;
-        if (k > 0 && k < combos.size()) {
+        if (k > 0 && k < combos.size())
             printf("    worn by default: %s (variant_choices.json turns the first %zu off)\n", combos[k].label.c_str(), k);
+        // NSFW options (keywords) are not worn by default: the first combination left on without one
+        auto has_kw = [&](const Combo& c) { return worn_kw(c.idx) != nullptr; };
+        if (k < combos.size() && has_kw(combos[k])) {
+            size_t q = k;
+            while (q < combos.size() && (variant_chosen_off(source, combos[q].label) || has_kw(combos[q]))) ++q;
+            if (q < combos.size()) {
+                printf("    nsfw: worn by default: %s (the first combination without an NSFW option)\n", combos[q].label.c_str());
+                k = q;
+            }
+        }
+        if (k > 0 && k < combos.size()) {
             combos[0].idx = combos[k].idx;
             combos[0].selected = combos[k].selected;
         }
         combos.resize(1);
         combos[0].label = root;
+    }
+    // An NSFW option (keywords) the one outfit would still wear (a group every combination takes it from): left out of
+    // what it wears by default when its group can do without it, else replaced by the first other option of its group
+    // (a group that asks for one); the main files, or a group of NSFW options only, make the outfit NSFW (push_combined).
+    // Kept as it was when the outfit would not be complete without it.
+    if (g_rto_layout == RtoLayout::One && rto && combos.size() == 1) {
+        Combo& c = combos[0];
+        const Combo before_kw = c;
+        std::unordered_map<size_t, size_t> unit_of;   // option -> unit
+        for (auto& [u, oi] : unit_option) unit_of[oi] = u;
+        bool changed = false;
+        for (size_t x = 0; x < c.idx.size();) {
+            const size_t i = c.idx[x];
+            auto uo = unit_option.find(i);
+            const std::vector<size_t> from(c.idx.begin() + std::ptrdiff_t(x), c.idx.end());
+            if (g_units[i].kw.empty() || uo == unit_option.end() || worn_kw(from) != &g_units[i]) { ++x; continue; }   // not worn
+            const size_t oi = uo->second;
+            const RtoOption& op = rto->options[oi];
+            const RtoGroup* g = nullptr;
+            for (auto& rg : rto->groups) if (std::find(rg.options.begin(), rg.options.end(), oi) != rg.options.end()) g = &rg;
+            if (op.mode == "base") {
+                printf("    nsfw: %s is the main files: the outfit is NSFW\n", op.name.c_str());
+                ++x;
+                continue;
+            }
+            if (op.mode == "pick" && g && g->required) {
+                size_t alt = SIZE_MAX;
+                for (auto a : g->options)
+                    if (a != oi && rto->options[a].mode == "pick" && !rto->options[a].nsfw && unit_of.count(a)) { alt = a; break; }
+                if (alt == SIZE_MAX) {
+                    printf("    nsfw: group %s has NSFW options only: the outfit is NSFW\n", g->name.c_str());
+                    ++x;
+                    continue;
+                }
+                printf("    nsfw: worn by default: %s instead of %s (NSFW)\n", rto->options[alt].name.c_str(), op.name.c_str());
+                c.idx[x] = unit_of[alt];
+                std::replace(c.selected.begin(), c.selected.end(), oi, alt);
+                changed = true;
+                ++x;
+                continue;
+            }
+            printf("    nsfw: %s not worn by default (NSFW: chosen in game)\n", op.name.c_str());
+            c.selected.erase(std::remove(c.selected.begin(), c.selected.end(), oi), c.selected.end());
+            c.idx.erase(c.idx.begin() + std::ptrdiff_t(x));
+            changed = true;
+        }
+        if (changed) {
+            std::unordered_map<std::string, ModFileRef> merged;
+            for (auto i : c.idx) for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
+            if (detect_mod_costumes(merged, o.inv, false, true).empty()) {
+                printf("    nsfw: without its NSFW options the outfit is not complete: worn as it was, the outfit is NSFW\n");
+                c = before_kw;
+            }
+        }
     }
     const size_t before = o.mods_out.size();
     for (auto& c : combos)
@@ -7163,6 +7403,7 @@ static void attach_addons(ScanOutputs& o) {
                 x.mode = mode;
                 x.files = g_units[i].files;
                 x.origin = g_units[i].origin;
+                x.nsfw = !g_units[i].kw.empty();
                 x.addon = true;
                 if (pa.retouch) {   // the outfit it made before: from the game outfit it modifies (its slot moves there)
                     x.retouch = true;
@@ -7205,6 +7446,7 @@ static void attach_addons(ScanOutputs& o) {
                     if (i == main) continue;
                     RtoOption x = opt(i, "pick");
                     for (auto& [p, mf] : g_units[main].files) x.files.emplace(p, mf);   // the option's own files win
+                    x.nsfw = x.nsfw || !g_units[main].kw.empty();
                     g.options.push_back(std::move(x));
                 }
                 printf("    runtime options: group %s: \"%s\" goes with each of its other options: one choice\n",
@@ -7867,6 +8109,13 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
     size_t bi = 0;
     while (bi < vs.size() && variant_chosen_off(vs[bi].source, vs[bi].row)) ++bi;
     if (bi == vs.size()) bi = 0;
+    if (!g_units[vs[bi].unit].kw.empty())   // an NSFW version (keywords) is not worn by default: the first other one
+        for (size_t k = 0; k < vs.size(); ++k)
+            if (g_units[vs[k].unit].kw.empty() && !variant_chosen_off(vs[k].source, vs[k].row)) {
+                printf("    nsfw: base %s instead of %s (NSFW)\n", vs[k].name.c_str(), vs[bi].name.c_str());
+                bi = k;
+                break;
+            }
     std::rotate(vs.begin(), vs.begin() + bi, vs.begin() + bi + 1);   // the base first, the others in their order
     Version& b = vs[0];
     const ModCostume bmc = g_units[b.unit].costumes[b.costume];
@@ -8262,7 +8511,11 @@ static void finalize_units(ScanOutputs& o) {
         }
     }
 
-    for (auto& u : g_units) { g_mod_source[u.mod_id] = source_of_rel(u.u.rel); g_mod_source[u.mod_id].nsfw = u.u.nsfw; }
+    for (auto& u : g_units) {
+        g_mod_source[u.mod_id] = source_of_rel(u.u.rel);
+        g_mod_source[u.mod_id].nsfw = u.u.nsfw;
+        g_mod_source[u.mod_id].nsfw_dir = u.u.nsfw_dir;
+    }
 
     // Retouches (docs/RUNTIME_OPTIONS.md): with RuntimeOptions, a mod (its whole folder or archive) made of meshes and
     // textures of costumes only, no material file, keeps the look of the outfit it retouches: no outfit of its own, it
@@ -8624,6 +8877,22 @@ static void finalize_units(ScanOutputs& o) {
         printf("\n  merge audit (RuntimeOptions=on): outfits that look related\n");
         for (auto& n : g_merge_audit) printf("    %s: %s\n", n.fd.c_str(), n.text.c_str());
     }
+    // An option of a mod made an outfit of its own (a bundle of outfits) with an NSFW name: an NSFW outfit
+    for (auto& [id, cs] : o.mods_out) {
+        if (outfit_is_nsfw(id)) continue;
+        for (auto& u : g_units)
+            if (u.mod_id == id && !u.kw.empty()) {
+                g_nsfw_ids.insert(id);
+                printf("\n  nsfw: %s (%s): an NSFW outfit\n", unit_label(u).c_str(), u.kw.c_str());
+                break;
+            }
+    }
+    if (g_nsfw_kw_mods || g_nsfw_kw_options) {
+        size_t outfits = 0;
+        for (auto& [id, cs] : o.mods_out) if (outfit_is_nsfw(id) && !mod_in_nsfw_dir(id)) ++outfits;
+        printf("\n  NSFW by keywords: %zu mod%s, %zu option%s; %zu NSFW outfit%s of costume_mods\n", g_nsfw_kw_mods,
+               g_nsfw_kw_mods == 1 ? "" : "s", g_nsfw_kw_options, g_nsfw_kw_options == 1 ? "" : "s", outfits, outfits == 1 ? "" : "s");
+    }
     g_merge_audit.clear();
     g_units.clear();
     g_menus.clear();
@@ -8802,9 +9071,18 @@ static const char* kSettingsTemplate =
     ";   off: one outfit per combination of a modular mod's options, as before (default)\r\n"
     ";   on: one outfit per modular mod, every option stored for the in-game menu\r\n"
     ";   variants: the outfits of \"off\", every option stored as well\r\n"
-    "RuntimeOptions=off\r\n";
+    "RuntimeOptions=off\r\n"
+    ";\r\n"
+    "; NsfwKeywords: a mod of costume_mods whose name has one of these words is NSFW, as if it were in\r\n"
+    "; costume_mods_nsfw (shown in game only while \"Display NSFW Outfits\" is on); an option whose name has one\r\n"
+    "; is an NSFW option. Left out: the default list (nsfw, nude, naked, topless, bottomless, pubic, pubes,\r\n"
+    "; nipple, pasties, lewd, futa, see through, see thru, no panties, no underwear, erotic). A comma list\r\n"
+    "; replaces it; given empty (NsfwKeywords=) the names are not looked at.\r\n"
+    "; Example: NsfwKeywords=nsfw, nude, lingerie\r\n";
 
-static std::string read_setting(const std::string& path, const char* key) {
+// A setting's value; *found: whether the key is there at all (a key given empty is not a key left out)
+static std::string read_setting(const std::string& path, const char* key, bool* found = nullptr) {
+    if (found) *found = false;
     std::string txt = read_text_file(path);
     size_t a = 0;
     while (a < txt.size()) {
@@ -8817,6 +9095,7 @@ static std::string read_setting(const std::string& path, const char* key) {
         if (str_lower(trim_ws(l.substr(0, eq))) != key) continue;
         std::string v = trim_ws(l.substr(eq + 1));
         if (v.size() >= 2 && v.front() == '"' && v.back() == '"') v = v.substr(1, v.size() - 2);
+        if (found) *found = true;
         return v;
     }
     return {};
@@ -9431,6 +9710,9 @@ static void scan_costume_mods(
     g_game_meshes.clear();
     g_game_mdf_mats.clear();
     g_unit_source = 0;
+    g_nsfw_ids.clear();
+    g_nsfw_kw_mods = g_nsfw_kw_options = 0;
+    g_moved_slots.clear();
 
     ScanOutputs o{ inv, mods_out, all_mod_out, pak_readers_out, infos_out, upgraded_tex_out };
 
@@ -9462,8 +9744,8 @@ static void scan_costume_mods(
         process_units({ ModUnit{ game_dir, "", "natives (Fluffy Mod Manager)", true } }, "natives (Fluffy Mod Manager)", o);
     }
 
-    // NSFW outfits (costume_mods_nsfw, only when the user made that folder): read after every other mod, so the
-    // other outfits come out exactly as without it; their archives share costume_mods\.cache
+    // NSFW outfits (costume_mods_nsfw, made with costume_mods): read after every other mod, so the other outfits come
+    // out exactly as without it; their archives share costume_mods\.cache
     const std::string nsfw_dir = game_dir + "\\reframework\\costume_mods_nsfw";
     const DWORD nsfw_attr = GetFileAttributesA(nsfw_dir.c_str());
     if (nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY)) {
@@ -9984,7 +10266,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 3a. Check if costume_mods folder exists (quick existence check)
     std::string costume_mods_dir = game_dir + "\\reframework\\costume_mods";
     bool has_costume_mods = (GetFileAttributesA(costume_mods_dir.c_str()) != INVALID_FILE_ATTRIBUTES);
-    // NSFW outfits: a second root the user makes (the loader does not create it); read like costume_mods
+    // NSFW outfits: a second root, made with costume_mods (ensure_costume_mods_dirs); read like costume_mods
     const std::string nsfw_mods_dir = game_dir + "\\reframework\\costume_mods_nsfw";
     const DWORD nsfw_attr = GetFileAttributesA(nsfw_mods_dir.c_str());
     const bool has_nsfw_mods = nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY);
@@ -9997,6 +10279,14 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         if (g_rto_layout == RtoLayout::Off) DeleteFileA((registry_dir + "\\" + RTO_FILE).c_str());
         else logf("  runtime options: %s\n", g_rto_layout == RtoLayout::One ? "on (one outfit per modular mod)"
                                                                           : "variants (options stored too)");
+    }
+    // NSFW keywords (docs/RUNTIME_OPTIONS.md, NSFW outfits): ZZtaii's list, or NsfwKeywords= (a comma list replacing it;
+    // given empty: detection off)
+    bool nsfw_kw_set = false;
+    {
+        const std::string v = read_setting(costume_mods_dir + "\\settings.ini", "nsfwkeywords", &nsfw_kw_set);
+        g_nsfw_keywords = nsfw_kw_set ? nsfw::parse_keywords(v) : nsfw::default_keywords();
+        if (nsfw_kw_set) logf("  NSFW keywords (NsfwKeywords): %s\n", g_nsfw_keywords.empty() ? "none, detection off" : v.c_str());
     }
     const bool has_loose = has_loose_files(game_dir);   // Fluffy Mod Manager's loose files
     // Fluffy is looked for only when it has put files in the game (loose files or a mod pak)
@@ -10089,6 +10379,13 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
         new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
     new_fp += variant_choices_fingerprint();   // empty while every variant is on
+    if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_BUILD_ID)
+        std::string k;
+        for (auto& w : g_nsfw_keywords) k += (k.empty() ? "" : ",") + nsfw::compact(w);
+        char h[24];
+        snprintf(h, sizeof(h), "%016llx", (unsigned long long)fnv1a64(k));
+        new_fp += std::string(";nsfwkw=") + h;
+    }
     const bool options_missing = g_rto_layout != RtoLayout::Off
         && GetFileAttributesA((registry_dir + "\\" + RTO_FILE).c_str()) == INVALID_FILE_ATTRIBUTES;
     int target_num = top_foreign + 1;

@@ -1,8 +1,9 @@
 // Unit test of plugin/src/rto_data.cpp: the options manifest, the choices file, what a model loads for a
-// set of options, the menu rows, the rules between options, the former variant slots.
+// set of options, the menu rows, the rules between options, the former variant slots, NSFW keywords and options.
 // Build and run: build_rto_test.bat [costume_options.json] (prints "all ok" and exits 0 when every check
 // passes; with a manifest written by the loader, it is parsed and its rows listed too).
 #include "../src/rto_data.hpp"
+#include "../../common/nsfw_keywords.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -612,6 +613,88 @@ int main(int argc, char** argv) {
         check(display_name("2) glasses only") == "Glasses only", "name: number, first letter upper case");
         check(display_name("Ken SFV Hair V2") == "Ken SFV Hair V2", "name: a plain name is kept");
         check(display_name("2B hair") == "2B hair" && display_name("1)") == "1)", "name: a number that is the name stays");
+    }
+
+    {   // NSFW keywords (common/nsfw_keywords.hpp, ZZtaii's Slotsloader Manager 1.0.8 rule)
+        const auto& kw = nsfw::default_keywords();
+        auto hit = [&](const char* t) { return !nsfw::match(kw, t).empty(); };
+        check(hit("Cammy Nude C1") && nsfw::match(kw, "Cammy Nude C1") == "nude", "nsfw: 'Cammy Nude C1' (nude)");
+        check(!hit("Hatless Cammy") && !hit("Mai Panty Pack") && !hit("Cammy Barefoot"), "nsfw: Hatless Cammy, Mai Panty Pack, Cammy Barefoot not");
+        check(!hit("C.Viper Lace lingerie C2") && !hit("Swimsuit Viper C1") && !hit("B Style Cammy Bunny Ver"), "nsfw: clothing words are not keywords");
+        check(!hit("Regular - Barefoot no panty") && !hit("Normal panties"), "nsfw: 'no panties' is one run (not 'Normal panties')");
+        check(hit("No-Panties version") && hit("full see through") && hit("See-Through dress") && hit("seethru top"), "nsfw: spaces and dashes do not matter");
+        check(!hit("see the through") && !hit("4! SFW style options c1") && hit("4! NSFW style options c1"), "nsfw: 'see ... through' not, SFW not, NSFW yes");
+        check(hit("Mai_NSFWMod") && hit("TOPLESS") && hit("Thicc - heels + pubic hair"), "nsfw: case and underscores");
+        check(hit("N\xC3\xBC" "de Mod") && hit("N\xFC" "de Mod") && hit("Nu\xCC\x88" "de"), "nsfw: accents dropped (UTF-8, ANSI, combining)");
+        check(hit("Goth Juri/See/Through") && hit("mod/opt/naked") && !hit("mod/opt/barefoot"), "nsfw: a folder path: each folder and the whole path");
+        check(nsfw::compact("C-Viper-Barefoot") == "cviperbarefoot" && nsfw::compact("\xC3\x89lena") == "elena", "nsfw: compact");
+        const std::vector<std::string> v2{"v2"}, a{"a"}, ex{"ex"};
+        check(!nsfw::match(v2, "Ryu V2 hair").empty() && !nsfw::match(v2, "Ryu v 2").empty() && nsfw::match(v2, "Ryuv2 hair").empty(),
+              "nsfw: two characters start a word (a word and the next count)");
+        check(!nsfw::match(a, "A Manual").empty() && nsfw::match(a, "D Manual").empty() && nsfw::match(a, "Alpha").empty(),
+              "nsfw: one character is a whole word");
+        check(!nsfw::match(ex, "EXtra").empty() && !nsfw::match(ex, "CammyEX").empty() && nsfw::match(ex, "Rex").empty(),
+              "nsfw: words break at lower -> upper case");
+        const auto parsed = nsfw::parse_keywords("nsfw, Nude ;  see   through\n\"lewd\", NSFW, ,--");
+        check(parsed == std::vector<std::string>{"nsfw", "Nude", "see through", "lewd"}, "nsfw: keyword list parsed (dups, quotes, empties)");
+        check(nsfw::parse_keywords("").empty() && nsfw::match({}, "Cammy Nude").empty(), "nsfw: an empty list matches nothing");
+    }
+
+    {   // NSFW options (loader "nsfw": true): hidden while "Display NSFW Outfits" is off, the saved choice kept
+        std::string j = kManifest;
+        auto mark = [&](const std::string& id) {
+            const std::string at = "{\"id\": \"" + id + "\"";
+            j.replace(j.find(at), at.size(), at + ", \"nsfw\": true");
+        };
+        mark("drss0002"); mark("skin0001"); mark("jigl0001");
+        const std::string at = "\"defaults\":";
+        j.replace(j.find(at), at.size(), "\"required\": [1], " + at);
+        Manifest q; std::string e;
+        check(parse_manifest(j, q, e) && q.has_nsfw && !q.show_nsfw, "nsfw options parsed, hidden by default");
+        const Slot& t = q.slots[0];
+        const Mod& qm = *q.mod_of(t);
+        check(qm.options[static_cast<size_t>(qm.find("drss0002"))].nsfw && !qm.options[static_cast<size_t>(qm.find("drss0001"))].nsfw,
+              "nsfw flag per option");
+        check(hidden(q, t, "drss0002") && !hidden(q, t, "drss0001"), "hidden while off");
+        auto c = chosen_of(q, t, Choices{}, 0);
+        check(!has(c, "skin0001") && has(c, "skin0002"), "defaults: an NSFW pick of a required group -> its first other option");
+        auto r = rows(q, t, c);
+        bool fishnet = false, damaged = false, jiggle = false;
+        for (auto& row : r) {
+            for (auto& l : row.labels) { fishnet = fishnet || l == "fishnet"; damaged = damaged || l == "damaged"; }
+            jiggle = jiggle || row.title == "more jiggle";
+        }
+        check(!fishnet && !damaged && !jiggle, "menu: NSFW picks and toggles not offered");
+        check(default_pick(q, t, 1) == "skin0002", "default pick skips a hidden option");
+        Choices ch;
+        auto& sd = ch.mods["esf028/test dress"][0];
+        sd.changed = true;
+        sd.ids = {"base0001", "skin0001", "drss0002", "jigl0001", "bdya0001", "bdyb0001"};
+        auto p1 = chosen_of(q, t, ch, 0);
+        check(!has(p1, "drss0002") && !has(p1, "jigl0001") && !has(p1, "skin0001") && has(p1, "skin0002") && has(p1, "bdyb0001"),
+              "saved NSFW choices not worn while off");
+        auto d = desired(q, t, p1);
+        check(is_orig(d, T_CHAIN) && path_of(d, T_DRESS) == "product/model/esf/esf028/006/rto/base/_/mini/mini1_atos.tex",
+              "not worn: the dress goes back to the base copy, no jiggle chain");
+        auto now = p1;
+        choose(q, t, now, 4, "bdyb0002");                  // the user changes body B while NSFW options are hidden
+        auto kept = keep_hidden(q, t, sd.ids, p1, now);
+        check(has(kept, "bdyb0002") && has(kept, "drss0002") && has(kept, "jigl0001") && has(kept, "skin0001") && !has(kept, "skin0002"),
+              "keep_hidden: hidden choices kept, the stand-in pick dropped, the user's change kept");
+        auto now2 = p1;
+        choose(q, t, now2, 2, "drss0001");                 // the user picks another dress: the hidden dress goes
+        auto kept2 = keep_hidden(q, t, sd.ids, p1, now2);
+        check(has(kept2, "drss0001") && !has(kept2, "drss0002") && has(kept2, "jigl0001"), "keep_hidden: a pick in its group replaces a hidden pick");
+        q.show_nsfw = true;
+        check(keep_hidden(q, t, sd.ids, p1, now) == now, "keep_hidden: nothing to keep while shown");
+        auto p1on = chosen_of(q, t, ch, 0);
+        check(has(p1on, "drss0002") && has(p1on, "jigl0001") && has(p1on, "skin0001"), "on: the saved NSFW choices are worn again");
+        fishnet = damaged = jiggle = false;
+        for (auto& row : rows(q, t, p1on)) {
+            for (auto& l : row.labels) { fishnet = fishnet || l == "fishnet"; damaged = damaged || l == "damaged"; }
+            jiggle = jiggle || row.title == "more jiggle";
+        }
+        check(fishnet && damaged && jiggle, "on: NSFW options offered");
     }
 
     int rc = 0;

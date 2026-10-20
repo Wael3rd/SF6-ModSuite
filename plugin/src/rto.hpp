@@ -32,6 +32,7 @@ void migration_done();                // after load_state: the choices file is w
 
 // ---- shared with rto_menu.cpp ----
 bool on();                            // a valid manifest is loaded
+bool nsfw_options();                  // the manifest has NSFW options (costumes.cpp then reads display_nsfw)
 const Manifest& manifest();
 Choices& choices();
 void save_choices();                  // written at once (small file)

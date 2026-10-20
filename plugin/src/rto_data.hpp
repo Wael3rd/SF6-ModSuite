@@ -29,6 +29,8 @@ struct Option {
     std::string id, name, folder, mode, apply;               // mode: base, pick, toggle
     int group = -1;
     int rank = 0;                                            // layering order: a later option's file wins
+    bool nsfw = false;                                       // its name has an NSFW keyword (loader): hidden() while
+                                                             // "Display NSFW Outfits" is off
 };
 struct Group { std::string name; std::vector<int> options; };
 struct Variant { std::string label; std::vector<std::string> ids; };
@@ -57,6 +59,10 @@ struct Manifest {
     std::string format, generated, loader, pak, layout;
     std::vector<Mod> mods;
     std::vector<Slot> slots;
+    bool has_nsfw = false;                                   // an option is marked "nsfw"
+    // "Display NSFW Outfits" (settings.json display_nsfw, set by the plugin): while false, NSFW options are not offered
+    // nor worn; a saved choice of one is kept (keep_hidden), only not applied
+    bool show_nsfw = false;
     const Mod* mod_of(const Slot& s) const { return s.mod_index >= 0 ? &mods[static_cast<size_t>(s.mod_index)] : nullptr; }
     const Mod* mod_by_key(const std::string& key) const;
     // The slot whose folder holds this resource ("product/model/esf/esf028/006/..."), lowercase path
@@ -94,8 +100,19 @@ bool removable(const Manifest& m, const Slot& s, const std::string& id);
 // The joint count the manifest gives for a mesh (a stored copy, or a target: the slot's own file), -1
 int joints_at(const Manifest& m, const Slot& s, const std::string& path);
 
-// The options a side wears on a slot: the slot's defaults until the user changed something
+// An NSFW option while "Display NSFW Outfits" is off: not offered, not worn
+bool hidden(const Manifest& m, const Slot& s, const std::string& id);
+
+// The options a side wears on a slot: the slot's defaults until the user changed something; hidden options left out
+// (a required group then gets its first other option, complete)
 std::vector<std::string> chosen_of(const Manifest& m, const Slot& s, const Choices& c, int side);
+
+// What to save for a side the menu changed while NSFW options are hidden: `now` (the menu's set), plus the hidden
+// options of `saved` (what the side had saved) the menu did not replace: a hidden toggle stays; a hidden pick stays
+// unless the user picked something else in its group (its pick in `now` differs from `shown`, the set the menu showed).
+// `now` as it is while NSFW options are shown.
+std::vector<std::string> keep_hidden(const Manifest& m, const Slot& s, const std::vector<std::string>& saved,
+                                     const std::vector<std::string>& shown, const std::vector<std::string>& now);
 
 // A group the loader marked "required": a file the slot wears from its options has no base copy (no usable
 // file to go back to), so the group always has one of its options. complete() gives each such group without

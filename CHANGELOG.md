@@ -11,6 +11,17 @@
   Marked `"nsfw": true` in `outfits.json`, the registry and `costume_options.json`; not listed in `variants.json`.
   Without that folder nothing changes (same registry, manifests and pak). Known issue: no in-game switch yet
   (the option row in Options > Interface needs a core change).
+- `costume_mods_nsfw` is made by the loader (with a folder per fighter) like `costume_mods`, and shipped in the Slots
+  Loader package; empty, it changes nothing.
+- NSFW by keywords: a mod of `costume_mods` whose name says it is NSFW (archive, folder, Fluffy menu name) is handled
+  as if it were in `costume_mods_nsfw`; an option whose name, folder or menu group says so is an NSFW runtime option:
+  not offered nor worn while NSFW outfits are hidden (the saved choice is kept and comes back), never worn by default
+  when its group can do without it; with `RuntimeOptions=off` / `variants` an outfit made with one is NSFW. Keyword
+  list and matching rule from ZZtaii's Slotsloader Manager 1.0.8 NSFW filter (ported with his permission, credited);
+  `NsfwKeywords=` in `costume_mods\settings.ini` replaces the list (empty: off). Outfits that become NSFW on an
+  existing install are numbered after the others once, and a Battle Settings choice follows them (`outfits.json`
+  `"moved"`). Each mod / option caught is logged with the word. On the author's mods: 17 options of one mod
+  (Mini Dress Mai: "see through" dresses, "pubic hair" and the "NSFW style" group), no whole mod.
 - Runtime options: a mod alone in its own sub-folder of a character folder is always its own outfit (no retouch, subset, merge or add-on placement on either side); logged and listed in the merge audit.
 
 ### SF6 Slots Loader (fixes ported from ZZtaii's Slotsloader fork, MIT)

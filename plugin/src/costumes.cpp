@@ -94,6 +94,9 @@ std::map<int, Intent> g_intent;
 // then state.json keeps the former slot, so a session that ends before does it again.
 struct ToGame { int costume = 0, color = -1, from = 0; };
 std::map<int, ToGame> g_to_game;
+// Outfits the loader numbered again because they became NSFW or stopped being NSFW (outfits.json "moved"):
+// (fighter, old number) -> new number. A Battle Settings choice of the old number follows (load_state).
+std::map<std::pair<int, int>, int> g_moved;
 
 // ---- per character ----
 struct Fighter {
@@ -183,12 +186,18 @@ void load_registry() {
         }
     std::map<std::pair<int, int>, std::string> label_of;
     Json oj;
-    if (json_parse(read_file(kOutfits), oj))
+    if (json_parse(read_file(kOutfits), oj)) {
         if (const Json* os = oj.get("outfits"); os && os->kind == Json::Array)
             for (auto& e : os->arr) {
                 const Json* f = e.get("fighter"); const Json* c = e.get("costume_no"); const Json* l = e.get("label");
                 if (f && c && l) label_of[{static_cast<int>(f->as_int()), static_cast<int>(c->as_int())}] = l->as_str();
             }
+        if (const Json* mv = oj.get("moved"); mv && mv->kind == Json::Array)
+            for (auto& e : mv->arr) {
+                const Json* f = e.get("fighter"); const Json* a = e.get("from"); const Json* b = e.get("to");
+                if (f && a && b) g_moved[{static_cast<int>(f->as_int()), static_cast<int>(a->as_int())}] = static_cast<int>(b->as_int());
+            }
+    }
     for (auto& e : pos->arr) {
         Slot s;
         const Json* f = e.get("fighter"); const Json* c = e.get("costume_no"); const Json* r = e.get("record_id");
@@ -226,7 +235,7 @@ uint64_t settings_stamp() {
 }
 // Reads "display_nsfw" (false when the file or the key is missing). Returns true when the setting changed.
 bool read_nsfw_setting(const char* why) {
-    if (!g_nsfw_slots) return false;
+    if (!g_nsfw_slots && !rto::nsfw_options()) return false;
     const uint64_t st = settings_stamp();
     if (st && st == g_settings_stamp) return false;
     g_settings_stamp = st;
@@ -243,8 +252,8 @@ bool read_nsfw_setting(const char* why) {
     if (on == g_show_nsfw && std::strcmp(why, "start") != 0) return false;
     const bool changed = on != g_show_nsfw;
     g_show_nsfw = on;
-    logf("costumes: Display NSFW Outfits %s (%s): %zu NSFW outfit%s %s", on ? "on" : "off", why, g_nsfw_slots,
-         g_nsfw_slots > 1 ? "s" : "", on ? "shown" : "hidden");
+    logf("costumes: Display NSFW Outfits %s (%s): %zu NSFW outfit%s %s%s", on ? "on" : "off", why, g_nsfw_slots,
+         g_nsfw_slots == 1 ? "" : "s", on ? "shown" : "hidden", rto::nsfw_options() ? ", NSFW options too" : "");
     return changed;
 }
 
@@ -264,6 +273,14 @@ void load_state() {
         if (const Json* c = v.get("carrier"); c && c->kind == Json::Number) g_saved_carrier[fid] = static_cast<int>(c->num);
         // A variant slot of a modular mod folded into one outfit with options (RuntimeOptions=on): the
         // choice moves to the kept slot, the variant's options become the P1 choice (rto.cpp)
+        // An outfit numbered again (it became NSFW, or stopped being NSFW): the choice follows it
+        if (in.slot && !is_slot(fid, in.slot))
+            if (auto mv = g_moved.find({fid, in.slot}); mv != g_moved.end() && is_slot(fid, mv->second)) {
+                logf("costumes: [F%d] Battle Settings outfit %d is now outfit %d (numbered again: NSFW outfits come after "
+                     "the others)", fid, in.slot, mv->second);
+                in.slot = mv->second;
+                migrated = true;
+            }
         if (in.slot && !is_slot(fid, in.slot)) {
             bool game = false;
             int kept = rto::migrate_former(fid, in.slot, &game);
@@ -1287,6 +1304,8 @@ bool g_menu_open = false;
 
 } // namespace
 
+bool display_nsfw() { return g_show_nsfw; }
+
 // ---------------------------------------------------------------------------------------------
 // Module entry points
 // ---------------------------------------------------------------------------------------------
@@ -1347,7 +1366,7 @@ void tick(uint32_t ev) {
 
     // ---- NSFW outfits: settings.json read again (when it changed) at every screen that lists outfits, before the
     // ownership pass below (which then follows the new setting); applied once more below the Battle Settings work
-    if (g_nsfw_slots && (ev & (EV_TITLE_END | EV_SELECT_START | EV_SELECT_END | EV_MENU_OPEN | EV_MENU_CLOSE))
+    if ((g_nsfw_slots || rto::nsfw_options()) && (ev & (EV_TITLE_END | EV_SELECT_START | EV_SELECT_END | EV_MENU_OPEN | EV_MENU_CLOSE))
         && read_nsfw_setting("settings.json changed"))
         g_nsfw_apply = true;
 
