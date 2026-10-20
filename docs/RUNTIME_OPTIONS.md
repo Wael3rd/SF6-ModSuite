@@ -312,12 +312,26 @@ does, the fallback above is the next step.
   when the outfit changes). The label is English only (the plugin has no locale system).
 - **Coexistence with the Color Mod** (same text object, the bar's `e_text_0_g_*` else first `e_text_0_d_*`): the
   Color Mod strips everything from the first `"      <ICON"` (six spaces) of the game's text and appends its entry
-  after it, only on its Color row; its stored copy is written back every frame and refreshed every 5 frames from
-  what it reads. Our entry starts with FOUR spaces, so its strip does not match: it keeps ours as game text (no
-  rewrite) and its own entry lands after ours. We remove only our exact entry (either icon) wherever it sits, and
-  add it only on the costume row of an outfit with options; elsewhere (Color row, other rows, window closed, menu
-  open) it is removed and the rest of the text stays. No identical write; a fight of more than 60 writes in 120
-  frames (the Color Mod's stale copy right after a change) is logged once and the text is still rewritten.
+  after it, only on its Color row. Our entry starts with FOUR spaces and is inserted before that separator, so its
+  strip keeps ours as game text and its own entry lands after ours. We remove only our exact entry (either icon)
+  wherever it sits, and add it only on the costume row of an outfit with options; elsewhere (Color row, other rows,
+  window closed, menu open) it is removed and the rest of the text stays. No identical write.
+- **No fight with the Color Mod (crash of 20/10)**: the Color Mod writes its stored copy of that text from its
+  post-hook of `app.UIPartsInputGuideList.OnLateUpdate` (a game UI job thread) on every frame the text differs, and
+  refreshes the copy only every 15 frames (its screens pass runs every 3rd frame, the guide refresh every 5th pass),
+  from the core's LateUpdateBehavior callback, i.e. right after ours on the same frame (REFramework initializes
+  plugins in name order, `sf6core_native` last). The first build (51dde84) wrote on any frame: the Color Mod took
+  the write back from the job thread, we wrote it again on the next frame, up to 14 pairs of `set_Message` on one
+  text per row change. Moving S / Z between the Costume and Color rows every 0.4 s (Mai Outfit I) crashed the game
+  2 / 2 within 40 round trips, same RIP (`StreetFighter6.exe+0x4654383`, a managed object with a zeroed header,
+  i.e. freed, read during a nested coroutine walk of the LateUpdateBehavior entry); the build without guide writes
+  ran 100 round trips. Since then the plugin writes only on the frame phase (`g_frame % 15`) where a write of ours
+  stays, learned from the first write that stays (at most 14 taken back, one a frame, once a session; forgotten
+  after two misses in a row; 16 in a row = no entry for that visit, never a fight): one write of ours per change and
+  no write of the Color Mod caused by ours. The entry shows up to 14 frames (a quarter second) after the costume row
+  gets the focus, like the Color Mod's own entry. Without the Color Mod loaded, no phase wait. The log says
+  `guide bar: a write of ours stays on frame phase N` once, and `guide bar: N writes this visit, M taken back` when
+  Fighter Settings closes.
 - **Key**: `F` (or the pad's A / Cross) with the costume row focused opens the menu. The Color Mod's keys are
   elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
   never open together (both need the option window closed).
@@ -346,7 +360,12 @@ does, the fallback above is the next step.
   on the frame after the window closed (never from the core's callback). Input is only read, never swallowed.
   The Color Mod hides `c_00` / `c_02` every 30 of its frames while Fighter Settings is up and its editor is closed
   (so also under our menu): the plugin paints them from a post-LateUpdateBehavior callback (after every pre
-  callback of the frame) and shows a block again on any frame it finds hidden, so nothing blinks.
+  callback of the frame) and shows a block again on any frame it finds hidden, so nothing blinks. Checked against
+  the guide bar crash (20/10): not the same case. REFramework runs the pre callbacks, the LateUpdateBehavior entry
+  and the post callbacks on one thread, one after the other, so the Color Mod's hide (pre, core callback) and our
+  paint (post) never overlap; no job-thread hook writes `c_00` / `c_02` (the Color Mod's camera writes them only
+  while its editor is open, never with our menu), and the only back and forth is one hide and one show per block
+  every 30 frames (texts written only when they differ).
 
 ## Saved choices and slot numbers
 

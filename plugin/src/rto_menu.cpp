@@ -57,8 +57,11 @@ struct Hint {
     bool key_was = false;
     bool raw_was = false;                           // F / A down, any row (log of every press)
     int text_log = -1, has_log = -1, guide_log = -1;// last logged: costume row text found, outfit with options, guide text found
-    std::vector<uint32_t> gwrites;                  // frames of our guide writes (log of a fight)
-    bool fight_logged = false;
+    uint32_t gwrote_at = 0;                         // our last guide write: frame and text (checked on the next frame)
+    std::string gwrote;
+    int gfails = 0;                                 // our guide writes taken back in a row
+    bool goff = false;                              // given up for this visit (never a fight)
+    uint32_t gwrites = 0, greverts = 0;             // this visit (logged when it ends)
 } H;
 
 uint32_t g_pad_a = 32;
@@ -302,23 +305,39 @@ void SF6CORE_CALL cb_closed(void*) {
 //
 // The entry goes into the bottom input guide bar, as the Color Mod does for its Color row ("<ICON KeyF><ICON
 // MouseL> Edit Color"). Both DLLs write the same text object (the bar's e_text_0_g_*, else the first
-// e_text_0_d_*, found the same way), so the scheme avoids a fight:
-//  - The Color Mod strips everything from the first "      <ICON" (SIX spaces) of the game's text and appends
-//    its own entry after it, and only on its Color row; elsewhere it writes the text back unchanged. Our entry
-//    uses FOUR spaces ("    <ICON KeyF> label"): the Color Mod's strip does not match it, so it keeps ours
-//    as "game text" (its stored copy then includes ours: no rewrite, no flicker), and when its own entry is
-//    added it lands after ours.
-//  - We strip only our exact entry (either icon), wherever it is in the text, and add it only on the costume
-//    row of an outfit with options. On the Color row, or any other row, ours is removed and the rest of the
-//    text (the game's, and the Color Mod's entry if it is there) is left as it is.
-//  - We never write an identical text, and rebuild from what is in the text each frame, so a text the game or
-//    the Color Mod rewrote is handled as it comes. The Color Mod refreshes its stored copy only every 5 frames
-//    (and writes it each frame), so for a few frames after a change its stale copy can rewrite the text and we
-//    write ours again; the screen is drawn after both. A fight of more than 60 writes in 120 frames is logged once.
+// e_text_0_d_*, found the same way):
+//  - The Color Mod strips everything from the first "      <ICON" (SIX spaces) of the text and appends its own
+//    entries after it. Our entry uses FOUR spaces ("    <ICON KeyF> label") and goes BEFORE that separator: the
+//    Color Mod's strip keeps it as "game text", and its own entry lands after ours.
+//  - We strip only our exact entry (either icon), wherever it is, and add it only on the costume row of an outfit
+//    with options; elsewhere the rest of the text is left as it is. Never an identical write.
+//  - NO FIGHT (20/10 crash, docs/RUNTIME_OPTIONS.md): the Color Mod writes its stored copy of the text from its
+//    post-hook of app.UIPartsInputGuideList.OnLateUpdate, on a game UI job thread, on every frame the text differs
+//    from it, and refreshes that copy only every 15 frames (its screens pass runs every 3rd frame, the guide part
+//    of it every 5th pass), in the core's LateUpdateBehavior callback, which runs right after ours on the same
+//    frame (REFramework initializes plugins in name order, the core last). A write of ours on any other frame was
+//    taken back from the job thread and written again by us on the next frame: up to 14 such pairs of set_Message
+//    on one text per row change, and the game crashed (use-after-free on the LateUpdateBehavior thread, 2 / 2 runs
+//    within 40 Costume / Color round trips; 0 in 100 with no write to this text). So with the Color Mod loaded we
+//    write only on the frame phase (g_frame % 15) where a write of ours stays (the Color Mod reads it at once and
+//    never writes it back): one write of ours per change and no write of the Color Mod caused by ours. The phase
+//    is learned from the first write that stays (once a session: at most 14 writes taken back, one a frame) and
+//    forgotten after two misses in a row; kGuideMaxFails writes taken back in a row = no entry for this visit.
+//    The entry shows up to 14 frames after the costume row gets the focus, as the Color Mod's own entry does.
+//    Without the Color Mod loaded, no phase wait.
 const char* kEntryLabel = "Costume options";        // English only: the plugin has no locale system
+const char* kCmSep = "      <ICON";                 // the Color Mod's separator (six spaces)
+constexpr uint32_t kCmCadence = 15;                 // the Color Mod refreshes its stored guide text every 15 frames
+constexpr int kGuideMaxFails = 16;                  // more than one try per phase
+int g_guide_phase = -1;                             // g_frame % kCmCadence where a write of ours stays (-1: unknown)
+int g_phase_misses = 0;                             // writes on that phase taken back in a row
 std::string entry_text(bool pad) { return std::string("    ") + (pad ? "<ICON BtnD> " : "<ICON KeyF> ") + kEntryLabel; }
 void erase_all(std::string& s, const std::string& what) {
     for (size_t at; (at = s.find(what)) != std::string::npos;) s.erase(at, what.size());
+}
+bool color_mod_loaded() {                           // every plugin is loaded before the first frame: asked once
+    static const bool loaded = GetModuleHandleW(L"SF6_ColorModNative.dll") != nullptr;
+    return loaded;
 }
 
 Obj* find_guide_text(const SF6CoreAPI* a) {
@@ -350,8 +369,9 @@ Obj* find_guide_text(const SF6CoreAPI* a) {
     return nullptr;
 }
 
-// show: the entry belongs in the bar now; false: take ours out (the bar keeps the rest as it is)
-void guide_apply(bool show) {
+// show: the entry belongs in the bar now; false: take ours out (the bar keeps the rest as it is).
+// leaving: Fighter Settings is going away, the last chance to take ours out: written at once, whatever the phase.
+void guide_apply(bool show, bool leaving = false) {
     const SF6CoreAPI* a = A();
     if (!a) return;
     if (show && (!alive(H.gtext) || g_frame - H.gfound_at > 60)) {
@@ -363,16 +383,48 @@ void guide_apply(bool show) {
     if (!alive(H.gtext)) { H.gtext = nullptr; return; }
     const std::string cur = str(call_obj(H.gtext, "get_Message"));
     if (cur.empty()) return;                        // the game has not written it yet
+    if (H.gwrote_at && g_frame == H.gwrote_at + 1) {    // did our last write stay?
+        if (cur == H.gwrote) {
+            const int ph = static_cast<int>(H.gwrote_at % kCmCadence);
+            if (color_mod_loaded() && ph != g_guide_phase) logf("rto: guide bar: a write of ours stays on frame phase %d (the Color Mod's refresh)", ph);
+            g_guide_phase = ph;
+            g_phase_misses = 0;
+            H.gfails = 0;
+        } else {                                    // taken back (the Color Mod's stale copy, or the game)
+            ++H.greverts; ++H.gfails;
+            if (g_guide_phase >= 0 && ++g_phase_misses >= 2) { g_guide_phase = -1; g_phase_misses = 0; }
+        }
+    }
     std::string want = cur;
     erase_all(want, entry_text(false));
     erase_all(want, entry_text(true));
-    if (show) want += entry_text(H.pad);
-    if (want == cur) return;
-    H.gwrites.push_back(g_frame);
-    while (!H.gwrites.empty() && g_frame - H.gwrites.front() > 120) H.gwrites.erase(H.gwrites.begin());
-    if (H.gwrites.size() > 60 && !H.fight_logged) { H.fight_logged = true; logf("rto: the guide bar text is rewritten by another writer every frame (the Color Mod's stored copy): rewriting ours"); }
+    if (show) {
+        const size_t at = want.find(kCmSep);        // before the Color Mod's entries: its strip keeps ours
+        want.insert(at == std::string::npos ? want.size() : at, entry_text(H.pad));
+    }
+    if (want == cur || (H.goff && !leaving)) return;
+    if (!leaving) {
+        if (H.gfails >= kGuideMaxFails) {
+            H.goff = true;
+            logf("rto: guide bar: %d writes in a row taken back by another writer: no entry this visit (no fight)", H.gfails);
+            return;
+        }
+        if (color_mod_loaded() && g_guide_phase >= 0 && static_cast<int>(g_frame % kCmCadence) != g_guide_phase) return;
+    }
     const SF6CoreStatus st = a->ui_set_text(C(), H.gtext, want.c_str());
-    if (st != SF6CORE_OK) logf("rto: guide bar text not written (core status %d)", static_cast<int>(st));
+    if (st != SF6CORE_OK) { logf("rto: guide bar text not written (core status %d)", static_cast<int>(st)); return; }
+    H.gwrote_at = g_frame;
+    H.gwrote = want;
+    ++H.gwrites;
+}
+
+// Fighter Settings left (or another agent): ours out of the bar, the visit's guide writes logged, the state reset
+void hint_reset() {
+    guide_apply(false, true);
+    if (H.gwrites) logf("rto: guide bar: %u writes this visit, %u taken back", H.gwrites, H.greverts);
+    const bool pad = H.pad;
+    H = Hint{};
+    H.pad = pad;
 }
 
 void hint_tick() {
@@ -380,9 +432,9 @@ void hint_tick() {
     if (!a || !SF6CORE_HAS(a, ui_agents)) return;
     void* buf[4] = {};
     Obj* agent = a->ui_agents("MatchingFighterSetting", buf, 4) ? reinterpret_cast<Obj*>(buf[0]) : nullptr;
-    if (!agent) { guide_apply(false); H = Hint{}; return; }
+    if (!agent) { if (H.agent) hint_reset(); return; }
     if (agent != H.agent || !alive(H.text) || g_frame - H.found_at > 60) {
-        if (agent != H.agent) { guide_apply(false); const bool pad = H.pad; H = Hint{}; H.pad = pad; }
+        if (agent != H.agent) hint_reset();
         H.agent = agent;
         H.found_at = g_frame;
         Obj* cm = call_obj(agent, "get_ControlMain");
@@ -504,7 +556,7 @@ void tick(bool fs_visible) {
             }
         }
         if (fs_visible || S.active) hint_tick();
-        else if (H.agent) { guide_apply(false); H = Hint{}; }
+        else if (H.agent) hint_reset();
     } catch (...) {
         logf("rto: EXCEPTION in the menu (tick)");
     }
