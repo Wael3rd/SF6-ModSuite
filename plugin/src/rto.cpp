@@ -230,11 +230,21 @@ struct Model {
 };
 Model g_models[3];                                // preview, P1, P2
 
+// The last write of this module on a preview model (frame, what): told when the preview stays empty (preview_tick)
+uint32_t g_prev_write_at = 0;
+std::string g_prev_write;
+void wrote(const Model& md, const std::string& what) {
+    if (&md != &g_models[0]) return;
+    g_prev_write_at = g_frame;
+    g_prev_write = what;
+}
+
 void reset(Model& md) {
     // a chain this module stopped starts again: between two frames its part always wears a whole unit
     for (auto& u : md.units)
         if (u.stopped && T.ch_enable && alive_as(u.chain, T.chain)) {
             call(T.ch_enable, u.chain, { arg_bool(true) });
+            wrote(md, u.go + " chain started again (model reset)");
             logf("rto: %s %s chain started again (model reset)", md.name, u.go.c_str());
         }
     const char* nm = md.name;
@@ -343,6 +353,7 @@ void recolor(Model& md) {
         uint32_t n = 0;
         if (!get_u32(p, "ColorNum", n)) continue;
         call(T.set_color, p, { arg_i32(static_cast<int32_t>(n)) });
+        wrote(md, "colours set again");
     }
 }
 
@@ -369,7 +380,7 @@ void put_unit(Obj* mesh, Obj* chain, Res* m, Res* t, Res* c) {
     if (c) call(T.ch_restart, chain);
 }
 void unit_done(Model& md, UnitSwap& u, const char* why) {
-    if (u.stopped && T.ch_enable && alive_as(u.chain, T.chain)) call(T.ch_enable, u.chain, { arg_bool(true) });
+    if (u.stopped && T.ch_enable && alive_as(u.chain, T.chain)) { call(T.ch_enable, u.chain, { arg_bool(true) }); wrote(md, u.go + " chain started again"); }
     logf("rto: %s %s chain %s (%s)", md.name, u.go.c_str(), u.stopped ? "started again" : "left as the game had it", why);
 }
 
@@ -397,6 +408,7 @@ void pass(Model& md) {
                      bc && bc->holder ? bc : nullptr);
             if (!u.wm.empty()) backoff(u.wm);
             if (!u.wt.empty()) backoff(u.wt);
+            wrote(md, u.go + " part put back");
             logf("rto: %s %s not drawable a frame later, back to %s", md.name, u.go.c_str(),
                  short_path(u.pm.empty() ? u.pt : u.pm).c_str());
             u.stage = 3; u.at = g_frame; pending = true; colour = true;
@@ -415,6 +427,7 @@ void pass(Model& md) {
         if (ok) continue;
         auto it = g_res.find(v.prev);
         if (it != g_res.end() && it->second.holder) call(v.mesh ? T.set_mesh : T.set_mat, v.c, { arg_obj(it->second.holder) });
+        wrote(md, "put back " + short_path(v.prev));
         backoff(v.path);
         logf("rto: %s %s not ready a frame later, back to %s", md.name, short_path(v.path).c_str(), short_path(v.prev).c_str());
         pending = true; colour = true;
@@ -476,7 +489,7 @@ void pass(Model& md) {
                 UnitSwap n;
                 n.mesh = mc.c; n.chain = cc->c; n.go = mc.go; n.at = g_frame;
                 n.stopped = !T.ch_enabled || ret_bool(T.ch_enabled, cc->c);
-                if (n.stopped) call(T.ch_enable, cc->c, { arg_bool(false) });
+                if (n.stopped) { call(T.ch_enable, cc->c, { arg_bool(false) }); wrote(md, mc.go + " chain stopped"); }
                 md.units.push_back(n);
                 logf("rto: %s %s %s: chain %s for its part's swap", md.name, side_name, mc.go.c_str(),
                      n.stopped ? "stopped" : "already stopped");
@@ -490,10 +503,13 @@ void pass(Model& md) {
                 put_unit(mc.c, cc->c, back_m, back_t, back_c);
                 if (need_m) backoff(wm);
                 if (need_t) backoff(wt);
+                wrote(md, mc.go + " part put back at once");
                 logf("rto: %s %s %s: part not drawable, put back", md.name, side_name, mc.go.c_str());
                 u->stage = 3; u->at = g_frame; pending = true;
+                colour = true;                        // a material set again lost the colours SetColor wrote
                 continue;
             }
+            wrote(md, mc.go + " part swapped");
             u->stage = 2; u->at = g_frame;
             just_set.insert(mc.c);
             colour = true;
@@ -506,13 +522,21 @@ void pass(Model& md) {
         if (need_t) call(T.set_mat, mc.c, { arg_obj(rt->holder) });
         const bool ok = (!need_m || ret_bool(T.mesh_ready, mc.c)) && (!need_t || (ret_bool(T.mat_ready, mc.c) && ret_u32(T.mat_num, mc.c) > 0));
         if (!ok) {
+            // Put back in the same frame. A material set again comes with its file's colours, not the ones SetColor
+            // wrote: without a recolour the part stays black (20/10, Ryu Aloha C2's body on its first pick)
             if (need_t) call(T.set_mat, mc.c, { arg_obj(back_t->holder) });
             if (need_m) call(T.set_mesh, mc.c, { arg_obj(back_m->holder) });
             if (need_m) backoff(wm);
             if (need_t) backoff(wt);
+            wrote(md, mc.go + " put back at once");
+            logf("rto: %s %s %s: not drawable at once (still loading), put back, tried again later:%s%s%s%s", md.name, side_name,
+                 mc.go.c_str(), need_m ? " mesh " : "", need_m ? short_path(wm).c_str() : "", need_t ? " material " : "",
+                 need_t ? short_path(wt).c_str() : "");
             pending = true;
+            colour = true;
             continue;
         }
+        wrote(md, mc.go + " swapped");
         if (need_m) md.verify.push_back({ mc.c, true, wm, pm });
         if (need_t) md.verify.push_back({ mc.c, false, wt, pt });
         just_set.insert(mc.c);
@@ -554,6 +578,7 @@ void pass(Model& md) {
                 if (r->dead) { tell_once(md, "cannot load " + short_path(w)); continue; }
                 if (!usable(r)) { pending = true; continue; }
                 call(T.set_tex, mc.c, { arg_i32(static_cast<int32_t>(b.mi)), arg_i32(static_cast<int32_t>(b.ti)), arg_obj(r->holder) });
+                wrote(md, mc.go + " texture");
                 logf("rto: %s %s %s texture %u/%u %s", md.name, side_name, mc.go.c_str(), b.mi, b.ti, short_path(w).c_str());
             }
         }
@@ -573,6 +598,7 @@ void pass(Model& md) {
         if (!usable(r)) { pending = true; continue; }
         call(T.ch_set, cc.c, { arg_obj(r->holder) });
         call(T.ch_restart, cc.c);
+        wrote(md, cc.go + " chain");
         logf("rto: %s %s %s chain %s", md.name, side_name, cc.go.c_str(), short_path(w).c_str());
     }
 
@@ -617,6 +643,10 @@ Obj* g_crf = nullptr;                // the preview's CaptureRoomFighter, checke
 uint32_t g_crf_scan = 0, g_prev_next = 0;
 
 std::string g_crf_log;               // the last preview search result logged (logged on change)
+std::atomic<uint32_t> g_builds{0};   // PlayerBehavior.SetupAppearance calls (every model build, the preview's too)
+uint32_t g_holders = 0;              // frames with an outfit's visual manifest created (EV_HOLDER: the game loads an outfit)
+uint32_t g_gone_at = 0, g_gone_builds = 0, g_gone_holders = 0;   // the preview without a model since this frame (0: it has one)
+bool g_gone_told = false;
 void preview_tick() {
     if (g_frame < g_prev_next) return;
     g_prev_next = g_frame + 10;
@@ -642,6 +672,22 @@ void preview_tick() {
     }
     Model& md = g_models[0];
     Obj* root = g_crf ? call_obj(T.crf_obj, g_crf) : nullptr;
+    // The preview without a model while Fighter Settings is up (20/10: after fast costume changes it stayed empty
+    // until the character grid): told once after 5 s with this module's last write on a preview model and the model
+    // builds seen since (none = the game never started the next one)
+    if (root) {
+        if (g_gone_at && g_gone_told) logf("rto: preview: a model again after %u frames", g_frame - g_gone_at);
+        g_gone_at = 0;
+    } else if (!g_gone_at) {
+        g_gone_at = g_frame; g_gone_told = false; g_gone_builds = g_builds.load(std::memory_order_relaxed);
+        g_gone_holders = g_holders;
+    } else if (!g_gone_told && g_fs_was && g_frame - g_gone_at > 300) {
+        g_gone_told = true;
+        logf("rto: preview: no model for %u frames (since f%u, %s); since then: %u outfit manifests created, %u model "
+             "builds (SetupAppearance); our last write on a preview model: %s", g_frame - g_gone_at, g_gone_at,
+             g_crf_log.c_str(), g_holders - g_gone_holders, g_builds.load(std::memory_order_relaxed) - g_gone_builds,
+             g_prev_write_at ? ("f" + std::to_string(g_prev_write_at) + " " + g_prev_write).c_str() : "none");
+    }
     if (root && T.crf_setup && !ret_bool(T.crf_setup, g_crf)) root = nullptr;   // still building
     if (root != md.root) {
         reset(md); md.root = root;
@@ -706,6 +752,7 @@ void warm() {
 }
 
 int pre_setup_appearance(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    g_builds.fetch_add(1, std::memory_order_relaxed);
     if (!g_closing.load(std::memory_order_relaxed) && !g_model_noisy) { g_model_calls.fetch_add(1, std::memory_order_relaxed); post(EV_RTO_MODEL); }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -835,6 +882,7 @@ void tick(uint32_t ev) {
             g_bs = true; g_bs_closed = false; g_bs_seen = g_frame;
         }
         if ((ev & EV_MENU_CLOSE) && g_bs && !g_bs_closed) { g_bs_closed = true; g_bs_seen = g_frame; }
+        if (ev & EV_HOLDER) ++g_holders;
         if ((ev & (EV_HOLDER | EV_RTO_MODEL)) && !g_select) {
             if (!g_watch_until) {
                 if (costumes::select_active()) { g_select = true; return; }   // the select screen builds its own models
@@ -860,6 +908,7 @@ void tick(uint32_t ev) {
                 g_fs_was = false;
                 reset(g_models[0]);
                 g_crf = nullptr;
+                g_gone_at = 0;
                 res_gc();
             }
         }

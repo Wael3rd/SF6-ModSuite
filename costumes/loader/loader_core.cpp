@@ -2793,6 +2793,7 @@ static void add_slot_files(PakWriter& writer,
     }
 
     // 2b. CMD files: discover from CCVD content, relocate dir-only
+    std::vector<std::pair<std::string, std::string>> slot_colour_files;   // original -> slot's copy (runtime options)
     {
         std::set<std::string> cmd_names;
         if (!ccvd_patched.empty()) {
@@ -2843,7 +2844,11 @@ static void add_slot_files(PakWriter& writer,
         for (auto& cn : cmd_names) {
             std::string cmd_orig = base_model + cn;
             std::string cmd_target = relocate_dir_only(cmd_orig);
-            if (written_paths.count(cmd_target)) { note_target(cmd_orig, cmd_target); continue; }
+            if (written_paths.count(cmd_target)) {
+                note_target(cmd_orig, cmd_target);
+                slot_colour_files.push_back({cmd_orig, cmd_target});
+                continue;
+            }
             uint64_t th = pak_path_hash(std::string_view(cmd_target));
             auto mfit = mc->files_in_folder.find(cmd_orig);
             if (mfit != mc->files_in_folder.end()) {
@@ -2900,6 +2905,7 @@ static void add_slot_files(PakWriter& writer,
                 }
             }
             note_target(cmd_orig, cmd_target);
+            if (written_paths.count(cmd_target)) slot_colour_files.push_back({cmd_orig, cmd_target});
         }
     }
 
@@ -3826,6 +3832,110 @@ static void add_slot_files(PakWriter& writer,
                 if (low.find(".jcns.") != std::string::npos || low.find("_jcs.user.") != std::string::npos)
                     printf("      runtime options: %s ships joint constraints (%s): applied at the next launch\n",
                            op.name.c_str(), p.c_str());
+            }
+        }
+        // Colour entries of the options' materials (RuntimeOptions=on; docs/RUNTIME_OPTIONS.md, Colour entries): colour
+        // files are not swapped live, so the slot's own ones colour every option. A material an option brings that
+        // no material file of the slot has (Aloha Ryu C2 carries Outfit 2's head: esf_Eyebrow, esf_Beard) gets its
+        // entries in each of the slot's colour files, from the option's colour file of the same number, else its
+        // cmd_000, else the game outfit's it was made for (same number, then cmd_000). Existing entries stay as they
+        // are; a material the slot itself has is never added (the slot looks as before).
+        if (g_rto_layout == RtoLayout::One && !slot_colour_files.empty()) {
+            auto read_any = [&](const std::string& low) -> std::vector<uint8_t> {
+                const uint64_t h = pak_path_hash(std::string_view(low));
+                if (writer.find(h)) return writer.get(h);
+                for (auto* pk : slotcheck::g_game_patch_paks) if (auto* e = pk->find(h)) return pk->read(*e);
+                if (auto* e = base_pak.find(h)) return base_pak.read(*e);
+                return {};
+            };
+            std::set<std::string> slot_mats;   // materials of every material file the slot's scene loads
+            for (auto& [nn, refs] : scene_part)
+                for (auto& r : refs) {
+                    if (!str_ends_with(r, ".mdf2")) continue;
+                    std::vector<std::string> names;
+                    if (slotcheck::mdf2_materials(read_any(scene_ref_pak_path(r, inv.suffixes)), names)) slot_mats.insert(names.begin(), names.end());
+                }
+            if (slot_mats.empty())
+                printf("      runtime options: %s/v%02d: the slot's material files are not read: colour files left as they are\n",
+                       fd.c_str(), slot.new_costume_no);
+            auto number_of = [](const std::string& low) {   // "..._cmd_003.user.2" -> "003", else empty
+                const size_t a = low.rfind("_cmd_"), b = low.find(".user.", a == std::string::npos ? 0 : a);
+                if (a == std::string::npos || b != a + 8) return std::string();
+                const std::string n = low.substr(a + 5, 3);
+                return std::all_of(n.begin(), n.end(), [](char c) { return isdigit((unsigned char)c) != 0; }) ? n : std::string();
+            };
+            for (size_t oi = 0; oi < rm.options.size() && !slot_mats.empty(); ++oi) {
+                if (!out.files.count(oi) || out.files.at(oi).empty()) continue;   // not stored for this slot
+                const RtoOption& op = rm.options[oi];
+                std::vector<std::string> want;   // its materials the slot has not
+                for (auto& [p, mf] : op.files) {
+                    if (str_lower(p).find(".mdf2.") == std::string::npos || !belongs(p)) continue;
+                    std::vector<std::string> names;
+                    if (!slotcheck::mdf2_materials(mf.read_data(), names)) continue;
+                    for (auto& n : names)
+                        if (!slot_mats.count(n) && std::find(want.begin(), want.end(), n) == want.end()) want.push_back(n);
+                }
+                if (want.empty()) continue;
+                // The game outfit the option was made for: the costume folder its moved files come from
+                std::string gfolder;
+                for (auto& [np, orig] : op.origin) {
+                    std::string pfd, folder;
+                    if (parse_model_folder(orig, pfd, folder) && pfd == fd && folder != "000" && folder != old_f) { gfolder = folder; break; }
+                }
+                auto own_colour = [&](const std::string& n) -> std::vector<uint8_t> {
+                    const std::string low = base_model + fd + "_" + old_f + "_cmd_" + n + ".user.2";
+                    for (auto& [p, mf] : op.files) if (str_lower(p) == low) return mf.read_data();
+                    return {};
+                };
+                auto game_colour = [&](const std::string& n) -> std::vector<uint8_t> {
+                    if (gfolder.empty()) return {};
+                    return read_any(fighter_root + gfolder + "/" + fd + "_" + gfolder + "_cmd_" + n + ".user.2");
+                };
+                const std::vector<uint8_t> own0 = own_colour("000"), game0 = game_colour("000");
+                size_t entries = 0, nfiles = 0;
+                std::vector<std::string> names;
+                for (auto& [orig, target] : slot_colour_files) {
+                    const std::string n = number_of(str_lower(orig));
+                    if (n.empty()) continue;
+                    const uint64_t h = pak_path_hash(std::string_view(target));
+                    std::vector<uint8_t> d = writer.get(h);
+                    const std::vector<uint8_t> ownn = n == "000" ? std::vector<uint8_t>{} : own_colour(n);
+                    const std::vector<uint8_t> gamen = n == "000" ? std::vector<uint8_t>{} : game_colour(n);
+                    std::vector<std::string> added;
+                    std::string why;
+                    if (!cmd_add_missing_clusters(d, {&ownn, &own0, &gamen, &game0}, want, added, &why)) {
+                        printf("      runtime options: %s/v%02d: colour file %s left as it is (%s)\n", fd.c_str(),
+                               slot.new_costume_no, rel_tail(target).c_str(), why.c_str());
+                        continue;
+                    }
+                    if (added.empty()) continue;
+                    // read back from the pak with the loader's parser: the entries it had plus the ones added
+                    std::vector<CmdCluster> was, now;
+                    cmd_tints(writer.get(h), was);
+                    writer.replace(h, std::move(d));
+                    if (!cmd_tints(writer.get(h), now) || now.size() != was.size() + added.size())
+                        printf("      WARN: runtime options: %s/v%02d: colour file %s does not read back (%zu entries, %zu expected)\n",
+                               fd.c_str(), slot.new_costume_no, rel_tail(target).c_str(), now.size(), was.size() + added.size());
+                    entries += added.size();
+                    nfiles++;
+                    for (auto& a : added) if (std::find(names.begin(), names.end(), a) == names.end()) names.push_back(a);
+                }
+                std::set<std::string> named;   // what the slot's colour files name now
+                for (auto& [orig, target] : slot_colour_files) {
+                    std::vector<CmdCluster> cl;
+                    cmd_tints(writer.get(pak_path_hash(std::string_view(target))), cl);
+                    for (auto& c : cl) named.insert(c.name);
+                }
+                std::string missing;   // materials no source names (left without colour entries)
+                for (auto& w : want) if (!named.count(w)) missing += (missing.empty() ? "" : ", ") + w;
+                std::string list;
+                for (auto& a : names) list += (list.empty() ? "" : ", ") + a;
+                if (entries)
+                    printf("      runtime options: %s/v%02d: colour files: +%zu entries (%s) from %s, in %zu files\n", fd.c_str(),
+                           slot.new_costume_no, entries, list.c_str(), op.name.c_str(), nfiles);
+                if (!missing.empty())
+                    printf("      runtime options: %s/v%02d: %s brings materials no colour file names here (%s): their default colours\n",
+                           fd.c_str(), slot.new_costume_no, op.name.c_str(), missing.c_str());
             }
         }
         std::set<std::string> chosen;   // files of the options the slot is made of

@@ -247,6 +247,20 @@ base's; option labels: the words that tell their names apart ("C1" / "C2"; "Muay
 the archives' names when two names are alike). Not merged: Fluffy installs, modular mods, retouches, outfits put with
 their add-ons in a sub-folder.
 
+**Colour entries of an option's materials** (`on` only, `add_slot_files`, `cmd_add_missing_clusters` in
+`patch.cpp`). Colour files are not swapped live, so the slot's own ones colour every option: a material no entry
+names keeps its material file's default (Aloha C2 on the C1 slot: Outfit 2's head brings `esf_Eyebrow` and
+`esf_Beard`, which neither the slot's `cmd_000` (game Outfit 1's) nor C1's `cmd_001..010` name: uncoloured). A
+material of an option's material file that **no material file of the slot's scene has** gets its entries (the
+cluster and its tree, per part type) appended to each of the slot's colour files `cmd_NNN`, taken from the option's
+`cmd_NNN`, else its `cmd_000`, else the game outfit's it was made for (the folder its moved files come from), same
+number then `cmd_000`. Existing entries are never changed, removed or moved (a new cluster goes at the end of its
+part, a new part at the end of the parts: the Color Mod lays its colour trees over the live data by position and
+name); a material the slot has is never added, so the slot looks as before. Each file is read back with the same
+parser (entry count). Log: `runtime options: esf001/v05: colour files: +22 entries (esf_Beard, esf_Eyebrow) from C2,
+in 11 files`; materials no source names are listed (Ingrid's book and cat props: none, their defaults). Offline on
+Wael's mods only Aloha C2 needs it. Not done for game outfits' options (their colour files are the game's).
+
 **Subsets: a game outfit with parts taken off** (`game_subset`). An outfit (a lone option of its folder or archive)
 whose every mesh is the mesh a game outfit of the fighter wears at that part, either the same bytes or the same
 materials and joints with some materials taken off: left out of the mesh, or every triangle of theirs folded to

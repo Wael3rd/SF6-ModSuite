@@ -127,6 +127,18 @@ bool upgrade_costume_material_layout(std::vector<uint8_t>& data,
                                      const std::vector<uint8_t>& reference,
                                      size_t* garments_upgraded);
 
+// Runtime options (docs/RUNTIME_OPTIONS.md, Colour entries of an option's materials): adds to a colour file the
+// entries (material clusters, with everything under them) of the materials it does not name, per part type, each
+// taken from the first of `sources` (other colour files, null allowed) that names it. Existing entries are never
+// changed or removed; a new cluster goes at the end of its part's list (a new part at the end of the parts), so every
+// existing entry keeps its position (the Color Mod matches clusters by position and name). Nothing is
+// taken from a source whose type signatures differ from the file's. The result is read back with the same parser
+// (entry count). added: one material name per entry added. False (data untouched, why set) when the file or the
+// result is not understood.
+bool cmd_add_missing_clusters(std::vector<uint8_t>& data, const std::vector<const std::vector<uint8_t>*>& sources,
+                              const std::vector<std::string>& materials, std::vector<std::string>& added,
+                              std::string* why = nullptr);
+
 // Test hook: parses a colour file and writes it back unchanged. False if the layout is not understood.
 bool costume_material_roundtrip(const std::vector<uint8_t>& data, std::vector<uint8_t>& out);
 
