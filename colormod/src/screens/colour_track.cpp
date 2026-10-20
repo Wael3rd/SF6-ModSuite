@@ -34,6 +34,7 @@
 #include "../vfx/feed.hpp"
 #include "colour_state.hpp"
 #include "dipanel_mode.hpp"
+#include "slots_panel.hpp"
 #include "guide.hpp"
 #include "rows.hpp"
 #include "tracker.hpp"
@@ -471,9 +472,17 @@ void guide_text_fix() {
             const uint64_t a = (uint64_t)(uintptr_t)g.corner.get(), b = (uint64_t)(uintptr_t)g.btn.get();
             const bool mine = g_menus[g.right ? 1 : 0].active;
             const bool in_di = di_active(g.right ? 2 : 1);
-            const bool show = !fsm.hidden_now && !in_di && mine;
             const bool pad2 = bar_pad(g.part.get(), g.right ? 1 : 0).value_or(fsm.pad.value_or(false));
-            const std::string text = show ? std::string(pad2 ? "<ICON BtnL> " : "<ICON KeyX> ") + L("hint.edit_di_color") : std::string();
+            // our X entry, then the Slots Loader's "R1 Costume options" (SF6Slots_SelectGuideEntry: we are the one writer
+            // of this corner); X is left out while its costume options hold the panel (X is refused then)
+            std::string text;
+            if (!fsm.hidden_now && !in_di && mine) {
+                const int side = g.right ? 2 : 1;
+                if (!screens::slots_panel::slots_holds(side)) text = std::string(pad2 ? "<ICON BtnL> " : "<ICON KeyX> ") + L("hint.edit_di_color");
+                const std::string se = screens::slots_panel::guide_entry(side, pad2);
+                if (!se.empty()) text += (text.empty() ? "" : "      ") + se;
+            }
+            const bool show = !text.empty();
             const double y = show ? kCornerY : 0.0, x = show ? (g.right ? kCornerXRight : kCornerX) : 0.0;
             screens::guide::set_corner(a, b, text, (float)x, (float)y, show);
             if (!show) screens::guide::release_corner(a);
@@ -519,9 +528,9 @@ void on_selection_changed(Menu& m, int64_t k, int64_t fighter, int64_t costume) 
 }
 
 void tick_menu(Menu& m) {
-    if (di_active(m.side)) {                                       // the panel shows the DI rows: the Color row is the
-        if (nb("screens_tracker")) screens::tracker::leave_menu(m.side);   // Drive Reversal row, no "MC 1" painted on it
-        return;
+    if (di_active(m.side) || screens::slots_panel::slots_holds(m.side)) {   // the panel shows the DI rows (the Color row
+        if (nb("screens_tracker")) screens::tracker::leave_menu(m.side);   // is the Drive Reversal row) or the Slots Loader's
+        return;                                                    // costume options: no "MC 1" painted on it
     }
     if (!m.text) { m.active = false; return; }
     if (!alive(m.param.get()) || !alive(m.text.get())) { m.agent.set(nullptr); m.text.set(nullptr); m.active = false; return; }

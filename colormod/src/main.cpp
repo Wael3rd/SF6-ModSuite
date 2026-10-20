@@ -21,6 +21,7 @@
 #include "engine/live.hpp"
 #include "screens/rows.hpp"
 #include "screens/dipanel.hpp"
+#include "screens/dipanel_mode.hpp"
 #include "screens/tracker.hpp"
 #include "screens/guide.hpp"
 #include "dialogs/camera.hpp"
@@ -40,6 +41,14 @@ extern "C" __declspec(dllexport) void reframework_plugin_required_version(REFram
     // 1.10, as the core and the Slots Loader: nothing past it is used (07/10: 1.15, copied from older plugins, kept
     // the mod from loading on the public REFramework 1.5.8)
     v->major = 1; v->minor = 10; v->patch = 0; v->game_name = nullptr;
+}
+
+// The Slots Loader (SF6_CostumeSlotsNative.dll) asks it: 1 while our DI mode borrows side's panel (1 P1, 2 P2) on the
+// character select (or the training popup), else 0. With it the Slots Loader knows we take part in the one-owner claim
+// of the panel (screens/slots_panel.hpp) and frees a claim we left behind; without it (an older Color Mod) its own mode
+// that borrows the same rows stays off. Cheap, any thread, no game call.
+extern "C" __declspec(dllexport) int SF6ColorMod_DiPanelActive(int side) {
+    try { return screens::dipanel::mode::active(side) ? 1 : 0; } catch (...) { return 0; }
 }
 
 namespace {

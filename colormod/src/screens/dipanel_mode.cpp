@@ -17,6 +17,7 @@
 #include "../vfx/drive_cfg.hpp"
 #include "../vfx/feed.hpp"
 #include "dipanel.hpp"
+#include "slots_panel.hpp"
 
 namespace screens::dipanel::mode {
 namespace {
@@ -186,6 +187,12 @@ void push(int side) {
 bool enter(int side, MO* param, MO* agent, MO* owner, bool popup, const char* spins_field, const char* group_field,
            const std::vector<std::string>& host_hide, int fighter, int costume) {
     if (side < 1 || side > 2 || g_s[side].on || !param || !agent || !owner || !api()) return false;
+    // the select panel has one owner: the Slots Loader's costume options borrow the same rows (slots_panel.hpp)
+    if (!popup && !slots_panel::take(side)) {
+        cmn::journal("DI panel P%d: the Slots Loader's costume options hold this panel, X ignored", side);
+        return false;
+    }
+    auto fail = [&]() { if (!popup) slots_panel::release(side); return false; };
     Side st;
     st.popup = popup; st.param = param; st.agent = agent; st.owner = owner;
     st.spins_field = spins_field; st.group_field = group_field;
@@ -193,7 +200,7 @@ bool enter(int side, MO* param, MO* agent, MO* owner, bool popup, const char* sp
     st.hide = host_hide;
     for (auto& d : kRows) if (d.mech == dc::Mech::Special) st.hide.push_back(d.row);   // Special Attacks off: its host row hidden
     void* cm = control_main(agent);
-    if (!cm) return false;
+    if (!cm) return fail();
     std::vector<std::pair<std::string, Row>> rows;                       // names = mechanics' rows (+ alt), then hidden
     auto row = [&](const std::string& nm) -> Row& {
         for (auto& r : rows) if (r.first == nm) return r.second;
@@ -225,7 +232,7 @@ bool enter(int side, MO* param, MO* agent, MO* owner, bool popup, const char* sp
         m.was_visible = vis && *vis;
         st.mecs.push_back(std::move(m));
     }
-    if (st.mecs.size() < 2) return false;                                 // panel not built yet
+    if (st.mecs.size() < 2) return fail();                                // panel not built yet
     st.ci = get_i32(owner, "get__cacheCostumeIndex");                     // the game's own indices
     st.co = get_i32(owner, "get__cacheColorIndex");
     if (!st.ci) {                                                         // the popup has no cache pair: ask it directly
@@ -318,6 +325,7 @@ void exit(int side) {
     dc::save_di(s.fighter);
     vfx::feed::mark_di_dirty();
     dc::save_dr(s.fighter);                                               // parry / rush: their own file
+    if (!s.popup) slots_panel::release(side);                             // the panel's claim given back last
     cmn::journal("DI panel mode OFF P%d", side);
 }
 
@@ -348,6 +356,7 @@ void tick(int side, uint64_t host_agent) {
     if (!st.on) return;
     if (!alive(st.param) || !alive(st.agent)) {                           // gone: tell the hooks, drop the side
         dipanel::leave(side);
+        if (!st.popup) slots_panel::release(side);
         g_s[side] = Side{};
         return;
     }
