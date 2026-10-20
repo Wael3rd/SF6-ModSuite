@@ -367,6 +367,40 @@ bool slots_entry_poll() {                              // true: the entry change
     return true;
 }
 
+// ---- the glyph set of the game's own guide (pad buttons or keyboard keys) ---------------------------------------------
+// Our entries show the glyphs the game's guide shows, and switch with it. Before this, the "last device" guess
+// (device_tick) ran only while Fighter Settings or the editor was up: on the character select a pad player saw the
+// keyboard "X" (Wael 20/10). app.InputGuideMode: 1 GamePad, 2 KeyboardAndMouse, 0 Invalid (nothing to follow).
+std::optional<bool> pad_of_mode(int32_t m) {
+    if (m == 1) return true;
+    if (m == 2) return false;
+    return std::nullopt;
+}
+std::optional<bool> game_pad(int32_t player) {         // app.InputGuideManager.GetMode(playerIndex), static
+    static API::Method* m_get = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        if (auto* td = API::get()->tdb()->find_type("app.InputGuideManager")) m_get = ll::find_method_full(td, "GetMode(System.Int32)");
+        cmn::journal("guide: the game's guide mode %s", m_get ? "read from InputGuideManager.GetMode" : "not found (last device used instead)");
+    }
+    if (!m_get || player < 0 || player > 1 || !API::get()->get_managed_singleton("app.InputGuideManager")) return std::nullopt;
+    auto r = m_get->invoke(nullptr, std::vector<void*>{ ll::arg_i32(player) });
+    if (r.exception_thrown) return std::nullopt;
+    return pad_of_mode((int32_t)r.dword);
+}
+// A guide bar's glyphs: the mode of its first input item (what the game drew there), else the mode of that item's
+// player (or of `player`), else nullopt
+std::optional<bool> bar_pad(MO* part, int32_t player) {
+    MO* items = alive(part) ? field_obj(field_obj(part, "_InputItemList"), "Items") : nullptr;
+    MO* it = items && call_i32(items, "get_Count").value_or(0) > 0 ? list_item(items, 0) : nullptr;
+    if (it) {
+        if (const auto p = pad_of_mode(field_i32(it, "GuideMode").value_or(0))) return p;
+        if (const auto pi = field_i32(it, "PlayerIndex"); pi && *pi >= 0 && *pi <= 1) player = *pi;
+    }
+    return game_pad(player);
+}
+
 // ---- guide (find_guide_list / guide_text_fix / set_bottom_hint) --------------------------------------------------------
 std::string L(const char* key) { return dialogs::locale::get(key, {}); }
 bool di_active(int side) { return nb("screens_dipanel") && screens::dipanel::mode::active(side); }   // dbg.di_panel.active
@@ -419,7 +453,8 @@ void guide_text_fix() {
             if (mr && mr->ptr) {                                    // ok and msg ~= nil
                 std::string msg = ll::managed_string_to_utf8(reinterpret_cast<MO*>(mr->ptr));
                 if (auto sep = msg.find("      <ICON"); sep != std::string::npos) msg = msg.substr(0, sep);
-                const bool pad = (fsm.pad && *fsm.pad) || msg.find("<ICON Btn") != std::string::npos;   // fsm.pad or ...
+                const auto bp = bar_pad(g.part.get(), g.right ? 1 : 0);   // the game's glyphs on this bar, else as before
+                const bool pad = bp ? *bp : ((fsm.pad && *fsm.pad) || msg.find("<ICON Btn") != std::string::npos);
                 const std::string prefix = fsm.guide_plain ? "      " : (pad ? "      <ICON BtnD> " : "      <ICON KeyF><ICON MouseL> ");
                 std::string want = fsm.guide_label ? msg + prefix + *fsm.guide_label : msg;
                 if (!g_slots_entry.empty() && fsm.visible && !fsm.hidden_now && !g.right)   // the Slots Loader's entry
@@ -437,7 +472,7 @@ void guide_text_fix() {
             const bool mine = g_menus[g.right ? 1 : 0].active;
             const bool in_di = di_active(g.right ? 2 : 1);
             const bool show = !fsm.hidden_now && !in_di && mine;
-            const bool pad2 = fsm.pad.value_or(false);
+            const bool pad2 = bar_pad(g.part.get(), g.right ? 1 : 0).value_or(fsm.pad.value_or(false));
             const std::string text = show ? std::string(pad2 ? "<ICON BtnL> " : "<ICON KeyX> ") + L("hint.edit_di_color") : std::string();
             const double y = show ? kCornerY : 0.0, x = show ? (g.right ? kCornerXRight : kCornerX) : 0.0;
             screens::guide::set_corner(a, b, text, (float)x, (float)y, show);
@@ -1050,7 +1085,10 @@ void block_popup_agents() {                            // the popup must not see
 // editor_tick: the device, the triggers (C / F / A / click, X per player, the Drive rows), the select screens' guide
 void editor_tick() {
     resolve_pad();
-    if (fsm.visible || ed_active()) device_tick();
+    if (const auto gp = game_pad(0)) {                                 // the game's guide mode (player 1), every screen
+        if (fsm.pad != gp) cmn::journal("guide: glyphs %s (the game's guide mode)", *gp ? "pad" : "keyboard");
+        fsm.pad = gp;
+    } else if (fsm.visible || ed_active()) device_tick();
     bool down = false, di_down = false;
     if (fsm.visible) {                                                 // (C opened it from any row too: a Lua-era shortcut, removed 0.19.4)
         di_down = key_down(0x58) || pad_btn_down();                    // X / Square: the Drive colour menu
