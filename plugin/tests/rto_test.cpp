@@ -401,6 +401,16 @@ int main(int argc, char** argv) {
               && joints_at(q, t, "product/model/esf/esf010/010/02/other.mesh") == -1, "joints of a copy, of the slot's own mesh");
     }
 
+    {   // the menu title: a long outfit name is cut, UTF-8 aware
+        check(clip_name("Ingrid - Fly In A Bucket - Drive Tech", kTitleNameChars) == "Ingrid - Fly In A Bucket - Drive Tech",
+              "title: a name of 40 characters or less is kept");
+        const std::string longer = "Ingrid - Fly In A Bucket - Drive Tech + Ingrid - True... meme book";
+        const std::string cut = clip_name(longer, kTitleNameChars);
+        check(cut == "Ingrid - Fly In A Bucket - Drive Tech..." && cut.size() == 40, "title: a longer name ends with ...");
+        const std::string u8 = "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";   // 6 characters, 12 bytes
+        check(clip_name(u8, 6) == u8 && clip_name(u8, 5) == "\xC3\xA9\xC3\xA9...", "title: characters, not bytes (UTF-8)");
+    }
+
     int rc = 0;
     if (argc > 1) rc = real_manifest(argv[1]);
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }

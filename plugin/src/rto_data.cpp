@@ -76,6 +76,20 @@ std::string norm_path(const std::string& path) {
     return s;
 }
 
+std::string clip_name(const std::string& s, size_t max_chars) {
+    // UTF-8: a character starts at every byte that is not a continuation byte (10xxxxxx)
+    size_t chars = 0;
+    for (unsigned char c : s) if ((c & 0xC0) != 0x80) ++chars;
+    if (chars <= max_chars || max_chars < 4) return s;
+    size_t keep = max_chars - 3, n = 0, end = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if ((static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) continue;
+        if (n++ == keep) { end = i; break; }
+    }
+    while (end > 0 && (s[end - 1] == ' ' || s[end - 1] == '-' || s[end - 1] == '+')) --end;
+    return s.substr(0, end) + "...";
+}
+
 int Mod::find(const std::string& id) const {
     for (size_t i = 0; i < options.size(); ++i) if (options[i].id == id) return static_cast<int>(i);
     return -1;

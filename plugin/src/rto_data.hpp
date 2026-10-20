@@ -67,6 +67,10 @@ bool parse_manifest(const std::string& text, Manifest& out, std::string& err);
 // A resource path as the manifest names it: lowercase, '/' separators, without "natives/stm/"
 std::string norm_path(const std::string& path);
 
+// A name cut to max_chars characters (UTF-8), ending with "..." when cut (the menu's title)
+std::string clip_name(const std::string& s, size_t max_chars);
+constexpr size_t kTitleNameChars = 40;   // the outfit's name in the menu title, before "  -  P1"
+
 // ---- the user's choices ----
 struct Side { bool changed = false; std::vector<std::string> ids, names; };
 struct Choices {

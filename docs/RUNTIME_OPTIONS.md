@@ -114,7 +114,9 @@ with a WARN) are also one mod:
   separate add-on archives of Ingrid's Fly In A Bucket): `off` makes the outfit with them only, never alone. `on`:
   the same one outfit with its add-ons as options, worn by default (`defaults`): the combination `off` makes (the
   one with the most add-ons of the sub-folder), whose id it keeps (its slot as before); the outfit alone and the
-  other combinations are its `variants`. Option ids as above (the add-on's folder).
+  other combinations are its `variants`. Option ids as above (the add-on's folder). Its name (`outfits.json`, the
+  manifest's `label`, the menu's title) is the outfit's alone ("Ingrid - Fly In A Bucket - Drive Tech"; before,
+  "... + Ingrid - True... meme book + Ingrid - Maxwell the cat (monad)"); the variants keep the names `off` gives.
 - Not when an add-on brings files for another costume folder than the outfit's (the runtime swaps the slot's own
   folders only; Cammy's Belly_cammy02 + BellyHair01_Cammy, hair made for `001/02/`): `off` rules.
 
@@ -433,6 +435,9 @@ does, the fallback above is the next step.
 - **Key**: `F` (or the pad's A / Cross) with the costume row focused opens the menu. The Color Mod's keys are
   elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
   never open together (both need the option window closed).
+- **Title**: the outfit's name in capitals and the side (`MINI DRESS MAI C1 SWAP  -  P1`); a name longer than 40
+  characters (UTF-8) is cut and ends with `...`, so the side stays readable. The outfit's name shows nowhere else in
+  game (the costume row shows the game's "Outfit VII"; the label is in logs, `outfits.json` and the manifest).
 - **Pages** (7 rows at most, the dialog's pool): page 1 = Player side (P1 / P2), the first option rows, More options (pushes page 2), Restore defaults; later pages = option rows (+
   More options). A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
   split in rows "Group (1/2)"...); a required group has no None (split in rows, its first label is "(other row)":

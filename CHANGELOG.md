@@ -55,6 +55,9 @@
   package's `modinfo.ini` (`SlotsloaderContract=1`) (fork 1.10.0).
 - A new outfit takes the number after the highest one in use for its fighter instead of a gap a removed mod left
   (listed last); outfits already installed keep their numbers (fork 1.10.0).
+- Runtime costume options: an outfit put with its add-ons in one sub-folder is named after the outfit alone ("Ingrid -
+  Fly In A Bucket - Drive Tech", no more "+ Book + Cat": they are options); the menu's title cuts a name past 40
+  characters ("...").
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite

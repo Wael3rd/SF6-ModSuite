@@ -153,7 +153,9 @@ void build() {
     S.rows = rows(manifest(), *S.slot, S.chosen);
     layout_pages();
     const std::string who = S.side == 1 ? "P2" : "P1";
-    const std::string title = upper(S.slot->label.empty() ? S.slot->name : S.slot->label) + "  -  " + who;
+    // a long outfit name is cut ("..."): the side stays readable
+    const std::string title = upper(clip_name(S.slot->label.empty() ? S.slot->name : S.slot->label, kTitleNameChars))
+                            + "  -  " + who;
     const std::string live = "The preview shows it at once; saved for " + who + ".";
     for (int p = 0; p < static_cast<int>(S.pages.size()); ++p) {
         const int64_t g = A()->opt_group(C(), page_key(p).c_str(), title.c_str(), "Costume options");

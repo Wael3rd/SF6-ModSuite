@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rto-units";
+static const char* LOADER_BUILD_ID = "2026-10-20-rto-names";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -6156,7 +6156,10 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
         } else {
             printf("    one outfit (RuntimeOptions=on): %s, put with its add-ons in one sub-folder: worn by default, "
                    "chosen in game\n", main.label.c_str());
-            push_combined(wear.parts, main.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, wear.sel, main.parts);
+            // Named after the outfit alone: its add-ons are options now ("Fly In A Bucket - Drive Tech", not
+            // "... + Book + Cat"); the variants keep the names off gives them (Slotsloader Manager rows)
+            push_combined(wear.parts, mod_label(b.mod_id), o, b.u.rel + " (with add-ons)", b.info_path, rto, wear.sel,
+                          main.parts);
         }
     } else
         for (auto& x : vars) push_combined(x.parts, x.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, x.sel);
