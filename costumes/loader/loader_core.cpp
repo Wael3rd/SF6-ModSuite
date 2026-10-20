@@ -7755,20 +7755,43 @@ static const std::map<std::string, GamePart>& game_parts(const VanillaIndex& inv
     return g_game_parts[{fighter, cno}];
 }
 
-// A mesh as the subset test reads it: its materials, its joints (blend shapes aside) and, in its first level of
-// detail, per material the triangles and how many of them are folded to nothing (two corners on one vertex)
+// A mesh as the subset test reads it: its materials, its joints (blend shapes aside) and their order and, in its first
+// level of detail, per material the triangles and how many of them are folded to nothing (two corners on one vertex)
 struct MeshShape {
     bool ok = false;
     std::set<std::string> mats, joints;
+    std::vector<std::string> joint_order;   // the joints by bone index (Havok cloth and chains address bones by index)
     std::map<std::string, std::pair<uint32_t, uint32_t>> faces;   // material -> (triangles, folded)
 };
-static MeshShape mesh_shape(const std::vector<uint8_t>& b) {
-    MeshShape s;
+// A mesh's materials, joints and joint order from its name tables (b: the whole file, or its start)
+static bool mesh_tables(const std::vector<uint8_t>& b, MeshShape& s, std::vector<std::string>* mats_out = nullptr) {
     std::vector<std::string> mats, names;
-    if (!slotcheck::mesh_materials(b, mats, &names)) return s;
+    if (!slotcheck::mesh_materials(b, mats, &names)) return false;
     s.mats.insert(mats.begin(), mats.end());
     for (auto& n : names)
         if (!s.mats.count(n) && !(n.compare(0, 2, "BS") == 0 && n.find('.') != std::string::npos)) s.joints.insert(n);
+    // (SF6 mesh: the name index of each bone at +120, after the materials' at +112; the name table's order when
+    // that table does not name exactly these joints)
+    int64_t bo = 0;
+    if (b.size() >= 128) memcpy(&bo, b.data() + 120, 8);
+    if (bo > 0 && size_t(bo) + 2 * s.joints.size() <= b.size()) {
+        for (size_t k = 0; k < s.joints.size(); ++k) {
+            uint16_t ix = 0;
+            memcpy(&ix, b.data() + size_t(bo) + 2 * k, 2);
+            if (ix >= names.size() || !s.joints.count(names[ix])) break;
+            s.joint_order.push_back(names[ix]);
+        }
+        if (std::set<std::string>(s.joint_order.begin(), s.joint_order.end()) != s.joints) s.joint_order.clear();
+    }
+    if (s.joint_order.empty())
+        for (auto& n : names) if (s.joints.count(n)) s.joint_order.push_back(n);
+    if (mats_out) *mats_out = std::move(mats);
+    return true;
+}
+static MeshShape mesh_shape(const std::vector<uint8_t>& b) {
+    MeshShape s;
+    std::vector<std::string> mats;
+    if (!mesh_tables(b, s, &mats)) return s;
     auto r64 = [&](size_t o, int64_t& v) { if (o + 8 > b.size()) return false; memcpy(&v, b.data() + o, 8); return true; };
     auto r32 = [&](size_t o, int32_t& v) { if (o + 4 > b.size()) return false; memcpy(&v, b.data() + o, 4); return true; };
     // (SF6 mesh: buffer header at +72, levels of detail at +32; per LOD the mesh groups, per group its submeshes:
@@ -7833,6 +7856,80 @@ static const std::set<std::string>& game_mdf_materials(const std::string& low) {
         it = g_game_mdf_mats.emplace(low, std::set<std::string>(m.begin(), m.end())).first;
     }
     return it->second;
+}
+
+// A physics file: a chain (the model's, the wind's), joint constraints, Havok cloth, and the .user files that name them
+// or set the model's ambient occlusion and shape (not the colour files: _ccvd, _cmd_)
+static bool is_physics_file(const std::string& low) {
+    for (const char* x : {".chain.", ".jcns.", ".havokcloth.", "_chain.user.", "_jcs.user.", "_havok.user.", "_aogeo.user.",
+                          "_shape.user."})
+        if (low.find(x) != std::string::npos) return true;
+    return false;
+}
+
+// The physics files a game costume loads (lowercase pak path -> md5 of its bytes): the ones its scene names (vanilla
+// index: its .user files, its wind chain) and the files those .user files name, one level (_chain.user -> .chain,
+// _jcs.user -> .jcns, _havok.user -> .havokcloth: Ryu's Outfit 1 body chain is named by esf001_001_01_chain.user, not
+// by the scene). Read once per costume while the mods are scanned.
+static std::map<std::pair<int, int>, std::map<std::string, std::string>> g_game_physics;
+static const std::map<std::string, std::string>& game_physics(const VanillaIndex& inv, int fighter, int cno) {
+    auto [it, fresh] = g_game_physics.try_emplace({fighter, cno});
+    auto& out = it->second;
+    if (!fresh) return out;
+    std::vector<std::vector<uint8_t>> users;
+    auto add = [&](const std::string& low) {
+        if (out.count(low)) return;
+        std::vector<uint8_t> d = scan_game_file(low);
+        if (d.empty()) return;
+        out[low] = md5_hex(d.data(), d.size());
+        if (low.find(".user.") != std::string::npos) users.push_back(std::move(d));
+    };
+    for (auto& [h, us] : inv.users) {
+        if (!us.count({fighter, cno})) continue;
+        if (auto hp = inv.hash_to_paths.find(h); hp != inv.hash_to_paths.end())
+            for (auto& path : hp->second)
+                if (const std::string low = str_lower(path); is_physics_file(low)) add(low);
+    }
+    for (auto& d : users)
+        for (auto& s : slotcheck::utf16_strings(d)) {
+            std::string ref = str_lower(s);
+            while (!ref.empty() && (ref[0] == '@' || ref[0] == '/')) ref.erase(0, 1);
+            if (str_ends_with(ref, ".havokcloth")) add("natives/stm/" + ref + ".1.x64");
+            else if (str_ends_with(ref, ".chain") || str_ends_with(ref, ".jcns"))
+                if (const std::string p = slotcheck::resource_path(ref, inv.suffixes); !p.empty()) add(p);
+        }
+    return out;
+}
+// The md5s of the physics files a game costume loads
+static std::set<std::string> game_physics_md5(const VanillaIndex& inv, int fighter, int cno) {
+    std::set<std::string> out;
+    for (auto& [p, md5] : game_physics(inv, fighter, cno)) out.insert(md5);
+    return out;
+}
+
+// The physics files of a costume of a unit (lowercase paths): in its folder and 000/, and the wind chain named after
+// its folder (natives/stm/product/weather/wind/mode/001/esf001_005_01_chain.chain.52)
+static std::map<std::string, ModFileRef> costume_physics(const UnitFiles& u, const ModCostume& mc) {
+    std::map<std::string, ModFileRef> out;
+    const std::string stem = mc.fighter_dir + "_" + mc.original_folder + "_";
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p);
+        if (!is_physics_file(low)) continue;
+        std::string pfd, folder;
+        if (parse_model_folder(low, pfd, folder)) {
+            if (pfd == mc.fighter_dir && (folder == mc.original_folder || folder == "000")) out[low] = mf;
+        } else if (rel_tail(low).compare(0, stem.size(), stem) == 0) out[low] = mf;
+    }
+    return out;
+}
+// The first of `files` (its file name) whose bytes are none of `loaded` (md5s), or empty: physics files must be the
+// same bytes as physics files the outfit they go on loads, whatever their names (an option wears that outfit's)
+static std::string physics_differ(const std::map<std::string, ModFileRef>& files, const std::set<std::string>& loaded) {
+    for (auto& [p, mf] : files) {
+        const std::vector<uint8_t> d = mf.read_data();
+        if (!loaded.count(md5_hex(d.data(), d.size()))) return rel_tail(p);
+    }
+    return {};
 }
 
 // The words that tell outfits apart: each name without the words all of them start and end with ("Aloha Ryu C1" /
@@ -7910,10 +8007,14 @@ static std::vector<std::string> distinct_labels(const std::vector<std::string>& 
 // "Outfit 1 No Cloak" folds the cloak of the game's Outfit 1 body; Sagat "Outfit 1 Shirtless" ships Outfit 1's head
 // as it is and its body with the fur vest folded. It becomes an option of that game outfit (and of the outfits that
 // wear that part), its files moved to the paths the game outfit loads; a file the same as the game's there is left
-// out, files a model cannot swap (physics, colours) too. A changed chain stays an outfit: a game outfit has no base
-// copy to go back to (a part unit needs one).
+// out, files a model cannot swap (physics, colours) too. Its physics files must be the same bytes as physics files the
+// game outfit loads (under other names: Sagat Shirtless ships Outfit 1's under DriveTech's), its meshes the game
+// meshes' joints in the same order (Havok cloth and chains address bones by index): the option wears the game
+// outfit's physics. A changed chain stays an outfit: a game outfit has no base copy to go back to (a part unit needs
+// one).
 struct Subset {
     int cno = -1;                      // the game outfit
+    bool physics = false;              // a game outfit's subset whose physics differ (why: which; audit)
     std::string hidden, why, kin;     // kin: a mesh made from a game outfit's, without anything taken off (audit)
     std::unordered_map<std::string, ModFileRef> files;     // the option, at the game outfit's paths
     std::unordered_map<std::string, std::string> origin;
@@ -7963,13 +8064,7 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
         }
         std::vector<std::string> mats, names;
         if (d.empty() || !slotcheck::mesh_materials(d, mats, &names)) d = mf.read_data();   // not in the first 8 MB
-        mats.clear(); names.clear();
-        if (slotcheck::mesh_materials(d, mats, &names)) {
-            t.ok = true;
-            t.mats.insert(mats.begin(), mats.end());
-            for (auto& n : names)
-                if (!t.mats.count(n) && !(n.compare(0, 2, "BS") == 0 && n.find('.') != std::string::npos)) t.joints.insert(n);
-        }
+        t.ok = mesh_tables(d, t);
         return heads.emplace(p, std::move(t)).first->second;
     };
     std::set<int> seen;
@@ -7996,6 +8091,7 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
                 fail = "part " + nn + ": other materials or joints";
                 break;
             }
+            if (mt.joint_order != gm.shape.joint_order) { fail = "part " + nn + ": its joints in another order"; break; }
             const GameMesh& mm = mod_mesh(p);
             if (mm.md5 == gm.md5) continue;
             const MeshShape& ms = mm.shape;
@@ -8027,6 +8123,12 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
         break;
     }
     if (r.cno < 0) { r.why = r.kin.empty() ? "no game outfit has these meshes" : r.kin; return r; }
+    if (const std::string f = physics_differ(costume_physics(u, mc), game_physics_md5(inv, mc.fighter, r.cno)); !f.empty()) {
+        r.why = game_outfit_name(r.cno) + " minus " + r.hidden + ", but its physics differ (" + f + ")";
+        r.physics = true;
+        r.cno = -1;
+        return r;
+    }
     // Its files at the game outfit's paths; the same as the game's there, or a file no model swaps: left out
     const auto& parts = game_parts(inv, mc.fighter, r.cno);
     const CostumeInfo* gc = inv.get_costume(mc.fighter, r.cno);
@@ -8035,7 +8137,8 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
     for (auto& [p, mf] : u.files) {
         const std::string low = str_lower(p), base = model_path(low), kd = rto_kind(base);
         std::string pfd, folder;
-        if (!parse_model_folder(base, pfd, folder) || pfd != fd || (folder != F && folder != "000")) continue;
+        if (!parse_model_folder(base, pfd, folder)) { other += is_physics_file(low); continue; }   // its wind chain
+        if (pfd != fd || (folder != F && folder != "000")) continue;
         if (kd != "mesh" && kd != "material" && kd != "texture" && kd != "chain") { other++; continue; }
         std::string np = low;
         if (folder == F) {
@@ -8643,7 +8746,8 @@ static void finalize_units(ScanOutputs& o) {
             const std::string fd = u.costumes[0].fighter_dir;
             Subset s = game_subset(o.inv, u);
             if (s.cno < 0) {
-                if (!s.kin.empty()) edited[fd] += (edited[fd].empty() ? "" : "; ") + unit_label(u) + " (" + s.why + ")";
+                if (s.physics) merge_note(fd, "subset: " + unit_label(u) + " stays an outfit (" + s.why + ")");
+                else if (!s.kin.empty()) edited[fd] += (edited[fd].empty() ? "" : "; ") + unit_label(u) + " (" + s.why + ")";
                 continue;
             }
             UnitFiles t = u;
