@@ -288,6 +288,56 @@ double glyphs(const std::string& s) {
     return n;
 }
 
+// The bottom guide's left margin (Wael 20/10: the name ends as far from the screen's right edge as the guide text
+// "Set your chosen character." starts from its left edge, about 60 at 1080p): the leftmost visible text drawn in the
+// bottom band of the screen (its lowest 15 %), left half, under the guide bar's agent or Fighter Settings', in root
+// space. Read every 60 frames (a walk of both trees); 0: none found.
+Obj* g_fs_ag = nullptr;                           // Fighter Settings' agent, this frame (update)
+double g_guide_l = 0;
+uint32_t g_guide_at = 0;
+std::string g_guide_log;
+bool shown_el(Obj* o) {
+    bool ok = false;
+    const bool v = call_bool(o, "get_ActualVisible", {}, &ok);
+    if (ok) return v;
+    return call_bool(o, "get_Visible", {}, &ok) && ok;
+}
+void guide_walk(Obj* o, int depth, int& budget, double canvas, double& best, std::string& what) {
+    for (; o && budget > 0; o = call_obj(o, "get_Next")) {
+        --budget;
+        if (!shown_el(o)) continue;
+        if (type_name(o) == "via.gui.Text") {
+            const std::string nm = str(call_obj(o, "get_Name"));
+            const std::string msg = str(call_obj(o, "get_Message"));
+            float gp[3] = {}, gs[3] = { 1, 1, 1 };
+            Geo g;
+            if (nm != kCopyName && !msg.empty() && floats(o, "get_GlobalPosition", gp, 2) && geo(o, g)) {
+                if (!floats(o, "get_GlobalScale", gs, 2) || !(std::fabs(gs[0]) > 1e-3)) gs[0] = 1;
+                const double l = gp[0] - (g.cp % 4) * 0.5 * width_of(o) * gs[0];
+                if (gp[1] > canvas * 9 / 16 * 0.85 && l >= 8 && l < canvas / 2 && (best <= 0 || l < best)) {
+                    best = l;
+                    what = nm + " '" + msg.substr(0, 40) + "'";
+                }
+            }
+        }
+        if (depth < 12) guide_walk(call_obj(o, "get_Child"), depth + 1, budget, canvas, best, what);
+    }
+}
+double guide_left(double canvas) {
+    if (g_guide_at && g_frame - g_guide_at < 60) return g_guide_l;
+    g_guide_at = g_frame;
+    double best = 0;
+    std::string what;
+    int budget = 1500;
+    for (Obj* ag : { g_bar.agent, g_fs_ag })
+        if (Obj* cm = ag ? call_obj(ag, "get_ControlMain") : nullptr) guide_walk(call_obj(cm, "get_Child"), 0, budget, canvas, best, what);
+    g_guide_l = best;
+    char s[200];
+    std::snprintf(s, sizeof s, "%.0f (%s)", best, best > 0 ? what.c_str() : "no text found");
+    if (g_guide_log != s) { g_guide_log = s; logf("fs name: the guide's left margin: %s", s); }
+    return best;
+}
+
 // One pass: the copy asked for, or placed, written and shown / hidden
 void pass(const std::string& name) {
     const SF6CoreAPI* a = A();
@@ -329,8 +379,10 @@ void pass(const std::string& name) {
     const float tw = width_of(text);
     const double text_l_btn = t.x - (t.cp % 4) * 0.5 * tw * t.sx;              // the bar text's left edge
     double left = off + sc * (b.x + b.sx * text_l_btn);                      // in root space
-    if (!(left >= 16 && left <= canvas * 0.25)) left = 96;                  // the bar's margin, mirrored right
-    const double right = canvas - left;
+    if (!(left >= 16 && left <= canvas * 0.25)) left = 96;
+    // the guide text's margin mirrored right; the bar text's when the guide is not found
+    const double gl = guide_left(canvas);
+    const double right = canvas - (gl >= 16 && gl <= canvas * 0.25 ? gl : left);
 
     // The name's drawn width: the copy's own once drawn (get_DisplaySize), else the bar's glyph width times the name's
     // glyphs (then the next frames read it and place again)
@@ -393,6 +445,7 @@ void pass(const std::string& name) {
 }
 
 void update(Obj* agent) {
+    g_fs_ag = agent;
     if (!bar_live(true) || g_frame - g_bar_at > 60) {
         g_bar_at = g_frame;
         Bar nb;
