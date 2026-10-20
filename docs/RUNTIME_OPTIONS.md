@@ -273,32 +273,41 @@ does, the fallback above is the next step.
 
 - Through the core's option service (`opt_group`, `opt_entry`, `opt_open_menu`, `opt_navigate` with PUSH,
   `opt_rebuild`; see `core/docs/OPTIONS.md`): one page per costume, one choice row per `pick` group, one on/off row
-  per `toggle` option, a "Restore defaults" button, presets from `variants`. The rows follow the costume shown
+  per `toggle` option, a "Restore defaults" button (no preset row: the `variants` only serve the migration of a former
+  variant slot). The rows follow the costume shown
   (the page is rebuilt when it changes).
-- `F` hint on the costume row only when the costume has options (`costume_options.json` lists its slot).
+- `F` entry in the bottom input guide bar, only on the costume row of a costume that has options (`costume_options.json`
+  lists its slot).
 - Live preview: each change is applied to the preview model at once (steps 2-3), and saved.
 - No new core capability is expected. If the option service cannot give a page whose rows change with the costume
   without closing it, that is a core change and needs an ADR (Proposed, then accepted by the user) before code.
 
 ### Built (lot B): `plugin/src/rto_menu.cpp` (no new core capability)
 
-- **Where**: Battle Settings > character (Fighter Settings, agent `MatchingFighterSetting`). When the preview wears
-  a slot with options, the costume row's text ends with the decide key (`<ICON KeyF>`, `<ICON BtnD>` after a pad
-  input). The hint is on the row itself, not in the guide bar: the Color Mod rewrites the guide bar's text every
-  frame (its own hints), two writers there would fight. If the game rewrote the row's text all the time, the hint
-  stops for that visit (one log line).
+- **Where**: Battle Settings > character (Fighter Settings, agent `MatchingFighterSetting`). While the costume row
+  (`p_Spin_costume`) is focused and the preview wears a slot with options, the bottom input guide bar gets an extra
+  entry `<ICON KeyF> Costume options` (`<ICON BtnD>` after a pad input), like the Color Mod's `<ICON KeyF><ICON
+  MouseL> Edit Color` on its Color row. The costume row's own text is no longer touched (it is only read, to see
+  when the outfit changes). The label is English only (the plugin has no locale system).
+- **Coexistence with the Color Mod** (same text object, the bar's `e_text_0_g_*` else first `e_text_0_d_*`): the
+  Color Mod strips everything from the first `"      <ICON"` (six spaces) of the game's text and appends its entry
+  after it, only on its Color row; its stored copy is written back every frame and refreshed every 5 frames from
+  what it reads. Our entry starts with FOUR spaces, so its strip does not match: it keeps ours as game text (no
+  rewrite) and its own entry lands after ours. We remove only our exact entry (either icon) wherever it sits, and
+  add it only on the costume row of an outfit with options; elsewhere (Color row, other rows, window closed, menu
+  open) it is removed and the rest of the text stays. No identical write; a fight of more than 60 writes in 120
+  frames (the Color Mod's stale copy right after a change) is logged once and the text is still rewritten.
 - **Key**: `F` (or the pad's A / Cross) with the costume row focused opens the menu. The Color Mod's keys are
   elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
   never open together (both need the option window closed).
-- **Pages** (7 rows at most, the dialog's pool): page 1 = Player side (P1 / P2), Preset (Custom + the mod's
-  variants), the first option rows, More options (pushes page 2), Restore defaults; later pages = option rows (+
+- **Pages** (7 rows at most, the dialog's pool): page 1 = Player side (P1 / P2), the first option rows, More options (pushes page 2), Restore defaults; later pages = option rows (+
   More options). A pick group = one choice row: None + its options (15 labels at most a row, R9: a bigger group is
   split in rows "Group (1/2)"...). A toggle = an Off / On row. Options that change nothing on the model (colour or
   cloth files only, e.g. the tan) are not offered; one that also ships such files is marked `*` (its description
   says so). Texts are English only for now.
 - **A change**: saved at once (`costume_choices.json`), applied to the preview by the runtime (a not-yet-loaded
   file shows within a second); the page is rebuilt on the next frame when other values changed (an option turned
-  off, the preset row), a page under it is rebuilt when it comes back on top. The window docks left (x -430, as the
+  off), a page under it is rebuilt when it comes back on top. The window docks left (x -430, as the
   Color Mod's editor on this screen) so the preview stays visible. Esc goes back / closes, as the game's dialogs.
 
 ## Saved choices and slot numbers

@@ -1,12 +1,13 @@
 // SF6 Slots — runtime costume options: the menu (rto.hpp, docs/RUNTIME_OPTIONS.md).
 //
 // Battle Settings > character (Fighter Settings, agent MatchingFighterSetting): when the outfit on the
-// preview has options, its costume row shows the decide key (F / A); that key on the costume row opens
-// the game's option window through the core's option service (the Color Mod's colour editor opens the
-// same way from the Color row; its keys are F on the Color row, X, and C / V inside its editor). Pages
-// of at most 7 rows (the dialog's pool): the player side, the presets (the mod's variants), one choice
+// preview has options, the bottom input guide bar gets an "F  Costume options" entry while the costume row
+// is focused; that key on the costume row opens the game's option window through the core's option service
+// (the Color Mod's colour editor opens the same way from the Color row; its keys are F on the Color row, X,
+// and C / V inside its editor). Pages of at most 7 rows (the dialog's pool): the player side, one choice
 // row per pick group (None + its options, at most 15 labels a row: R9), one On / Off row per toggle,
 // More options, Restore defaults. A change is saved at once and shown on the preview by rto.cpp.
+// (No preset row: the mod's former variants only serve the migration of a Battle Settings choice, rto.cpp.)
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -21,7 +22,7 @@ namespace {
 constexpr int kRowsPerPage = 7;
 constexpr float kDockX = -430.0f;                   // the dialog docked left: the preview stays visible
 
-struct Act { enum Kind { Side, Preset, Option, More, Restore } kind = Option; int page = 0, pos = 0, row = -1; };
+struct Act { enum Kind { Side, Option, More, Restore } kind = Option; int page = 0, pos = 0, row = -1; };
 
 struct State {
     bool active = false;
@@ -44,17 +45,19 @@ int g_last_side = 0;
 // ---- the trigger and the hint ----
 struct Hint {
     Obj* agent = nullptr;
-    Obj* text = nullptr;
-    uint32_t found_at = 0;
-    std::string base;                               // the game's text, without our key
+    Obj* text = nullptr;                            // the costume row's text (read only: tells when the outfit changed)
+    Obj* gtext = nullptr;                           // the input guide bar's text (see guide_apply)
+    uint32_t found_at = 0, gfound_at = 0;
+    std::string base;                               // the costume row's text
     uint32_t base_at = 0;                           // when the game last wrote it (the outfit changed)
-    bool off = false;                               // the game rewrites the text all the time: no hint this visit
-    std::vector<uint32_t> writes;
     bool pad = false;
     bool key_was = false;
     bool raw_was = false;                           // F / A down, any row (log of every press)
-    int text_log = -1, has_log = -1;                // last logged: costume row text found, outfit with options
+    int text_log = -1, has_log = -1, guide_log = -1;// last logged: costume row text found, outfit with options, guide text found
+    std::vector<uint32_t> gwrites;                  // frames of our guide writes (log of a fight)
+    bool fight_logged = false;
 } H;
+
 uint32_t g_pad_a = 32;
 bool g_pad_bits = false;
 
@@ -63,9 +66,6 @@ SF6CoreClient* C() { return ui::client(); }
 std::string page_key(int p) { return "__slots_rto_" + std::to_string(p); }
 
 std::string upper(std::string s) { for (auto& c : s) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A'); return s; }
-bool ends_with(const std::string& s, const std::string& e) { return s.size() >= e.size() && s.compare(s.size() - e.size(), e.size(), e) == 0; }
-const char* kKeyHint = "  <ICON KeyF>";
-const char* kPadHint = "  <ICON BtnD>";
 
 uint32_t pad_mask() {
     static Method* m_dev = nullptr;
@@ -98,8 +98,7 @@ bool game_has_focus() {
 // ---- pages ----
 void layout_pages() {
     S.pages.clear();
-    const Mod* mod = manifest().mod_of(*S.slot);
-    const int head = 1 + ((mod && !mod->variants.empty()) ? 1 : 0) + 1;     // side, preset, restore
+    const int head = 2;                                                     // side, restore
     const int total = static_cast<int>(S.rows.size());
     int i = 0, p = 0;
     do {
@@ -133,7 +132,6 @@ void build() {
     S.groups.clear();
     S.rows = rows(manifest(), *S.slot, S.chosen);
     layout_pages();
-    const Mod* mod = manifest().mod_of(*S.slot);
     const std::string who = S.side == 1 ? "P2" : "P1";
     const std::string title = upper(S.slot->label.empty() ? S.slot->name : S.slot->label) + "  -  " + who;
     const std::string live = "The preview shows it at once; saved for " + who + ".";
@@ -147,14 +145,6 @@ void build() {
             put(add_entry(g, SF6CORE_OPT_CHOICE, "side", "Player side",
                           "Whose options this menu shows and changes: the fighter on that side in Training and Versus. "
                           "Online, your own fighter wears P1's options.", { "P1", "P2" }, S.side + 1), { Act::Side });
-            if (mod && !mod->variants.empty()) {
-                std::vector<std::string> labels = { "Custom" };
-                for (size_t k = 0; k < mod->variants.size() && labels.size() < kMaxLabels; ++k) labels.push_back(preset_label(*mod, k));
-                int v = preset_of(*mod, S.chosen);
-                if (v >= static_cast<int>(labels.size())) v = 0;
-                put(add_entry(g, SF6CORE_OPT_CHOICE, "preset", "Preset",
-                              "The outfits made from this mod before: one choice sets all its options. " + live, labels, v + 1), { Act::Preset });
-            }
         }
         for (int ri : S.pages[static_cast<size_t>(p)]) {
             const Row& r = S.rows[static_cast<size_t>(ri)];
@@ -237,24 +227,16 @@ void SF6CORE_CALL cb_value(void*, int64_t entry, int64_t value) {
             S.chosen = chosen_of(manifest(), *S.slot, choices(), side);
             choices_changed();
             rebuild_later(a.page, a.pos);
-        } else if (a.kind == Act::Preset) {
-            const Mod* mod = manifest().mod_of(*S.slot);
-            if (!mod || value < 2 || value - 2 >= static_cast<int64_t>(mod->variants.size())) return;
-            S.chosen = mod->variants[static_cast<size_t>(value - 2)].ids;
-            commit(("preset " + preset_label(*mod, static_cast<size_t>(value - 2))).c_str());
-            rebuild_later(a.page, a.pos);
         } else if (a.kind == Act::Option && a.row >= 0 && a.row < static_cast<int>(S.rows.size())) {
             const Row r = S.rows[static_cast<size_t>(a.row)];
-            const int before_preset = manifest().mod_of(*S.slot) ? preset_of(*manifest().mod_of(*S.slot), S.chosen) : 0;
             apply_row(manifest(), *S.slot, S.chosen, r, static_cast<int>(value));
             commit((r.title + " = " + (value >= 1 && value <= static_cast<int64_t>(r.labels.size()) ? r.labels[static_cast<size_t>(value - 1)] : "?")).c_str());
-            // other rows changed (an option turned off), or this one did not take the value, or the preset row: rebuilt
+            // other rows changed (an option turned off), or this one did not take the value: rebuilt
             const auto now = rows(manifest(), *S.slot, S.chosen);
             bool same = now.size() == S.rows.size();
             for (size_t k = 0; same && k < now.size(); ++k)
                 if (static_cast<int>(k) == a.row ? now[k].value != value : now[k].value != S.rows[k].value) same = false;
-            const int after_preset = manifest().mod_of(*S.slot) ? preset_of(*manifest().mod_of(*S.slot), S.chosen) : 0;
-            if (!same || (a.page == 0 && before_preset != after_preset)) rebuild_later(a.page, a.pos);
+            if (!same) rebuild_later(a.page, a.pos);
             else {
                 S.rows = now;
                 for (int p = 0; p < static_cast<int>(S.pages.size()); ++p) if (p != a.page) S.stale.insert(p);
@@ -312,15 +294,91 @@ void SF6CORE_CALL cb_closed(void*) {
     if (S.active) teardown("window closed");
 }
 
-// ---- Fighter Settings: hint and key ----
+// ---- Fighter Settings: the guide bar entry and the key ----
+//
+// The entry goes into the bottom input guide bar, as the Color Mod does for its Color row ("<ICON KeyF><ICON
+// MouseL> Edit Color"). Both DLLs write the same text object (the bar's e_text_0_g_*, else the first
+// e_text_0_d_*, found the same way), so the scheme avoids a fight:
+//  - The Color Mod strips everything from the first "      <ICON" (SIX spaces) of the game's text and appends
+//    its own entry after it, and only on its Color row; elsewhere it writes the text back unchanged. Our entry
+//    uses FOUR spaces ("    <ICON KeyF> label"): the Color Mod's strip does not match it, so it keeps ours
+//    as "game text" (its stored copy then includes ours: no rewrite, no flicker), and when its own entry is
+//    added it lands after ours.
+//  - We strip only our exact entry (either icon), wherever it is in the text, and add it only on the costume
+//    row of an outfit with options. On the Color row, or any other row, ours is removed and the rest of the
+//    text (the game's, and the Color Mod's entry if it is there) is left as it is.
+//  - We never write an identical text, and rebuild from what is in the text each frame, so a text the game or
+//    the Color Mod rewrote is handled as it comes. The Color Mod refreshes its stored copy only every 5 frames
+//    (and writes it each frame), so for a few frames after a change its stale copy can rewrite the text and we
+//    write ours again; the screen is drawn after both. A fight of more than 60 writes in 120 frames is logged once.
+const char* kEntryLabel = "Costume options";        // English only: the plugin has no locale system
+std::string entry_text(bool pad) { return std::string("    ") + (pad ? "<ICON BtnD> " : "<ICON KeyF> ") + kEntryLabel; }
+void erase_all(std::string& s, const std::string& what) {
+    for (size_t at; (at = s.find(what)) != std::string::npos;) s.erase(at, what.size());
+}
+
+Obj* find_guide_text(const SF6CoreAPI* a) {
+    void* buf[4] = {};
+    const uint32_t n = a->ui_agents("InputGuide", buf, 4);
+    for (uint32_t i = 0; i < n && i < 4; ++i) {
+        Obj* ag = reinterpret_cast<Obj*>(buf[i]);
+        Obj* cm = call_obj(ag, "get_ControlMain");
+        bool ok = false;
+        const bool vis = cm && call_bool(cm, "get_ActualVisible", {}, &ok);
+        if (!(ok && vis)) continue;
+        Obj* lst = get_obj(get_obj(ag, "_PartsManager"), "_List");
+        for (int k = 0, cnt = list_count(lst); k < cnt; ++k) {
+            Obj* part = list_item(lst, k);
+            auto* td = part ? part->get_type_definition() : nullptr;
+            if (!(td && std::string(td->get_full_name()) == "app.UIPartsInputGuideList")) continue;
+            Obj* ctrl = get_obj(part, "<Control>k__BackingField");
+            Obj* btn = ctrl ? reinterpret_cast<Obj*>(a->ui_find_child(ctrl, "c_guideBtn", 8)) : nullptr;
+            Obj* first_d = nullptr;
+            for (Obj* c = btn ? call_obj(btn, "get_Child") : nullptr; c; c = call_obj(c, "get_Next")) {
+                const std::string nm = str(call_obj(c, "get_Name"));
+                if (nm.rfind("e_text_0_g_", 0) == 0) return c;
+                if (nm.rfind("e_text_0_d_", 0) == 0 && !first_d) first_d = c;
+            }
+            if (first_d) return first_d;
+            break;                                  // the guide list of this bar has no text: next bar
+        }
+    }
+    return nullptr;
+}
+
+// show: the entry belongs in the bar now; false: take ours out (the bar keeps the rest as it is)
+void guide_apply(bool show) {
+    const SF6CoreAPI* a = A();
+    if (!a) return;
+    if (show && (!alive(H.gtext) || g_frame - H.gfound_at > 60)) {
+        H.gfound_at = g_frame;
+        H.gtext = find_guide_text(a);
+        const int found = H.gtext ? 1 : 0;
+        if (found != H.guide_log) { H.guide_log = found; logf("rto: Fighter Settings: guide bar text %s", found ? "found" : "not found"); }
+    }
+    if (!alive(H.gtext)) { H.gtext = nullptr; return; }
+    const std::string cur = str(call_obj(H.gtext, "get_Message"));
+    if (cur.empty()) return;                        // the game has not written it yet
+    std::string want = cur;
+    erase_all(want, entry_text(false));
+    erase_all(want, entry_text(true));
+    if (show) want += entry_text(H.pad);
+    if (want == cur) return;
+    H.gwrites.push_back(g_frame);
+    while (!H.gwrites.empty() && g_frame - H.gwrites.front() > 120) H.gwrites.erase(H.gwrites.begin());
+    if (H.gwrites.size() > 60 && !H.fight_logged) { H.fight_logged = true; logf("rto: the guide bar text is rewritten by another writer every frame (the Color Mod's stored copy): rewriting ours"); }
+    const SF6CoreStatus st = a->ui_set_text(C(), H.gtext, want.c_str());
+    if (st != SF6CORE_OK) logf("rto: guide bar text not written (core status %d)", static_cast<int>(st));
+}
+
 void hint_tick() {
     const SF6CoreAPI* a = A();
     if (!a || !SF6CORE_HAS(a, ui_agents)) return;
     void* buf[4] = {};
     Obj* agent = a->ui_agents("MatchingFighterSetting", buf, 4) ? reinterpret_cast<Obj*>(buf[0]) : nullptr;
-    if (!agent) { H = Hint{}; return; }
-    if (agent != H.agent || !H.text || !H.text->is_managed_object() || g_frame - H.found_at > 60) {
-        if (agent != H.agent) { const bool pad = H.pad; H = Hint{}; H.pad = pad; }
+    if (!agent) { guide_apply(false); H = Hint{}; return; }
+    if (agent != H.agent || !alive(H.text) || g_frame - H.found_at > 60) {
+        if (agent != H.agent) { guide_apply(false); const bool pad = H.pad; H = Hint{}; H.pad = pad; }
         H.agent = agent;
         H.found_at = g_frame;
         Obj* cm = call_obj(agent, "get_ControlMain");
@@ -336,10 +394,9 @@ void hint_tick() {
     if (pad_mask()) H.pad = true;
     else for (int vk : { 0x46, 0x1B, 0x0D, 0x25, 0x26, 0x27, 0x28, 0x5A, 0x51, 0x53, 0x44 }) if (key_down(vk)) { H.pad = false; break; }
 
+    // the costume row's text (never written by us): when it changes, the outfit changed
     const Slot* slot = preview_slot();
-    std::string cur = H.text && H.text->is_managed_object() ? str(call_obj(H.text, "get_Message")) : std::string();
-    std::string base = cur;
-    for (const char* s : { kKeyHint, kPadHint }) if (ends_with(base, s)) base.resize(base.size() - std::strlen(s));
+    const std::string base = alive(H.text) ? str(call_obj(H.text, "get_Message")) : std::string();
     if (base != H.base) { H.base_at = H.base.empty() ? 0 : g_frame; H.base = base; }   // the first read is no change
     // the preview was identified after the outfit shown changed: it is that outfit's
     const bool has = slot && preview_since() >= static_cast<int>(H.base_at);
@@ -349,24 +406,15 @@ void hint_tick() {
         else logf("rto: costume row '%s': no options (%s)", base.c_str(),
                   !slot ? "the preview wears no outfit with options" : "the preview was not seen again since the outfit changed");
     }
-    if (H.text && !H.off && !cur.empty()) {
-        const std::string want = has ? base + (H.pad ? kPadHint : kKeyHint) : base;
-        if (want != cur) {
-            H.writes.push_back(g_frame);
-            while (!H.writes.empty() && g_frame - H.writes.front() > 120) H.writes.erase(H.writes.begin());
-            if (H.writes.size() > 12) { H.off = true; logf("rto: the costume row's text is rewritten all the time: no key hint there"); }
-            else {
-                const SF6CoreStatus st = a->ui_set_text(C(), H.text, want.c_str());
-                logf("rto: costume row text -> '%s' (%s)", want.c_str(), st == SF6CORE_OK ? "written" : ("core status " + std::to_string(static_cast<int>(st))).c_str());
-            }
-        }
-    }
 
-    // the key: F / A on the costume row
+    // the focused row
     Obj* item = call_obj(agent, "GetFocusItem");
     Obj* ctrl = item ? get_obj(item, "<Control>k__BackingField") : nullptr;
     const std::string row = ctrl ? str(call_obj(ctrl, "get_Name")) : std::string();
     const bool on_row = row == "p_Spin_costume";
+    guide_apply(on_row && has && !S.active);
+
+    // the key: F / A on the costume row
     const bool raw = key_down(0x46) || (pad_mask() & g_pad_a) != 0;
     const bool down = on_row && game_has_focus() && raw;
     if (raw && !H.raw_was && !S.active) {                // every press, and what it led to
@@ -396,7 +444,7 @@ void install() {
     cb.on_value = cb_value; cb.on_button = cb_button;
     cb.on_dialog_created = cb_created; cb.on_page_popped = cb_popped; cb.on_window_closed = cb_closed;
     g_svc = a->opt_set_callbacks(C(), &cb) == SF6CORE_OK;
-    logf("rto: options menu %s", g_svc ? "ready (F on the costume row of Fighter Settings)" : "refused by the core's option service");
+    logf("rto: options menu %s", g_svc ? "ready (F on the costume row of Fighter Settings, entry in the guide bar)" : "refused by the core's option service");
 }
 
 bool active() { return S.active; }
@@ -433,7 +481,7 @@ void tick(bool fs_visible) {
             }
         }
         if (fs_visible || S.active) hint_tick();
-        else if (H.agent) H = Hint{};
+        else if (H.agent) { guide_apply(false); H = Hint{}; }
     } catch (...) {
         logf("rto: EXCEPTION in the menu (tick)");
     }
