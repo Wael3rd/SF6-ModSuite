@@ -362,9 +362,24 @@ std::string default_pick(const Manifest& m, const Slot& s, int group) {
     return {};
 }
 
-void complete(const Manifest& m, const Slot& s, std::vector<std::string>& chosen) {
+void complete(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, std::vector<std::string>* notes) {
     const Mod* mod = m.mod_of(s);
     if (!mod) return;
+    // one pick per group: the last one listed stays
+    for (size_t k = chosen.size(); k-- > 0;) {
+        const int x = mod->find(chosen[k]);
+        if (x < 0 || mod->options[static_cast<size_t>(x)].mode != "pick") continue;
+        const int g = mod->options[static_cast<size_t>(x)].group;
+        for (size_t q = k; q-- > 0;) {
+            const int y = mod->find(chosen[q]);
+            if (y < 0 || y == x || mod->options[static_cast<size_t>(y)].mode != "pick" || mod->options[static_cast<size_t>(y)].group != g)
+                continue;
+            if (notes) notes->push_back("\"" + mod->options[static_cast<size_t>(y)].name + "\" and \"" + mod->options[static_cast<size_t>(x)].name
+                                        + "\" are one choice now: \"" + mod->options[static_cast<size_t>(x)].name + "\" kept");
+            chosen.erase(chosen.begin() + static_cast<std::ptrdiff_t>(q));
+            --k;
+        }
+    }
     for (int g : s.required) {
         if (g < 0 || g >= static_cast<int>(mod->groups.size())) continue;
         bool any = false;
@@ -464,10 +479,29 @@ void choose(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, 
     drop_later(m, s, chosen, id);
 }
 
-void toggle(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const std::string& id, bool on) {
+void toggle(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const std::string& id, bool on,
+            std::vector<std::string>* notes) {
     if (!on) { erase_id(chosen, id); return; }
     if (!has(chosen, id)) chosen.push_back(id);
     drop_later(m, s, chosen, id);
+    // another On / Off option that replaces one of its files, earlier or later: off (the second one's file would hide
+    // the first one's, the first one's other files would stay: a set no outfit has)
+    const Mod* mod = m.mod_of(s);
+    const auto* fx = files_for(s, id);
+    const int x = mod ? mod->find(id) : -1;
+    if (x < 0 || !fx) return;
+    std::set<std::string> targets;
+    for (auto& f : *fx) if (live_kind(f.kind)) targets.insert(f.target);
+    for (auto it = chosen.begin(); it != chosen.end();) {
+        const int y = mod->find(*it);
+        bool drop = false;
+        if (*it != id && y >= 0 && mod->options[static_cast<size_t>(y)].mode == "toggle")
+            if (const auto* fy = files_for(s, *it))
+                for (auto& f : *fy) if (live_kind(f.kind) && targets.count(f.target)) { drop = true; break; }
+        if (drop && notes)
+            notes->push_back("\"" + mod->options[static_cast<size_t>(y)].name + "\" turned off: it replaces a file of \"" + mod->options[static_cast<size_t>(x)].name + "\"");
+        it = drop ? chosen.erase(it) : it + 1;
+    }
 }
 
 bool same_set(const std::vector<std::string>& a, const std::vector<std::string>& b) {
@@ -543,12 +577,13 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
     return out;
 }
 
-void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const Row& r, int value) {
+void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const Row& r, int value,
+               std::vector<std::string>* notes) {
     const Mod* mod = m.mod_of(s);
     if (!mod || value < 1 || value > static_cast<int>(r.label_option.size())) return;
     const int oi = r.label_option[static_cast<size_t>(value - 1)];
     if (r.kind == Row::Toggle) {
-        if (r.option >= 0) toggle(m, s, chosen, mod->options[static_cast<size_t>(r.option)].id, oi >= 0);
+        if (r.option >= 0) toggle(m, s, chosen, mod->options[static_cast<size_t>(r.option)].id, oi >= 0, notes);
     } else if (oi >= 0) {
         choose(m, s, chosen, r.group, mod->options[static_cast<size_t>(oi)].id);
     } else {
@@ -560,7 +595,7 @@ void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chose
                 break;
             }
     }
-    complete(m, s, chosen);                                  // an option turned off for this one may leave a required group empty
+    complete(m, s, chosen, notes);                           // an option turned off for this one may leave a required group empty
 }
 
 int preset_of(const Mod& mod, const std::vector<std::string>& chosen) {

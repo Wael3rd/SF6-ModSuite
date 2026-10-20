@@ -252,7 +252,9 @@ void SF6CORE_CALL cb_value(void*, int64_t entry, int64_t value) {
             rebuild_later(a.page, a.pos);
         } else if (a.kind == Act::Option && a.row >= 0 && a.row < static_cast<int>(S.rows.size())) {
             const Row r = S.rows[static_cast<size_t>(a.row)];
-            apply_row(manifest(), *S.slot, S.chosen, r, static_cast<int>(value));
+            std::vector<std::string> notes;
+            apply_row(manifest(), *S.slot, S.chosen, r, static_cast<int>(value), &notes);
+            for (auto& n : notes) logf("rto: menu: %s", n.c_str());
             commit((r.title + " = " + (value >= 1 && value <= static_cast<int64_t>(r.labels.size()) ? r.labels[static_cast<size_t>(value - 1)] : "?")).c_str());
             // other rows changed (an option turned off), or this one did not take the value: rebuilt
             const auto now = rows(manifest(), *S.slot, S.chosen);

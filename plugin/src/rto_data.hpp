@@ -102,7 +102,9 @@ std::vector<std::string> chosen_of(const Manifest& m, const Slot& s, const Choic
 // a choice its default option (the slot's default in that group, else its first offered option).
 bool required(const Slot& s, int group);
 std::string default_pick(const Manifest& m, const Slot& s, int group);
-void complete(const Manifest& m, const Slot& s, std::vector<std::string>& chosen);
+// Two picks of one group in a set (a saved set from before the loader made two On / Off options one choice): the
+// last one stays (a note each).
+void complete(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, std::vector<std::string>* notes = nullptr);
 
 // ---- what the model loads ----
 struct Want {
@@ -119,7 +121,10 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
 // A pick group's option chosen (id empty: none of the group), a toggle switched. Options of other groups
 // that come LATER in the layering and ship a file of the option chosen are turned off: they would hide it.
 void choose(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, int group, const std::string& id);
-void toggle(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const std::string& id, bool on);
+// A toggle switched on also turns off every other chosen toggle that ships one of its targets, of any group: two
+// On / Off options never replace a same file together (the loader makes such options one choice; defensive, a note).
+void toggle(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const std::string& id, bool on,
+            std::vector<std::string>* notes = nullptr);
 bool same_set(const std::vector<std::string>& a, const std::vector<std::string>& b);
 
 // ---- the menu rows ----
@@ -139,7 +144,8 @@ struct Row {
 };
 constexpr size_t kMaxLabels = 15;        // a native spin crashed above 16 entries (R9)
 std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::string>& chosen);
-void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const Row& r, int value);
+void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const Row& r, int value,
+               std::vector<std::string>* notes = nullptr);
 // 0: no preset matches the set, k: the mod's variant k-1
 int preset_of(const Mod& mod, const std::vector<std::string>& chosen);
 std::string preset_label(const Mod& mod, size_t k);   // a variant's label without the mod's name

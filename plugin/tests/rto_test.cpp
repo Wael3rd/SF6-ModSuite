@@ -509,6 +509,93 @@ int main(int argc, char** argv) {
               "retouches: None gives back the game's body");
     }
 
+    {   // On / Off options that replace a same file (Swimsuit Viper C1: "hide accessories" and "hide leg chain" both ship
+        // jewels_atos.tex). A manifest of an older loader keeps them toggles: the menu never leaves both on. The new
+        // loader writes them as one pick group; a set saved with both picks keeps the last one.
+        const char* j = R"JSON({"format": "sf6-costume-options-1", "layout": "one", "mods": [
+          {"key": "esf030/swimsuit", "name": "Swimsuit", "groups": [
+            {"name": "Swimsuit", "options": [{"id": "base0001", "name": "Main", "mode": "base"}]},
+            {"name": "optional slots", "options": [{"id": "acce0001", "name": "hide accessories", "mode": "toggle"},
+                                                   {"id": "legc0001", "name": "hide leg chain", "mode": "toggle"},
+                                                   {"id": "belt0001", "name": "hide belt chain", "mode": "toggle"}]},
+            {"name": "Necklace", "options": [{"id": "neck0001", "name": "hide earings and necklace", "mode": "pick"},
+                                             {"id": "neck0002", "name": "hide necklace", "mode": "pick"}]}]}],
+          "slots": [{"fighter": 30, "fighter_dir": "esf030", "costume_no": 13, "folder": "014", "mod": "esf030/swimsuit",
+            "defaults": ["base0001"],
+            "options": {
+              "acce0001": [{"kind": "texture", "target": "product/model/esf/esf030/014/01/jewels_atos.tex", "path": "product/model/esf/esf030/014/rto/acce0001/01/jewels_atos.tex"}],
+              "legc0001": [{"kind": "texture", "target": "product/model/esf/esf030/014/01/jewels_atos.tex", "path": "product/model/esf/esf030/014/rto/legc0001/01/jewels_atos.tex"}],
+              "belt0001": [{"kind": "texture", "target": "product/model/esf/esf030/014/01/belt_atos.tex", "path": "product/model/esf/esf030/014/rto/belt0001/01/belt_atos.tex"}],
+              "neck0001": [{"kind": "texture", "target": "product/model/esf/esf030/014/01/necklace_atos.tex", "path": "product/model/esf/esf030/014/rto/neck0001/01/necklace_atos.tex"}],
+              "neck0002": [{"kind": "texture", "target": "product/model/esf/esf030/014/01/necklace_atos.tex", "path": "product/model/esf/esf030/014/rto/neck0002/01/necklace_atos.tex"}]},
+            "base": [], "required": [], "former": []}]})JSON";
+        Manifest q; std::string e6;
+        check(parse_manifest(j, q, e6), "same-file toggles: manifest parsed");
+        const Slot& t = q.slots[0];
+        auto c = t.defaults;
+        std::vector<std::string> notes;
+        toggle(q, t, c, "acce0001", true, &notes);
+        toggle(q, t, c, "belt0001", true, &notes);
+        check(has(c, "acce0001") && has(c, "belt0001") && notes.empty(), "same-file toggles: toggles of other files stay on together");
+        toggle(q, t, c, "legc0001", true, &notes);
+        check(has(c, "legc0001") && !has(c, "acce0001") && has(c, "belt0001") && notes.size() == 1,
+              "same-file toggles: the second one of a same file turns the first off (one note)");
+        auto d = desired(q, t, c);
+        check(path_of(d, "product/model/esf/esf030/014/01/jewels_atos.tex") == "product/model/esf/esf030/014/rto/legc0001/01/jewels_atos.tex",
+              "same-file toggles: its file shows");
+        toggle(q, t, c, "acce0001", true, &notes);
+        check(has(c, "acce0001") && !has(c, "legc0001"), "same-file toggles: and back, the earlier one turns the later off");
+        std::vector<std::string> two = { "base0001", "neck0001", "neck0002" };
+        notes.clear();
+        complete(q, t, two, &notes);
+        check(!has(two, "neck0001") && has(two, "neck0002") && notes.size() == 1, "two picks of one group saved: the last one stays");
+        Choices ch;
+        ch.mods["esf030/swimsuit"][0] = Side{true, {"neck0002", "neck0001"}, {}};
+        auto cc = chosen_of(q, t, ch, 0);
+        check(has(cc, "neck0001") && !has(cc, "neck0002"), "a saved set with two picks of one group: one of them");
+    }
+
+    {   // outfits made one (versions of one archive, identical meshes): the base keeps its slot, a required "Version"
+        // group whose base pick is a default (its files are the slot's own: nothing to swap), the others' files
+        // swapped; a former slot of another version moves here with that version picked
+        const char* j = R"JSON({"format": "sf6-costume-options-1", "layout": "one", "mods": [
+          {"key": "esf025/sagat - muay thai tee - drive tech", "name": "Sagat - Muay Thai Tee - Drive Tech", "groups": [
+            {"name": "Sagat - Muay Thai Tee - Drive Tech", "options": [{"id": "root0001", "name": "Sagat - Muay Thai Tee - Drive Tech", "mode": "base"}]},
+            {"name": "Tee", "options": [{"id": "muay0001", "name": "Muay Thai", "mode": "pick"},
+                                        {"id": "phot0001", "name": "Tiger Photo", "mode": "pick"},
+                                        {"id": "tigr0001", "name": "Tiger", "mode": "pick"}]}],
+           "variants": [{"label": "Sagat - Muay Thai Tee - Drive Tech", "options": ["root0001", "muay0001"]},
+                        {"label": "Sagat - Tiger Tee - Drive Tech", "options": ["root0001", "tigr0001"]}]}],
+          "slots": [{"fighter": 25, "fighter_dir": "esf025", "costume_no": 5, "folder": "006", "mod": "esf025/sagat - muay thai tee - drive tech",
+            "defaults": ["root0001", "muay0001"],
+            "options": {
+              "muay0001": [{"kind": "texture", "target": "product/model/esf/esf025/006/01/esf025_006_01_clotha_1_cmask.tex", "path": "product/model/esf/esf025/006/rto/muay0001/01/esf025_006_01_clotha_1_cmask.tex"},
+                           {"kind": "colour", "target": "product/model/esf/esf025/006/esf025_006_cmd_001.user", "path": "product/model/esf/esf025/006/rto/muay0001/esf025_006_cmd_001.user"}],
+              "phot0001": [{"kind": "texture", "target": "product/model/esf/esf025/006/01/esf025_006_01_clotha_1_cmask.tex", "path": "product/model/esf/esf025/006/rto/phot0001/01/esf025_006_01_clotha_1_cmask.tex"}],
+              "tigr0001": [{"kind": "texture", "target": "product/model/esf/esf025/006/01/esf025_006_01_clotha_1_cmask.tex", "path": "product/model/esf/esf025/006/rto/tigr0001/01/esf025_006_01_clotha_1_cmask.tex"}]},
+            "base": [{"kind": "texture", "target": "product/model/esf/esf025/006/01/esf025_006_01_clotha_1_cmask.tex", "path": "product/model/esf/esf025/006/rto/base/01/esf025_006_01_clotha_1_cmask.tex"}],
+            "required": [1], "former": [{"costume_no": 8, "folder": "009", "label": "Sagat - Tiger Tee - Drive Tech", "options": ["root0001", "tigr0001"]}]}]})JSON";
+        Manifest q; std::string e7;
+        check(parse_manifest(j, q, e7), "merged outfits: manifest parsed");
+        const Slot& t = q.slots[0];
+        const char* CM = "product/model/esf/esf025/006/01/esf025_006_01_clotha_1_cmask.tex";
+        auto d = desired(q, t, t.defaults);
+        check(is_orig(d, CM), "merged outfits: the base version by default (the slot's own file)");
+        auto r = rows(q, t, t.defaults);
+        check(r.size() == 1 && !r[0].none && r[0].labels.size() == 3 && r[0].value == 1 && r[0].title == "Tee",
+              "merged outfits: one choice row, no None, the base's version shown");
+        auto c = t.defaults;
+        apply_row(q, t, c, r[0], 3);
+        d = desired(q, t, c);
+        check(has(c, "tigr0001") && !has(c, "muay0001") && path_of(d, CM) == "product/model/esf/esf025/006/rto/tigr0001/01/esf025_006_01_clotha_1_cmask.tex",
+              "merged outfits: another version's texture");
+        apply_row(q, t, c, r[0], 1);
+        d = desired(q, t, c);
+        check(is_orig(d, CM), "merged outfits: back to the base's version");
+        const Former* fo = nullptr;
+        check(former_of(q, 25, 8, &fo) == &t && fo && has(fo->ids, "tigr0001"), "merged outfits: the former slot of a version moves here, that version picked");
+    }
+
     {   // the menu title: a long outfit name is cut, UTF-8 aware
         check(clip_name("Ingrid - Fly In A Bucket - Drive Tech", kTitleNameChars) == "Ingrid - Fly In A Bucket - Drive Tech",
               "title: a name of 40 characters or less is kept");
