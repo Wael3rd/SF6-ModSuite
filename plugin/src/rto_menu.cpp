@@ -242,6 +242,7 @@ void open() {
 
 // ---- the core's callbacks (game thread, guarded by the core) ----
 void SF6CORE_CALL cb_value(void*, int64_t entry, int64_t value) {
+    if (nsfwopt::on_value(entry, value)) return;       // the Options screen's "Display NSFW Outfits" row
     if (!S.active) return;
     auto it = S.acts.find(entry);
     if (it == S.acts.end()) return;
@@ -579,6 +580,7 @@ void install() {
     logf("rto: options menu %s", g_svc ? "ready (F on the costume row of Fighter Settings, entry in the guide bar)" : "refused by the core's option service");
 }
 
+bool service() { return g_svc; }
 bool active() { return S.active; }
 int side() { return S.side; }
 bool busy() { return S.active || camera::active(); }   // the camera is closed on the next frame, by tick

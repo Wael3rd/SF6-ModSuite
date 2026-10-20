@@ -9,10 +9,11 @@
   goes back to Outfit 1. They are numbered after the fighter's other outfits, keep their numbers, and are merged or
   made options only with other NSFW mods (an NSFW retouch stays an outfit; NSFW add-ons go on NSFW outfits only).
   Marked `"nsfw": true` in `outfits.json`, the registry and `costume_options.json`; not listed in `variants.json`.
-  Without that folder nothing changes (same registry, manifests and pak). Known issue: no in-game switch yet
-  (the option row in Options > Interface needs a core change).
+  Without that folder nothing changes (same registry, manifests and pak).
 - `costume_mods_nsfw` is made by the loader (with a folder per fighter) like `costume_mods`, and shipped in the Slots
   Loader package; empty, it changes nothing.
+- Options > Interface > Other Settings > "Display NSFW Outfits" (Off / On) row, through the Native Core option service
+  (core 0.9.0+, opt_group_place; without it no row, the file setting keeps working).
 - NSFW by keywords: a mod of `costume_mods` whose name says it is NSFW (archive, folder, Fluffy menu name) is handled
   as if it were in `costume_mods_nsfw`; an option whose name, folder or menu group says so is an NSFW runtime option:
   not offered nor worn while NSFW outfits are hidden (the saved choice is kept and comes back), never worn by default

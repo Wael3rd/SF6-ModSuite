@@ -171,11 +171,12 @@ Mods left in `costume_mods` are looked at too, by name (creators tag their mods,
 - No `modinfo.ini` field says a mod is for adults (Fluffy's fields are name, version, author, category, description,
   screenshot, AddonFor, NameAsBundle; Nexus's adult flag is not in the downloads), so only names count.
 
-- **Hidden by default.** NSFW outfits are listed only while "Display NSFW Outfits" is on. For now the setting is in
+- **Hidden by default.** NSFW outfits are listed only while "Display NSFW Outfits" is on. In game: **Options > Interface > Other Settings > Display NSFW Outfits** (Off / On; needs the Native Core 0.9.0 or newer;
+  the row is saved at once and applied without a relaunch). The setting is kept in
   `reframework\data\SF6_CostumeSlots_data\settings.json`: `"display_nsfw": true` shows them, `false` hides them
   (the file is created, set to `false`, the first time the plugin finds an NSFW outfit or option). A change takes
   effect at the next screen that lists outfits (character select, Battle Settings), without a relaunch; the outfits
-  stay installed either way. An in-game switch is not available yet.
+  stay installed either way; editing the file by hand works too, and the row follows it.
 - **Hidden** means not listed by the character select screens or Battle Settings / Fighter Settings, like an outfit
   you do not own. A fighter whose Battle Settings outfit is an NSFW one goes back to its Outfit 1 when they are
   hidden.

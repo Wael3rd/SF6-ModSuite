@@ -66,6 +66,7 @@ size_t g_nsfw_slots = 0;
 bool g_show_nsfw = false;
 uint64_t g_settings_stamp = 0;       // size and date of settings.json when read (0: never read / missing)
 bool g_nsfw_apply = false;           // a change not applied yet (Battle Settings was open)
+bool g_nsfw_row = false;             // the in-game row (nsfw_option.cpp) shows the setting: the file is followed even with no NSFW content
 
 bool visible(const Slot& s) {
     return g_book.shown(s.fighter, s.base) && ownership::nsfw_shown(s.nsfw, g_show_nsfw);
@@ -235,7 +236,7 @@ uint64_t settings_stamp() {
 }
 // Reads "display_nsfw" (false when the file or the key is missing). Returns true when the setting changed.
 bool read_nsfw_setting(const char* why) {
-    if (!g_nsfw_slots && !rto::nsfw_options()) return false;
+    if (!g_nsfw_slots && !rto::nsfw_options() && !g_nsfw_row) return false;
     const uint64_t st = settings_stamp();
     if (st && st == g_settings_stamp) return false;
     g_settings_stamp = st;
@@ -1306,6 +1307,25 @@ bool g_menu_open = false;
 
 bool display_nsfw() { return g_show_nsfw; }
 
+// The in-game row "Display NSFW Outfits" (nsfw_option.cpp) exists: settings.json is followed (read now) even when
+// no NSFW outfit or option is installed, so the row shows the file.
+void nsfw_row_present(bool on) {
+    g_nsfw_row = on;
+    if (on) read_nsfw_setting("row");
+}
+
+// The row was changed in the game (core callback, game thread): written to settings.json and applied at once
+// (ownership and the Outfit 1 fallback run on the next tick, outside Battle Settings).
+void set_display_nsfw(bool on) {
+    CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
+    const bool ok = write_file(kSettings, on ? "{\n    \"display_nsfw\": true\n}\n" : "{\n    \"display_nsfw\": false\n}\n");
+    if (ok) g_settings_stamp = settings_stamp();
+    logf("costumes: Display NSFW Outfits %s (option row)%s", on ? "on" : "off", ok ? "" : ": settings.json NOT written");
+    if (on == g_show_nsfw) return;
+    g_show_nsfw = on;
+    g_nsfw_apply = true;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Module entry points
 // ---------------------------------------------------------------------------------------------
@@ -1340,6 +1360,7 @@ void install_hooks() {
 bool busy() {
     if (g_slots.empty()) return false;
     if (!g_boot_done || g_revoke_cursor >= kStaticMin || g_color_cursor >= kColorMin) return true;
+    if (g_nsfw_apply) return true;
     return g_mount_until != 0;
 }
 
@@ -1366,7 +1387,7 @@ void tick(uint32_t ev) {
 
     // ---- NSFW outfits: settings.json read again (when it changed) at every screen that lists outfits, before the
     // ownership pass below (which then follows the new setting); applied once more below the Battle Settings work
-    if ((g_nsfw_slots || rto::nsfw_options()) && (ev & (EV_TITLE_END | EV_SELECT_START | EV_SELECT_END | EV_MENU_OPEN | EV_MENU_CLOSE))
+    if ((g_nsfw_slots || rto::nsfw_options() || g_nsfw_row) && (ev & (EV_TITLE_END | EV_SELECT_START | EV_SELECT_END | EV_MENU_OPEN | EV_MENU_CLOSE))
         && read_nsfw_setting("settings.json changed"))
         g_nsfw_apply = true;
 

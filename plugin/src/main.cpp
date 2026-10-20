@@ -78,6 +78,7 @@ void on_late_update() {
             stages::install_hooks();
             rto::install_hooks();
             fsname::install_hooks();
+            nsfwopt::setup();
         }
         if (ev & EV_DIAG) diag_flush();
         {
@@ -92,6 +93,7 @@ void on_late_update() {
         }
         rto::tick(ev);                      // runtime costume options (after the costume work of the frame)
         fsname::tick(ev);                   // the outfit's name on Fighter Settings
+        nsfwopt::tick();                    // the Options row follows settings.json
         g_costumes_busy = costumes::busy();
         g_stages_busy = stages::busy();
         g_rto_busy = rto::busy();

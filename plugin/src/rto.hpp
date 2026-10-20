@@ -45,6 +45,7 @@ int frame_now();
 
 namespace menu {
 void install();                       // the core's option service (first frame)
+bool service();                       // the core accepted our option callbacks (rto_menu.cpp owns them)
 bool active();                        // the options window is ours and open
 int side();                           // the player side the menu edits (0 P1, 1 P2)
 bool busy();

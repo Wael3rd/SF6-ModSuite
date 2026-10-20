@@ -151,6 +151,14 @@ namespace costumes {
     std::string slot_label(int fighter, int costume_no);   // one of our outfits: its label (outfits.json), else ""
     int slot_by_name(int fighter, const std::string& name); // one of our outfits by its game name ("Outfit II"), else -1
     bool display_nsfw();              // settings.json "display_nsfw": NSFW outfits and options shown
+    void nsfw_row_present(bool on);   // the in-game row exists: settings.json is followed even with no NSFW content
+    void set_display_nsfw(bool on);   // the row changed: settings.json written, applied on the next tick
+}
+// nsfw_option.cpp: the row "Display NSFW Outfits" in Options > Interface > Other Settings (core option service)
+namespace nsfwopt {
+    void setup();                     // first frame, after rto::install_hooks (needs the core; once)
+    void tick();                      // the row follows settings.json
+    bool on_value(int64_t entry, int64_t value);   // the core's on_value: true when the entry is the row's
 }
 // fs_name.cpp: the outfit's name on Fighter Settings, at the right end of the bottom input guide bar
 namespace fsname {
