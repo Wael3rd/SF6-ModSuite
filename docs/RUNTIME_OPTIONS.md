@@ -301,6 +301,18 @@ add-ons ship `001/02/` and a scene pointing there) target what the slot's scene 
 material files the scene names for it, the chain of the same name in that folder. Before, they targeted the
 original folder's path, which no model loads (the option did nothing).
 
+### A mod alone in its sub-folder (20/10)
+
+A mod (archive or folder mod, all its options counting as one) that is the only mod of its own sub-folder of the
+character folder (`costume_mods/<Character>/<Sub-folder>/<that mod>`; the sub-folder is neither an archive nor a pak) is
+**always its own outfit** with `RuntimeOptions=on`. It is left out of every rule above, on both sides: never a retouch,
+a subset or a version of another outfit, never merged with another outfit (rules B, C, D), never an option of another
+outfit's add-on placement, and no other mod's add-ons or retouches are placed on it. Its own internal options (a modular
+mod) stay runtime options of that outfit. Several mods in one sub-folder keep the grouped-outfit rule. A lone mod that is
+a pure add-on (no complete outfit) cannot be an outfit: it keeps the add-on rules, and the log says so. The log has one
+line per mod kept apart (`<mod>: alone in its sub-folder <name>: its own outfit (no merge)`), repeated in the merge audit.
+`RuntimeOptions=variants` and `off` are unchanged.
+
 ## Storage in the costume pak
 
 For every slot of a modular mod, every option except `base` ones is stored **as that slot would use it**, under the

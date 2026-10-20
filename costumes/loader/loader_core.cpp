@@ -5948,6 +5948,24 @@ static bool user_grouped(const UnitFiles& a, const UnitFiles& b) {
     return str_lower(pa[2]) != str_lower(pb[2]);
 }
 
+// A mod alone in its own sub-folder of a character folder ("<Char>/<Sub-folder>/<that one mod>", the sub-folder being
+// neither an archive nor a pak; all the options of an archive or folder count as one mod) is always its own outfit with
+// RuntimeOptions=on (docs/RUNTIME_OPTIONS.md, "A mod alone in its sub-folder"): kept out of the retouch, subset, merge and
+// add-on placement rules, on both sides. Key: "<char>/<sub-folder>" lowercase (= the mod's source), empty when not alone.
+static std::set<std::string> g_lone_sources;
+static std::string lone_key_of(const UnitFiles& u) {
+    std::vector<std::string> parts; size_t x = 0;
+    const std::string& rel = u.u.rel;
+    while (x <= rel.size()) { size_t y = rel.find('/', x); if (y == std::string::npos) y = rel.size(); parts.push_back(rel.substr(x, y - x)); x = y + 1; }
+    if (parts.size() < 3 || is_archive_name(parts[1]) || str_ends_with(str_lower(parts[1]), ".pak")) return std::string();
+    return str_lower(parts[0]) + "/" + str_lower(parts[1]);
+}
+static bool is_lone_unit(const UnitFiles& u) {
+    if (g_lone_sources.empty()) return false;
+    const std::string k = lone_key_of(u);
+    return !k.empty() && g_lone_sources.count(k) != 0;
+}
+
 static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
     for (auto& [p, mf] : a.files) if (b.files.count(p)) return true;
     return false;
@@ -7126,6 +7144,13 @@ static void attach_addons(ScanOutputs& o) {
                                                 : folder == folder_of(*c)) { games_hit.push_back(c); break; }
                         }
             }
+            // An outfit alone in its sub-folder is its own: no other mod's add-on or retouch goes on it
+            if (g_rto_layout == RtoLayout::One && !g_lone_sources.empty())
+                mods_hit.erase(std::remove_if(mods_hit.begin(), mods_hit.end(), [&](size_t k) {
+                    auto ms = g_mod_source.find(o.mods_out[k].first);
+                    return ms != g_mod_source.end() && ms->second.source != pa.source
+                           && g_lone_sources.count(str_lower(ms->second.source)) != 0;
+                }), mods_hit.end());
             std::string names;
             // A retouch's options on one outfit: those that touch it (a file of its costume folder, a 000/ file it
             // loads), not where the outfit (a mod's: e) ships one of their files itself (it replaces the game's files)
@@ -8066,12 +8091,46 @@ static void finalize_units(ScanOutputs& o) {
     // an outfit: one with a body mesh, or a lone option applied to the outfit it modifies (C. Viper C2 Glasses
     // Removed: Outfit 2's head); an add-on mod that makes none ("Mai face accessories") keeps the add-on rules.
     // (RuntimeOptions=variants keeps the outfits of off: a retouch stays one there)
+    // A mod alone in its sub-folder (is_lone_unit) is always its own outfit: left out of every rule below, both sides
+    g_lone_sources.clear();
+    if (g_rto_layout == RtoLayout::One) {
+        std::map<std::string, std::set<std::string>> mods_in;   // "<char>/<sub>" -> the mods (3rd path part) in it
+        std::map<std::string, std::vector<size_t>> units_in;
+        for (size_t i = 0; i < g_units.size(); ++i) {
+            const std::string k = lone_key_of(g_units[i]);
+            if (k.empty()) continue;
+            const std::string& rel = g_units[i].u.rel;
+            size_t a = rel.find('/'); a = rel.find('/', a + 1) + 1;
+            size_t b = rel.find('/', a);
+            mods_in[k].insert(str_lower(rel.substr(a, b == std::string::npos ? std::string::npos : b - a)));
+            units_in[k].push_back(i);
+        }
+        for (auto& [k, mods] : mods_in) {
+            if (mods.size() != 1) continue;
+            const auto& idx = units_in[k];
+            const std::string rel = g_units[idx[0]].u.rel;
+            size_t a = rel.find('/'); a = rel.find('/', a + 1);
+            const std::string sub = rel.substr(rel.find('/') + 1, a - rel.find('/') - 1);
+            const std::string label = unit_label(g_units[idx[0]]);
+            std::string fd;
+            for (auto i : idx) if (!g_units[i].costumes.empty()) { fd = g_units[i].costumes[0].fighter_dir; break; }
+            if (fd.empty()) {
+                printf("\n  %s: alone in its sub-folder %s, but a pure add-on (no complete outfit): it cannot be its own "
+                       "outfit, made as before\n", label.c_str(), sub.c_str());
+                continue;
+            }
+            g_lone_sources.insert(k);
+            printf("\n  %s: alone in its sub-folder %s: its own outfit (no merge)\n", label.c_str(), sub.c_str());
+            merge_note(fd, label + ": alone in its sub-folder " + sub + ": its own outfit (no merge)");
+        }
+    }
     std::set<size_t> retouch;
     g_retouch_sources.clear();
     if (g_rto_layout == RtoLayout::One) {
         std::map<int, std::vector<size_t>> by_source;
         for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
         for (auto& [src, idx] : by_source) {
+            if (std::any_of(idx.begin(), idx.end(), [](size_t i) { return is_lone_unit(g_units[i]); })) continue;
             if (!std::all_of(idx.begin(), idx.end(), [](size_t i) { return unit_retouch(g_units[i]); })) continue;
             const bool outfit = std::any_of(idx.begin(), idx.end(), [](size_t i) { return !g_units[i].costumes.empty(); })
                 || (idx.size() == 1 && trim_ws(g_units[idx[0]].addonfor).empty()
@@ -8100,7 +8159,7 @@ static void finalize_units(ScanOutputs& o) {
         std::map<int, std::vector<size_t>> by_source;
         for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
         for (auto& [src, idx] : by_source) {
-            if (idx.size() != 1 || g_retouch_sources.count(src)) continue;
+            if (idx.size() != 1 || g_retouch_sources.count(src) || is_lone_unit(g_units[idx[0]])) continue;
             UnitFiles& u = g_units[idx[0]];
             if (u.costumes.size() != 1 || !trim_ws(u.addonfor).empty() || u.u.game_install
                 || u.u.rel.compare(0, 19, "Fluffy Mod Manager/") == 0) continue;
@@ -8220,6 +8279,7 @@ static void finalize_units(ScanOutputs& o) {
             for (size_t j = 0; j < g_units.size(); ++j) {
                 const auto& b = g_units[j];
                 if (b.costumes.empty() || modular.count(j) || retouch.count(j) || complete_addon_of.count(j)) continue;
+                if (b.source != a.source && is_lone_unit(b)) continue;   // alone in its sub-folder: nobody else's add-on goes on it
                 bool hit = false;
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
@@ -8273,6 +8333,7 @@ static void finalize_units(ScanOutputs& o) {
         std::set<size_t> apart = modular;
         apart.insert(retouch.begin(), retouch.end());
         for (auto& [i, j] : complete_addon_of) apart.insert(i);
+        for (size_t i = 0; i < g_units.size(); ++i) if (is_lone_unit(g_units[i])) apart.insert(i);
         const ULONGLONG t0 = GetTickCount64();
         merge_outfits(o, addons_of, apart, merged);
         printf("\n  merges: %llu ms\n", (unsigned long long)(GetTickCount64() - t0));

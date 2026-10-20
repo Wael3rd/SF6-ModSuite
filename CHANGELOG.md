@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Runtime options: a mod alone in its own sub-folder of a character folder is always its own outfit (no retouch, subset, merge or add-on placement on either side); logged and listed in the merge audit.
+
 ### SF6 Slots Loader (fixes ported from ZZtaii's Slotsloader fork, MIT)
 - A slot check reads only the textures a material actually binds, not every `.tex` string of a material file: leftover
   paths no material uses (the "Leon Requiem On Luke" mods keep some) no longer count as "texture missing" (fork 1.9.9).
