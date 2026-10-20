@@ -340,6 +340,33 @@ void paint_rect(MO* rect, uint32_t rgba) {                         // paint_rect
     api()->ui_set_color(cmn::client(), rect, rgba);
 }
 
+// ---- the Slots Loader's entry (SF6_CostumeSlotsNative.dll's SF6Slots_GuideEntry) ----------------------------------------
+// Fighter Settings' bar has ONE writer, us: the Slots Loader publishes its "<ICON KeyF> Costume options" entry (its
+// costume row, outfit with runtime options) and we add it to the text we write (both DLLs writing it crashed the game,
+// 20/10). Asked every pass (every 3 frames): the call also tells the plugin we own the bar. Without that DLL or that
+// export nothing here changes what we write.
+using SlotsGuideEntryFn = int (*)(char* buf, int cap);
+SlotsGuideEntryFn g_slots_fn = nullptr;
+uint64_t g_slots_try_at = 0;                           // g_F of the next look for the export
+std::string g_slots_entry;                             // what it gave last ("": nothing to add)
+
+bool slots_entry_poll() {                              // true: the entry changed (the guide is refreshed now)
+    if (!g_slots_fn) {
+        if (g_F < g_slots_try_at) return false;
+        g_slots_try_at = g_F + 600;
+        if (HMODULE h = GetModuleHandleW(L"SF6_CostumeSlotsNative.dll"))
+            g_slots_fn = reinterpret_cast<SlotsGuideEntryFn>(GetProcAddress(h, "SF6Slots_GuideEntry"));
+        if (!g_slots_fn) return false;
+        cmn::journal("guide: the Slots Loader's guide entry export found (its Costume options entry goes into our text)");
+    }
+    char buf[160] = {};
+    const int n = g_slots_fn(buf, (int)sizeof buf);
+    std::string e = n > 0 && n < (int)sizeof buf ? std::string(buf, (size_t)n) : std::string();
+    if (e == g_slots_entry) return false;
+    g_slots_entry = std::move(e);
+    return true;
+}
+
 // ---- guide (find_guide_list / guide_text_fix / set_bottom_hint) --------------------------------------------------------
 std::string L(const char* key) { return dialogs::locale::get(key, {}); }
 bool di_active(int side) { return nb("screens_dipanel") && screens::dipanel::mode::active(side); }   // dbg.di_panel.active
@@ -395,6 +422,8 @@ void guide_text_fix() {
                 const bool pad = (fsm.pad && *fsm.pad) || msg.find("<ICON Btn") != std::string::npos;   // fsm.pad or ...
                 const std::string prefix = fsm.guide_plain ? "      " : (pad ? "      <ICON BtnD> " : "      <ICON KeyF><ICON MouseL> ");
                 std::string want = fsm.guide_label ? msg + prefix + *fsm.guide_label : msg;
+                if (!g_slots_entry.empty() && fsm.visible && !fsm.hidden_now && !g.right)   // the Slots Loader's entry
+                    want += "      " + g_slots_entry;
                 const bool on_select = g_menus[g.right ? 1 : 0].active;
                 const bool in_di_any = di_active(1) || di_active(2);
                 if (!fsm.hidden_now && !on_select && !g.right && !in_di_any && !fsm.visible)
@@ -537,6 +566,7 @@ void fs_shown(int64_t k, const char* why) {
 }
 
 void tick_fighter_settings() {
+    const bool slots_changed = nb("screens_guide") && slots_entry_poll();   // its entry came / went: refreshed now
     const auto ags = agents(kAgentFs);
     MO* agent = ags.empty() ? nullptr : ags[0];
     if (!agent) { fsm.agent.set(nullptr); fsm.text.set(nullptr); fsm.spin.set(nullptr); fsm.last_k = 0; fsm.visible = false; return; }
@@ -565,7 +595,7 @@ void tick_fighter_settings() {
     if (!alive(fsm.text.get())) { fsm.agent.set(nullptr); fsm.text.set(nullptr); return; }
     const auto row = focused_row_name(agent);
     fsm.color_focused = row && *row == "p_Spin_color";
-    if (g_F % 5 == 0) {
+    if (g_F % 5 == 0 || slots_changed) {
         find_guide_list();
         fsm.guide_plain = false;                                    // (fsm.status: no chained message any more)
         const bool on_drive = nb("screens_rows") && !screens::rows::focused_mech().empty();

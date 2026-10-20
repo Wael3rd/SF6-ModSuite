@@ -349,32 +349,40 @@ does, the fallback above is the next step.
 ### Built (lot B): `plugin/src/rto_menu.cpp` (no new core capability)
 
 - **Where**: Battle Settings > character (Fighter Settings, agent `MatchingFighterSetting`). While the costume row
-  (`p_Spin_costume`) is focused and the preview wears a slot with options, the bottom input guide bar gets an extra
-  entry `<ICON KeyF> Costume options` (`<ICON BtnD>` after a pad input), like the Color Mod's `<ICON KeyF><ICON
-  MouseL> Edit Color` on its Color row. The costume row's own text is no longer touched (it is only read, to see
-  when the outfit changes). The label is English only (the plugin has no locale system).
-- **Coexistence with the Color Mod** (same text object, the bar's `e_text_0_g_*` else first `e_text_0_d_*`): the
-  Color Mod strips everything from the first `"      <ICON"` (six spaces) of the game's text and appends its entry
-  after it, only on its Color row. Our entry starts with FOUR spaces and is inserted before that separator, so its
-  strip keeps ours as game text and its own entry lands after ours. We remove only our exact entry (either icon)
-  wherever it sits, and add it only on the costume row of an outfit with options; elsewhere (Color row, other rows,
-  window closed, menu open) it is removed and the rest of the text stays. No identical write.
-- **No fight with the Color Mod (crash of 20/10)**: the Color Mod writes its stored copy of that text from its
-  post-hook of `app.UIPartsInputGuideList.OnLateUpdate` (a game UI job thread) on every frame the text differs, and
-  refreshes the copy only every 15 frames (its screens pass runs every 3rd frame, the guide refresh every 5th pass),
-  from the core's LateUpdateBehavior callback, i.e. right after ours on the same frame (REFramework initializes
-  plugins in name order, `sf6core_native` last). The first build (51dde84) wrote on any frame: the Color Mod took
-  the write back from the job thread, we wrote it again on the next frame, up to 14 pairs of `set_Message` on one
-  text per row change. Moving S / Z between the Costume and Color rows every 0.4 s (Mai Outfit I) crashed the game
-  2 / 2 within 40 round trips, same RIP (`StreetFighter6.exe+0x4654383`, a managed object with a zeroed header,
-  i.e. freed, read during a nested coroutine walk of the LateUpdateBehavior entry); the build without guide writes
-  ran 100 round trips. Since then the plugin writes only on the frame phase (`g_frame % 15`) where a write of ours
-  stays, learned from the first write that stays (at most 14 taken back, one a frame, once a session; forgotten
-  after two misses in a row; 16 in a row = no entry for that visit, never a fight): one write of ours per change and
-  no write of the Color Mod caused by ours. The entry shows up to 14 frames (a quarter second) after the costume row
-  gets the focus, like the Color Mod's own entry. Without the Color Mod loaded, no phase wait. The log says
-  `guide bar: a write of ours stays on frame phase N` once, and `guide bar: N writes this visit, M taken back` when
-  Fighter Settings closes.
+  (`p_Spin_costume`) is focused, the preview wears a slot with options and our menu is closed, the bottom input
+  guide bar gets an extra entry `<ICON KeyF> Costume options` (`<ICON BtnD>` after a pad input), like the Color
+  Mod's `<ICON KeyF><ICON MouseL> Edit Color` on its Color row. The label is English only (the plugin has no locale
+  system).
+- **One writer of the bar** (the bar's `e_text_0_g_*`, else its first `e_text_0_d_*`). Who writes depends on the
+  Color Mod (`rto_menu.cpp`, `guide_mode`; the log says `guide bar entry: ...` once per visit):
+  - **Color Mod 0.22.4 or later** (the normal case): the plugin never writes the bar. It exports
+    `int SF6Slots_GuideEntry(char* buf, int cap)` from `SF6_CostumeSlotsNative.dll`: the entry text (UTF-8, icon
+    included, chosen by the plugin's device detection, which follows the Color Mod's rule) while it belongs in the
+    bar, else 0 / empty (also when the plugin stopped publishing for more than 500 ms). It only copies a string the
+    plugin's LateUpdateBehavior code keeps under a lock: no game call, any thread. The Color Mod resolves it with
+    `GetModuleHandleW` + `GetProcAddress` (looked for again every 600 passes while absent), calls it on every
+    screens pass (every 3 frames, `colormod/src/screens/colour_track.cpp`, `slots_entry_poll`) and, while Fighter
+    Settings is up, appends `"      " + entry` (its own six-space separator) to the text it writes for the left
+    bar, after its own entry. When the entry comes or goes it refreshes the bar at once instead of waiting for its
+    15-frame refresh: the entry shows / leaves within about 4 frames of the row change. Each call also tells the
+    plugin a guide owner is there; while calls come (within 60 of its frames) the plugin writes nothing.
+    Without the plugin (or without that export) the Color Mod writes exactly what 0.22.3 wrote.
+  - **No Color Mod loaded**: the plugin writes the bar itself (appends `"      " + entry`, takes out only its exact
+    entry, never an identical write); the game is the only other writer. More than 12 writes in 120 frames = the
+    text is left alone for that visit (never a fight).
+  - **An older Color Mod** (loaded, never calls the export): the plugin never writes the bar. The key icon goes at
+    the end of the costume row's value instead (`  <ICON KeyF>` / `  <ICON BtnD>` while the outfit has options),
+    the kit B behaviour that ran 100 Costume / Color round trips without a crash; same 12-in-120 guard.
+- **Why one writer (crash of 20/10)**: the Color Mod writes its stored copy of that text from its post-hook of
+  `app.UIPartsInputGuideList.OnLateUpdate` (a game UI job thread) on every frame the text differs, and refreshed
+  the copy only every 15 frames. The first build (51dde84) also wrote the text from the plugin, on any frame: the
+  Color Mod took it back from the job thread, the plugin wrote it again, up to 14 pairs of `set_Message` on one text
+  per row change. Moving S / Z between the Costume and Color rows every 0.4 s (Mai Outfit I) crashed the game 2 / 2
+  within 40 round trips, same RIP (`StreetFighter6.exe+0x4654383`, a managed object with a zeroed header, i.e.
+  freed, read during a nested coroutine walk of the LateUpdateBehavior entry); the build without guide writes ran
+  100 round trips. 1f503bf then wrote only on the frame phase where a write stayed (learned from the Color Mod's
+  refresh): no crash in 100 round trips, but after fast row changes it gave up ("16 writes in a row taken back")
+  and the entry stayed gone. Replaced by the single writer above.
 - **Key**: `F` (or the pad's A / Cross) with the costume row focused opens the menu. The Color Mod's keys are
   elsewhere: F on the Color row (its editor), X (Drive colours), C / V inside its editor; its editor and this menu
   never open together (both need the option window closed).

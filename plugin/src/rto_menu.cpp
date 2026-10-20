@@ -11,10 +11,12 @@
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <set>
 
 namespace slots::rto::menu {
@@ -44,12 +46,24 @@ bool g_svc = false;
 int g_last_side = 0;
 
 // ---- the trigger and the hint ----
+struct Guard {                                      // a text rewritten all the time by someone else: we stop (no fight)
+    std::vector<uint32_t> writes;                   // our writes of the last 120 frames
+    bool off = false;
+    bool take(const char* what) {
+        if (off) return false;
+        writes.push_back(g_frame);
+        while (!writes.empty() && g_frame - writes.front() > 120) writes.erase(writes.begin());
+        if (writes.size() <= 12) return true;
+        off = true;
+        logf("rto: %s is rewritten all the time by someone else: left alone for this visit (no fight)", what);
+        return false;
+    }
+};
 struct Hint {
     Obj* agent = nullptr;
-    Obj* text = nullptr;                            // the costume row's text (read only: tells when the outfit changed)
-    Obj* gtext = nullptr;                           // the input guide bar's text (see guide_apply)
-    uint32_t found_at = 0, gfound_at = 0;
-    std::string base;                               // the costume row's text
+    Obj* text = nullptr;                            // the costume row's text (tells when the outfit changed; carries the
+    uint32_t found_at = 0;                          // key icon with an older Color Mod, see guide_mode)
+    std::string base;                               // the costume row's text, without our icon
     uint32_t base_at = 0;                           // when the game last wrote it (the outfit changed)
     bool pad = false;
     bool mouse_known = false;                       // the cursor's last position (a move = keyboard / mouse device)
@@ -57,11 +71,11 @@ struct Hint {
     bool key_was = false;
     bool raw_was = false;                           // F / A down, any row (log of every press)
     int text_log = -1, has_log = -1, guide_log = -1;// last logged: costume row text found, outfit with options, guide text found
-    uint32_t gwrote_at = 0;                         // our last guide write: frame and text (checked on the next frame)
-    std::string gwrote;
-    int gfails = 0;                                 // our guide writes taken back in a row
-    bool goff = false;                              // given up for this visit (never a fight)
-    uint32_t gwrites = 0, greverts = 0;             // this visit (logged when it ends)
+    int mode_log = -1;                              // last logged guide_mode
+    Obj* gtext = nullptr;                           // the input guide bar's text (written by us only without the Color Mod)
+    uint32_t gfound_at = 0;
+    Guard row_guard, bar_guard;
+    uint32_t gwrites = 0;                           // our guide bar writes this visit (logged when it ends)
 } H;
 
 uint32_t g_pad_a = 32;
@@ -303,41 +317,55 @@ void SF6CORE_CALL cb_closed(void*) {
 
 // ---- Fighter Settings: the guide bar entry and the key ----
 //
-// The entry goes into the bottom input guide bar, as the Color Mod does for its Color row ("<ICON KeyF><ICON
-// MouseL> Edit Color"). Both DLLs write the same text object (the bar's e_text_0_g_*, else the first
-// e_text_0_d_*, found the same way):
-//  - The Color Mod strips everything from the first "      <ICON" (SIX spaces) of the text and appends its own
-//    entries after it. Our entry uses FOUR spaces ("    <ICON KeyF> label") and goes BEFORE that separator: the
-//    Color Mod's strip keeps it as "game text", and its own entry lands after ours.
-//  - We strip only our exact entry (either icon), wherever it is, and add it only on the costume row of an outfit
-//    with options; elsewhere the rest of the text is left as it is. Never an identical write.
-//  - NO FIGHT (20/10 crash, docs/RUNTIME_OPTIONS.md): the Color Mod writes its stored copy of the text from its
-//    post-hook of app.UIPartsInputGuideList.OnLateUpdate, on a game UI job thread, on every frame the text differs
-//    from it, and refreshes that copy only every 15 frames (its screens pass runs every 3rd frame, the guide part
-//    of it every 5th pass), in the core's LateUpdateBehavior callback, which runs right after ours on the same
-//    frame (REFramework initializes plugins in name order, the core last). A write of ours on any other frame was
-//    taken back from the job thread and written again by us on the next frame: up to 14 such pairs of set_Message
-//    on one text per row change, and the game crashed (use-after-free on the LateUpdateBehavior thread, 2 / 2 runs
-//    within 40 Costume / Color round trips; 0 in 100 with no write to this text). So with the Color Mod loaded we
-//    write only on the frame phase (g_frame % 15) where a write of ours stays (the Color Mod reads it at once and
-//    never writes it back): one write of ours per change and no write of the Color Mod caused by ours. The phase
-//    is learned from the first write that stays (once a session: at most 14 writes taken back, one a frame) and
-//    forgotten after two misses in a row; kGuideMaxFails writes taken back in a row = no entry for this visit.
-//    The entry shows up to 14 frames after the costume row gets the focus, as the Color Mod's own entry does.
-//    Without the Color Mod loaded, no phase wait.
+// The entry "<ICON KeyF> Costume options" (pad: <ICON BtnD>) goes into the bottom input guide bar while the costume
+// row of an outfit with options is focused, like the Color Mod's "<ICON KeyF><ICON MouseL> Edit Color" on its Color
+// row. ONE writer of that text, always (crash of 20/10, docs/RUNTIME_OPTIONS.md: both DLLs writing it = up to 14 pairs
+// of set_Message per row change, one side from a game UI job thread, and a use-after-free in the game):
+//  - Color Mod loaded and calling SF6Slots_GuideEntry (0.22.4 and later; it calls it every 3 frames): it adds our
+//    entry to the text it writes, on its own guide refresh. We only publish the entry (below), never write the bar.
+//  - No Color Mod loaded: we write the bar ourselves (the game is the only other writer; a Guard stops a fight).
+//  - A Color Mod loaded that does not call it (older): never the bar. The key icon at the end of the costume row's
+//    value instead (the kit B behaviour, 100 Costume / Color round trips without a crash).
 const char* kEntryLabel = "Costume options";        // English only: the plugin has no locale system
-const char* kCmSep = "      <ICON";                 // the Color Mod's separator (six spaces)
-constexpr uint32_t kCmCadence = 15;                 // the Color Mod refreshes its stored guide text every 15 frames
-constexpr int kGuideMaxFails = 16;                  // more than one try per phase
-int g_guide_phase = -1;                             // g_frame % kCmCadence where a write of ours stays (-1: unknown)
-int g_phase_misses = 0;                             // writes on that phase taken back in a row
-std::string entry_text(bool pad) { return std::string("    ") + (pad ? "<ICON BtnD> " : "<ICON KeyF> ") + kEntryLabel; }
+const char* kSep = "      ";                        // the Color Mod's separator between entries (six spaces)
+const char* kKeyHint = "  <ICON KeyF>";             // the costume row's icon (older Color Mod only)
+const char* kPadHint = "  <ICON BtnD>";
+std::string entry_text(bool pad) { return std::string(pad ? "<ICON BtnD> " : "<ICON KeyF> ") + kEntryLabel; }
 void erase_all(std::string& s, const std::string& what) {
     for (size_t at; (at = s.find(what)) != std::string::npos;) s.erase(at, what.size());
 }
+bool ends_with(const std::string& s, const std::string& e) { return s.size() >= e.size() && s.compare(s.size() - e.size(), e.size(), e) == 0; }
 bool color_mod_loaded() {                           // every plugin is loaded before the first frame: asked once
     static const bool loaded = GetModuleHandleW(L"SF6_ColorModNative.dll") != nullptr;
     return loaded;
+}
+
+// What SF6Slots_GuideEntry hands out (any thread): written on our LateUpdateBehavior frame, read under the lock.
+// Older than 500 ms = we stopped publishing without a reset (e.g. the select screen took over): nothing.
+std::mutex g_pub_mx;
+std::string g_pub;
+uint64_t g_pub_ms = 0;
+std::atomic<uint32_t> g_calls{ 0 };                 // calls of SF6Slots_GuideEntry (sampled on our frame)
+uint32_t g_calls_seen = 0, g_owner_at = 0;
+bool g_owner_seen = false;
+
+void publish(const std::string& e) {
+    std::lock_guard<std::mutex> lk(g_pub_mx);
+    if (g_pub != e) g_pub = e;
+    g_pub_ms = GetTickCount64();
+}
+
+enum GuideMode { kViaColorMod, kOwnBar, kRowIcon };
+const char* mode_name(int m) {
+    return m == kViaColorMod ? "added by the Color Mod to its own text (one writer)"
+         : m == kOwnBar ? "written by us (no Color Mod)"
+                        : "the Color Mod does not take it (older version): key icon on the costume row instead";
+}
+GuideMode guide_mode() {
+    const uint32_t calls = g_calls.load(std::memory_order_relaxed);
+    if (calls != g_calls_seen) { g_calls_seen = calls; g_owner_at = g_frame; g_owner_seen = true; }
+    if (!color_mod_loaded()) return kOwnBar;
+    return g_owner_seen && g_frame - g_owner_at <= 60 ? kViaColorMod : kRowIcon;
 }
 
 Obj* find_guide_text(const SF6CoreAPI* a) {
@@ -369,9 +397,9 @@ Obj* find_guide_text(const SF6CoreAPI* a) {
     return nullptr;
 }
 
-// show: the entry belongs in the bar now; false: take ours out (the bar keeps the rest as it is).
-// leaving: Fighter Settings is going away, the last chance to take ours out: written at once, whatever the phase.
-void guide_apply(bool show, bool leaving = false) {
+// Without the Color Mod only. show: the entry belongs in the bar now; false: ours out (the rest stays as it is).
+// leaving: Fighter Settings is going away, the last chance to take ours out (written even after the Guard stopped).
+void own_bar(bool show, bool leaving = false) {
     const SF6CoreAPI* a = A();
     if (!a) return;
     if (show && (!alive(H.gtext) || g_frame - H.gfound_at > 60)) {
@@ -383,45 +411,22 @@ void guide_apply(bool show, bool leaving = false) {
     if (!alive(H.gtext)) { H.gtext = nullptr; return; }
     const std::string cur = str(call_obj(H.gtext, "get_Message"));
     if (cur.empty()) return;                        // the game has not written it yet
-    if (H.gwrote_at && g_frame == H.gwrote_at + 1) {    // did our last write stay?
-        if (cur == H.gwrote) {
-            const int ph = static_cast<int>(H.gwrote_at % kCmCadence);
-            if (color_mod_loaded() && ph != g_guide_phase) logf("rto: guide bar: a write of ours stays on frame phase %d (the Color Mod's refresh)", ph);
-            g_guide_phase = ph;
-            g_phase_misses = 0;
-            H.gfails = 0;
-        } else {                                    // taken back (the Color Mod's stale copy, or the game)
-            ++H.greverts; ++H.gfails;
-            if (g_guide_phase >= 0 && ++g_phase_misses >= 2) { g_guide_phase = -1; g_phase_misses = 0; }
-        }
-    }
     std::string want = cur;
-    erase_all(want, entry_text(false));
-    erase_all(want, entry_text(true));
-    if (show) {
-        const size_t at = want.find(kCmSep);        // before the Color Mod's entries: its strip keeps ours
-        want.insert(at == std::string::npos ? want.size() : at, entry_text(H.pad));
-    }
-    if (want == cur || (H.goff && !leaving)) return;
-    if (!leaving) {
-        if (H.gfails >= kGuideMaxFails) {
-            H.goff = true;
-            logf("rto: guide bar: %d writes in a row taken back by another writer: no entry this visit (no fight)", H.gfails);
-            return;
-        }
-        if (color_mod_loaded() && g_guide_phase >= 0 && static_cast<int>(g_frame % kCmCadence) != g_guide_phase) return;
-    }
+    erase_all(want, kSep + entry_text(false));
+    erase_all(want, kSep + entry_text(true));
+    if (show) want += kSep + entry_text(H.pad);
+    if (want == cur) return;                        // never an identical write
+    if (!leaving && !H.bar_guard.take("the guide bar text")) return;
     const SF6CoreStatus st = a->ui_set_text(C(), H.gtext, want.c_str());
     if (st != SF6CORE_OK) { logf("rto: guide bar text not written (core status %d)", static_cast<int>(st)); return; }
-    H.gwrote_at = g_frame;
-    H.gwrote = want;
     ++H.gwrites;
 }
 
 // Fighter Settings left (or another agent): ours out of the bar, the visit's guide writes logged, the state reset
 void hint_reset() {
-    guide_apply(false, true);
-    if (H.gwrites) logf("rto: guide bar: %u writes this visit, %u taken back", H.gwrites, H.greverts);
+    publish(std::string());
+    if (!color_mod_loaded()) own_bar(false, true);
+    if (H.gwrites) logf("rto: guide bar: %u writes of ours this visit", H.gwrites);
     const bool pad = H.pad;
     H = Hint{};
     H.pad = pad;
@@ -461,9 +466,11 @@ void hint_tick() {
         if (kb) H.pad = false;
     }
 
-    // the costume row's text (never written by us): when it changes, the outfit changed
+    // the costume row's text, without our icon (older Color Mod): when it changes, the outfit changed
     const Slot* slot = preview_slot();
-    const std::string base = alive(H.text) ? str(call_obj(H.text, "get_Message")) : std::string();
+    const std::string cur = alive(H.text) ? str(call_obj(H.text, "get_Message")) : std::string();
+    std::string base = cur;
+    for (const char* s : { kKeyHint, kPadHint }) if (ends_with(base, s)) base.resize(base.size() - std::strlen(s));
     if (base != H.base) { H.base_at = H.base.empty() ? 0 : g_frame; H.base = base; }   // the first read is no change
     // the preview was identified after the outfit shown changed: it is that outfit's
     const bool has = slot && preview_since() >= static_cast<int>(H.base_at);
@@ -479,7 +486,22 @@ void hint_tick() {
     Obj* ctrl = item ? get_obj(item, "<Control>k__BackingField") : nullptr;
     const std::string row = ctrl ? str(call_obj(ctrl, "get_Name")) : std::string();
     const bool on_row = row == "p_Spin_costume";
-    guide_apply(on_row && has && !S.active);
+
+    // the entry: published in every mode (a Color Mod that starts calling gets it at once)
+    const bool show = on_row && has && !S.active;
+    publish(show ? entry_text(H.pad) : std::string());
+    const GuideMode mode = guide_mode();
+    if (mode != H.mode_log) { H.mode_log = mode; logf("rto: guide bar entry: %s", mode_name(mode)); }
+    if (mode == kOwnBar) own_bar(show);
+    // the costume row's icon: only for an older Color Mod (shown while the outfit has options, as in kit B); in the
+    // other modes only taken out if it is there (a Color Mod that started calling late)
+    if (alive(H.text) && !cur.empty()) {
+        const std::string want = mode == kRowIcon && has ? base + (H.pad ? kPadHint : kKeyHint) : base;
+        if (want != cur && H.row_guard.take("the costume row's text")) {
+            const SF6CoreStatus st = a->ui_set_text(C(), H.text, want.c_str());
+            logf("rto: costume row text -> '%s' (%s)", want.c_str(), st == SF6CORE_OK ? "written" : ("core status " + std::to_string(static_cast<int>(st))).c_str());
+        }
+    }
 
     // the key: F / A on the costume row
     const bool raw = key_down(0x46) || (pad_mask() & g_pad_a) != 0;
@@ -499,6 +521,20 @@ void hint_tick() {
 }
 
 } // namespace
+
+// SF6Slots_GuideEntry (below): any thread, no game call
+int guide_entry(char* buf, int cap) {
+    g_calls.fetch_add(1, std::memory_order_relaxed);
+    if (!buf || cap <= 0) return 0;
+    buf[0] = 0;
+    std::lock_guard<std::mutex> lk(g_pub_mx);
+    if (g_pub.empty() || GetTickCount64() - g_pub_ms > 500) return 0;
+    const int n = static_cast<int>(g_pub.size());
+    if (n >= cap) return 0;                         // never a cut icon tag
+    std::memcpy(buf, g_pub.data(), static_cast<size_t>(n));
+    buf[n] = 0;
+    return n;
+}
 
 void install() {
     const SF6CoreAPI* a = A();
@@ -563,3 +599,12 @@ void tick(bool fs_visible) {
 }
 
 } // namespace slots::rto::menu
+
+// The guide bar entry for the Color Mod (0.22.4+), which then writes the bar alone (rto_menu.cpp, "the guide bar
+// entry"): copies "<ICON KeyF> Costume options" (pad: "<ICON BtnD> Costume options"; UTF-8, NUL-terminated) into buf
+// and returns its length while Fighter Settings' focused row is the costume row of an outfit with options and our
+// menu is closed; 0 (buf empty) otherwise, or when cap is too small. Each call also tells the plugin a guide owner is
+// there: while calls come (within 60 of our frames), the plugin never writes the bar. Cheap, any thread, no game call.
+extern "C" __declspec(dllexport) int SF6Slots_GuideEntry(char* buf, int cap) {
+    try { return slots::rto::menu::guide_entry(buf, cap); } catch (...) { return 0; }
+}
