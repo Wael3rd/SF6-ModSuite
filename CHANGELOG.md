@@ -28,6 +28,8 @@
   (Mini Dress Mai: "see through" dresses, "pubic hair" and the "NSFW style" group), no whole mod.
 - Runtime options menu: several pages turn like the Color Mod's colour editor (A / E, Q / E on QWERTY, or L1 / R1, or a click beside the title; "1/2" and the keys in the title), the "More options" row is gone; Player side and Restore defaults stay on page 1.
 - Runtime options: a mod alone in its own sub-folder of a character folder is always its own outfit (no retouch, subset, merge or add-on placement on either side); logged and listed in the merge audit.
+- Runtime options, subsets: a game outfit's subset is an option only when every physics file it ships (chains, wind chain, joint constraints, cloth and their `.user` files) is byte-identical to one the game outfit loads, and its meshes keep the game meshes' joint order; else it stays its own outfit (merge audit: "its physics differ (<file>)").
+- Runtime options, versions: an outfit wears the files its physics `.user` files name, a version's chain nothing of its outfit names is left out, and a version's physics must be the base's bytes: Aloha Ryu C3 is now a Version of the Aloha Ryu outfit like C1 / C2.
 
 ### SF6 Slots Loader (fixes ported from ZZtaii's Slotsloader fork, MIT)
 - A slot check reads only the textures a material actually binds, not every `.tex` string of a material file: leftover

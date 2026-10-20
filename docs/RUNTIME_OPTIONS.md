@@ -240,8 +240,14 @@ base loads; not their chains: the base's chains stay). A file the same as what t
 identical body mesh of the Aloha versions, the Tees' mesh and material file), physics files (`other`) too. The base's
 own pick holds the base's files wherever a version ships another one (going back to it; worn by default, so nothing
 is swapped). A version is merged **only where every file fits the base** (`version_fit`, the add-on fit checks against
-the base's files and its game outfit's); else it stays an outfit (Aloha C3: its body chain, the C1 outfit has no chain
-there; AoD replace Ingrid: a texture its material names is missing). A version whose files are all the same as the
+the base's files and its game outfit's; what an outfit wears includes the files its physics `.user` files name, one
+level: Outfit 1's body chain `001/esf001_001_01_chain.chain` is named by `esf001_001_01_chain.user`, not by the scene)
+**and its physics are the base's** (physics rule below; its model chains aside: they are swapped live where the base
+has a chain); else it stays an outfit (AoD replace Ingrid: a texture its material names is missing). A chain that
+nothing of the version's own outfit names (its game outfit's scene and physics `.user` files, its own `.user` files) is
+left out, unused there (Aloha C3's `003/esf001_003_02_chain.chain`; the game's Outfit 3 names `esf001_002_03_chain`).
+Aloha C3 (made for Outfit 3, its body chain and wind chain Outfit 1's bytes) is a version of the C1 outfit since loader
+`2026-10-20-physics` (before: "the outfit has no chain there"). A version whose files are all the same as the
 base's is merged without an option; one that differs only in colours stays an outfit (colours are not swapped live).
 Their add-ons are made with it (the same add-on of several versions once). The outfit's name: what the versions' names
 share ("Aloha Ryu"), else the archive's name without its download numbers ("Lily Jun Kazama Cosplay"), else the
@@ -273,9 +279,13 @@ Wael's mods only Aloha C2 needs it. Not done for game outfits' options (their co
 whose every mesh is the mesh a game outfit of the fighter wears at that part, either the same bytes or the same
 materials and joints with some materials taken off: left out of the mesh, or every triangle of theirs folded to
 nothing (two corners on one vertex; the other materials keep their triangles as they were), at least one part with
-something taken off. Ryu "Outfit 1 No Cloak - Drive Tech" is the game's Outfit 1 body with `esf_Costume00`, `esf_Ring`
-and `esf_Threads` folded; Sagat "Outfit 1 Shirtless" ships Outfit 1's head as it is and its body with the fur vest
-folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. It makes no outfit: its
+something taken off, and its meshes have the game meshes' joints **in the same order** (bone indices: Havok cloth and
+chains address bones by index). Ryu "Outfit 1 No Cloak - Drive Tech" is the game's Outfit 1 body with `esf_Costume00`,
+`esf_Ring` and `esf_Threads` folded; Sagat "Outfit 1 Shirtless" ships Outfit 1's head as it is and its body with the fur
+vest folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. A mod alone in its
+sub-folder is never a subset (that rule, below, comes first): Ryu No Cloak in its own sub-folder
+(`costume_mods/Ryu/Ryu_Outfit1_NoCloak_DriveTech_v1.0/`) stays its own outfit; the same archive put directly in
+`costume_mods/Ryu/` is a subset. It makes no outfit: its
 files are moved to the paths that game outfit loads (Drive Tech's `005/01` -> Outfit 1's `001/01`), the ones the same
 as the game's there left out, physics and colour files too (the game outfit's own stay: the subset mesh has all its
 joints), and it is an option of that game outfit and of the mods' outfits that wear those files, where it fits (as a
@@ -287,8 +297,20 @@ the plugin goes back to them file by file), so a chain changed on a game outfit 
 other mesh. None of Wael's subsets ships a model chain (their `_chain.user` and joint constraints are physics files,
 left out). A mesh made from a game outfit's with nothing taken off (an edited copy) stays an outfit (audit).
 
-Offline (Wael's mods, `on`): 70 outfits -> 59. Ryu: Aloha Ryu (Version C1 / C2, add-ons No Gloves / No Headband),
-Aloha Ryu C3 stays (its body chain), No Cloak -> an option of game Outfit 1; Sagat: one Tee outfit (Muay Thai / Tiger
+**Physics: the same bytes as what the outfit loads** (subsets and versions, loader `2026-10-20-physics`). Physics files
+(`_chain.user`, `_jcs.user`, `.jcns`, `_havok.user`, `.havokcloth`, `_aogeo.user`, `_shape.user`, model chains and the
+wind chain `weather/wind/mode/NNN/<fd>_<folder>_NN_chain.chain`; not `_ccvd.user` / `cmd`: colours) are not swapped
+live: an option wears the physics of the outfit it goes on. So every physics file of a subset must be **byte-identical
+to a physics file the game outfit loads**, and every physics file of a version to one the base loads (its own files
+and its game outfit's): the files its scene names and the files its physics `.user` files name, one level
+(`_chain.user` -> `.chain`, `_jcs.user` -> `.jcns`, `_havok.user` -> `.havokcloth`). Compared by content, whatever the
+names (the five subsets above ship their game outfit's physics under the Drive Tech names). One that differs keeps the
+mod its own outfit: merge audit `subset: <mod> stays an outfit (<outfit> minus <parts>, but its physics differ
+(<file>))`, or for a version `... not with <base> (...): its physics differ (<file>)`.
+
+Offline (Wael's mods, `on`, before the sub-folder rule and the physics rule): 70 outfits -> 59. Ryu: Aloha Ryu (Version
+C1 / C2, add-ons No Gloves / No Headband), Aloha Ryu C3 stayed (its body chain; a version since `2026-10-20-physics`),
+No Cloak -> an option of game Outfit 1 (in its own sub-folder now: its own outfit); Sagat: one Tee outfit (Muay Thai / Tiger
 Photo / Tiger), Shirtless -> game Outfit 1; Cammy: Zani Costume (Horn removed / Outfit01) and Mai Outfit 2 PRO
 (PRO / PROmc: its own chain); Lily: Jun Kazama Cosplay (No Shawl / Jun's Outfit); Ken Outfit 2 Shirtless, Alex No
 Vest, Yasmine No Jacket -> their game outfits. The scan takes about 12 s more (meshes read for the subset test, hashed
