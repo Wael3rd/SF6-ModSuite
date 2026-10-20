@@ -6,9 +6,12 @@
   rules as `costume_mods`). Its outfits are hidden until "Display NSFW Outfits" is on (`display_nsfw` in
   `reframework\data\SF6_CostumeSlots_data\settings.json`, off by default; applied at the next screen that lists
   outfits, no relaunch); while hidden they are not listed anywhere outfits are, and a Battle Settings choice of one
-  goes back to Outfit 1. They are numbered after the fighter's other outfits, keep their numbers, and are merged or
-  made options only with other NSFW mods (an NSFW retouch stays an outfit; NSFW add-ons go on NSFW outfits only).
-  Marked `"nsfw": true` in `outfits.json`, the registry and `costume_options.json`; not listed in `variants.json`.
+  goes back to Outfit 1. They are numbered after the fighter's other outfits and keep their numbers. Both folders are
+  read as one: add-ons, retouches, subsets and merges work across them (a sub-folder stays its own). An outfit whose
+  base is an NSFW mod's is NSFW; an option an NSFW mod gives another outfit, a game outfit included, is an NSFW option:
+  not offered nor worn while NSFW outfits are hidden (Mai's face accessories in `costume_mods_nsfw` are options of
+  Mai's game outfits and of the Mini Dress). Marked `"nsfw": true` in `outfits.json`, the registry and
+  `costume_options.json`; not listed in `variants.json`.
   Without that folder nothing changes (same registry, manifests and pak).
 - `costume_mods_nsfw` is made by the loader (with a folder per fighter) like `costume_mods`, and shipped in the Slots
   Loader package; empty, it changes nothing.
