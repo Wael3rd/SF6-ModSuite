@@ -309,6 +309,22 @@ does, the fallback above is the next step.
   file shows within a second); the page is rebuilt on the next frame when other values changed (an option turned
   off), a page under it is rebuilt when it comes back on top. The window docks left (x -430, as the
   Color Mod's editor on this screen) so the preview stays visible. Esc goes back / closes, as the game's dialogs.
+- **Preview camera** (`plugin/src/rto_camera.cpp`, a port of the Color Mod's `colormod/src/dialogs/camera.cpp`
+  with the same constants, limits and input; the Color Mod is unchanged): while the menu is open on Fighter
+  Settings, exactly what the colour editor gives. Mouse right of the docked dialog (x > 1040 at 1920 wide): left
+  drag = turn (`app.FighterSpinCtrl`'s `Rot` yaw + `mAngle`), middle drag = pan, wheel = zoom (`ess_DefaultCamera`
+  local position, eased, clamped); PageUp / PageDown = zoom anywhere; pad: right stick = turn, L3 + right stick =
+  pan, R2 / L2 = zoom. The cursor is read only while the game window has the focus. The screen's hint blocks
+  `c_00` (Move: `<ICON MouseM>` or `<ICON BtnL3>＋<ICON StickR>`) and `c_02` (Zoom: wheel or L2 / R2 glyphs) are
+  shown at the editor's positions, glyph size from the game's Rotation block `c_01`, titles `hint.move` /
+  `hint.zoom` from the shared `SF6_NativeLocale_data/locale.json` in the game's text language (English when the
+  file is absent). The device (pad or keyboard / mouse) follows the Color Mod's rule (a pad button; a menu key, a
+  mouse button or a cursor move), also for the guide bar entry. On close: the camera position goes back to what
+  it was before the first zoom / pan (the turn stays, as in the editor) and both blocks are hidden; this happens
+  on the frame after the window closed (never from the core's callback). Input is only read, never swallowed.
+  The Color Mod hides `c_00` / `c_02` every 30 of its frames while Fighter Settings is up and its editor is closed
+  (so also under our menu): the plugin paints them from a post-LateUpdateBehavior callback (after every pre
+  callback of the frame) and shows a block again on any frame it finds hidden, so nothing blinks.
 
 ## Saved choices and slot numbers
 

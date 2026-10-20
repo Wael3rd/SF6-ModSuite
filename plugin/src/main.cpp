@@ -2,6 +2,8 @@
 //
 // One LateUpdateBehavior callback (REFramework offers no way to remove it). With no event pending
 // and no work in progress it returns at once, having read nothing but this plugin's own memory.
+// A post-LateUpdateBehavior callback paints the preview camera's hints while the runtime options menu is
+// open (rto_camera.cpp); otherwise it returns at once on one flag of this plugin.
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "rto.hpp"
@@ -100,6 +102,15 @@ void on_late_update() {
     perf::end(perf::OnLateUpdate, pt_outer);
 }
 
+void on_post_late_update() {
+    if (!rto::camera::active() || g_closing.load(std::memory_order_relaxed)) return;
+    try {
+        rto::camera::post_frame();
+    } catch (...) {
+        logf("EXCEPTION (post frame)");
+    }
+}
+
 } // namespace
 } // namespace slots
 
@@ -135,6 +146,8 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
         slots::logf("EXCEPTION at init");
     }
     param->functions->on_pre_application_entry("LateUpdateBehavior", slots::on_late_update);
+    if (param->functions->on_post_application_entry)
+        param->functions->on_post_application_entry("LateUpdateBehavior", slots::on_post_late_update);
     // Register window message callback (closing guard)
     if (param->functions->on_message) {
         param->functions->on_message(slots::on_message);

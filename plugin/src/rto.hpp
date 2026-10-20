@@ -48,4 +48,14 @@ bool busy();
 void tick(bool fs_visible);
 }
 
+// rto_camera.cpp: the preview's turn / zoom / pan and the Move / Zoom hints while the menu is open, the same as
+// the Color Mod's colour editor on Fighter Settings (driven by menu::tick)
+namespace camera {
+void open(Obj* fs_agent, bool pad);   // idempotent: every 5 frames while the menu is open on Fighter Settings
+void close();                         // camera position restored (if zoomed / panned), hints hidden; safe when off
+bool active();
+void tick();                          // input and transforms, each frame while open (LateUpdateBehavior)
+void post_frame();                    // hint paint, after every LateUpdateBehavior pre callback (main.cpp)
+}
+
 } // namespace slots::rto

@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 
@@ -51,6 +52,8 @@ struct Hint {
     std::string base;                               // the costume row's text
     uint32_t base_at = 0;                           // when the game last wrote it (the outfit changed)
     bool pad = false;
+    bool mouse_known = false;                       // the cursor's last position (a move = keyboard / mouse device)
+    long mouse_x = 0, mouse_y = 0;
     bool key_was = false;
     bool raw_was = false;                           // F / A down, any row (log of every press)
     int text_log = -1, has_log = -1, guide_log = -1;// last logged: costume row text found, outfit with options, guide text found
@@ -390,9 +393,20 @@ void hint_tick() {
             logf("rto: Fighter Settings: costume row %s", found ? "text found" : spin ? "found, no e_text in it" : "(p_Spin_costume) not found");
         }
     }
-    // the device last used: the key shown is the decide key of that device
+    // the device last used (the Color Mod's rule, so both show the same glyphs): a pad button; else a menu key,
+    // a mouse button or a cursor move of more than 2 px = keyboard / mouse
     if (pad_mask()) H.pad = true;
-    else for (int vk : { 0x46, 0x1B, 0x0D, 0x25, 0x26, 0x27, 0x28, 0x5A, 0x51, 0x53, 0x44 }) if (key_down(vk)) { H.pad = false; break; }
+    else {
+        bool kb = key_down(0x01) || key_down(0x02) || key_down(0x04);
+        for (int vk : { 0x25, 0x26, 0x27, 0x28, 0x1B, 0x08, 0x20, 0x41, 0x45, 0x43, 0x46, 0x5A, 0x51, 0x53, 0x44, 0x56, 0x58, 0x57 })
+            if (key_down(vk)) kb = true;
+        POINT p{};
+        if (!kb && GetCursorPos(&p)) {
+            if (H.mouse_known && (std::abs(p.x - H.mouse_x) > 2 || std::abs(p.y - H.mouse_y) > 2)) kb = true;
+            H.mouse_known = true; H.mouse_x = p.x; H.mouse_y = p.y;
+        }
+        if (kb) H.pad = false;
+    }
 
     // the costume row's text (never written by us): when it changes, the outfit changed
     const Slot* slot = preview_slot();
@@ -449,11 +463,19 @@ void install() {
 
 bool active() { return S.active; }
 int side() { return S.side; }
-bool busy() { return S.active; }
+bool busy() { return S.active || camera::active(); }   // the camera is closed on the next frame, by tick
 
 void tick(bool fs_visible) {
     if (!g_svc) return;
     try {
+        // the colour editor's camera gate: our menu open, its window up, Fighter Settings on screen
+        const bool cam_on = S.active && A()->opt_window_open() && fs_visible;
+        if (cam_on) {
+            if (!camera::active() || g_frame % 5 == 0) camera::open(H.agent, H.pad);
+            camera::tick();
+        } else if (camera::active()) {
+            camera::close();                                // the preview camera back, its hints hidden (as the editor
+        }                                                   // does on its gate's edge; after a teardown: the next frame)
         if (S.active) {
             const SF6CoreAPI* a = A();
             if (!a->opt_window_open()) {
