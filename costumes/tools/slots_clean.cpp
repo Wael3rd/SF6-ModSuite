@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
     const std::string costume_data = game + "\\reframework\\data\\SF6_Costumes_Data";
     const std::string stage_data = game + "\\reframework\\data\\SF6_StageSlots_Data";
     const std::string state[] = {
-        costume_data + "\\registry.json", costume_data + "\\outfits.json",
+        costume_data + "\\registry.json", costume_data + "\\outfits.json", costume_data + "\\pak_sources.tsv",
         stage_data + "\\registry.json", stage_data + "\\loader\\variants.tsv",
     };
     printf("\nRuntime state:\n");
