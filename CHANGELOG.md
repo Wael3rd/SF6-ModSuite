@@ -1,151 +1,178 @@
 # Changelog
 
-## Unreleased
+## 1.17.0 (2026-10-20) — SF6 Mod Suite
 
-- Runtime options on the character select: R1 (pad) or C (keyboard) in a side's panel shows the options of the outfit
-  that side wears in place of Costume / Color / Control Type / Button Preset (Left / Right change, Up / Down move, a
-  window wrapping at the ends when there are more than four rows, with "▲" / "▼" in the left margin of the first /
-  last row, the row names untouched); saved like the Battle Settings menu's and shown at once on that side's model;
-  B / Esc or Decide go back (R1 / C do nothing while the options show, and the guide corner no longer offers them).
-  Each side its own options in local versus; online the player's own (P1's). Keys in
-  `SF6_CostumeSlots_data\settings.json` (`select_options_button`, `select_options_key`). One owner per panel with the
-  Color Mod's DI mode (L1 / X), which refuses its key while the options show (and the other way round); "R1 Costume
-  options" in the select guide corner, written by the Color Mod. Needs Color Mod 0.22.5+ when the Color Mod is
-  installed (an older one keeps this mode off).
-- Runtime options on the VS screen: the two models of the versus intro (after the character / stage select, before
-  the fight) wear the chosen options too, each side its own (online the player's own, P1's), loaded ahead and swapped
-  on the first frame they are ready (found as soon as they are built); followed only while that screen's models are
-  there, never into the fight.
-- NSFW outfits: a second mods folder, `reframework\costume_mods_nsfw\<Character>\` (made by the user; same layout and
-  rules as `costume_mods`). Its outfits are hidden until "Display NSFW Outfits" is on (`display_nsfw` in
-  `reframework\data\SF6_CostumeSlots_data\settings.json`, off by default; applied at the next screen that lists
-  outfits, no relaunch); while hidden they are not listed anywhere outfits are, and a Battle Settings choice of one
-  goes back to Outfit 1. They are numbered after the fighter's other outfits and keep their numbers. Both folders are
-  read as one: add-ons, retouches, subsets and merges work across them (a sub-folder stays its own). An outfit whose
-  base is an NSFW mod's is NSFW; an option an NSFW mod gives another outfit, a game outfit included, is an NSFW option:
-  not offered nor worn while NSFW outfits are hidden (Mai's face accessories in `costume_mods_nsfw` are options of
-  Mai's game outfits and of the Mini Dress). Marked `"nsfw": true` in `outfits.json`, the registry and
-  `costume_options.json`; not listed in `variants.json`.
-  Without that folder nothing changes (same registry, manifests and pak).
-- `costume_mods_nsfw` is made by the loader (with a folder per fighter) like `costume_mods`, and shipped in the Slots
-  Loader package; empty, it changes nothing.
-- Options > Interface > Other Settings > "Display NSFW Outfits" (Off / On) row, through the Native Core option service
-  (core 0.9.0+, opt_group_place; without it no row, the file setting keeps working).
-- NSFW by keywords: a mod of `costume_mods` whose name says it is NSFW (archive, folder, Fluffy menu name) is handled
-  as if it were in `costume_mods_nsfw`; an option whose name, folder or menu group says so is an NSFW runtime option:
-  not offered nor worn while NSFW outfits are hidden (the saved choice is kept and comes back), never worn by default
-  when its group can do without it; with `RuntimeOptions=off` / `variants` an outfit made with one is NSFW. Keyword
-  list and matching rule from ZZtaii's Slotsloader Manager 1.0.8 NSFW filter (ported with his permission, credited);
-  `NsfwKeywords=` in `costume_mods\settings.ini` replaces the list (empty: off). Outfits that become NSFW on an
-  existing install are numbered after the others once, and a Battle Settings choice follows them (`outfits.json`
-  `"moved"`). Each mod / option caught is logged with the word. On the author's mods: 17 options of one mod
-  (Mini Dress Mai: "see through" dresses, "pubic hair" and the "NSFW style" group), no whole mod.
-- Runtime options menu: several pages turn like the Color Mod's colour editor (A / E, Q / E on QWERTY, or L1 / R1, or a click beside the title; "1/2" and the keys in the title), the "More options" row is gone; Player side and Restore defaults stay on page 1.
-- Runtime options: a mod alone in its own sub-folder of a character folder is always its own outfit (no retouch, subset, merge or add-on placement on either side); logged and listed in the merge audit.
-- Runtime options, subsets: a game outfit's subset is an option only when every physics file it ships (chains, wind chain, joint constraints, cloth and their `.user` files) is byte-identical to one the game outfit loads, and its meshes keep the game meshes' joint order; else it stays its own outfit (merge audit: "its physics differ (<file>)").
-- Runtime options, versions: an outfit wears the files its physics `.user` files name, a version's chain nothing of its outfit names is left out, and a version's physics must be the base's bytes: Aloha Ryu C3 is now a Version of the Aloha Ryu outfit like C1 / C2.
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.13.0 | runtime costume options (opt-in), NSFW outfits, the outfit's name on Fighter Settings, faster and safer pak builds, Slotsloader Manager contract 1, fixes from ZZtaii's fork |
+| SF6 Color Mod | 0.22.6 | Drive colour mode on the character select opens with L1 (pad); shares the select panel and the guide with the Slots Loader's costume options |
+| SF6 Native Core | 0.9.0 | a client's option rows in a section of the game's Options screen (`opt_group_place`) |
+| SF6 Recording Manager | 2.1.2 | unchanged |
 
-### SF6 Slots Loader (fixes ported from ZZtaii's Slotsloader fork, MIT)
-- A slot check reads only the textures a material actually binds, not every `.tex` string of a material file: leftover
-  paths no material uses (the "Leon Requiem On Luke" mods keep some) no longer count as "texture missing" (fork 1.9.9).
-- Archives and folder mods whose paths pass MAX_PATH: the options of an archive, its `modinfo.ini` and the cache
-  fingerprint are read with the wide API and the long-path prefix (fork 1.9.7).
-- An antivirus briefly locking a freshly unpacked archive no longer makes the loader skip it: the cache folder rename
-  is retried for about 2 s (fork 1.10.4).
+Updating in Fluffy Mod Manager: disable or remove the previous version first. Install the three changed packages
+together: the "Display NSFW Outfits" row needs SF6 Native Core 0.9.0, and the Slots Loader's costume options on the
+character select need Color Mod 0.22.5 or newer when the Color Mod is installed (an older one keeps that mode off).
+The first launch rebuilds the costume pak once.
+
+For authors of mod managers and tools that read the loader's files: everything the Slots Loader 1.13.0 adds or
+changes, file by file, is in [docs/SLOTS_LOADER_1.13_CHANGES.md](docs/SLOTS_LOADER_1.13_CHANGES.md).
+
+### SF6 Slots Loader 1.13.0
+
+#### Runtime costume options (off by default)
+Set `RuntimeOptions=on` in `reframework\costume_mods\settings.ini` to use them (`off`, the default, builds exactly
+what 1.12.0 built; `variants` keeps the outfits of `off` and adds the options). Design and rules:
+[docs/RUNTIME_OPTIONS.md](docs/RUNTIME_OPTIONS.md).
+- **One outfit per mod, its options chosen in game.** A modular mod (body types, skins, dress textures, "hide
+  ponytail"...) and an outfit with its add-ons (Leon Requiem On Luke, Aloha Ryu, Ken SFV + Ken SFV Hair V2 put in one
+  sub-folder...) are one outfit; their options are worn live, per player (P1 and P2 can wear the same outfit with
+  other options), without relaunching. Option names are shown without the prefixes mods use for Fluffy's sort order.
+- **Battle Settings menu**: on Fighter Settings, `F` (pad: A / Cross) or a left click on the Costume row of an outfit
+  with options opens its menu ("F Costume options" in the bottom guide bar): a choice row per group of options, an
+  Off / On row per option, Player side and Restore defaults; several pages turn like the Color Mod's colour editor
+  (A / E, Q / E on QWERTY, L1 / R1, or a click beside the title); the preview shows each change at once and turns /
+  zooms / pans like the colour editor's. A group its author asks exactly one option of ("2! Skin", "Choose one") is
+  offered without None.
+- **Character select menu**: R1 (pad) or C (keyboard) in a side's panel shows the options of the outfit that side
+  wears in place of Costume / Color / Control Type / Button Preset (Left / Right change, Up / Down move, "▲" / "▼"
+  when there are more than four rows; B / Esc or Decide go back; R1 / C do nothing while it shows). The side's model
+  wears the change at once. Keys: `select_options_button` / `select_options_key` in
+  `reframework\data\SF6_CostumeSlots_data\settings.json`. Each side its own options in local versus; online the
+  player's own (P1's).
+- **Worn everywhere**: the Battle Settings preview, the character select models, the two models of the VS screen and
+  the fighters; online the player's own fighter wears P1's options (the opponent sees nothing new, as with colours).
+- **What becomes an option**, decided from the files, each build writing a short "merge audit" in
+  `SF6_CostumeLoader.log`:
+  - an add-on that makes no outfit of its own (Mai face accessories, A.K.I No Sleeves, Cammy C4 pale skin) is an option
+    of every outfit whose files it replaces, the game's outfits included, where it fits;
+  - a retouch (meshes and textures only, no material file: C. Viper Barefoot, Coatless, C2 Glasses Removed) is an
+    option of the outfits that wear the files it replaces instead of an outfit;
+  - versions of one archive (Aloha Ryu C1 / C2 / C3, Lily Jun Kazama No Shawl / Jun's Outfit) and outfits of several
+    archives with the same meshes (Sagat's three Tees) are one outfit with a choice;
+  - a game outfit with parts taken off (Ryu Outfit 1 No Cloak, Sagat Outfit 1 Shirtless) is an option of that game
+    outfit;
+  - only where the physics match: a subset's or a version's chains, joint constraints and cloth files must be the same
+    bytes as the outfit's, else it stays its own outfit;
+  - a mod alone in its own sub-folder of a character folder is always its own outfit (no merge either way);
+  - On / Off options that replace a same file are one choice (two of them on hid each other).
+- An outfit's former extra outfits (variants, retouches, merged versions) move to it with their options chosen:
+  a Battle Settings choice of one follows. Materials an option brings get colour entries in the outfit's colour files
+  (Aloha Ryu C2's eyebrows and beard).
+- An add-on that brings a part's mesh, material and chain together (Ken SFV Hair V2, Ingrid's book / cat) can be
+  turned off live: the part is swapped as one unit, its chain stopped for the swap.
+- Choices are saved in `reframework\data\SF6_CostumeSlots_data\costume_choices.json`; the options checked in Fluffy
+  (or the loader's default combination) apply until you change something in the menu.
+
+#### NSFW outfits
+- A second mods folder, `reframework\costume_mods_nsfw\<Character>\` (made by the loader and shipped in the package,
+  same layout and rules as `costume_mods`; empty, it changes nothing). Its outfits are hidden until "Display NSFW
+  Outfits" is on: **Options > Interface > Other Settings** (needs Native Core 0.9.0), or `display_nsfw` in
+  `reframework\data\SF6_CostumeSlots_data\settings.json` (off by default; applied at the next screen that lists
+  outfits). While hidden they are listed nowhere and a Battle Settings choice of one goes back to Outfit 1. They are
+  numbered after the fighter's other outfits.
+- Both folders are read as one: add-ons, retouches, versions and merges work across them (sub-folders stay apart). An
+  option an NSFW mod gives another outfit, a game outfit included, is an NSFW option: not offered nor worn while NSFW
+  outfits are hidden (your choice of it is kept).
+- **By keywords**: a mod of `costume_mods` whose name says it is NSFW (archive, folder, Fluffy menu name) is handled as
+  if it were in `costume_mods_nsfw`; an option whose name or menu group says so is an NSFW option. Keyword list and
+  matching rule from ZZtaii's Slotsloader Manager 1.0.8 NSFW filter (ported with his permission);
+  `NsfwKeywords=` in `costume_mods\settings.ini` replaces the list (empty: off). The log names every mod and option
+  caught, with the word.
+
+#### Fighter Settings
+- The name of the outfit on the preview (the mod's name for ours, the game's own name otherwise) at the right end of
+  the bottom input guide bar. Works with `RuntimeOptions=off` too.
+
+#### Pak builds: faster and safer
+- **Incremental build** (`IncrementalPak`, on by default): the files of the mods and of the game that did not change
+  are taken from the pak already in place instead of being read again (`pak_sources.tsv` beside the registry); the
+  result is byte for byte the pak a full build makes (tested). `IncrementalPak=off` reads everything again.
+- Big files wait in a temporary `.spill` file instead of memory while the pak is written (a large mod set no longer
+  pages a 16 GB PC out), unless enough memory is free; a file put in the pak several times is read once; colour
+  swatches read only the small level of each mask.
+- The new pak is written as `<pak>.tmp` and replaces the old one only once complete: a crash, a full disk or a power
+  cut during a build no longer leaves the game without a costume pak. Leftovers of a build cut short are removed at the
+  next launch.
+- A loader update that changes only what is written beside the pak (registry, json files, swatches) keeps the pak in
+  place instead of rewriting it.
+- The log gives the time and peak memory of each step of a rebuild. `SF6_SlotsClean.exe` also removes
+  `pak_sources.tsv`.
+
+#### Slotsloader Manager compatibility
+- Contract 1 with ZZtaii's Slotsloader Manager ([docs/MANAGER_CONTRACT.md](docs/MANAGER_CONTRACT.md)): the loader
+  writes `variants.json` (every variant of every mod in `costume_mods`, on and off, with its outfit) and reads the
+  Manager's `variant_choices.json` (a variant turned off gets no outfit and its files stay out of the pak). The
+  contract number is in `variants.json` and in the package's `modinfo.ini` (`SlotsloaderContract=1`) (fork 1.10.0).
+- Mods the Manager installed with "Replace original" (loose files, its patch paks) no longer also make an extra
+  outfit: read from the Manager's `manager_installs.json`, else its `replace-state.json`.
+- A new outfit takes the number after the highest one in use for its fighter instead of a gap a removed mod left;
+  outfits already installed keep their numbers (fork 1.10.0).
+
+#### Fixes ported from ZZtaii's Slotsloader fork (MIT, credited)
+- A slot check reads only the textures a material actually binds: leftover paths no material uses ("Leon Requiem On
+  Luke") no longer count as "texture missing" (fork 1.9.9).
+- Archives and folder mods whose paths pass MAX_PATH are read (wide API, long-path prefix) (fork 1.9.7).
+- An antivirus briefly locking a freshly unpacked archive no longer makes the loader skip it (the cache folder rename
+  is retried for about 2 s) (fork 1.10.4).
 - Modular mods with nested Fluffy menus ("03 Outfit" > "Lower Neckline" > option) are made as Fluffy installs them:
-  the menu folders (a `modinfo.ini` only) are read, every option under one top-level group is one choice, the main
-  files are merged first (a root not named `(...)` could overwrite the options), a group whose name or description
-  says "optional" is left out, outfits are named after the mod; a modular mod may make 50 combinations (24 before)
-  (fork 1.9.7-custom).
+  the menu folders are read, every option under one top-level group is one choice, the main files are laid first, a
+  group whose name or description says "optional" is left out of the outfits, outfits are named after the mod; a
+  modular mod may make 50 combinations (24 before) (fork 1.9.7-custom).
 - An option whose `AddonFor` names another complete option of its mod is made with that option ("Leon as Luke +
-  Optional - More muscles"), not as an outfit of its own without the option's files (fork 1.9.8).
-- Add-ons whose `AddonFor` names nothing of their mod, beside a single complete option, are add-ons of that option
-  (with a WARN: fix the mod's `AddonFor`); they were lost in a modular mod that made nothing of them (fork 1.9.9).
-- Runtime costume options (`RuntimeOptions=on`; ours, with the Slotsloader Manager's "choose one" rule): an outfit
-  with add-ons (Leon Requiem On Luke, Aloha Ryu, Lily's DMC5 Nico...) is one outfit, its add-ons chosen in game
-  (add-ons replacing a same file are one choice: Leon Hair / Trimmed Hair); a group its author asks exactly one option of ("2! Skin", "Choose one") is offered without None
-  (unless its options share files with another group's); an option for a part the outfit takes from another folder
-  (Leon's hair add-ons, the game's hair in `000/02/`) now replaces that part. A modular mod none of whose options
-  has a body mesh (Mai face accessories) still makes no outfit, with a WARN instead of nothing. An outfit the user
-  put with its add-on archives in one sub-folder (`Ken\Ken SFV\` with KenSFV and Ken SFV Hair V2) is one outfit
-  too, its add-ons worn by default (what the sub-folder made before, same slot) and chosen in game; before, it made
-  the combined outfit without options. A chain is no longer put back under a mesh that stays (a part's mesh without
-  a way back keeps its own chain).
-- Runtime costume options: an add-on that brings a part's mesh, material and chain together (Ken SFV Hair V2) can be
-  turned off live: the part without it (the game's hair) is stored as one unit and swapped as one, the chain stopped
-  for the swap and set before the mesh; Ingrid's Fly In A Bucket book / cat add-ons give back the game's props. An
-  option worn by default that turning off would not change is no longer offered.
-- Joint constraints a mod ships (`.jcns`) are used by its outfit, as a replacement install uses them: the outfit gets
-  its own copy of the game's `_jcs.user` naming them (or the mod's own, repointed), and its scene follows it. Before,
-  the outfit drove the mod's mesh with the game's constraints (A.K.I. bare-legs mods with added toe bones). A
-  constraint or physics file of the mod that nothing the outfit loads names is reported with a WARN (fork 1.9.8). A
-  runtime option that ships joint constraints is applied at the next launch (logged).
-- A mod's own scene of the outfit is used whole when it is another layout of the outfit (another number of model
-  parts than the game's: SF5 Sakura over Ryu) or puts it on another fighter's body (another prefab / body shape), and
-  when the game's scene cannot be read (its pak entry turned off by a mod manager's "PAK method"); before, the outfit
-  lost its own hair and cloth physics, came out on the wrong skeleton, or was left out ("slot scene missing") (fork
-  1.9.9, 1.10.1, 1.10.3). Unlike the fork, only a scene made for this game version (every type signature the game's)
-  is taken; another is left as before, with its reason in the log.
+  Optional - More muscles") (fork 1.9.8); add-ons whose `AddonFor` names nothing of their mod, beside a single
+  complete option, are add-ons of that option, with a WARN (fork 1.9.9).
+- Joint constraints a mod ships (`.jcns`) are used by its outfit, as a replacement install uses them (A.K.I. bare-legs
+  mods with added toe bones); a constraint or physics file nothing of the outfit names gets a WARN (fork 1.9.8).
+- A mod's own scene of the outfit is used whole when it is another layout of the outfit (SF5 Sakura over Ryu) or puts
+  it on another fighter's body, and when the game's scene cannot be read (a mod manager's "PAK method"); only a scene
+  made for this game version is taken (fork 1.9.9, 1.10.1, 1.10.3).
 - A game file whose pak entry a mod manager's "PAK method" turned off is read from its loose copy in the game's
-  `natives` folder: outfits that use such a texture are no longer left out as "texture missing"; runtime options
-  check their base copies against the same files (our pak, other tools' patch paks, the game's paks with the DLC,
-  loose copies) (fork 1.10.1).
-- Slotsloader Manager contract 1 (`docs/MANAGER_CONTRACT.md`): the loader writes `variants.json` (every variant of
-  every mod in `costume_mods`, on and off, with its outfit) and reads the Manager's `variant_choices.json` at launch:
-  a variant turned off gets no outfit and its files stay out of the pak; with `RuntimeOptions=on` the variants are
-  the outfits `off` would make, the one outfit wears the first one left on by default (same outfit number) and is
-  not built when every one is off. The contract number is in `variants.json` (`"contract": 1`) and in the
-  package's `modinfo.ini` (`SlotsloaderContract=1`) (fork 1.10.0).
-- Mods the Slotsloader Manager installed with "Replace original" (loose files, its patch paks) no longer also make an
-  extra outfit: read from the Manager's record (`manager_installs.json`, else its `replace-state.json`; ZZtaii's
-  format) (`docs/MANAGER_CONTRACT.md`).
-- A new outfit takes the number after the highest one in use for its fighter instead of a gap a removed mod left
-  (listed last); outfits already installed keep their numbers (fork 1.10.0).
-- Runtime costume options: an outfit put with its add-ons in one sub-folder is named after the outfit alone ("Ingrid -
-  Fly In A Bucket - Drive Tech", no more "+ Book + Cat": they are options); the menu's title cuts a name past 40
-  characters ("...").
-- Runtime costume options: a separate add-on that makes no outfit (Mai face accessories, A.K.I No Sleeves, Cammy C4
-  pale skin) becomes options of the outfits whose files it replaces: a series made of files every outfit of the
-  fighter loads (Mai's "remove wrinkles") on every outfit, ours and the game's; another series on every outfit that
-  wears a file it replaces, ours and the game's (the "C1 swap" glasses on the mini dress, Outfit 1 and Drive Tech; the
-  "C2" glasses on Mai's Outfit 2, the game's files as the way back). Stored only where it fits (joints, materials,
-  textures), none worn by default; a series' "main files" go with each of its other options. The plugin finds a game
-  outfit with options from the paths its model loads (our slots first); a game outfit whose options replace a mesh
-  or material is worn only when its model loads that file (A.K.I's Outfit 4 shares Outfit 1's folder, not its mdf2).
-- Runtime costume options: a series' "main files" alone are no longer a choice (the mod always pairs them with one
-  of its other options); the menu shows names without the prefixes mods use for Fluffy's order ("!", "1)", "addon -").
-- Runtime costume options (`on`): a retouch (a mod of meshes and textures only, no material file: C. Viper Barefoot,
-  Coatless, coat no mesh, C2 Glasses Removed) makes no outfit of its own any more: it is an option of every outfit
-  that wears the files it replaces (the game outfit it was made from, the mods' outfits made from it that keep the
-  game's file there) where it fits; retouches of one file are one choice ("Body": None / Barefoot / Coat no mesh /
-  Coatless). One that fits no game outfit it modifies stays an outfit. Its former outfit, chosen in Battle Settings,
-  becomes the game outfit with the retouch chosen; the other outfits keep their numbers.
-- Runtime costume options: On / Off options that replace a same file are one choice (Swimsuit Viper C1: "hide
-  accessories" and "hide leg chain" both on brought the bracelets back); the menu never keeps two of them on.
-- Runtime costume options (`on`), decided from the files only: versions of one archive (Aloha Ryu C1 / C2, Lily Jun
-  Kazama No Shawl / Jun's Outfit) and outfits of several archives with the same meshes (Sagat's three Tees) are one
-  outfit with a choice, where each one fits (a version made for another game outfit brings that outfit's head and
-  parts); an outfit that is a game outfit with parts taken off (Ryu Outfit 1 No Cloak, Sagat Outfit 1 Shirtless) is an
-  option of that game outfit. Their former outfits move there with their option chosen. Each build logs a short merge
-  audit (what was merged, what looks related and why it was not).
-- Fighter Settings shows the name of the outfit on the preview (our outfits: the mod's name; the game's: its own)
-  at the right end of the bottom input guide bar.
-- Runtime costume options (`on`): materials an option brings that the outfit itself has not get their colour entries
-  in the outfit's colour files, each colour slot as the game shows it (Aloha Ryu C2's head: dark eyebrows and beard
-  as on the game's Outfit 2, no longer light grey); nothing else changes.
-- Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
+  `natives` folder: outfits that use such a texture are no longer left out as "texture missing" (fork 1.10.1).
+- Not ported: the fork's character-swap repairs (1.10.4; `swap_repairs.txt` is ignored).
 
 ### SF6 Color Mod 0.22.6
 - Character select: the Drive colour mode of a side's panel opens with **L1** on the pad (X / Square before; X on the
   keyboard as before) and the guide corner shows "L1 Edit Drive Colors" (X on the keyboard). While that mode is on,
-  L1 / X do nothing (A validates, B goes back, as before) and the corner shows nothing. Fighter Settings and the
-  Training popup keep X / Square. The game's guide on that screen is read once a visit: a warning in the journal if
-  it shows L1 too.
+  L1 / X do nothing (A validates, B goes back, as before). Fighter Settings and the Training popup keep X / Square.
+  The game's guide on that screen is read once a visit: a warning in the journal if it shows L1 too.
+- The guide entries (character select corner, Fighter Settings bar) show the glyphs of the game's own guide, pad or
+  keyboard, and switch with it (a pad player saw the keyboard "X" on the character select).
+- Shares the character select panel with the Slots Loader's costume options (R1 / C): one owner per panel, the Drive
+  colour mode refuses its key while the costume options show, and the other way round (0.22.5). The select corner adds
+  the Slots Loader's "R1 Costume options" entry after its own.
+- Fighter Settings: the guide bar shows the Slots Loader's "F Costume options" entry after the Color Mod's own, written
+  by the Color Mod alone (two writers of that text crashed the game in testing) (0.22.4). Without the Slots Loader it
+  writes what 0.22.3 wrote.
 
 ### SF6 Native Core 0.9.0
-- `opt_group_place`, appended at the end of the API: a client's option group shown as rows of a section of the game's
-  Options screen (e.g. Interface > Other Settings) instead of the core's window. Older clients are not affected; see
-  [core/docs/ABI.md](core/docs/ABI.md).
+- `opt_group_place`, appended at the end of the API (increment 11): a client's option group shown as rows of a section
+  of the game's Options screen (e.g. Interface > Other Settings) instead of the core's window. Older clients are not
+  affected; see [core/docs/ABI.md](core/docs/ABI.md).
+
+### Known issues
+- Slots Loader: runtime costume options are **off by default**: set `RuntimeOptions=on` in
+  `reframework\costume_mods\settings.ini` (one rebuild of the costume pak at the next launch). The loader writes that
+  file, with every setting listed, only when the game folder holds other mods' patch paks or loose files: otherwise create it with
+  that one line. Options that change
+  only colour or cloth / physics files (a tan) are not offered in the menus; an option that ships joint constraints is
+  applied at the next launch only. The Training pause menu's character popup has no options menu.
+- Slots Loader, character select: the costume options menu (R1 / C) and the Color Mod's Drive colours (L1) use
+  buttons the game may also use on that screen; this is not confirmed either way. If the game's own guide there shows
+  them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, character select: the "▲" / "▼" arrows of the costume options menu may flicker and are drawn below the
+  focused row's highlight.
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+- Slots Loader: the slot names are set when the costume pak is built. When a slot is hidden because its outfit is not
+  yours, the names of the others are not renumbered (you may see Outfit I, then Outfit III).
+- The pencil-like outline around the fighter during Drive Impact, Drive Reversal (red) and Drive Rush (green) keeps
+  the game's colours: it is drawn by the game's camera filter, not by an effect.
+- Stage Slots: the *Aokigahara - no NPC* stage mod hangs on the VS screen, with or without the Slots Loader. The
+  cause is in the mod: see [stages/README.md](stages/README.md), Limits.
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite
 

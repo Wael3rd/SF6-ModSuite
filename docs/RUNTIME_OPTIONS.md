@@ -1,8 +1,9 @@
 # Runtime costume options (design, in progress)
 
-Status: lot A (the loader part) and lot B (the plugin: runtime swaps, the Battle Settings menu, the `former`
-migration) are built, behind a setting that is **off by default**. Lot B is not tested in game yet. Nothing changes
-for a user who does not set `RuntimeOptions` (no manifest: the plugin's runtime-options code stays idle).
+Status: released in Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0), behind a setting that is **off by default**: lot A
+(the loader part) and lot B (the plugin: runtime swaps, the Battle Settings and character select menus, the `former`
+migration), tested in game. Nothing changes for a user who does not set `RuntimeOptions` (no manifest: the plugin's
+runtime-options code stays idle). Everything 1.13.0 changed, file by file: [SLOTS_LOADER_1.13_CHANGES.md](SLOTS_LOADER_1.13_CHANGES.md).
 
 ## Goal
 
@@ -49,7 +50,7 @@ On a fighter's model (Training) and on the Battle Settings preview, per model:
 | `variants` | one per combination, as before | yes |
 
 `on` is the target layout. `variants` is the fallback: the options are available in game while the old outfits stay.
-The default becomes `on` in the release that ships the plugin part. `off` builds exactly what the loader built
+The default stays `off` in 1.13.0 (opt-in). `off` builds exactly what the loader built
 before (same pak bytes, same `outfits.json`, same registry).
 
 ## Data model

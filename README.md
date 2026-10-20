@@ -143,6 +143,20 @@ with the outfits each one gave, then the extra outfits by character. The report 
 - Variants share most of their files, and the generated pak stores identical data only once.
 - Broken, password-protected or unrelated archives are skipped and reported in `SF6_CostumeLoader.log`.
 
+## Runtime costume options (opt-in, since 1.13.0)
+
+With `RuntimeOptions=on` in `reframework\costume_mods\settings.ini` (off by default; the next launch rebuilds the
+costume pak once), a modular mod or an outfit with add-ons is **one** outfit whose options you choose in game, live,
+per player: on Fighter Settings press `F` (or click) on the Costume row of an outfit with options; on the character
+select press R1 (pad) or C (keyboard) in your panel. Add-ons, retouches and outfits with parts taken off become
+options of the outfits they fit, the game's outfits included. Choices are kept in
+`reframework\data\SF6_CostumeSlots_data\costume_choices.json`. `RuntimeOptions=variants` keeps the outfits of `off`
+and adds the options. Design and rules: [docs/RUNTIME_OPTIONS.md](docs/RUNTIME_OPTIONS.md).
+
+**For mod-manager and tool authors**: what the Slots Loader writes and reads (outfits, registry, options manifest,
+variants), the Slotsloader Manager contract and everything 1.13.0 changed:
+[docs/SLOTS_LOADER_1.13_CHANGES.md](docs/SLOTS_LOADER_1.13_CHANGES.md), [docs/MANAGER_CONTRACT.md](docs/MANAGER_CONTRACT.md).
+
 ## NSFW outfits
 
 NSFW costume mods go in a folder of their own, `reframework\costume_mods_nsfw\<Character>\`, instead of
