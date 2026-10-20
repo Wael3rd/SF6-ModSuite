@@ -12,6 +12,7 @@ Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
   reframework/data/SF6_Costumes_Data/loader/static/*      (5 fichiers structurels + static_meta.json)
   reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt   (du depot, fins de ligne LF)
   reframework/costume_mods/<32 personnages>/, reframework/stage_mods/   (vides, avec leur mode d'emploi)
+  reframework/costume_mods_nsfw/<32 personnages>/   (vide, avec son mode d'emploi ; le loader le cree aussi)
 
 Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"] [--costumes-only]
 La vraie AGS est prise dans l'ordre : <jeu>/amd_ags_x64_real.dll, puis reframework/_backup/amd_ags_x64_real_orig_20260922.dll.
@@ -72,6 +73,26 @@ COSTUME_MODS_TXT = CRLF.join([
     "The first launch after adding a large archive takes a few seconds longer: the archive is",
     "unpacked once into the hidden .cache folder, then reused.",
     "",
+    "NSFW outfits: a mod whose name says it is NSFW (nsfw, nude, naked, topless, see through, no",
+    "panties...) is handled as if it were in costume_mods_nsfw: hidden in game until \"display_nsfw\"",
+    "is true in reframework/data/SF6_CostumeSlots_data/settings.json. An option whose name says so is",
+    "an NSFW option (not offered, not worn, until then). The word list can be changed in settings.ini",
+    "(NsfwKeywords=); the log lists every mod and option it caught (lines starting with \"nsfw:\").",
+    "",
+])
+
+COSTUME_MODS_NSFW_TXT = CRLF.join([
+    "NSFW costume mods go here, laid out like costume_mods:",
+    "  reframework/costume_mods_nsfw/<Character>/<the .zip, .7z or .rar file, or a folder>",
+    "",
+    "They become outfits like the others, listed after them, but the game shows them only while",
+    "\"display_nsfw\" is true in reframework/data/SF6_CostumeSlots_data/settings.json (false by",
+    "default). With it false, a Battle Settings choice of one goes back to Outfit 1.",
+    "They are never mixed with the mods of costume_mods (no add-on of one on the other's outfits).",
+    "",
+    "Mods left in costume_mods whose name says they are NSFW are handled the same way (see the",
+    "LISEZMOI.txt of costume_mods). An empty folder changes nothing.",
+    "",
 ])
 
 STAGE_MODS_TXT = CRLF.join([
@@ -117,6 +138,7 @@ README_TXT = CRLF.join([
     "  reframework/data/           static tables, vanilla costume index, stage path index",
     "  reframework/costume_mods/   drop your costume mods here: .zip/.7z/.rar as downloaded, or folders;",
     "                              SF6_CostumeAudit.bat there lists what is installed",
+    "  reframework/costume_mods_nsfw/  NSFW costume mods: shown in game only once display_nsfw is true",
     "  reframework/stage_mods/     drop your stage mods here, as downloaded",
     "",
     "INSTALL (Fluffy Mod Manager): install this zip as a mod, then install costume mods as usual.",
@@ -233,6 +255,13 @@ def main():
             zi.external_attr = (0o40755 << 16) | 0x10   # repertoire
             z.writestr(zi, b"")
         print("  %-70s %10s  %s" % ("reframework/costume_mods/<32 personnages>/", "-", "structure"))
+        # costume_mods_nsfw : la meme structure (le loader la cree aussi au lancement si elle manque)
+        z.writestr("reframework/costume_mods_nsfw/README.txt", COSTUME_MODS_NSFW_TXT)
+        for name in CHARACTERS:
+            zi = zipfile.ZipInfo("reframework/costume_mods_nsfw/%s/" % name)
+            zi.external_attr = (0o40755 << 16) | 0x10   # repertoire
+            z.writestr(zi, b"")
+        print("  %-70s %10s  %s" % ("reframework/costume_mods_nsfw/<32 personnages>/", "-", "structure"))
     print("zip :", out, os.path.getsize(out), "octets")
 
 if __name__ == "__main__":

@@ -333,6 +333,72 @@ a pure add-on (no complete outfit) cannot be an outfit: it keeps the add-on rule
 line per mod kept apart (`<mod>: alone in its sub-folder <name>: its own outfit (no merge)`), repeated in the merge audit.
 `RuntimeOptions=variants` and `off` are unchanged.
 
+### NSFW outfits: `costume_mods_nsfw` (20/10)
+
+A second root, `reframework/costume_mods_nsfw/<Character>/`, read like `costume_mods` (same layout, archives in the
+same `costume_mods\.cache`, same `settings.ini`), after every other source, its units marked `nsfw`. The plugin hides
+its outfits while "Display NSFW Outfits" is off (README, NSFW outfits). No mixing, every layout:
+
+- An NSFW mod is merged (versions, identical meshes), grouped (one sub-folder) or given add-ons (`AddonFor`, bundle)
+  with NSFW mods only; a mod alone in its sub-folder has its own key per root (`nsfw:<char>/<sub>`).
+- An NSFW retouch or subset stays an outfit (a retouch is an option of the game's outfits, which are shown whatever
+  the setting); the loader logs `... from costume_mods_nsfw: stays an outfit`.
+- An NSFW add-on that makes no outfit (`attach_addons`) is an option of NSFW outfits only, never of a game outfit;
+  the add-ons of `costume_mods` never go on an NSFW outfit. So no NSFW option is ever offered on, or worn by, an
+  outfit that stays shown while NSFW outfits are hidden: the runtime options need no filter.
+- Manifests: `outfits.json` and the registry (`slots[]`, `possession[]`) carry `"nsfw": true` on NSFW outfits;
+  `costume_options.json` on their `slots[]` and `mods[]`, whose key is `<fighter folder>/nsfw/<name>` (never the
+  choices of a mod of the same name in `costume_mods`). Written only when true: without `costume_mods_nsfw` every
+  file is byte-identical to before. `variants.json` does not list them (the Slotsloader Manager names sources in
+  `costume_mods` only).
+- Numbers (`assign_slots`): a new NSFW outfit goes after every number of the fighter in use, its first one
+  `kNsfwGap` (10) numbers further; a new outfit of `costume_mods` goes after the fighter's other outfits and before
+  its NSFW ones (a free number before them, else after them, logged). Numbers in use are kept; a mod moved between
+  the roots is numbered again (the registry's `nsfw` no longer matches).
+- Fingerprint: the root's entries as `nsfw:<path>` (none without the folder). The loader makes the folder (and a
+  folder per fighter) with `costume_mods` (`ensure_costume_mods_dirs`); the Slots Loader package ships it too. Empty, it
+  adds nothing to the fingerprint and changes no output.
+
+### NSFW by keywords (20/10)
+
+Mods of `costume_mods` (and those Fluffy Mod Manager installed) are NSFW by their names: `common/nsfw_keywords.hpp`,
+a port of ZZtaii's Slotsloader Manager 1.0.8 NSFW filter (`LibraryFilters.NsfwKeywords`, `LibrarySearch.HasCompact`,
+with his permission): a keyword's letters and digits as one run in a text's letters and digits (case, accents,
+spaces, dashes dropped); a keyword of one or two characters must start a word. Default list: `nsfw, nude, naked,
+topless, bottomless, pubic, pubes, nipple, pasties, lewd, futa, see through, see thru, no panties, no underwear,
+erotic`; `NsfwKeywords=` in `costume_mods\settings.ini` replaces it (a comma list; empty: detection off; part of the
+fingerprint when given). Read per mod after its units are loaded (`nsfw_detect`, `process_units`):
+
+- **Mod level**: the mod's archive, folder or pak name (not the character folder of a mod put straight in it), the
+  folders around all its options, its Fluffy root menu entry (`AddonFor` empty), every name of a one-option mod. A hit
+  marks every unit `nsfw`: the mod is handled exactly as one of `costume_mods_nsfw` (no mixing, numbering, hidden),
+  except that its source stays one the Slotsloader Manager can name (`variants.json`) and its options keep their key
+  `<fighter folder>/<name>` (saved choices stay).
+- **Option level** (a mod whose name has no keyword): a unit whose `modinfo.ini` name, folders below the mod's, or
+  Fluffy menu groups (its `AddonFor` chain up to the root entry, "4! NSFW style options c1") have one gets
+  `UnitFiles::kw`; its `RtoOption` is `nsfw` (written `"nsfw": true` in `costume_options.json`, `mods[].groups[].
+  options[]`). The plugin (`rto_data`: `hidden`, `rows`, `default_pick`, `chosen_of`) neither offers nor wears it while
+  `display_nsfw` is false; a required group then gets its first other option; a saved choice of it is kept
+  (`keep_hidden`: what the menu saves while they are hidden keeps the hidden toggles, and a hidden pick unless the
+  user picked in its group) and worn again once they are shown. The plugin reads `settings.json` when the manifest has
+  an NSFW option even without an NSFW outfit.
+- **What an outfit wears by default**: `RuntimeOptions=on`, `build_modular` takes the first combination left on
+  without an NSFW option; an NSFW option every combination keeps (a frozen group) is left out of the defaults when its
+  group is not required, replaced by the group's first other option when it is; the main files, a required group of
+  NSFW options only, or an outfit that would not be complete without it keep it, and the outfit is NSFW.
+  `merge_versions` takes a version without keyword as the base. `push_combined`: an outfit that wears an option with
+  `kw` is NSFW (`g_nsfw_ids`; `worn_kw`: one of the option's files is not replaced by a later group, so a frozen option
+  every file of which a later group replaces does not count); so is every such combination with `off` / `variants`. A
+  unit with `kw` that is an outfit of its own (a bundle of outfits) is NSFW (end of `finalize_units`).
+- **Numbers**: `outfit_is_nsfw` (folder, mod keyword or `g_nsfw_ids`) is the slot's `nsfw`. An outfit whose registry
+  `nsfw` differs is numbered again once (log `nsfw: <mod>: outfit number A -> B`), as a new outfit (an NSFW one after
+  the others, one no longer NSFW before the NSFW ones); its old number stays unused in that run, and `outfits.json` lists `"moved": [{"fighter", "from", "to", "label"}]` (only when something moved): the
+  plugin moves a Battle Settings choice of the old number to the new one at start (`load_state`).
+- **Log**: `nsfw: <mod> (<where> "<text>": "<keyword>")` per mod, `nsfw: <mod> / <option> (...)` per option, what the
+  one outfit wears instead, and `NSFW by keywords: N mods, M options; K NSFW outfits of costume_mods` after the merge
+  audit. No `modinfo.ini` field carries an adult flag (keys seen on 190 mods: name, version, description, screenshot,
+  author, category = the character, AddonFor, DummyMod, NameAsBundle, requirement, homepage); names only.
+
 ## Storage in the costume pak
 
 For every slot of a modular mod, every option except `base` ones is stored **as that slot would use it**, under the

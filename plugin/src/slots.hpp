@@ -150,6 +150,7 @@ namespace costumes {
     bool select_active();             // the character select screen is open (read now, not watched)
     std::string slot_label(int fighter, int costume_no);   // one of our outfits: its label (outfits.json), else ""
     int slot_by_name(int fighter, const std::string& name); // one of our outfits by its game name ("Outfit II"), else -1
+    bool display_nsfw();              // settings.json "display_nsfw": NSFW outfits and options shown
 }
 // fs_name.cpp: the outfit's name on Fighter Settings, at the right end of the bottom input guide bar
 namespace fsname {

@@ -34,6 +34,7 @@ struct State {
     int side = 0, page = 0;
     std::vector<Row> rows;
     std::vector<std::string> chosen;
+    std::vector<std::string> shown;     // the set the menu showed last (keep_hidden: hidden NSFW choices kept)
     std::vector<std::vector<int>> pages;            // per page: indexes into rows
     std::vector<int64_t> groups;
     std::map<int64_t, Act> acts;                    // every entry made while the menu is open (a parent page keeps old ids)
@@ -199,8 +200,10 @@ void rebuild(int page, int pos) {
 
 void commit(const char* why) {
     auto& sd = choices().mods[S.slot->mod][static_cast<size_t>(S.side)];
+    const std::vector<std::string> saved = sd.changed ? sd.ids : S.slot->defaults;
     sd.changed = true;
-    sd.ids = S.chosen;
+    sd.ids = keep_hidden(manifest(), *S.slot, saved, S.shown, S.chosen);   // a hidden NSFW choice stays saved
+    S.shown = S.chosen;
     sd.names.clear();
     save_choices();
     choices_changed();
@@ -226,6 +229,7 @@ void open() {
     S.slot = slot;
     S.side = g_last_side;
     S.chosen = chosen_of(manifest(), *slot, choices(), S.side);
+    S.shown = S.chosen;
     build();
     A()->opt_rebuild(C());
     A()->opt_ensure_built(C());
@@ -248,6 +252,7 @@ void SF6CORE_CALL cb_value(void*, int64_t entry, int64_t value) {
             if (side == S.side) return;
             S.side = side;
             S.chosen = chosen_of(manifest(), *S.slot, choices(), side);
+            S.shown = S.chosen;
             choices_changed();
             rebuild_later(a.page, a.pos);
         } else if (a.kind == Act::Option && a.row >= 0 && a.row < static_cast<int>(S.rows.size())) {
@@ -287,6 +292,7 @@ void SF6CORE_CALL cb_button(void*, int64_t entry, SF6CoreOptButtonResult* out) {
         } else if (a.kind == Act::Restore) {
             choices().mods[S.slot->mod][static_cast<size_t>(S.side)] = Side{};
             S.chosen = chosen_of(manifest(), *S.slot, choices(), S.side);
+            S.shown = S.chosen;
             save_choices();
             choices_changed();
             logf("rto: menu %s, %s: defaults restored", S.side ? "P2" : "P1", S.slot->mod.c_str());

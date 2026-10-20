@@ -143,6 +143,50 @@ with the outfits each one gave, then the extra outfits by character. The report 
 - Variants share most of their files, and the generated pak stores identical data only once.
 - Broken, password-protected or unrelated archives are skipped and reported in `SF6_CostumeLoader.log`.
 
+## NSFW outfits
+
+NSFW costume mods go in a folder of their own, `reframework\costume_mods_nsfw\<Character>\`, instead of
+`reframework\costume_mods\<Character>\`. The loader makes that folder (with a folder per fighter) next to
+`costume_mods`; the Slots Loader package ships it too. It takes the same things, with the same rules: mod folders,
+archives, sub-folders, paks, modular mods and runtime options (`costume_mods\settings.ini` applies to both folders).
+Left empty, it changes nothing.
+
+Mods left in `costume_mods` are looked at too, by name (creators tag their mods, or put "nsfw" in the names):
+
+- **A mod whose name says it is NSFW** (its archive, folder or pak name, the folder around all its options, its
+  Fluffy menu name, the `modinfo.ini` name of a one-option mod) is an NSFW mod, exactly as if it were in
+  `costume_mods_nsfw` (hidden, numbered after the others, never mixed).
+- **An option whose name says so** (its `modinfo.ini` name, its folders, the Fluffy menu groups it hangs from, such as
+  "4! NSFW style options") is an NSFW option of an outfit that stays shown: while NSFW outfits are hidden, it is not
+  offered in the costume options menu and not worn; your choice of it is kept and comes back when they are shown. The
+  outfit never wears one by default when its group can do without it (else the outfit itself is NSFW). With
+  `RuntimeOptions=off` or `variants`, an outfit made with an NSFW option is an NSFW outfit.
+- **The words** (Slotsloader Manager 1.0.8's NSFW filter, by ZZtaii): `nsfw, nude, naked, topless, bottomless, pubic,
+  pubes, nipple, pasties, lewd, futa, see through, see thru, no panties, no underwear, erotic`. Case, spaces and dashes
+  do not matter ("See-Through" = "seethrough"), but a word must appear as one run ("no panties" is not found in
+  "Normal panties"); clothing words (bikini, lingerie, thong) are not in the list. To change it, add a line to
+  `costume_mods\settings.ini`: `NsfwKeywords=nsfw, nude, lingerie` replaces the list; `NsfwKeywords=` (empty) turns
+  the detection off. `SF6_CostumeLoader.log` names every mod and option it caught (lines `nsfw: ...`, with the word
+  and where it was found) and the count.
+- No `modinfo.ini` field says a mod is for adults (Fluffy's fields are name, version, author, category, description,
+  screenshot, AddonFor, NameAsBundle; Nexus's adult flag is not in the downloads), so only names count.
+
+- **Hidden by default.** NSFW outfits are listed only while "Display NSFW Outfits" is on. For now the setting is in
+  `reframework\data\SF6_CostumeSlots_data\settings.json`: `"display_nsfw": true` shows them, `false` hides them
+  (the file is created, set to `false`, the first time the plugin finds an NSFW outfit or option). A change takes
+  effect at the next screen that lists outfits (character select, Battle Settings), without a relaunch; the outfits
+  stay installed either way. An in-game switch is not available yet.
+- **Hidden** means not listed by the character select screens or Battle Settings / Fighter Settings, like an outfit
+  you do not own. A fighter whose Battle Settings outfit is an NSFW one goes back to its Outfit 1 when they are
+  hidden.
+- **Numbers**: a fighter's NSFW outfits come after its other outfits in the costume list (ten numbers further, so
+  outfits added later to `costume_mods` still come before them), and keep their numbers from one launch to the next.
+  A mod moved from one folder to the other, or that becomes NSFW by its name (or stops being NSFW), is numbered again
+  once; a Battle Settings choice of it follows it to its new number. Other outfits keep their numbers.
+- **Kept apart**: an NSFW mod is merged with, or made an option of, other NSFW mods only. An NSFW add-on is an option
+  of NSFW outfits only (never of the game's outfits); an NSFW retouch stays an outfit of its own; the add-ons of
+  `costume_mods` never go on an NSFW outfit. The Slotsloader Manager does not list the mods of `costume_mods_nsfw`.
+
 ## Colour swatches (experimental)
 
 The costume menu shows two small squares next to each colour. Capcom picks them by hand for its own outfits,

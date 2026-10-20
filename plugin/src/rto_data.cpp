@@ -201,6 +201,7 @@ bool parse_manifest(const std::string& text, Manifest& out, std::string& err) {
                             o.folder = str_of(jo.get("folder"));
                             o.mode = str_of(jo.get("mode"));
                             o.apply = str_of(jo.get("apply"));
+                            if (const Json* ns = jo.get("nsfw"); ns && ns->kind == Json::Bool && ns->b) o.nsfw = out.has_nsfw = true;
                             o.group = static_cast<int>(m.groups.size());
                             o.rank = rank++;
                             g.options.push_back(static_cast<int>(m.options.size()));
@@ -326,11 +327,22 @@ std::string write_choices(const Choices& c, const Manifest& m) {
     return o;
 }
 
+bool hidden(const Manifest& m, const Slot& s, const std::string& id) {
+    if (m.show_nsfw) return false;
+    const Mod* mod = m.mod_of(s);
+    const int x = mod ? mod->find(id) : -1;
+    return x >= 0 && mod->options[static_cast<size_t>(x)].nsfw;
+}
+
 std::vector<std::string> chosen_of(const Manifest& m, const Slot& s, const Choices& c, int side) {
     const Mod* mod = m.mod_of(s);
     auto it = c.mods.find(s.mod);
+    auto unhide = [&](std::vector<std::string>& v) {         // NSFW options while they are hidden: not worn
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const std::string& id) { return hidden(m, s, id); }), v.end());
+    };
     if (!mod || it == c.mods.end() || side < 0 || side > 1 || !it->second[static_cast<size_t>(side)].changed) {
         std::vector<std::string> out = s.defaults;
+        unhide(out);
         complete(m, s, out);
         return out;
     }
@@ -340,7 +352,34 @@ std::vector<std::string> chosen_of(const Manifest& m, const Slot& s, const Choic
         int x = mod->find(id);
         if (x >= 0 && mod->options[static_cast<size_t>(x)].mode == "base" && !has(out, id)) out.push_back(id);
     }
+    unhide(out);
     complete(m, s, out);                                     // a saved "None" of a required group: its default
+    return out;
+}
+
+std::vector<std::string> keep_hidden(const Manifest& m, const Slot& s, const std::vector<std::string>& saved,
+                                     const std::vector<std::string>& shown, const std::vector<std::string>& now) {
+    const Mod* mod = m.mod_of(s);
+    if (m.show_nsfw || !mod) return now;
+    auto pick_in = [&](const std::vector<std::string>& v, int group) -> std::string {
+        for (auto& id : v) {
+            const int x = mod->find(id);
+            if (x >= 0 && mod->options[static_cast<size_t>(x)].mode == "pick" && mod->options[static_cast<size_t>(x)].group == group) return id;
+        }
+        return {};
+    };
+    std::vector<std::string> out = now;
+    for (auto& id : saved) {
+        const int x = mod->find(id);
+        if (x < 0 || !hidden(m, s, id) || has(out, id)) continue;
+        const Option& o = mod->options[static_cast<size_t>(x)];
+        if (o.mode == "pick") {
+            const std::string was = pick_in(shown, o.group), is = pick_in(now, o.group);
+            if (was != is) continue;                         // the user picked in that group: the hidden pick goes
+            if (!is.empty()) erase_id(out, is);              // what stood in for it while hidden
+        }
+        out.push_back(id);
+    }
     return out;
 }
 
@@ -354,7 +393,7 @@ std::string default_pick(const Manifest& m, const Slot& s, int group) {
     auto pick = [&](const std::string& id) {
         const int x = mod->find(id);
         return x >= 0 && mod->options[static_cast<size_t>(x)].group == group && mod->options[static_cast<size_t>(x)].mode == "pick"
-            && offered(s, id);
+            && offered(s, id) && !hidden(m, s, id);
     };
     for (auto& id : s.defaults) if (pick(id)) return id;
     for (int oi : mod->groups[static_cast<size_t>(group)].options)
@@ -529,6 +568,7 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
         for (int oi : g.options) {
             const Option& o = mod->options[static_cast<size_t>(oi)];
             if (!offered(s, o.id)) continue;
+            if (hidden(m, s, o.id)) continue;                              // NSFW while "Display NSFW Outfits" is off
             if (o.mode == "toggle" && !removable(m, s, o.id)) continue;   // its Off would change nothing
             if (o.mode == "pick") picks.push_back(oi);
             else if (o.mode == "toggle") toggles.push_back(oi);

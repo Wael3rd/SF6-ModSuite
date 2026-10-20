@@ -39,6 +39,9 @@ int g_faults = 0;
 uint32_t g_ver = 1;                 // choices version: a model re-applies when it changes
 bool g_migrated = false;
 std::set<const Slot*> g_no_rows;    // slots whose menu would be empty: no F hint, no menu
+std::set<const Slot*> g_no_rows_off; // the same while NSFW options are hidden (only NSFW options can change live)
+
+bool has_rows(const Slot* s) { return !g_no_rows.count(s) && (g_m.show_nsfw || !g_no_rows_off.count(s)); }
 
 // ---- screens and events ----
 bool g_select = false;              // character select open: nothing at all
@@ -918,7 +921,7 @@ void choices_changed() {
 }
 int preview_since() {
     const Model& md = g_models[0];
-    return (md.root && md.slot && !g_no_rows.count(md.slot)) ? static_cast<int>(md.since) : -1;
+    return (md.root && md.slot && has_rows(md.slot)) ? static_cast<int>(md.since) : -1;
 }
 int preview_fighter(uint32_t* at) {
     if (at) *at = g_prev_fighter_at;
@@ -926,7 +929,7 @@ int preview_fighter(uint32_t* at) {
 }
 const Slot* preview_slot() {
     const Model& md = g_models[0];
-    return (md.root && md.slot && !g_no_rows.count(md.slot)) ? md.slot : nullptr;
+    return (md.root && md.slot && has_rows(md.slot)) ? md.slot : nullptr;
 }
 
 void init() {
@@ -954,13 +957,21 @@ void init() {
             if (o.mode == "toggle" && offered(s, o.id) && !removable(g_m, s, o.id))
                 logf("rto: %s/%s: \"%s\" cannot be turned off live (no copy of the outfit without it): not in the menu",
                      s.fighter_dir.c_str(), s.folder.c_str(), o.name.c_str());
+        g_m.show_nsfw = true;                     // NSFW options count here; without them: g_no_rows_off
         if (rows(g_m, s, s.defaults).empty()) {
             g_no_rows.insert(&s);
             logf("rto: %s/%s: no option can change live, no options menu", s.fighter_dir.c_str(), s.folder.c_str());
         }
+        g_m.show_nsfw = false;
+        if (g_m.has_nsfw && !g_no_rows.count(&s) && rows(g_m, s, s.defaults).empty()) {
+            g_no_rows_off.insert(&s);
+            logf("rto: %s/%s: NSFW options only: no options menu while Display NSFW Outfits is off", s.fighter_dir.c_str(),
+                 s.folder.c_str());
+        }
     }
-    size_t opts = 0;
-    for (auto& m : g_m.mods) opts += m.options.size();
+    size_t opts = 0, nsfw = 0;
+    for (auto& m : g_m.mods) { opts += m.options.size(); for (auto& o : m.options) nsfw += o.nsfw ? 1 : 0; }
+    if (nsfw) logf("rto: %zu NSFW options (offered and worn only while Display NSFW Outfits is on)", nsfw);
     logf("rto: %zu modular mods, %zu options, %zu slots (layout %s, generated %s)", g_m.mods.size(), opts, g_m.slots.size(),
          g_m.layout.c_str(), g_m.generated.c_str());
 }
@@ -1001,9 +1012,18 @@ bool busy() {
     return !g_warm_done && g_frame < 60 * 120;
 }
 
+bool nsfw_options() { return on() && g_m.has_nsfw; }
+
 void tick(uint32_t ev) {
     if (!on() || !T.ok) return;
     try {
+        // "Display NSFW Outfits" (costumes.cpp reads settings.json): NSFW options offered and worn, or not; the models
+        // apply it at once (the preview now, fighters at their next build)
+        if (g_m.has_nsfw && costumes::display_nsfw() != g_m.show_nsfw) {
+            g_m.show_nsfw = costumes::display_nsfw();
+            logf("rto: NSFW options %s", g_m.show_nsfw ? "shown" : "hidden");
+            choices_changed();
+        }
         if (ev & EV_SELECT_START) { g_select = true; g_watch_until = 0; for (auto& md : g_models) reset(md); }
         if (ev & EV_SELECT_END) g_select = false;
         if (ev & EV_MENU_OPEN) {
