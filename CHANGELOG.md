@@ -6,9 +6,12 @@
   rules as `costume_mods`). Its outfits are hidden until "Display NSFW Outfits" is on (`display_nsfw` in
   `reframework\data\SF6_CostumeSlots_data\settings.json`, off by default; applied at the next screen that lists
   outfits, no relaunch); while hidden they are not listed anywhere outfits are, and a Battle Settings choice of one
-  goes back to Outfit 1. They are numbered after the fighter's other outfits, keep their numbers, and are merged or
-  made options only with other NSFW mods (an NSFW retouch stays an outfit; NSFW add-ons go on NSFW outfits only).
-  Marked `"nsfw": true` in `outfits.json`, the registry and `costume_options.json`; not listed in `variants.json`.
+  goes back to Outfit 1. They are numbered after the fighter's other outfits and keep their numbers. Both folders are
+  read as one: add-ons, retouches, subsets and merges work across them (a sub-folder stays its own). An outfit whose
+  base is an NSFW mod's is NSFW; an option an NSFW mod gives another outfit, a game outfit included, is an NSFW option:
+  not offered nor worn while NSFW outfits are hidden (Mai's face accessories in `costume_mods_nsfw` are options of
+  Mai's game outfits and of the Mini Dress). Marked `"nsfw": true` in `outfits.json`, the registry and
+  `costume_options.json`; not listed in `variants.json`.
   Without that folder nothing changes (same registry, manifests and pak).
 - `costume_mods_nsfw` is made by the loader (with a folder per fighter) like `costume_mods`, and shipped in the Slots
   Loader package; empty, it changes nothing.
@@ -25,6 +28,8 @@
   (Mini Dress Mai: "see through" dresses, "pubic hair" and the "NSFW style" group), no whole mod.
 - Runtime options menu: several pages turn like the Color Mod's colour editor (A / E, Q / E on QWERTY, or L1 / R1, or a click beside the title; "1/2" and the keys in the title), the "More options" row is gone; Player side and Restore defaults stay on page 1.
 - Runtime options: a mod alone in its own sub-folder of a character folder is always its own outfit (no retouch, subset, merge or add-on placement on either side); logged and listed in the merge audit.
+- Runtime options, subsets: a game outfit's subset is an option only when every physics file it ships (chains, wind chain, joint constraints, cloth and their `.user` files) is byte-identical to one the game outfit loads, and its meshes keep the game meshes' joint order; else it stays its own outfit (merge audit: "its physics differ (<file>)").
+- Runtime options, versions: an outfit wears the files its physics `.user` files name, a version's chain nothing of its outfit names is left out, and a version's physics must be the base's bytes: Aloha Ryu C3 is now a Version of the Aloha Ryu outfit like C1 / C2.
 
 ### SF6 Slots Loader (fixes ported from ZZtaii's Slotsloader fork, MIT)
 - A slot check reads only the textures a material actually binds, not every `.tex` string of a material file: leftover
@@ -115,6 +120,11 @@
   in the outfit's colour files, each colour slot as the game shows it (Aloha Ryu C2's head: dark eyebrows and beard
   as on the game's Outfit 2, no longer light grey); nothing else changes.
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
+
+### SF6 Native Core 0.9.0
+- `opt_group_place`, appended at the end of the API: a client's option group shown as rows of a section of the game's
+  Options screen (e.g. Interface > Other Settings) instead of the core's window. Older clients are not affected; see
+  [core/docs/ABI.md](core/docs/ABI.md).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite
 

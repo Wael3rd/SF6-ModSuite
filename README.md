@@ -149,13 +149,17 @@ NSFW costume mods go in a folder of their own, `reframework\costume_mods_nsfw\<C
 `reframework\costume_mods\<Character>\`. The loader makes that folder (with a folder per fighter) next to
 `costume_mods`; the Slots Loader package ships it too. It takes the same things, with the same rules: mod folders,
 archives, sub-folders, paks, modular mods and runtime options (`costume_mods\settings.ini` applies to both folders).
-Left empty, it changes nothing.
+Left empty, it changes nothing. Both folders count as one: an add-on, a retouch or a version from `costume_mods_nsfw`
+still goes on every outfit it fits, the game's outfits included, as an **NSFW option** (not offered nor worn while
+NSFW outfits are hidden), and the add-ons of `costume_mods` go on NSFW outfits too. Only sub-folders stay apart (a
+sub-folder of one folder never groups with one of the other). An outfit is NSFW when its base comes from
+`costume_mods_nsfw`.
 
 Mods left in `costume_mods` are looked at too, by name (creators tag their mods, or put "nsfw" in the names):
 
 - **A mod whose name says it is NSFW** (its archive, folder or pak name, the folder around all its options, its
   Fluffy menu name, the `modinfo.ini` name of a one-option mod) is an NSFW mod, exactly as if it were in
-  `costume_mods_nsfw` (hidden, numbered after the others, never mixed).
+  `costume_mods_nsfw` (its outfits hidden and numbered after the others, its options on other outfits NSFW options).
 - **An option whose name says so** (its `modinfo.ini` name, its folders, the Fluffy menu groups it hangs from, such as
   "4! NSFW style options") is an NSFW option of an outfit that stays shown: while NSFW outfits are hidden, it is not
   offered in the costume options menu and not worn; your choice of it is kept and comes back when they are shown. The
@@ -184,9 +188,11 @@ Mods left in `costume_mods` are looked at too, by name (creators tag their mods,
   outfits added later to `costume_mods` still come before them), and keep their numbers from one launch to the next.
   A mod moved from one folder to the other, or that becomes NSFW by its name (or stops being NSFW), is numbered again
   once; a Battle Settings choice of it follows it to its new number. Other outfits keep their numbers.
-- **Kept apart**: an NSFW mod is merged with, or made an option of, other NSFW mods only. An NSFW add-on is an option
-  of NSFW outfits only (never of the game's outfits); an NSFW retouch stays an outfit of its own; the add-ons of
-  `costume_mods` never go on an NSFW outfit. The Slotsloader Manager does not list the mods of `costume_mods_nsfw`.
+- **Not kept apart**: an NSFW mod is merged with, or made an option of, any other mod, as if both folders were one.
+  An NSFW add-on, retouch or version on an outfit that stays shown (a game outfit, an outfit of `costume_mods`) is
+  an NSFW option of it: not offered nor worn while NSFW outfits are hidden, your choice of it kept for when they are
+  shown. A merged outfit takes a version that is not NSFW as its base when there is one. The Slotsloader Manager does
+  not list the mods of `costume_mods_nsfw`.
 
 ## Colour swatches (experimental)
 

@@ -240,8 +240,14 @@ base loads; not their chains: the base's chains stay). A file the same as what t
 identical body mesh of the Aloha versions, the Tees' mesh and material file), physics files (`other`) too. The base's
 own pick holds the base's files wherever a version ships another one (going back to it; worn by default, so nothing
 is swapped). A version is merged **only where every file fits the base** (`version_fit`, the add-on fit checks against
-the base's files and its game outfit's); else it stays an outfit (Aloha C3: its body chain, the C1 outfit has no chain
-there; AoD replace Ingrid: a texture its material names is missing). A version whose files are all the same as the
+the base's files and its game outfit's; what an outfit wears includes the files its physics `.user` files name, one
+level: Outfit 1's body chain `001/esf001_001_01_chain.chain` is named by `esf001_001_01_chain.user`, not by the scene)
+**and its physics are the base's** (physics rule below; its model chains aside: they are swapped live where the base
+has a chain); else it stays an outfit (AoD replace Ingrid: a texture its material names is missing). A chain that
+nothing of the version's own outfit names (its game outfit's scene and physics `.user` files, its own `.user` files) is
+left out, unused there (Aloha C3's `003/esf001_003_02_chain.chain`; the game's Outfit 3 names `esf001_002_03_chain`).
+Aloha C3 (made for Outfit 3, its body chain and wind chain Outfit 1's bytes) is a version of the C1 outfit since loader
+`2026-10-20-physics` (before: "the outfit has no chain there"). A version whose files are all the same as the
 base's is merged without an option; one that differs only in colours stays an outfit (colours are not swapped live).
 Their add-ons are made with it (the same add-on of several versions once). The outfit's name: what the versions' names
 share ("Aloha Ryu"), else the archive's name without its download numbers ("Lily Jun Kazama Cosplay"), else the
@@ -273,9 +279,13 @@ Wael's mods only Aloha C2 needs it. Not done for game outfits' options (their co
 whose every mesh is the mesh a game outfit of the fighter wears at that part, either the same bytes or the same
 materials and joints with some materials taken off: left out of the mesh, or every triangle of theirs folded to
 nothing (two corners on one vertex; the other materials keep their triangles as they were), at least one part with
-something taken off. Ryu "Outfit 1 No Cloak - Drive Tech" is the game's Outfit 1 body with `esf_Costume00`, `esf_Ring`
-and `esf_Threads` folded; Sagat "Outfit 1 Shirtless" ships Outfit 1's head as it is and its body with the fur vest
-folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. It makes no outfit: its
+something taken off, and its meshes have the game meshes' joints **in the same order** (bone indices: Havok cloth and
+chains address bones by index). Ryu "Outfit 1 No Cloak - Drive Tech" is the game's Outfit 1 body with `esf_Costume00`,
+`esf_Ring` and `esf_Threads` folded; Sagat "Outfit 1 Shirtless" ships Outfit 1's head as it is and its body with the fur
+vest folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. A mod alone in its
+sub-folder is never a subset (that rule, below, comes first): Ryu No Cloak in its own sub-folder
+(`costume_mods/Ryu/Ryu_Outfit1_NoCloak_DriveTech_v1.0/`) stays its own outfit; the same archive put directly in
+`costume_mods/Ryu/` is a subset. It makes no outfit: its
 files are moved to the paths that game outfit loads (Drive Tech's `005/01` -> Outfit 1's `001/01`), the ones the same
 as the game's there left out, physics and colour files too (the game outfit's own stay: the subset mesh has all its
 joints), and it is an option of that game outfit and of the mods' outfits that wear those files, where it fits (as a
@@ -287,8 +297,20 @@ the plugin goes back to them file by file), so a chain changed on a game outfit 
 other mesh. None of Wael's subsets ships a model chain (their `_chain.user` and joint constraints are physics files,
 left out). A mesh made from a game outfit's with nothing taken off (an edited copy) stays an outfit (audit).
 
-Offline (Wael's mods, `on`): 70 outfits -> 59. Ryu: Aloha Ryu (Version C1 / C2, add-ons No Gloves / No Headband),
-Aloha Ryu C3 stays (its body chain), No Cloak -> an option of game Outfit 1; Sagat: one Tee outfit (Muay Thai / Tiger
+**Physics: the same bytes as what the outfit loads** (subsets and versions, loader `2026-10-20-physics`). Physics files
+(`_chain.user`, `_jcs.user`, `.jcns`, `_havok.user`, `.havokcloth`, `_aogeo.user`, `_shape.user`, model chains and the
+wind chain `weather/wind/mode/NNN/<fd>_<folder>_NN_chain.chain`; not `_ccvd.user` / `cmd`: colours) are not swapped
+live: an option wears the physics of the outfit it goes on. So every physics file of a subset must be **byte-identical
+to a physics file the game outfit loads**, and every physics file of a version to one the base loads (its own files
+and its game outfit's): the files its scene names and the files its physics `.user` files name, one level
+(`_chain.user` -> `.chain`, `_jcs.user` -> `.jcns`, `_havok.user` -> `.havokcloth`). Compared by content, whatever the
+names (the five subsets above ship their game outfit's physics under the Drive Tech names). One that differs keeps the
+mod its own outfit: merge audit `subset: <mod> stays an outfit (<outfit> minus <parts>, but its physics differ
+(<file>))`, or for a version `... not with <base> (...): its physics differ (<file>)`.
+
+Offline (Wael's mods, `on`, before the sub-folder rule and the physics rule): 70 outfits -> 59. Ryu: Aloha Ryu (Version
+C1 / C2, add-ons No Gloves / No Headband), Aloha Ryu C3 stayed (its body chain; a version since `2026-10-20-physics`),
+No Cloak -> an option of game Outfit 1 (in its own sub-folder now: its own outfit); Sagat: one Tee outfit (Muay Thai / Tiger
 Photo / Tiger), Shirtless -> game Outfit 1; Cammy: Zani Costume (Horn removed / Outfit01) and Mai Outfit 2 PRO
 (PRO / PROmc: its own chain); Lily: Jun Kazama Cosplay (No Shawl / Jun's Outfit); Ken Outfit 2 Shirtless, Alex No
 Vest, Yasmine No Jacket -> their game outfits. The scan takes about 12 s more (meshes read for the subset test, hashed
@@ -338,16 +360,40 @@ line per mod kept apart (`<mod>: alone in its sub-folder <name>: its own outfit 
 ### NSFW outfits: `costume_mods_nsfw` (20/10)
 
 A second root, `reframework/costume_mods_nsfw/<Character>/`, read like `costume_mods` (same layout, archives in the
-same `costume_mods\.cache`, same `settings.ini`), after every other source, its units marked `nsfw`. The plugin hides
-its outfits while "Display NSFW Outfits" is off (README, NSFW outfits). No mixing, every layout:
+same `costume_mods\.cache`, same `settings.ini`), after every other source, its units marked `nsfw` (`ModUnit::nsfw`,
+`nsfw_dir`). The plugin hides its outfits while "Display NSFW Outfits" is off (README, NSFW outfits).
 
-- An NSFW mod is merged (versions, identical meshes), grouped (one sub-folder) or given add-ons (`AddonFor`, bundle)
-  with NSFW mods only; a mod alone in its sub-folder has its own key per root (`nsfw:<char>/<sub>`).
-- An NSFW retouch or subset stays an outfit (a retouch is an option of the game's outfits, which are shown whatever
-  the setting); the loader logs `... from costume_mods_nsfw: stays an outfit`.
-- An NSFW add-on that makes no outfit (`attach_addons`) is an option of NSFW outfits only, never of a game outfit;
-  the add-ons of `costume_mods` never go on an NSFW outfit. So no NSFW option is ever offered on, or worn by, an
-  outfit that stays shown while NSFW outfits are hidden: the runtime options need no filter.
+**Both roots are one folder** (Wael, 20/10; loader `2026-10-20-nsfw-samelevel`; before, nothing of one root was
+merged with, grouped with or made an option of the other). Every rule above reads the mods of both as if they were in
+one folder: add-ons by `AddonFor` or bundle, add-ons on other outfits, retouches, subsets, versions and identical
+meshes (merges), the "On / Off of a same file" choice, the merge audit. Only two things set them apart:
+
+- **Sub-folders are folders**: `costume_mods/Mai/X/` and `costume_mods_nsfw/Mai/X/` are two sub-folders
+  (`user_grouped`, the lone key `nsfw:<char>/<sub>`). A sub-folder groups the mods it holds and a mod alone in its
+  sub-folder stays its own outfit, as before, each in its root.
+- **NSFW only hides**, never separates:
+  - An **outfit whose base is an NSFW mod's** is NSFW (hidden while the row is Off; `outfit_is_nsfw`). In a merge
+    (`merge_versions`) the base is the first version that is not NSFW (as for keywords), so an outfit merged from
+    normal and NSFW versions is a normal outfit whose NSFW versions are NSFW picks of its version choice; an outfit
+    all of whose versions are NSFW is NSFW.
+  - An **option an NSFW mod gives an outfit that is not NSFW is an NSFW option** (`RtoOption::nsfw`, `"nsfw": true`
+    in `costume_options.json`, exactly as a keyword option): add-ons placed on game outfits and on mods' outfits
+    (`attach_addons`), retouches and subsets, the versions of a merge, the add-ons of an outfit (`build_addon_options`;
+    `rto_from_groups` takes `outfit_nsfw`). The plugin neither offers nor wears it while the row is Off and keeps a
+    saved choice of it (`hidden`, `chosen_of`, `keep_hidden`, unchanged); a game outfit whose options are all NSFW has
+    no options menu (and no F hint) then. In `attach_addons` every option of an NSFW mod is marked, also where it
+    lands on an NSFW outfit (hidden with that outfit anyway: the mark changes nothing there). An NSFW outfit's own
+    options (its modular groups) are not NSFW options: only those whose names have a keyword would be, and the
+    keywords are not looked at in `costume_mods_nsfw`.
+  - An outfit that **wears** an option of an NSFW mod (not replaced by a later part) is NSFW (`push_combined`,
+    `worn_kw` / `nsfw_part`, log `nsfw: wears <option> (from costume_mods_nsfw): an NSFW outfit`): an outfit put in
+    one sub-folder with an add-on of an NSFW mod (keywords), the combinations `off` / `variants` make of an outfit and
+    an NSFW add-on.
+- A former slot (a retouch's, a merged version's) moves onto its outfit with its NSFW option chosen: worn again once
+  NSFW outfits are shown.
+- Log and merge audit: `add-on <mod>, <series>: N NSFW options (hidden while Display NSFW Outfits is off), for
+  <outfits>`, `retouches: ...` likewise; a merge names its NSFW versions with `(NSFW)`. The summary line of the add-on
+  says `; NSFW options`.
 - Manifests: `outfits.json` and the registry (`slots[]`, `possession[]`) carry `"nsfw": true` on NSFW outfits;
   `costume_options.json` on their `slots[]` and `mods[]`, whose key is `<fighter folder>/nsfw/<name>` (never the
   choices of a mod of the same name in `costume_mods`). Written only when true: without `costume_mods_nsfw` every
@@ -361,6 +407,17 @@ its outfits while "Display NSFW Outfits" is off (README, NSFW outfits). No mixin
   folder per fighter) with `costume_mods` (`ensure_costume_mods_dirs`); the Slots Loader package ships it too. Empty, it
   adds nothing to the fingerprint and changes no output.
 
+Offline (20/10, Wael's mods in a test game folder, `RuntimeOptions=on`): Mai's "Mini Dress Mai C1 Swap" and "Mai face
+accessories C2 and swap test" both in `costume_mods_nsfw\Mai`: the mini dress is an NSFW outfit; the accessories are
+NSFW options of game Outfit 1 and Drive Tech ("C1 swap" series, "remove wrinkles"), Outfit 2 ("C2" series, "remove
+wrinkles"), Outfit 3 ("remove wrinkles") and of the mini dress ("C1 swap", "remove wrinkles"), the same placement as
+with both mods in `costume_mods` (before: options of the mini dress only). C. Viper's Lace lingerie in
+`costume_mods_nsfw` gets the "Glasses Removed" retouch of `costume_mods`. Sagat's Muay Thai Tee in `costume_mods_nsfw`
+is merged with the Tiger and Tiger Photo Tees of `costume_mods` (base Tiger Photo Tee, "Muay Thai" an NSFW pick); the
+Outfit 1 Shirtless subset from `costume_mods_nsfw` is an NSFW option of game Outfit 1. With the same mods all in
+`costume_mods` (no NSFW mod), the pak, `costume_options.json`, `outfits.json`, `variants.json` and the registry are
+byte-identical to the loader before this change, but for the loader's build id.
+
 ### NSFW by keywords (20/10)
 
 Mods of `costume_mods` (and those Fluffy Mod Manager installed) are NSFW by their names: `common/nsfw_keywords.hpp`,
@@ -373,9 +430,10 @@ fingerprint when given). Read per mod after its units are loaded (`nsfw_detect`,
 
 - **Mod level**: the mod's archive, folder or pak name (not the character folder of a mod put straight in it), the
   folders around all its options, its Fluffy root menu entry (`AddonFor` empty), every name of a one-option mod. A hit
-  marks every unit `nsfw`: the mod is handled exactly as one of `costume_mods_nsfw` (no mixing, numbering, hidden),
-  except that its source stays one the Slotsloader Manager can name (`variants.json`) and its options keep their key
-  `<fighter folder>/<name>` (saved choices stay).
+  marks every unit `nsfw`: the mod is handled exactly as one of `costume_mods_nsfw` (mixed with the other mods, its
+  outfits NSFW and numbered after the others, its options on other outfits NSFW options), except that its source
+  stays one the Slotsloader Manager can name (`variants.json`), its sub-folder is one of `costume_mods`, and its
+  options keep their key `<fighter folder>/<name>` (saved choices stay).
 - **Option level** (a mod whose name has no keyword): a unit whose `modinfo.ini` name, folders below the mod's, or
   Fluffy menu groups (its `AddonFor` chain up to the root entry, "4! NSFW style options c1") have one gets
   `UnitFiles::kw`; its `RtoOption` is `nsfw` (written `"nsfw": true` in `costume_options.json`, `mods[].groups[].

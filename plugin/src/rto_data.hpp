@@ -29,8 +29,9 @@ struct Option {
     std::string id, name, folder, mode, apply;               // mode: base, pick, toggle
     int group = -1;
     int rank = 0;                                            // layering order: a later option's file wins
-    bool nsfw = false;                                       // its name has an NSFW keyword (loader): hidden() while
-                                                             // "Display NSFW Outfits" is off
+    bool nsfw = false;                                       // its name has an NSFW keyword, or it comes from an NSFW
+                                                             // mod (costume_mods_nsfw) put on this outfit (loader):
+                                                             // hidden() while "Display NSFW Outfits" is off
 };
 struct Group { std::string name; std::vector<int> options; };
 struct Variant { std::string label; std::vector<std::string> ids; };

@@ -132,7 +132,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_PAK_ID = "2026-10-20-nsfw-keywords";
+static const char* LOADER_PAK_ID = "2026-10-20-physics";
 static const char* LOADER_META_ID = "2026-10-20-fastpak";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
@@ -1473,8 +1473,9 @@ static std::string mod_label(const std::string& id) {
 }
 // Where each mod comes from, for outfits.json: kind ("fluffy pak", "archive", "folder", "pak") and the
 // file or folder the user installed ("re_chunk_000.pak.patch_002.pak", "Ken/KenSFV.zip", "Ryu/Vagrant")
-// nsfw: read from costume_mods_nsfw, or a mod whose name has an NSFW keyword (shown in game only while the plugin's
-// "Display NSFW Outfits" is on); nsfw_dir: read from costume_mods_nsfw (a folder the Slotsloader Manager cannot name)
+// nsfw: read from costume_mods_nsfw, or a mod whose name has an NSFW keyword (its outfits shown in game only while the
+// plugin's "Display NSFW Outfits" is on, its options on other outfits NSFW options); nsfw_dir: read from
+// costume_mods_nsfw (a folder the Slotsloader Manager cannot name)
 struct ModSource { std::string kind, source; bool nsfw = false, nsfw_dir = false; };
 static std::unordered_map<std::string, ModSource> g_mod_source;
 static bool mod_is_nsfw(const std::string& mod_id) {
@@ -5914,9 +5915,10 @@ struct ModUnit {
     std::string rel;   // path shown in the log
     bool game_install = false;   // the game's own natives tree (mods Fluffy copied there)
     bool menu = false;           // a modinfo.ini without natives or .pak: a Fluffy menu (dummy) entry, no files
-    bool nsfw = false;           // found in costume_mods_nsfw, or its mod's name has an NSFW keyword: merged / made an
-                                 // option only with other NSFW mods
-    bool nsfw_dir = false;       // found in costume_mods_nsfw
+    bool nsfw = false;           // found in costume_mods_nsfw, or its mod's name has an NSFW keyword: read with the
+                                 // other mods as one folder; an outfit it is the base of is NSFW, an option it gives
+                                 // another outfit an NSFW option (docs/RUNTIME_OPTIONS.md, NSFW outfits)
+    bool nsfw_dir = false;       // found in costume_mods_nsfw (its sub-folders are not those of costume_mods)
 };
 
 struct ScanOutputs {
@@ -6338,7 +6340,7 @@ static bool user_grouped(const UnitFiles& a, const UnitFiles& b) {
         while (x <= rel.size()) { size_t y = rel.find('/', x); if (y == std::string::npos) y = rel.size(); parts.push_back(rel.substr(x, y - x)); x = y + 1; }
         return parts;
     };
-    if (a.u.nsfw != b.u.nsfw) return false;   // costume_mods and costume_mods_nsfw are never one sub-folder
+    if (a.u.nsfw_dir != b.u.nsfw_dir) return false;   // a sub-folder of costume_mods_nsfw is not one of costume_mods
     auto pa = split(a.u.rel), pb = split(b.u.rel);
     if (pa.size() < 3 || pb.size() < 3) return false;
     if (str_lower(pa[0]) != str_lower(pb[0]) || str_lower(pa[1]) != str_lower(pb[1])) return false;
@@ -6350,16 +6352,16 @@ static bool user_grouped(const UnitFiles& a, const UnitFiles& b) {
 // neither an archive nor a pak; all the options of an archive or folder count as one mod) is always its own outfit with
 // RuntimeOptions=on (docs/RUNTIME_OPTIONS.md, "A mod alone in its sub-folder"): kept out of the retouch, subset, merge and
 // add-on placement rules, on both sides. Key: "<char>/<sub-folder>" lowercase (= the mod's source; "nsfw:" before it for
-// costume_mods_nsfw), empty when not alone.
+// costume_mods_nsfw: a sub-folder of that root is another folder), empty when not alone.
 static std::set<std::string> g_lone_sources;
 static std::string lone_key_of(const UnitFiles& u) {
     std::vector<std::string> parts; size_t x = 0;
     const std::string& rel = u.u.rel;
     while (x <= rel.size()) { size_t y = rel.find('/', x); if (y == std::string::npos) y = rel.size(); parts.push_back(rel.substr(x, y - x)); x = y + 1; }
     if (parts.size() < 3 || is_archive_name(parts[1]) || str_ends_with(str_lower(parts[1]), ".pak")) return std::string();
-    return (u.u.nsfw ? "nsfw:" : "") + str_lower(parts[0]) + "/" + str_lower(parts[1]);
+    return (u.u.nsfw_dir ? "nsfw:" : "") + str_lower(parts[0]) + "/" + str_lower(parts[1]);
 }
-static std::string lone_key_of(const ModSource& ms) { return (ms.nsfw ? "nsfw:" : "") + str_lower(ms.source); }
+static std::string lone_key_of(const ModSource& ms) { return (ms.nsfw_dir ? "nsfw:" : "") + str_lower(ms.source); }
 static bool is_lone_unit(const UnitFiles& u) {
     if (g_lone_sources.empty()) return false;
     const std::string k = lone_key_of(u);
@@ -6374,12 +6376,18 @@ static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
 static std::string unit_label(const UnitFiles& u) { return trim_ws(u.name.empty() ? u.u.rel : u.name); }
 
 // Id of a costume made of several options: from their ids, in order
-// The first option of an outfit made of `parts` (merge order: a later part's file wins) that has an NSFW keyword
-// (UnitFiles::kw) and is worn: one of its files is not replaced by a later part. nullptr when none.
+// An option that makes the outfit wearing it NSFW: its name has an NSFW keyword (UnitFiles::kw), or it comes from an
+// NSFW mod (costume_mods_nsfw, a keyword in the mod's name) and the outfit's base does not (an NSFW base: NSFW already)
+static bool nsfw_part(const UnitFiles& u, const UnitFiles& base) { return !u.kw.empty() || (u.u.nsfw && !base.u.nsfw); }
+static std::string nsfw_why(const UnitFiles& u) {
+    return !u.kw.empty() ? u.kw : u.u.nsfw_dir ? std::string("from costume_mods_nsfw") : std::string("an NSFW mod (keywords)");
+}
+// The first option of an outfit made of `parts` (merge order: a later part's file wins; parts[0] its base) that is
+// NSFW (nsfw_part) and is worn: one of its files is not replaced by a later part. nullptr when none.
 static const UnitFiles* worn_kw(const std::vector<size_t>& parts) {
     for (size_t k = 0; k < parts.size(); ++k) {
         const UnitFiles& u = g_units[parts[k]];
-        if (u.kw.empty()) continue;
+        if (!nsfw_part(u, g_units[parts[0]])) continue;
         for (auto& [p, mf] : u.files) {
             bool replaced = false;
             for (size_t j = k + 1; j < parts.size() && !replaced; ++j) replaced = g_units[parts[j]].files.count(p) > 0;
@@ -6419,9 +6427,9 @@ static void push_combined(const std::vector<size_t>& parts, const std::string& l
     printf("    mod_id: %s\n", idb);
     g_mod_names[idb] = label;
     if (!parts.empty()) g_mod_source[idb] = g_mod_source[g_units[parts[0]].mod_id];
-    if (const UnitFiles* kw = worn_kw(parts)) {   // wears an NSFW option (keywords): an NSFW outfit
+    if (const UnitFiles* kw = worn_kw(parts)) {   // wears an NSFW option (keywords, NSFW mod): an NSFW outfit
         g_nsfw_ids.insert(idb);
-        printf("    nsfw: wears %s (%s): an NSFW outfit\n", unit_label(*kw).c_str(), kw->kw.c_str());
+        printf("    nsfw: wears %s (%s): an NSFW outfit\n", unit_label(*kw).c_str(), nsfw_why(*kw).c_str());
     }
     o.mods_out.push_back({idb, std::move(costumes)});
     for (auto i : parts) o.all_mod_out.insert(g_units[i].files.begin(), g_units[i].files.end());
@@ -6659,9 +6667,10 @@ static void rto_one_of_shared(RtoMod& m) {
 // files) is "base", the others are toggles (hide ponytail); an optional option is a toggle; in a choice
 // group the options are "pick" (one at a time; a lone option a toggle unless the group is required);
 // in another group each option is a toggle. unit_option: unit index -> option index.
+// outfit_nsfw: the outfit is NSFW (its base is an NSFW mod's): options of NSFW mods are not NSFW options there
 static std::shared_ptr<RtoMod> rto_from_groups(const std::vector<RtoGroupIn>& groups, const std::string& name,
                                                const std::set<size_t>& optional_units,
-                                               std::unordered_map<size_t, size_t>& unit_option) {
+                                               std::unordered_map<size_t, size_t>& unit_option, bool outfit_nsfw) {
     auto m = std::make_shared<RtoMod>();
     m->name = name;
     std::set<std::string> ids;
@@ -6693,7 +6702,8 @@ static std::shared_ptr<RtoMod> rto_from_groups(const std::vector<RtoGroupIn>& gr
             op.id = rto_option_id(gi.key, op.folder, ids);
             op.files = g_units[i].files;
             op.origin = g_units[i].origin;
-            op.nsfw = !g_units[i].kw.empty();
+            // an NSFW option: its name has a keyword, or it comes from an NSFW mod and the outfit is not NSFW
+            op.nsfw = !g_units[i].kw.empty() || (g_units[i].u.nsfw && !outfit_nsfw);
             unit_option[i] = m->options.size();
             g.options.push_back(m->options.size());
             m->options.push_back(std::move(op));
@@ -6946,7 +6956,7 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
             r.required = told && !contains_ci(r.name, "optional") && !contains_ci(desc, "optional");
             in.push_back(std::move(r));
         }
-        rto = rto_from_groups(in, root, optional_units, unit_option);
+        rto = rto_from_groups(in, root, optional_units, unit_option, g_units[tree[0]].u.nsfw);
         rto_in = in;
         rto->defaults_from = "loader";
         auto src = g_mod_source.find(g_units[tree[0]].mod_id);
@@ -7245,7 +7255,7 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
         in[gi].name = w.empty() ? unit_label(b) + " - choice " + std::to_string(gi - 1) : w;
     }
     std::unordered_map<size_t, size_t> unit_option;
-    std::shared_ptr<RtoMod> rto = rto_from_groups(in, unit_label(b), {}, unit_option);
+    std::shared_ptr<RtoMod> rto = rto_from_groups(in, unit_label(b), {}, unit_option, b.u.nsfw);
     rto->defaults_from = "loader";
     if (auto src = g_mod_source.find(b.mod_id); src != g_mod_source.end()) rto->source = src->second.source;
     const std::vector<size_t> base_sel = {unit_option[j]};
@@ -7331,6 +7341,7 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
 // Retouches (pa.retouch: meshes and textures only, no material file) go on every outfit that wears the files they
 // replace: the game outfits that load them and the mods' outfits made from those costumes that do not ship them; the
 // retouches of a fighter are one series (options of different mods that replace a same file: one choice).
+static void merge_note(const std::string& fd, const std::string& text);   // the merge audit (below)
 static void attach_addons(ScanOutputs& o) {
     if (g_pending_addons.empty()) return;
     const VanillaIndex& inv = o.inv;
@@ -7457,11 +7468,12 @@ static void attach_addons(ScanOutputs& o) {
         return false;
     };
     for (auto& pa : g_pending_addons) {
-        // An NSFW add-on (costume_mods_nsfw) is an option of NSFW outfits only: never of a game outfit or of another
-        // outfit, which are shown whatever the NSFW setting; no other mod's option goes on an NSFW outfit
-        bool pa_nsfw = false;
-        for (auto& gi : pa.groups) for (auto i : gi.members) pa_nsfw = pa_nsfw || g_units[i].u.nsfw;
-        auto same_root = [&](size_t k) { return mod_is_nsfw(o.mods_out[k].first) == pa_nsfw; };
+        // An add-on of an NSFW mod (costume_mods_nsfw, a keyword in its name) goes where any add-on goes (the two roots
+        // are one folder): its options are NSFW options (offered and worn only while the plugin's "Display NSFW
+        // Outfits" is on; on an NSFW outfit, hidden with it anyway, the mark changes nothing)
+        bool pa_nsfw = false, pa_dir = false;
+        for (auto& gi : pa.groups)
+            for (auto i : gi.members) { pa_nsfw = pa_nsfw || g_units[i].u.nsfw; pa_dir = pa_dir || g_units[i].u.nsfw_dir; }
         for (auto& gi : pa.groups) {
             std::vector<size_t> mem;
             for (auto i : gi.members) {
@@ -7482,7 +7494,7 @@ static void attach_addons(ScanOutputs& o) {
                 x.mode = mode;
                 x.files = g_units[i].files;
                 x.origin = g_units[i].origin;
-                x.nsfw = !g_units[i].kw.empty();
+                x.nsfw = !g_units[i].kw.empty() || g_units[i].u.nsfw;
                 x.addon = true;
                 if (pa.retouch) {   // the outfit it made before: from the game outfit it modifies (its slot moves there)
                     x.retouch = true;
@@ -7525,7 +7537,7 @@ static void attach_addons(ScanOutputs& o) {
                     if (i == main) continue;
                     RtoOption x = opt(i, "pick");
                     for (auto& [p, mf] : g_units[main].files) x.files.emplace(p, mf);   // the option's own files win
-                    x.nsfw = x.nsfw || !g_units[main].kw.empty();
+                    x.nsfw = x.nsfw || !g_units[main].kw.empty() || g_units[main].u.nsfw;
                     g.options.push_back(std::move(x));
                 }
                 printf("    runtime options: group %s: \"%s\" goes with each of its other options: one choice\n",
@@ -7610,19 +7622,17 @@ static void attach_addons(ScanOutputs& o) {
             if (pa.retouch) {
                 // every outfit that wears the files: the game outfits that load them, the mods' outfits made from those
                 // costumes (an option whose files a mod's outfit ships itself is left out there, below)
-                for (auto* c : games) if (!pa_nsfw && touches(c->costume_no, folder_of(*c))) games_hit.push_back(c);
+                for (auto* c : games) if (touches(c->costume_no, folder_of(*c))) games_hit.push_back(c);
                 for (size_t k = 0; k < o.mods_out.size(); ++k) {
-                    if (!same_root(k)) continue;
                     for (auto& mc : o.mods_out[k].second)
                         if (mc.fighter_dir == fd && touches(mc.original_costume_no, mc.original_folder)) { mods_hit.push_back(k); break; }
                 }
             } else if (all_shared) {
                 for (size_t k = 0; k < o.mods_out.size(); ++k) {
-                    if (!same_root(k)) continue;
                     for (auto& mc : o.mods_out[k].second)
                         if (mc.fighter_dir == fd) { mods_hit.push_back(k); break; }
                 }
-                if (!pa_nsfw) games_hit = games;
+                games_hit = games;
             } else {
                 // Every outfit that wears a file it replaces, as a retouch (20/10: the C1 swap glasses replace Mai's
                 // head 000/00, which the mini dress ships and Outfit 1 / 3 / DriveTech load: all of them); where each
@@ -7632,7 +7642,6 @@ static void attach_addons(ScanOutputs& o) {
                 // textures is a re-skin of its own (Cammy C4 pale skin, beside outfits made for Cammy's Outfit 4 slot
                 // that ship their own textures there): left out.
                 for (size_t k = 0; k < o.mods_out.size(); ++k) {
-                    if (!same_root(k)) continue;
                     const auto& e = o.mods_out[k];
                     bool shape = false, any = false;
                     for (auto& lp : paths) {
@@ -7651,20 +7660,19 @@ static void attach_addons(ScanOutputs& o) {
                         printf("    runtime options: %s ships the textures of %s, %s itself: not an option there\n",
                                mod_label(e.first).c_str(), pa.name.c_str(), trim_ws(gi.name).c_str());
                 }
-                if (!pa_nsfw)
-                    for (auto* c : games)
-                        for (auto& lp : paths) {
-                            std::string pfd, folder;
-                            if (shared(lp) || !parse_model_folder(lp, pfd, folder)) continue;
-                            if (folder == "000" ? inv.used_by(pak_path_hash(std::string_view(lp)), fighter, c->costume_no)
-                                                : folder == folder_of(*c)) { games_hit.push_back(c); break; }
-                        }
+                for (auto* c : games)
+                    for (auto& lp : paths) {
+                        std::string pfd, folder;
+                        if (shared(lp) || !parse_model_folder(lp, pfd, folder)) continue;
+                        if (folder == "000" ? inv.used_by(pak_path_hash(std::string_view(lp)), fighter, c->costume_no)
+                                            : folder == folder_of(*c)) { games_hit.push_back(c); break; }
+                    }
             }
             // An outfit alone in its sub-folder is its own: no other mod's add-on or retouch goes on it
             if (g_rto_layout == RtoLayout::One && !g_lone_sources.empty())
                 mods_hit.erase(std::remove_if(mods_hit.begin(), mods_hit.end(), [&](size_t k) {
                     auto ms = g_mod_source.find(o.mods_out[k].first);
-                    return ms != g_mod_source.end() && ms->second.source != pa.source
+                    return ms != g_mod_source.end() && (ms->second.source != pa.source || ms->second.nsfw_dir != pa_dir)
                            && g_lone_sources.count(lone_key_of(ms->second)) != 0;
                 }), mods_hit.end());
             std::string names;
@@ -7726,8 +7734,16 @@ static void attach_addons(ScanOutputs& o) {
                    n > 1 ? "s" : "", pa.retouch ? "a retouch: the outfits that wear its files"
                                     : all_shared ? "files every outfit of the fighter loads"
                                     : "the outfits that wear the files it replaces",
-                   pa_nsfw ? "; NSFW: NSFW outfits only" : "",
+                   pa_nsfw ? "; NSFW options" : "",
                    names.empty() ? "no outfit: not used" : names.c_str());
+            if (pa_nsfw && !names.empty() && g_rto_layout == RtoLayout::One) {   // the merge audit: where NSFW options went
+                size_t nn = 0;
+                for (auto& g : gs) for (auto& op : g.options) nn += op.nsfw ? 1 : 0;
+                merge_note(fd, (pa.retouch && gi.key == "retouch" ? std::string("retouches")
+                                                                  : "add-on " + pa.name + ", " + trim_ws(gi.name))
+                               + ": " + std::to_string(nn) + " NSFW option" + (nn == 1 ? "" : "s")
+                               + " (hidden while Display NSFW Outfits is off), for " + names);
+            }
         }
     }
     g_pending_addons.clear();
@@ -7813,20 +7829,43 @@ static const std::map<std::string, GamePart>& game_parts(const VanillaIndex& inv
     return g_game_parts[{fighter, cno}];
 }
 
-// A mesh as the subset test reads it: its materials, its joints (blend shapes aside) and, in its first level of
-// detail, per material the triangles and how many of them are folded to nothing (two corners on one vertex)
+// A mesh as the subset test reads it: its materials, its joints (blend shapes aside) and their order and, in its first
+// level of detail, per material the triangles and how many of them are folded to nothing (two corners on one vertex)
 struct MeshShape {
     bool ok = false;
     std::set<std::string> mats, joints;
+    std::vector<std::string> joint_order;   // the joints by bone index (Havok cloth and chains address bones by index)
     std::map<std::string, std::pair<uint32_t, uint32_t>> faces;   // material -> (triangles, folded)
 };
-static MeshShape mesh_shape(const std::vector<uint8_t>& b) {
-    MeshShape s;
+// A mesh's materials, joints and joint order from its name tables (b: the whole file, or its start)
+static bool mesh_tables(const std::vector<uint8_t>& b, MeshShape& s, std::vector<std::string>* mats_out = nullptr) {
     std::vector<std::string> mats, names;
-    if (!slotcheck::mesh_materials(b, mats, &names)) return s;
+    if (!slotcheck::mesh_materials(b, mats, &names)) return false;
     s.mats.insert(mats.begin(), mats.end());
     for (auto& n : names)
         if (!s.mats.count(n) && !(n.compare(0, 2, "BS") == 0 && n.find('.') != std::string::npos)) s.joints.insert(n);
+    // (SF6 mesh: the name index of each bone at +120, after the materials' at +112; the name table's order when
+    // that table does not name exactly these joints)
+    int64_t bo = 0;
+    if (b.size() >= 128) memcpy(&bo, b.data() + 120, 8);
+    if (bo > 0 && size_t(bo) + 2 * s.joints.size() <= b.size()) {
+        for (size_t k = 0; k < s.joints.size(); ++k) {
+            uint16_t ix = 0;
+            memcpy(&ix, b.data() + size_t(bo) + 2 * k, 2);
+            if (ix >= names.size() || !s.joints.count(names[ix])) break;
+            s.joint_order.push_back(names[ix]);
+        }
+        if (std::set<std::string>(s.joint_order.begin(), s.joint_order.end()) != s.joints) s.joint_order.clear();
+    }
+    if (s.joint_order.empty())
+        for (auto& n : names) if (s.joints.count(n)) s.joint_order.push_back(n);
+    if (mats_out) *mats_out = std::move(mats);
+    return true;
+}
+static MeshShape mesh_shape(const std::vector<uint8_t>& b) {
+    MeshShape s;
+    std::vector<std::string> mats;
+    if (!mesh_tables(b, s, &mats)) return s;
     auto r64 = [&](size_t o, int64_t& v) { if (o + 8 > b.size()) return false; memcpy(&v, b.data() + o, 8); return true; };
     auto r32 = [&](size_t o, int32_t& v) { if (o + 4 > b.size()) return false; memcpy(&v, b.data() + o, 4); return true; };
     // (SF6 mesh: buffer header at +72, levels of detail at +32; per LOD the mesh groups, per group its submeshes:
@@ -7891,6 +7930,84 @@ static const std::set<std::string>& game_mdf_materials(const std::string& low) {
         it = g_game_mdf_mats.emplace(low, std::set<std::string>(m.begin(), m.end())).first;
     }
     return it->second;
+}
+
+// A physics file: a chain (the model's, the wind's), joint constraints, Havok cloth, and the .user files that name them
+// or set the model's ambient occlusion and shape (not the colour files: _ccvd, _cmd_)
+static bool is_physics_file(const std::string& low) {
+    for (const char* x : {".chain.", ".jcns.", ".havokcloth.", "_chain.user.", "_jcs.user.", "_havok.user.", "_aogeo.user.",
+                          "_shape.user."})
+        if (low.find(x) != std::string::npos) return true;
+    return false;
+}
+
+// The physics files a game costume loads (lowercase pak path -> md5 of its bytes): the ones its scene names (vanilla
+// index: its .user files, its wind chain) and the files those .user files name, one level (_chain.user -> .chain,
+// _jcs.user -> .jcns, _havok.user -> .havokcloth: Ryu's Outfit 1 body chain is named by esf001_001_01_chain.user, not
+// by the scene). Read once per costume while the mods are scanned.
+static std::map<std::pair<int, int>, std::map<std::string, std::string>> g_game_physics;
+static const std::map<std::string, std::string>& game_physics(const VanillaIndex& inv, int fighter, int cno) {
+    auto [it, fresh] = g_game_physics.try_emplace({fighter, cno});
+    auto& out = it->second;
+    if (!fresh) return out;
+    std::vector<std::vector<uint8_t>> users;
+    auto add = [&](const std::string& low) {
+        if (out.count(low)) return;
+        std::vector<uint8_t> d = scan_game_file(low);
+        if (d.empty()) return;
+        out[low] = md5_hex(d.data(), d.size());
+        if (low.find(".user.") != std::string::npos) users.push_back(std::move(d));
+    };
+    for (auto& [h, us] : inv.users) {
+        if (!us.count({fighter, cno})) continue;
+        if (auto hp = inv.hash_to_paths.find(h); hp != inv.hash_to_paths.end())
+            for (auto& path : hp->second)
+                if (const std::string low = str_lower(path); is_physics_file(low)) add(low);
+    }
+    for (auto& d : users)
+        for (auto& s : slotcheck::utf16_strings(d)) {
+            std::string ref = str_lower(s);
+            while (!ref.empty() && (ref[0] == '@' || ref[0] == '/')) ref.erase(0, 1);
+            if (str_ends_with(ref, ".havokcloth")) add("natives/stm/" + ref + ".1.x64");
+            else if (str_ends_with(ref, ".chain") || str_ends_with(ref, ".jcns"))
+                if (const std::string p = slotcheck::resource_path(ref, inv.suffixes); !p.empty()) add(p);
+        }
+    return out;
+}
+// Whether a game costume loads a file: outfit_wears, or a file its physics .user files name (game_physics)
+static bool outfit_loads(const VanillaIndex& inv, int fighter, int cno, const std::string& low) {
+    return outfit_wears(inv, fighter, cno, low) || game_physics(inv, fighter, cno).count(low) > 0;
+}
+// The md5s of the physics files a game costume loads
+static std::set<std::string> game_physics_md5(const VanillaIndex& inv, int fighter, int cno) {
+    std::set<std::string> out;
+    for (auto& [p, md5] : game_physics(inv, fighter, cno)) out.insert(md5);
+    return out;
+}
+
+// The physics files of a costume of a unit (lowercase paths): in its folder and 000/, and the wind chain named after
+// its folder (natives/stm/product/weather/wind/mode/001/esf001_005_01_chain.chain.52)
+static std::map<std::string, ModFileRef> costume_physics(const UnitFiles& u, const ModCostume& mc) {
+    std::map<std::string, ModFileRef> out;
+    const std::string stem = mc.fighter_dir + "_" + mc.original_folder + "_";
+    for (auto& [p, mf] : u.files) {
+        const std::string low = str_lower(p);
+        if (!is_physics_file(low)) continue;
+        std::string pfd, folder;
+        if (parse_model_folder(low, pfd, folder)) {
+            if (pfd == mc.fighter_dir && (folder == mc.original_folder || folder == "000")) out[low] = mf;
+        } else if (rel_tail(low).compare(0, stem.size(), stem) == 0) out[low] = mf;
+    }
+    return out;
+}
+// The first of `files` (its file name) whose bytes are none of `loaded` (md5s), or empty: physics files must be the
+// same bytes as physics files the outfit they go on loads, whatever their names (an option wears that outfit's)
+static std::string physics_differ(const std::map<std::string, ModFileRef>& files, const std::set<std::string>& loaded) {
+    for (auto& [p, mf] : files) {
+        const std::vector<uint8_t> d = mf.read_data();
+        if (!loaded.count(md5_hex(d.data(), d.size()))) return rel_tail(p);
+    }
+    return {};
 }
 
 // The words that tell outfits apart: each name without the words all of them start and end with ("Aloha Ryu C1" /
@@ -7968,10 +8085,14 @@ static std::vector<std::string> distinct_labels(const std::vector<std::string>& 
 // "Outfit 1 No Cloak" folds the cloak of the game's Outfit 1 body; Sagat "Outfit 1 Shirtless" ships Outfit 1's head
 // as it is and its body with the fur vest folded. It becomes an option of that game outfit (and of the outfits that
 // wear that part), its files moved to the paths the game outfit loads; a file the same as the game's there is left
-// out, files a model cannot swap (physics, colours) too. A changed chain stays an outfit: a game outfit has no base
-// copy to go back to (a part unit needs one).
+// out, files a model cannot swap (physics, colours) too. Its physics files must be the same bytes as physics files the
+// game outfit loads (under other names: Sagat Shirtless ships Outfit 1's under DriveTech's), its meshes the game
+// meshes' joints in the same order (Havok cloth and chains address bones by index): the option wears the game
+// outfit's physics. A changed chain stays an outfit: a game outfit has no base copy to go back to (a part unit needs
+// one).
 struct Subset {
     int cno = -1;                      // the game outfit
+    bool physics = false;              // a game outfit's subset whose physics differ (why: which; audit)
     std::string hidden, why, kin;     // kin: a mesh made from a game outfit's, without anything taken off (audit)
     std::unordered_map<std::string, ModFileRef> files;     // the option, at the game outfit's paths
     std::unordered_map<std::string, std::string> origin;
@@ -8021,13 +8142,7 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
         }
         std::vector<std::string> mats, names;
         if (d.empty() || !slotcheck::mesh_materials(d, mats, &names)) d = mf.read_data();   // not in the first 8 MB
-        mats.clear(); names.clear();
-        if (slotcheck::mesh_materials(d, mats, &names)) {
-            t.ok = true;
-            t.mats.insert(mats.begin(), mats.end());
-            for (auto& n : names)
-                if (!t.mats.count(n) && !(n.compare(0, 2, "BS") == 0 && n.find('.') != std::string::npos)) t.joints.insert(n);
-        }
+        t.ok = mesh_tables(d, t);
         return heads.emplace(p, std::move(t)).first->second;
     };
     std::set<int> seen;
@@ -8054,6 +8169,7 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
                 fail = "part " + nn + ": other materials or joints";
                 break;
             }
+            if (mt.joint_order != gm.shape.joint_order) { fail = "part " + nn + ": its joints in another order"; break; }
             const GameMesh& mm = mod_mesh(p);
             if (mm.md5 == gm.md5) continue;
             const MeshShape& ms = mm.shape;
@@ -8085,6 +8201,12 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
         break;
     }
     if (r.cno < 0) { r.why = r.kin.empty() ? "no game outfit has these meshes" : r.kin; return r; }
+    if (const std::string f = physics_differ(costume_physics(u, mc), game_physics_md5(inv, mc.fighter, r.cno)); !f.empty()) {
+        r.why = game_outfit_name(r.cno) + " minus " + r.hidden + ", but its physics differ (" + f + ")";
+        r.physics = true;
+        r.cno = -1;
+        return r;
+    }
     // Its files at the game outfit's paths; the same as the game's there, or a file no model swaps: left out
     const auto& parts = game_parts(inv, mc.fighter, r.cno);
     const CostumeInfo* gc = inv.get_costume(mc.fighter, r.cno);
@@ -8093,7 +8215,8 @@ static Subset game_subset(const VanillaIndex& inv, const UnitFiles& u) {
     for (auto& [p, mf] : u.files) {
         const std::string low = str_lower(p), base = model_path(low), kd = rto_kind(base);
         std::string pfd, folder;
-        if (!parse_model_folder(base, pfd, folder) || pfd != fd || (folder != F && folder != "000")) continue;
+        if (!parse_model_folder(base, pfd, folder)) { other += is_physics_file(low); continue; }   // its wind chain
+        if (pfd != fd || (folder != F && folder != "000")) continue;
         if (kd != "mesh" && kd != "material" && kd != "texture" && kd != "chain") { other++; continue; }
         std::string np = low;
         if (folder == F) {
@@ -8159,7 +8282,7 @@ static std::string version_fit(const VanillaIndex& inv, int fighter, int base_cn
     auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
         const std::string low = str_lower(path);
         if (const ModFileRef* mf = slotcheck::mod_file(base_files, low)) return mf->read_data();
-        if (!outfit_wears(inv, fighter, base_cno, low)) return {};
+        if (!outfit_loads(inv, fighter, base_cno, low)) return {};
         return scan_game_file(low);
     };
     std::set<std::string> own_tex;
@@ -8198,7 +8321,9 @@ static std::vector<std::vector<size_t>> addon_sets(const std::vector<size_t>& ad
 // first of them (archive order; the first one the Slotsloader Manager leaves on): it keeps its slot, the others'
 // slots move to it with their version chosen. A version made for another game outfit is moved onto the base's folder
 // and carries what that game outfit wears at the parts it does not ship (Outfit 2's head for C2). Only where it fits
-// the base outfit (addon_fit); else it stays an outfit of its own. Their add-ons go with them, the same add-on once.
+// the base outfit (addon_fit) and its physics files are the same bytes as physics files the base loads (the version
+// wears the base's); else it stays an outfit of its own. A chain nothing of its own outfit names is left out (unused
+// there: Aloha C3's 003/esf001_003_02_chain.chain). Their add-ons go with them, the same add-on once.
 // handled: the units whose outfits and add-ons were made here.
 static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char* rule,
                            std::map<size_t, std::vector<size_t>>& addons_of, std::set<size_t>& handled) {
@@ -8206,9 +8331,12 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
     size_t bi = 0;
     while (bi < vs.size() && variant_chosen_off(vs[bi].source, vs[bi].row)) ++bi;
     if (bi == vs.size()) bi = 0;
-    if (!g_units[vs[bi].unit].kw.empty())   // an NSFW version (keywords) is not worn by default: the first other one
+    // An NSFW version (keywords, an NSFW mod's) is not worn by default: the first other one is the base (the outfit is
+    // NSFW only when its base is; the NSFW versions are NSFW options of it)
+    auto nsfw_v = [&](size_t k) { return !g_units[vs[k].unit].kw.empty() || g_units[vs[k].unit].u.nsfw; };
+    if (nsfw_v(bi))
         for (size_t k = 0; k < vs.size(); ++k)
-            if (g_units[vs[k].unit].kw.empty() && !variant_chosen_off(vs[k].source, vs[k].row)) {
+            if (!nsfw_v(k) && !variant_chosen_off(vs[k].source, vs[k].row)) {
                 printf("    nsfw: base %s instead of %s (NSFW)\n", vs[k].name.c_str(), vs[bi].name.c_str());
                 bi = k;
                 break;
@@ -8226,13 +8354,34 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         if (p.find(".mesh.") != std::string::npos && p.compare(0, strlen(STREAM_PFX), STREAM_PFX) != 0)
             if (const std::string nn = part_number(p); !nn.empty()) base_part[nn] = p;
     auto base_has = [&](const std::string& low) -> const ModFileRef* { return slotcheck::mod_file(b.files, low); };
+    // The physics files the base loads (md5s): its own and its game outfit's
+    std::set<std::string> base_physics = game_physics_md5(inv, fighter, b.cno);
+    for (auto& [p, mf] : costume_physics(g_units[b.unit], bmc)) {
+        const std::vector<uint8_t> d = mf.read_data();
+        base_physics.insert(md5_hex(d.data(), d.size()));
+    }
     for (size_t k = 1; k < vs.size(); ++k) {
         Version& v = vs[k];
         const ModCostume vmc = g_units[v.unit].costumes[v.costume];
         std::set<std::string> shipped;   // parts the version ships a mesh of
         size_t other = 0;
+        // What its own outfit names (resource names): its game outfit's physics files and what its own .user files name
+        std::set<std::string> named;
+        for (auto& [p, md5] : game_physics(inv, fighter, v.cno)) named.insert(resource_name(p));
+        std::map<std::string, ModFileRef> vphys = costume_physics(g_units[v.unit], vmc);
+        for (auto& [p, mf] : vphys)
+            if (p.find(".user.") != std::string::npos)
+                for (auto& s : slotcheck::utf16_strings(mf.read_data())) {
+                    std::string ref = str_lower(s);
+                    while (!ref.empty() && (ref[0] == '@' || ref[0] == '/')) ref.erase(0, 1);
+                    named.insert(ref);
+                }
         for (auto& [low, mf] : costume_model_files(g_units[v.unit], vmc)) {
             const std::string base = model_path(low), kd = rto_kind(base);
+            if (kd == "chain" && !named.count(resource_name(base))) {
+                printf("    %s: %s is named by nothing of its outfit: left out\n", v.name.c_str(), rel_tail(low).c_str());
+                continue;
+            }
             if (kd == "other") { other++; continue; }
             std::string pfd, folder;
             parse_model_folder(base, pfd, folder);
@@ -8266,9 +8415,16 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         for (auto it = v.files.begin(); it != v.files.end();) {
             const ModFileRef* bf = base_has(it->first);
             const bool same = bf ? same_bytes(*bf, it->second)
-                                 : outfit_wears(inv, fighter, b.cno, model_path(it->first)) && same_as_game(it->second, it->first);
+                                 : outfit_loads(inv, fighter, b.cno, model_path(it->first)) && same_as_game(it->second, it->first);
             it = same ? v.files.erase(it) : std::next(it);
         }
+        // (its model chains are swapped live where the base has a chain: version_fit)
+        for (auto it = vphys.begin(); it != vphys.end();) {
+            std::string pfd, folder;
+            it = rto_kind(it->first) == "chain" && parse_model_folder(it->first, pfd, folder) ? vphys.erase(it) : std::next(it);
+        }
+        if (v.why.empty())
+            if (const std::string f = physics_differ(vphys, base_physics); !f.empty()) v.why = "its physics differ (" + f + ")";
         if (!v.why.empty()) continue;
         bool live = false;
         for (auto& [p, mf] : v.files) {
@@ -8284,7 +8440,8 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         }
         v.why = version_fit(inv, fighter, b.cno, b.files, v);
         if (other && v.why.empty())
-            printf("    %s: %zu physics file%s of its own left out (not swapped live)\n", v.name.c_str(), other, other == 1 ? "" : "s");
+            printf("    %s: %zu physics / colour file%s of its own left out (its physics: the base's bytes)\n", v.name.c_str(),
+                   other, other == 1 ? "" : "s");
     }
     std::vector<size_t> in_merge;   // indices in vs merged with the base (the base first)
     for (size_t k = 0; k < vs.size(); ++k) if (k == 0 || vs[k].why.empty()) in_merge.push_back(k);
@@ -8416,12 +8573,14 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
             }
         }
         std::string list;
-        for (auto k : in_merge) list += (list.empty() ? "" : ", ") + vs[k].name + (vs[k].alias ? " (the same files)" : "");
+        for (auto k : in_merge)
+            list += (list.empty() ? "" : ", ") + vs[k].name + (vs[k].alias ? " (the same files)" : "")
+                  + (k && g_units[vs[k].unit].u.nsfw && !g_units[b.unit].u.nsfw ? " (NSFW)" : "");
         printf("\n  %s: one outfit %s, %s \"%s\": %s (base %s, %s)\n", rule, merged.c_str(),
                bpick_live ? "choice" : "choice with None for the base,", group.c_str(), list.c_str(), b.name.c_str(),
                game_outfit_name(b.cno).c_str());
         std::unordered_map<size_t, size_t> unit_option;
-        std::shared_ptr<RtoMod> rto = rto_from_groups(in, merged, {}, unit_option);
+        std::shared_ptr<RtoMod> rto = rto_from_groups(in, merged, {}, unit_option, g_units[b.unit].u.nsfw);
         rto->defaults_from = "loader";
         rto->source = b.source;
         // The outfits RuntimeOptions=off makes: its rows (the base's first) and the slots that move here
@@ -8525,7 +8684,7 @@ static void merge_outfits(ScanOutputs& o, std::map<size_t, std::vector<size_t>>&
     for (auto i : cand) {
         if (handled.count(i) || g_units[i].costumes.size() != 1) continue;
         const ModCostume& mc = g_units[i].costumes[0];
-        std::string sig = (g_units[i].u.nsfw ? "nsfw\t" : "") + mc.fighter_dir + "\t" + mc.original_folder;
+        std::string sig = mc.fighter_dir + "\t" + mc.original_folder;
         bool all = true, any = false;
         for (auto& [p, mf] : costume_model_files(g_units[i], mc)) {
             if (p.find(".mesh.") == std::string::npos) continue;
@@ -8562,8 +8721,8 @@ static void merge_outfits(ScanOutputs& o, std::map<size_t, std::vector<size_t>>&
     }
     // The audit: outfits of a fighter sharing a mesh (same bytes) that were not made one
     std::map<std::string, std::vector<std::pair<size_t, std::string>>> by_md5;   // fighter \t md5 -> (unit, mesh)
-    for (auto& [i, ms] : md5_of)   // (each root apart: NSFW and other outfits are never made one)
-        for (auto& [p, h] : ms) by_md5[g_units[i].costumes[0].fighter_dir + "\t" + h + (g_units[i].u.nsfw ? "\tnsfw" : "")].push_back({i, p});
+    for (auto& [i, ms] : md5_of)
+        for (auto& [p, h] : ms) by_md5[g_units[i].costumes[0].fighter_dir + "\t" + h].push_back({i, p});
     for (auto& [k, v] : by_md5) {
         if (v.size() < 2 || std::all_of(v.begin(), v.end(), [&](auto& x) { return handled.count(x.first) > 0; })) continue;
         std::string names, why;
@@ -8662,12 +8821,6 @@ static void finalize_units(ScanOutputs& o) {
         for (auto& [src, idx] : by_source) {
             if (std::any_of(idx.begin(), idx.end(), [](size_t i) { return is_lone_unit(g_units[i]); })) continue;
             if (!std::all_of(idx.begin(), idx.end(), [](size_t i) { return unit_retouch(g_units[i]); })) continue;
-            // An NSFW mod is never an option of the game's outfits (shown whatever the NSFW setting): it stays an outfit
-            if (g_units[idx[0]].u.nsfw) {
-                printf("\n  %s: meshes / textures only (a retouch), but from costume_mods_nsfw: stays an outfit (NSFW "
-                       "options go on NSFW outfits only)\n", g_units[idx[0]].u.rel.c_str());
-                continue;
-            }
             const bool outfit = std::any_of(idx.begin(), idx.end(), [](size_t i) { return !g_units[i].costumes.empty(); })
                 || (idx.size() == 1 && trim_ws(g_units[idx[0]].addonfor).empty()
                     && !detect_mod_costumes(g_units[idx[0]].files, o.inv, true).empty());
@@ -8696,14 +8849,14 @@ static void finalize_units(ScanOutputs& o) {
         for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
         for (auto& [src, idx] : by_source) {
             if (idx.size() != 1 || g_retouch_sources.count(src) || is_lone_unit(g_units[idx[0]])) continue;
-            if (g_units[idx[0]].u.nsfw) continue;   // never an option of a game outfit: stays an outfit (NSFW)
             UnitFiles& u = g_units[idx[0]];
             if (u.costumes.size() != 1 || !trim_ws(u.addonfor).empty() || u.u.game_install
                 || u.u.rel.compare(0, 19, "Fluffy Mod Manager/") == 0) continue;
             const std::string fd = u.costumes[0].fighter_dir;
             Subset s = game_subset(o.inv, u);
             if (s.cno < 0) {
-                if (!s.kin.empty()) edited[fd] += (edited[fd].empty() ? "" : "; ") + unit_label(u) + " (" + s.why + ")";
+                if (s.physics) merge_note(fd, "subset: " + unit_label(u) + " stays an outfit (" + s.why + ")");
+                else if (!s.kin.empty()) edited[fd] += (edited[fd].empty() ? "" : "; ") + unit_label(u) + " (" + s.why + ")";
                 continue;
             }
             UnitFiles t = u;
@@ -8817,7 +8970,6 @@ static void finalize_units(ScanOutputs& o) {
                 const auto& b = g_units[j];
                 if (b.costumes.empty() || modular.count(j) || retouch.count(j) || complete_addon_of.count(j)) continue;
                 if (b.source != a.source && is_lone_unit(b)) continue;   // alone in its sub-folder: nobody else's add-on goes on it
-                if (b.u.nsfw != a.u.nsfw) continue;   // NSFW add-ons on NSFW outfits only, and the other way round
                 bool hit = false;
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
@@ -9691,8 +9843,9 @@ static bool has_loose_files(const std::string& game_dir) {
     return false;
 }
 
-// One root of costume mods: costume_mods, or costume_mods_nsfw (nsfw: its mods are marked, shown in game only while
-// the plugin's "Display NSFW Outfits" is on, and merged or made options only with other NSFW mods). Same layout and
+// One root of costume mods: costume_mods, or costume_mods_nsfw (nsfw: its mods are marked; their outfits shown in game
+// only while the plugin's "Display NSFW Outfits" is on, their options on other outfits NSFW options; every rule mixes
+// them with the mods of costume_mods as if both were one folder, a sub-folder staying its root's own). Same layout and
 // rules in both: <root>/<Character>/<mod folder | archive | sub-folder>, archives dropped in the root, a mod straight
 // in the character folder.
 static void scan_mods_root(const std::string& base_dir, bool nsfw, ScanOutputs& o) {
@@ -9845,8 +9998,8 @@ static void scan_costume_mods(
         process_units({ ModUnit{ game_dir, "", "natives (Fluffy Mod Manager)", true } }, "natives (Fluffy Mod Manager)", o);
     }
 
-    // NSFW outfits (costume_mods_nsfw, made with costume_mods): read after every other mod, so the other outfits come
-    // out exactly as without it; their archives share costume_mods\.cache
+    // NSFW mods (costume_mods_nsfw, made with costume_mods): read after every other mod (the other outfits keep the ids
+    // and numbers they have without it), then handled with them as one folder; their archives share costume_mods\.cache
     const std::string nsfw_dir = game_dir + "\\reframework\\costume_mods_nsfw";
     const DWORD nsfw_attr = GetFileAttributesA(nsfw_dir.c_str());
     if (nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY)) {
