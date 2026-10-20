@@ -115,7 +115,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-nsfw-samelevel";
+static const char* LOADER_BUILD_ID = "2026-10-20-physics";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
@@ -7900,6 +7900,10 @@ static const std::map<std::string, std::string>& game_physics(const VanillaIndex
         }
     return out;
 }
+// Whether a game costume loads a file: outfit_wears, or a file its physics .user files name (game_physics)
+static bool outfit_loads(const VanillaIndex& inv, int fighter, int cno, const std::string& low) {
+    return outfit_wears(inv, fighter, cno, low) || game_physics(inv, fighter, cno).count(low) > 0;
+}
 // The md5s of the physics files a game costume loads
 static std::set<std::string> game_physics_md5(const VanillaIndex& inv, int fighter, int cno) {
     std::set<std::string> out;
@@ -8204,7 +8208,7 @@ static std::string version_fit(const VanillaIndex& inv, int fighter, int base_cn
     auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
         const std::string low = str_lower(path);
         if (const ModFileRef* mf = slotcheck::mod_file(base_files, low)) return mf->read_data();
-        if (!outfit_wears(inv, fighter, base_cno, low)) return {};
+        if (!outfit_loads(inv, fighter, base_cno, low)) return {};
         return scan_game_file(low);
     };
     std::set<std::string> own_tex;
@@ -8243,7 +8247,9 @@ static std::vector<std::vector<size_t>> addon_sets(const std::vector<size_t>& ad
 // first of them (archive order; the first one the Slotsloader Manager leaves on): it keeps its slot, the others'
 // slots move to it with their version chosen. A version made for another game outfit is moved onto the base's folder
 // and carries what that game outfit wears at the parts it does not ship (Outfit 2's head for C2). Only where it fits
-// the base outfit (addon_fit); else it stays an outfit of its own. Their add-ons go with them, the same add-on once.
+// the base outfit (addon_fit) and its physics files are the same bytes as physics files the base loads (the version
+// wears the base's); else it stays an outfit of its own. A chain nothing of its own outfit names is left out (unused
+// there: Aloha C3's 003/esf001_003_02_chain.chain). Their add-ons go with them, the same add-on once.
 // handled: the units whose outfits and add-ons were made here.
 static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char* rule,
                            std::map<size_t, std::vector<size_t>>& addons_of, std::set<size_t>& handled) {
@@ -8274,13 +8280,34 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         if (p.find(".mesh.") != std::string::npos && p.compare(0, strlen(STREAM_PFX), STREAM_PFX) != 0)
             if (const std::string nn = part_number(p); !nn.empty()) base_part[nn] = p;
     auto base_has = [&](const std::string& low) -> const ModFileRef* { return slotcheck::mod_file(b.files, low); };
+    // The physics files the base loads (md5s): its own and its game outfit's
+    std::set<std::string> base_physics = game_physics_md5(inv, fighter, b.cno);
+    for (auto& [p, mf] : costume_physics(g_units[b.unit], bmc)) {
+        const std::vector<uint8_t> d = mf.read_data();
+        base_physics.insert(md5_hex(d.data(), d.size()));
+    }
     for (size_t k = 1; k < vs.size(); ++k) {
         Version& v = vs[k];
         const ModCostume vmc = g_units[v.unit].costumes[v.costume];
         std::set<std::string> shipped;   // parts the version ships a mesh of
         size_t other = 0;
+        // What its own outfit names (resource names): its game outfit's physics files and what its own .user files name
+        std::set<std::string> named;
+        for (auto& [p, md5] : game_physics(inv, fighter, v.cno)) named.insert(resource_name(p));
+        std::map<std::string, ModFileRef> vphys = costume_physics(g_units[v.unit], vmc);
+        for (auto& [p, mf] : vphys)
+            if (p.find(".user.") != std::string::npos)
+                for (auto& s : slotcheck::utf16_strings(mf.read_data())) {
+                    std::string ref = str_lower(s);
+                    while (!ref.empty() && (ref[0] == '@' || ref[0] == '/')) ref.erase(0, 1);
+                    named.insert(ref);
+                }
         for (auto& [low, mf] : costume_model_files(g_units[v.unit], vmc)) {
             const std::string base = model_path(low), kd = rto_kind(base);
+            if (kd == "chain" && !named.count(resource_name(base))) {
+                printf("    %s: %s is named by nothing of its outfit: left out\n", v.name.c_str(), rel_tail(low).c_str());
+                continue;
+            }
             if (kd == "other") { other++; continue; }
             std::string pfd, folder;
             parse_model_folder(base, pfd, folder);
@@ -8314,9 +8341,16 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         for (auto it = v.files.begin(); it != v.files.end();) {
             const ModFileRef* bf = base_has(it->first);
             const bool same = bf ? same_bytes(*bf, it->second)
-                                 : outfit_wears(inv, fighter, b.cno, model_path(it->first)) && same_as_game(it->second, it->first);
+                                 : outfit_loads(inv, fighter, b.cno, model_path(it->first)) && same_as_game(it->second, it->first);
             it = same ? v.files.erase(it) : std::next(it);
         }
+        // (its model chains are swapped live where the base has a chain: version_fit)
+        for (auto it = vphys.begin(); it != vphys.end();) {
+            std::string pfd, folder;
+            it = rto_kind(it->first) == "chain" && parse_model_folder(it->first, pfd, folder) ? vphys.erase(it) : std::next(it);
+        }
+        if (v.why.empty())
+            if (const std::string f = physics_differ(vphys, base_physics); !f.empty()) v.why = "its physics differ (" + f + ")";
         if (!v.why.empty()) continue;
         bool live = false;
         for (auto& [p, mf] : v.files) {
@@ -8332,7 +8366,8 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         }
         v.why = version_fit(inv, fighter, b.cno, b.files, v);
         if (other && v.why.empty())
-            printf("    %s: %zu physics file%s of its own left out (not swapped live)\n", v.name.c_str(), other, other == 1 ? "" : "s");
+            printf("    %s: %zu physics / colour file%s of its own left out (its physics: the base's bytes)\n", v.name.c_str(),
+                   other, other == 1 ? "" : "s");
     }
     std::vector<size_t> in_merge;   // indices in vs merged with the base (the base first)
     for (size_t k = 0; k < vs.size(); ++k) if (k == 0 || vs[k].why.empty()) in_merge.push_back(k);
