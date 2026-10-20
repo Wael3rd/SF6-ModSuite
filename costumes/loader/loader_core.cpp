@@ -36,6 +36,7 @@
 #include <windows.h>
 #include <bcrypt.h>
 #include <tlhelp32.h>
+#include <psapi.h>
 #pragma comment(lib, "bcrypt.lib")
 
 // ============================================================================
@@ -67,6 +68,19 @@ static void logf(const char* fmt, ...) {
         st.wYear,st.wMonth,st.wDay,st.wHour,st.wMinute,st.wSecond);
     if (g_log) { fprintf(g_log, "[%s] %s", ts, buf); fflush(g_log); }
     if (g_is_exe) printf("%s", buf);
+}
+
+// Time since the run started and the process's peak memory, logged at each step of a rebuild
+static std::chrono::high_resolution_clock::time_point g_run_t0;
+static void log_step(const char* what) {
+    const double s = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - g_run_t0).count();
+    PROCESS_MEMORY_COUNTERS pmc{};
+    pmc.cb = sizeof(pmc);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        logf("  [%6.1f s] %s (peak working set %.0f MB, peak commit %.0f MB)\n", s, what,
+             pmc.PeakWorkingSetSize / 1048576.0, pmc.PeakPagefileUsage / 1048576.0);
+    else
+        logf("  [%6.1f s] %s\n", s, what);
 }
 
 static std::string w2a(const wchar_t* w) {
@@ -10197,6 +10211,7 @@ static void complete_vanilla_index(VanillaIndex& inv, PakReader& base_pak, const
 
 int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_override) {
     auto t0 = std::chrono::high_resolution_clock::now();
+    g_run_t0 = t0;
 
     std::string game_dir = w2a(game_dir_w);
     if (game_dir.empty()) return 1;
@@ -10500,6 +10515,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 4c. Costumes of the game that the shipped vanilla index does not know (added by a game update)
     if (structural.ok) complete_vanilla_index(inv, base_pak, structural.fighters);
     if (structural.ok) note_new_fighter_folders(game_dir, structural.fighters);
+    log_step("game files read");
 
 
     // 5. Scan each mod pak
@@ -10568,6 +10584,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 5b'. Variants turned off in variant_choices.json are not built (before 5c: an identical variant
     // that stays on must not be dropped as a copy of one turned off)
     apply_variant_choices(mods_with_costumes, all_mod_files);
+    log_step("mods scanned");
 
     if (mods_with_costumes.empty() || !std::any_of(mods_with_costumes.begin(),
             mods_with_costumes.end(), [](auto& p){ return !p.second.empty(); })) {
@@ -10655,6 +10672,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
 
     // 7. Build output pak
+    log_step("slots assigned");
     printf("\nAssembling output pak (minimal)...\n");
     PakWriter writer;
     std::unordered_set<std::string> written_paths;
@@ -10671,6 +10689,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // Restorations
     add_restorations(writer, written_paths, slots, inv, base_pak, all_mod_files);
     if (g_rto_layout != RtoLayout::Off) add_game_options(writer, written_paths, inv, base_pak, all_mod_files);
+    log_step("files assembled");
 
     // Slot check: every slot must be loadable as the game will load it, else it is left out
     {
@@ -10709,6 +10728,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             slots = std::move(kept);
             name_outfits();
         }
+        log_step("slots checked");
 
         // Colour swatches of the select screen, from each slot's own colour files and masks
         {
@@ -10726,6 +10746,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                     }
             printf("  colour swatches: %d colours for %d slots\n", colours, with);
         }
+        log_step("colour swatches made");
 
         // Every slot number the static scenes declare gets a scene. A choice saved by the game, or a
         // replay, can still name the number of a removed or left-out outfit; with no scene there,
@@ -10877,6 +10898,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         log_close(); return 1;
     }
     logf("  wrote %s (%zu entries)\n", target_path.c_str(), writer.entry_count());
+    log_step("pak written");
     if (writer.dedup_count())
         logf("  %zu entries share data with an identical one (%.1f MB not written twice)\n",
              writer.dedup_count(), writer.dedup_bytes() / 1048576.0);
