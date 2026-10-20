@@ -14,7 +14,8 @@
   installed (an older one keeps this mode off).
 - Runtime options on the VS screen: the two models of the versus intro (after the character / stage select, before
   the fight) wear the chosen options too, each side its own (online the player's own, P1's), loaded ahead and swapped
-  once ready like the select's; followed only while that screen's models are there, never into the fight.
+  on the first frame they are ready (found as soon as they are built); followed only while that screen's models are
+  there, never into the fight.
 - NSFW outfits: a second mods folder, `reframework\costume_mods_nsfw\<Character>\` (made by the user; same layout and
   rules as `costume_mods`). Its outfits are hidden until "Display NSFW Outfits" is on (`display_nsfw` in
   `reframework\data\SF6_CostumeSlots_data\settings.json`, off by default; applied at the next screen that lists

@@ -786,11 +786,10 @@ int main(int argc, char** argv) {
         check(std::string(panel_arrow(0, 2, 6)) == up && std::string(panel_arrow(3, 2, 6)).empty(), "arrows: bottom window, Up arrow on the first row");
         check(std::string(panel_arrow(1, 1, 6)).empty() && std::string(panel_arrow(2, 1, 6)).empty(), "arrows: none on the middle rows");
         check(std::string(panel_arrow(0, 0, 3)).empty() && std::string(panel_arrow(2, 0, 3)).empty(), "arrows: none when every row shows");
-        // the arrow in the row's left margin (the title stays where it is)
-        check(panel_arrow_left(100, 160, 20, 8) == 108, "arrow: room for the glyph and two margins, near the outline");
-        check(panel_arrow_left(100, 125, 20, 8) == 102.5, "arrow: room for the glyph only, centred left of the title");
-        check(panel_arrow_left(100, 110, 20, 8) == 88, "arrow: no room, just left of the title");
-        check(panel_arrow_left(100, 160, -5, -1) == 100, "arrow: a negative width or margin counts as 0");
+        // the arrow in the row's left margin: 45 left of the title, its right edge at least 8 from it
+        check(panel_arrow_left(85, 18, 45, 8) == 40, "arrow: 45 left of the title (in game 20/10: title at 85, arrow at 40)");
+        check(panel_arrow_left(85, 40, 45, 8) == 37, "arrow: a wide glyph ends 8 left of the title");
+        check(panel_arrow_left(85, -5, -1, -2) == 85, "arrow: a negative width, offset or gap counts as 0");
         // the VS screen's models: esfNNNvMM < Pos < Left | Right < FighterEmoteCtrl
         int root = 9;
         check(vs_model_side({ "esf002v00", "Pos", "Left", "FighterEmoteCtrl", "VS" }, &root) == 1 && root == 2, "vs: Left under FighterEmoteCtrl = P1, root Left");

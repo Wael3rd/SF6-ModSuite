@@ -236,12 +236,15 @@ struct Model {
     std::vector<UnitSwap> units;
     bool walked = false, settled = false, chains_mapped = false;
     uint32_t ver = 0, next = 0, walk_at = 0, check_at = 0, since = 0;
+    uint32_t seen = 0;                           // the frame its root was found (VS screen models)
     std::set<std::string> told;                  // log lines given once
 };
 Model g_models[7];                                // preview, P1, P2 (fighters), select P1, select P2, VS P1, VS P2
 // The character select builds a side's model under the same GameObject (its root stays): looked at more often, and the
 // VS screen's (shown a few seconds)
 bool select_model(const Model& md) { return &md >= &g_models[3] && &md <= &g_models[6]; }
+// The VS screen's: shown at once and for a few seconds, every frame until it wears its options (vs_tick)
+bool vs_model(const Model& md) { return &md >= &g_models[5] && &md <= &g_models[6]; }
 uint32_t check_every(const Model& md) { return select_model(md) ? 10 : 30; }
 
 // The last write of this module on a preview model (frame, what): told when the preview stays empty (preview_tick)
@@ -651,7 +654,7 @@ void pass(Model& md) {
         } else ++it;
     }
     if (!md.units.empty()) { md.next = g_frame + 1; return; }
-    if (pending) { md.next = g_frame + 5; return; }
+    if (pending) { md.next = g_frame + (vs_model(md) ? 1 : 5); return; }   // a VS model: its first ready frame
     if (!md.verify.empty()) { md.next = g_frame + 1; return; }
     md.settled = true;
     for (auto& mc : md.meshes)
@@ -662,7 +665,11 @@ void pass(Model& md) {
 // light: compare what the model loads with what it was left with (menu screens and fight watches only)
 void process(Model& md, int side, bool light) {
     if (!alive_as(md.root, T.go)) { reset(md); return; }
-    if (!md.walked || (!md.slot && g_frame >= md.walk_at)) { walk(md); md.walk_at = g_frame + (select_model(md) ? 20 : 60); }
+    if (!md.walked || (!md.slot && g_frame >= md.walk_at)) {
+        walk(md);
+        // a VS model with no outfit of ours yet: its parts may still be set up, looked at again each frame for a second
+        md.walk_at = g_frame + (vs_model(md) && g_frame - md.seen < 60 ? 1 : select_model(md) ? 20 : 60);
+    }
     if (!md.slot) return;
     if (md.side != side || md.ver != g_ver) { md.side = side; md.ver = g_ver; md.settled = false; md.next = 0; }
     if (md.settled) {
@@ -904,6 +911,7 @@ int visual_side(Obj* go) {
     return nm == "FighterVisual_01" ? 1 : nm == "FighterVisual_02" ? 2 : 0;
 }
 void vs_open(uint32_t frames, const char* why);
+void warm_vs();
 void select_tick() {
     if (!T.pcc_go || g_frame < g_sel_next) return;
     g_sel_next = g_frame + 10;
@@ -917,6 +925,7 @@ void select_tick() {
             logf("rto: character select no longer up: its models are no longer followed");
             g_select = false;
             select::leave_all("character select no longer up");
+            warm_vs();
             reset(*sm[0]); reset(*sm[1]);
             vs_open(60 * 90, "character select no longer up");
             return;
@@ -960,15 +969,46 @@ void select_tick() {
 // under Pos < Left (P1) / Right (P2) < FighterEmoteCtrl (the Color Mod's finding, rto_data vs_model_side); never a
 // fight's (the intro's rigs hang under FighterVisual_0N, the fighters under nothing). Looked for from the end of the
 // character select (90 s: the stage select comes between) or the start of a fighters watch (20 s: online, no select
-// here), followed like the select's models (polled every 10 frames, preload then apply), and let go when the screen's
-// models are gone, 20 s after they were first seen at the latest, or 5 s after both fighters are built without a VS
-// screen (Training): never into the fight. Online the player's own side wears P1's options (as in a fight).
-uint32_t g_vs_until = 0, g_vs_scan = 0, g_vs_next = 0, g_vs_first = 0;
+// here), and let go when the screen's models are gone, 20 s after they were first seen at the latest, or 5 s after both
+// fighters are built without a VS screen (Training): never into the fight. Online the player's own side wears P1's
+// options (as in a fight).
+// No visible swap (20/10: the base outfit showed a moment, then the option): the files of both sides' options asked
+// for when the select ends (warm_vs; mostly loaded already, the select models wore them); the scene searched every
+// frame for a second after any model's colours are set up (PlayerColorController.SetupColor, a hook that only counts:
+// the VS models get theirs when built), else every 30 frames (every 5 without that hook); a model found is looked at
+// every frame until it wears its options: swapped on the first frame its parts are ready (a part with a chain one
+// frame later: its chain is stopped a frame before the swap, docs/RUNTIME_OPTIONS.md Part units).
+uint32_t g_vs_until = 0, g_vs_scan = 0, g_vs_first = 0;
+std::atomic<uint32_t> g_color_setups{ 0 };  // PlayerColorController.SetupColor calls (hook: counted only)
+bool g_color_hook = false;
+uint32_t g_vs_setups = 0, g_vs_burst = 0;
 std::string g_vs_log;
 std::set<std::string> g_vs_odd;       // Left / Right chains not under FighterEmoteCtrl, told once a session
+int pre_color_setup(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    g_color_setups.fetch_add(1, std::memory_order_relaxed);
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+// The files of the options the select's models wear (both sides), asked for before those models go: the VS screen's
+// models then swap at once
+void warm_vs() {
+    size_t n = 0, fresh = 0;
+    for (int i = 3; i <= 4; ++i) {
+        const Model& md = g_models[i];
+        if (!md.slot || md.side < 0) continue;
+        for (auto& [t, w] : desired(g_m, *md.slot, chosen_of(g_m, *md.slot, g_c, md.side))) {
+            if (w.orig || w.path.empty()) continue;
+            if (!g_res.count(w.path)) ++fresh;
+            res_get(w.path, w.kind, false);
+            ++n;
+        }
+    }
+    if (n) logf("rto: %zu files of the select models' options kept for the VS screen (%zu not loaded yet)", n, fresh);
+}
 void vs_open(uint32_t frames, const char* why) {
     if (!g_vs_until) {
-        g_vs_scan = g_vs_next = g_vs_first = g_fighters_at = 0;
+        g_vs_scan = g_vs_first = g_fighters_at = 0;
+        g_vs_setups = g_color_setups.load(std::memory_order_relaxed);
+        g_vs_burst = 0;
         g_vs_log.clear();
         logf("rto: VS screen models looked for (%s)", why);
     }
@@ -981,14 +1021,16 @@ void vs_close(const char* why) {
     logf("rto: VS screen models no longer followed (%s)", why);
 }
 void vs_tick() {
-    if (!T.pcc_go || !T.tr_parent || g_frame < g_vs_next) return;
-    g_vs_next = g_frame + 10;
+    if (!T.pcc_go || !T.tr_parent) return;
     Model* vm[2] = { &g_models[5], &g_models[6] };
     if (g_vs_first && g_frame - g_vs_first > 60 * 20) { vs_close("20 s after they came"); return; }
     if (!g_vs_first && g_fighters_at && g_frame - g_fighters_at > 300) { vs_close("both fighters built, no VS screen"); return; }
     if (!g_vs_first && g_frame >= g_vs_until) { vs_close("none came"); return; }
     const bool both = vm[0]->root && vm[1]->root;
-    if (g_frame - g_vs_scan >= (both ? 120u : 30u)) {
+    const uint32_t setups = g_color_setups.load(std::memory_order_relaxed);
+    if (setups != g_vs_setups) { g_vs_setups = setups; g_vs_burst = g_frame + 60; }   // a model was just built
+    const uint32_t every = both ? 120u : (g_frame < g_vs_burst ? 1u : g_color_hook ? 30u : 5u);
+    if (g_frame - g_vs_scan >= every) {
         g_vs_scan = g_frame;
         Obj* found[2] = {};
         Obj* list = find_components(T.pcc);
@@ -1026,15 +1068,17 @@ void vs_tick() {
             if (found[i] == vm[i]->root) continue;
             reset(*vm[i]);
             vm[i]->root = found[i];
+            vm[i]->seen = g_frame;
+            if (found[i]) logf("rto: VS P%d model found (%s)", i + 1, g_frame < g_vs_burst ? "a model was just built" : "periodic search");
         }
     }
+    // every frame (process waits for md.next / check_at itself): a part unit's chain stays stopped one frame only, a
+    // model not ready yet is swapped on its first ready frame
     const bool net = costumes::online();
     for (int i = 0; i < 2; ++i) {
         Model& md = *vm[i];
         if (!md.root) continue;
         process(md, net ? 0 : i, true);
-        if (!md.units.empty()) g_vs_next = g_frame + 1;      // a part unit in flight: its chain stays stopped one frame only
-        else if (!md.settled && md.next && md.next < g_vs_next) g_vs_next = md.next;
     }
 }
 
@@ -1196,6 +1240,7 @@ void install_hooks() {
     if (!g_on) return;
     if (!types()) { g_on = false; return; }
     hook_all(T.pb, "SetupAppearance", pre_setup_appearance, nullptr);
+    g_color_hook = hook_all(T.pcc, "SetupColor", pre_color_setup, nullptr) > 0;   // VS screen models: found when built
     crf_hooks();
     menu::install();
 }
@@ -1227,6 +1272,7 @@ void tick(uint32_t ev) {
         if ((ev & EV_SELECT_END) && g_select) {
             g_select = false;
             select::leave_all("character select ended");
+            warm_vs();
             reset(g_models[3]); reset(g_models[4]);
             vs_open(60 * 90, "character select ended");
         }

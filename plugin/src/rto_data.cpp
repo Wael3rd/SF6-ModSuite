@@ -691,13 +691,9 @@ const char* panel_arrow(int k, int win, int n, int shown) {
     return "";
 }
 
-double panel_arrow_left(double row_left, double title_left, double glyph_w, double margin) {
+double panel_arrow_left(double title_left, double glyph_w, double offset, double gap) {
     glyph_w = std::max(0.0, glyph_w);
-    margin = std::max(0.0, margin);
-    const double space = title_left - row_left;
-    if (space >= glyph_w + 2 * margin) return row_left + margin;
-    if (space >= glyph_w) return row_left + (space - glyph_w) / 2;
-    return title_left - glyph_w - std::min(margin, 2.0);
+    return std::min(title_left - std::max(0.0, offset), title_left - std::max(0.0, gap) - glyph_w);
 }
 
 int vs_model_side(const std::vector<std::string>& up, int* root) {

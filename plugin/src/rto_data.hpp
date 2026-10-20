@@ -188,10 +188,10 @@ PanelWindow panel_focus(PanelWindow w, int n, int k, int shown = kPanelRows);
 // on the last shown row while rows lie below, else "". Drawn in the row's left margin (panel_arrow_left), the title
 // untouched; put before the title only when that row has no arrow copy (the copy could not be made)
 const char* panel_arrow(int k, int win, int n, int shown = kPanelRows);
-// The left edge of a row's arrow, in the row's own units: the row's outline starts at row_left, its title at
-// title_left, the glyph is glyph_w wide. Near the outline (a margin from it) when the space left of the title holds
-// the glyph and two margins; centred in that space when it holds only the glyph; else just left of the title.
-double panel_arrow_left(double row_left, double title_left, double glyph_w, double margin);
+// The left edge of a row's arrow (root units, 1080p): `offset` left of the title's left edge (inside the row's visible
+// frame, well left of the title), moved further left when the glyph (glyph_w wide) would end less than `gap` from
+// the title. Negative widths, offsets and gaps count as 0.
+double panel_arrow_left(double title_left, double glyph_w, double offset, double gap);
 // A model on the VS screen (the versus intro before a fight): its GameObject sits under Pos < Left | Right <
 // FighterEmoteCtrl (the Color Mod's finding). `up` = the names of a colour controller's GameObject (up[0]) and of its
 // parents (up[1] its parent, ...). The side (1 Left, 2 Right) when a Left / Right within the first five names has a

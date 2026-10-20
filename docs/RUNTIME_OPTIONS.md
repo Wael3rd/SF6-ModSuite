@@ -704,14 +704,24 @@ options in the set (see `slots[].required`).
   (`esfNNNvMM`) sits under `Pos` < `Left` (P1) / `Right` (P2) < `FighterEmoteCtrl` (the Color Mod's finding; the
   intro's rigs hang under `FighterVisual_0N`, the fighters under nothing). The root followed is that `Left` / `Right`
   GameObject, found from a `PlayerColorController`'s parents (`vs_model_side` in `rto_data.cpp`, unit-tested; a
-  `Left` / `Right` not under `FighterEmoteCtrl` is not followed and is logged once). Looked for (every 30 frames)
-  from the end of the character select (90 s: the stage select comes between) or the start of a fighters watch
-  (20 s: online, where there is no select screen), then followed like the select's models (every 10 frames, the
-  same passes: preload, swap once ready, never half loaded), offline with that side's options, online P1's. Let go
+  `Left` / `Right` not under `FighterEmoteCtrl` is not followed and is logged once). Looked for from the end of the
+  character select (90 s: the stage select comes between) or the start of a fighters watch (20 s: online, where
+  there is no select screen): every frame for a second after any model's colours are set up (a pre-hook of
+  `PlayerColorController.SetupColor` that only counts calls: the VS models get theirs when built), else every 30
+  frames (every 5 without that hook). A model found is looked at every frame until it wears its options (the same
+  passes: preload, swap once ready, never half loaded; a model still loading is tried again the next frame, not 5
+  frames later; its walk too, for its first second), so it is swapped on the first frame its parts are ready; a part
+  swapped with its chain (part unit) one frame later (its chain stopped a frame before). When the select ends, the
+  files of the options both select models wear are asked for again (`warm_vs`, mostly loaded already: kept, not
+  given back) so the VS models never wait the 30 frames of a new holder. Offline with that side's options, online
+  P1's. Until 20/10 the search ran every 30 frames and a model every 10: the base outfit showed up to ~40
+  frames before the option. Let go
   (models reset, no more scans) when the screen's models are gone, 20 s after they came at the latest, 5 s after both
   fighters are built when no VS model came (Training), or when the character select opens: never into the fight.
-  Logs: `rto: VS screen models looked for (...)`, `rto: VS screen: N colour controllers, P1 model found|none, P2
-  model found|none` (on change), `rto: VS P1 wears ...`, `rto: VS screen models no longer followed (...)`.
+  Logs: `rto: VS screen models looked for (...)`, `rto: N files of the select models' options kept for the VS
+  screen (M not loaded yet)`, `rto: VS screen: N colour controllers, P1 model found|none, P2 model found|none` (on
+  change), `rto: VS P1 model found (a model was just built | periodic search)`, `rto: VS P1 wears ...`, `rto: VS
+  screen models no longer followed (...)`.
 - **Ahead**: 30 s after start, the files of the choices made in the menu (both sides, 64 at most) are loaded and
   kept, so a fight shows them at once; other holders are given back 10 s after their last use.
 - 5 exceptions: the runtime options stop for the session (one log line).
@@ -879,13 +889,21 @@ does, the fallback above is the next step.
   (Esc leaves the mode only: the press is not a Back for the screen, IsDecide / IsCancel answer false 15 frames
   after); R1 / C do nothing while the options show (Wael 20/10; logged).
 - **Arrows**: a copy of the row's title (`e_text_slots_arrow`, the core's `ui_clone_control`, core 0.8.2+) next to
-  it (same parent, font, size and colour), on the title's line (its control point row), its left edge 8 units (root
-  space, 1080p) right of the row's outline: the leftmost visible non-text element of the row at least 40 wide; when
-  the space left of the title is narrower than the glyph and two margins the glyph is centred in it, with no room
-  just left of the title (`panel_arrow_left`); no outline found: left of the title by the glyph and two margins.
-  `set_AutoRegionFit(true)`, the control point moved to the left of the title's row. Placed once a visit (the
-  glyph's drawn width read on the next frames, then placed again), logged once (`rto select: P1 arrow row 3:
-  outline x .., title x .., glyph .. wide, arrow x ..`). R19: the copy is made inside a post-hook of
+  it (same parent, font, size and colour), on the title's line (its control point row), its left edge 45 units (root
+  space, 1080p) left of the title's left edge, further left when the glyph would end less than 8 units from the title
+  (`panel_arrow_left`, unit-tested): x 40 for a title at 85, about 12 inside the row's visible frame (x 28). The row's
+  outline is no reference: its leftmost wide element is the glow `e_tex_glow`, which reaches off the panel (x -32);
+  the leftmost non-glow element is only logged. 20/10 19:59: placed six times when shown and then left alone, the
+  arrows were drawn on the titles' first letters: the copy inherits the title's layout / animation (R31) and the game
+  puts it back at the title's place. Now written every frame while shown (left point, `set_AutoRegionFit(true)`),
+  its drawn place read 3 frames after it shows and logged once a visit (`rto select: P1 arrow row 3: drawn at x ..,
+  meant .. (title x .. - 45, glyph .. wide ..; row frame x .. <element>, for reference; placed every frame | anchored;
+  its position found moved by the game on N of M frames)`). Drawn more than 4 units from where it was meant (the
+  game's own write comes after ours): from then on, for the session, **anchored**: its position kept on the title's
+  own point (what moves the title moves it), its control point on the right of the title's row,
+  `set_AutoRegionFit(false)`, a region reaching from that point left to the arrow's place, the glyph drawn at the
+  region's left (`via.gui.PageAlignment` of the same row on the left, read by name from the game's types; logged:
+  `rto select: P1 arrow row 3: anchored, page alignment ..`). R19: the copy is made inside a post-hook of
   `app.UIFlowUI10505.CharaSetting.OnUpdate` (the type's own method only; the place LL's row clones on this panel
   use), installed with the mode's hooks; the frame asks (one copy per row, under the title's parent, it lives and
   dies with the panel's tree), the hook body is the core's guarded copy, made hidden and ForceInvisible. R35: found
