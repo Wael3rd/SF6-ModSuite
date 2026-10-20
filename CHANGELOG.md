@@ -119,6 +119,11 @@
   as on the game's Outfit 2, no longer light grey); nothing else changes.
 - Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
+### SF6 Native Core 0.9.0
+- `opt_group_place`, appended at the end of the API: a client's option group shown as rows of a section of the game's
+  Options screen (e.g. Interface > Other Settings) instead of the core's window. Older clients are not affected; see
+  [core/docs/ABI.md](core/docs/ABI.md).
+
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite
 
 | Package | Version | |
