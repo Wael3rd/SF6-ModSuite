@@ -467,6 +467,35 @@ int main(int argc, char** argv) {
         auto r = rows(q, t, c);
         check(r.size() == 2 && r[0].kind == Row::Pick && r[0].none && r[0].labels.size() == 3 && r[1].kind == Row::Toggle,
               "game outfit: a choice with None (main files / glasses) and an On / Off row");
+
+        // The same add-on from costume_mods_nsfw (the loader marks every option "nsfw" on an outfit that is not NSFW):
+        // while "Display NSFW Outfits" is off the game outfit offers nothing and wears the game's own files, a saved
+        // choice is kept and worn again once NSFW is shown
+        std::string jn = j;
+        for (const char* id : {"c2main01", "c2glas01", "wrnk0001"}) {
+            const std::string at = std::string("{\"id\": \"") + id + "\"";
+            jn.replace(jn.find(at), at.size(), at + ", \"nsfw\": true");
+        }
+        Manifest qn; std::string e7;
+        check(parse_manifest(jn, qn, e7) && qn.has_nsfw && !qn.show_nsfw, "game outfit, NSFW add-on: parsed, hidden by default");
+        const Slot& tn = qn.slots[0];
+        check(rows(qn, tn, chosen_of(qn, tn, none, 0)).empty(), "game outfit, NSFW add-on: no row while off");
+        Choices chn;
+        auto& sdn = chn.mods["esf028/game outfit 2"][0];
+        sdn.changed = true;
+        sdn.ids = {"c2glas01", "wrnk0001"};
+        auto off = chosen_of(qn, tn, chn, 0);
+        d = desired(qn, tn, off);
+        check(off.empty() && is_orig(d, "product/model/esf/esf028/002/00/esf028_002_00.mesh"),
+              "game outfit, NSFW add-on: a saved choice not worn while off (the game's head)");
+        check(keep_hidden(qn, tn, sdn.ids, off, off) == std::vector<std::string>({"c2glas01", "wrnk0001"}),
+              "game outfit, NSFW add-on: the saved choice kept while off");
+        qn.show_nsfw = true;
+        auto on = chosen_of(qn, tn, chn, 0);
+        check(has(on, "c2glas01") && has(on, "wrnk0001") && rows(qn, tn, on).size() == 2,
+              "game outfit, NSFW add-on: worn and offered while on");
+        check(!qn.slots[1].game && rows(qn, qn.slots[1], qn.slots[1].defaults).size() == 1,
+              "game outfit, NSFW add-on: the other slot's own option untouched");
     }
 
     {   // retouches (meshes / textures only, no material file) on a game outfit: one choice for the body they all
