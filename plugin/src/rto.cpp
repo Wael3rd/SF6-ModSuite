@@ -637,6 +637,105 @@ void process(Model& md, int side, bool light) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Diagnostics of an empty preview (20/10: after fast costume changes that stop on a game outfit the preview stayed
+// without a model and the game built none, CaptureRoomFighter made and dropped again every 30-50 frames): which
+// CaptureRoomFighter methods ran between two preview models, and the fields of one waiting for its model (a normal
+// load and a stuck one compared). The hooks only count calls; the rest is reads from LateUpdateBehavior.
+// ---------------------------------------------------------------------------------------------
+constexpr int kCrfHooks = 24;
+std::string g_crf_hook_name[kCrfHooks];
+std::atomic<uint32_t> g_crf_calls[kCrfHooks];
+uint32_t g_crf_mark[kCrfHooks] = {};
+int g_crf_hook_n = 0;
+template <int I> int crf_pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    g_crf_calls[I].fetch_add(1, std::memory_order_relaxed);
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+template <int... I> constexpr REFPreHookFn crf_fn(int i, std::integer_sequence<int, I...>) {
+    constexpr REFPreHookFn t[] = { &crf_pre<I>... };
+    return t[i];
+}
+// Its own methods (no getter / setter), the ones named like a load step first
+void crf_hooks() {
+    std::vector<Method*> key, rest;
+    std::string all;
+    for (auto* m : T.crf->get_methods()) {
+        if (!m || !m->get_name() || m->is_static()) continue;
+        const std::string n = m->get_name();
+        all += (all.empty() ? "" : " ") + n;
+        if (n.rfind("get_", 0) == 0 || n.rfind("set_", 0) == 0 || n.rfind("op_", 0) == 0 || n[0] == '<') continue;
+        std::string low = n;
+        for (auto& ch : low) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+        bool k = false;
+        for (const char* w : { "setup", "request", "load", "create", "change", "release", "destroy", "start", "init",
+                               "ready", "wait", "end", "ctor", "apply", "build" })
+            if (low.find(w) != std::string::npos) k = true;
+        (k ? key : rest).push_back(m);
+    }
+    key.insert(key.end(), rest.begin(), rest.end());
+    std::string hooked;
+    for (Method* m : key) {
+        if (g_crf_hook_n >= kCrfHooks) break;
+        if (!m->get_function_raw()) continue;
+        const int i = g_crf_hook_n;
+        if (!m->add_hook(crf_fn(i, std::make_integer_sequence<int, kCrfHooks>{}), hook_post_pass, false)) continue;
+        g_crf_hook_name[i] = std::string(m->get_name()) + "/" + std::to_string(m->get_num_params());
+        hooked += (hooked.empty() ? "" : " ") + g_crf_hook_name[i];
+        ++g_crf_hook_n;
+    }
+    logf("rto: preview diagnostics: CaptureRoomFighter methods: %s", all.c_str());
+    logf("rto: preview diagnostics: calls counted: %s", hooked.empty() ? "none" : hooked.c_str());
+}
+// The counted calls since the last time this was asked
+std::string crf_calls_since() {
+    std::string s;
+    for (int i = 0; i < g_crf_hook_n; ++i) {
+        const uint32_t c = g_crf_calls[i].load(std::memory_order_relaxed);
+        if (c != g_crf_mark[i]) s += (s.empty() ? "" : ", ") + g_crf_hook_name[i] + " x" + std::to_string(c - g_crf_mark[i]);
+        g_crf_mark[i] = c;
+    }
+    return s.empty() ? "none" : s;
+}
+// An object's fields (its type, then its parents up to via.Component): booleans, numbers, enums, strings, the type of
+// an object (or null); structs left out
+std::string fields_of(Obj* o) {
+    std::string s;
+    int n = 0;
+    for (TD* t = o ? o->get_type_definition() : nullptr; t && n < 80; t = t->get_parent_type()) {
+        const std::string tn = t->get_full_name();
+        if (tn == "via.Component" || tn == "System.Object") break;
+        for (auto* f : t->get_fields()) {
+            if (!f || !f->get_name() || f->is_static() || n >= 80) continue;
+            TD* ft = f->get_type();
+            void* p = ft ? f->get_data_raw(o, false) : nullptr;
+            if (!p) continue;
+            const std::string ftn = ft->get_full_name();
+            std::string v;
+            if (ftn == "System.Boolean") v = *static_cast<uint8_t*>(p) ? "true" : "false";
+            else if (ftn == "System.Single") { char b[32]; snprintf(b, sizeof b, "%g", *static_cast<float*>(p)); v = b; }
+            else if (ft->is_valuetype()) {
+                const uint32_t sz = ft->get_valuetype_size();
+                if (sz == 1) v = std::to_string(*static_cast<uint8_t*>(p));
+                else if (sz == 2) v = std::to_string(*static_cast<int16_t*>(p));
+                else if (sz == 4) v = std::to_string(*static_cast<int32_t*>(p));
+                else if (sz == 8) v = std::to_string(*static_cast<int64_t*>(p));
+                else continue;
+            } else {
+                Obj* r = *static_cast<Obj**>(p);
+                v = !r ? "null" : !alive(r) ? "?" : ftn == "System.String" ? "\"" + str(r) + "\"" : type_name(r);
+            }
+            s += (s.empty() ? "" : ", ") + std::string(f->get_name()) + "=" + v;
+            ++n;
+        }
+    }
+    return s.empty() ? "no field read" : s;
+}
+Obj* g_crf_wait = nullptr;           // the last CaptureRoomFighter seen without a model, since g_crf_wait_at
+uint32_t g_crf_wait_at = 0;
+bool g_crf_wait_told = false;
+int g_crf_wait_dumps = 0;            // fields told for a normal wait (3 a session; every stuck one is told)
+
+// ---------------------------------------------------------------------------------------------
 // Screens
 // ---------------------------------------------------------------------------------------------
 Obj* g_crf = nullptr;                // the preview's CaptureRoomFighter, checked alive before each use
@@ -658,9 +757,11 @@ void preview_tick() {
         Obj* list = find_components(T.crf);
         const int n = list_count(list);
         Obj* any = nullptr;                          // one with a model, set up or not
+        Obj* wait = nullptr;                         // one without a model
         int with_obj = 0;
         for (int i = 0; i < n; ++i) {
             Obj* c = list_item(list, i);
+            if (c && !call_obj(T.crf_obj, c) && !wait) wait = c;
             if (!c || !call_obj(T.crf_obj, c)) continue;
             ++with_obj;
             if (!any) any = c;
@@ -671,6 +772,17 @@ void preview_tick() {
         snprintf(b, sizeof b, "%d CaptureRoomFighter, %d with a model, %s", n, with_obj,
                  !g_crf ? "no preview" : (g_crf == any && T.crf_setup && !ret_bool(T.crf_setup, g_crf)) ? "using one not set up yet" : "using one set up");
         if (g_crf_log != b) { g_crf_log = b; logf("rto: preview search: %s", b); }
+        if (wait != g_crf_wait) { g_crf_wait = wait; g_crf_wait_at = g_frame; g_crf_wait_told = false; }
+    }
+    // one waiting 30 frames for its model: its fields (a normal load takes about 40), every one while the preview is
+    // stuck (since the empty preview was told)
+    if (g_crf_wait && !g_crf_wait_told && g_frame - g_crf_wait_at >= 30 && (g_crf_wait_dumps < 3 || g_gone_told)) {
+        g_crf_wait_told = true;
+        if (alive_as(g_crf_wait, T.crf)) {
+            ++g_crf_wait_dumps;
+            logf("rto: preview diagnostics: CaptureRoomFighter waiting %u frames for its model%s: %s", g_frame - g_crf_wait_at,
+                 g_gone_told ? " (preview stuck)" : "", fields_of(g_crf_wait).c_str());
+        }
     }
     Model& md = g_models[0];
     Obj* root = g_crf ? call_obj(T.crf_obj, g_crf) : nullptr;
@@ -686,16 +798,18 @@ void preview_tick() {
     } else if (!g_gone_told && g_fs_was && g_frame - g_gone_at > 300) {
         g_gone_told = true;
         logf("rto: preview: no model for %u frames (since f%u, %s); since then: %u outfit manifests created, %u model "
-             "builds (SetupAppearance); our last write on a preview model: %s", g_frame - g_gone_at, g_gone_at,
+             "builds (SetupAppearance); our last write on a preview model: %s; CaptureRoomFighter calls since the last "
+             "model: %s", g_frame - g_gone_at, g_gone_at,
              g_crf_log.c_str(), g_holders - g_gone_holders, g_builds.load(std::memory_order_relaxed) - g_gone_builds,
-             g_prev_write_at ? ("f" + std::to_string(g_prev_write_at) + " " + g_prev_write).c_str() : "none");
+             g_prev_write_at ? ("f" + std::to_string(g_prev_write_at) + " " + g_prev_write).c_str() : "none",
+             crf_calls_since().c_str());
     }
     if (root && T.crf_setup && !ret_bool(T.crf_setup, g_crf)) root = nullptr;   // still building
     if (root != md.root) {
         reset(md); md.root = root;
         if (root) {
             const std::string nm = str(call_obj(T.go_name, root));
-            logf("rto: preview model %s", nm.c_str());
+            logf("rto: preview model %s (CaptureRoomFighter calls since the last one: %s)", nm.c_str(), crf_calls_since().c_str());
             if (nm.size() >= 6 && nm.compare(0, 3, "esf") == 0 && isdigit(static_cast<unsigned char>(nm[3])) &&
                 isdigit(static_cast<unsigned char>(nm[4])) && isdigit(static_cast<unsigned char>(nm[5]))) {
                 g_prev_fighter = (nm[3] - '0') * 100 + (nm[4] - '0') * 10 + (nm[5] - '0');
@@ -877,6 +991,7 @@ void install_hooks() {
     if (!g_on) return;
     if (!types()) { g_on = false; return; }
     hook_all(T.pb, "SetupAppearance", pre_setup_appearance, nullptr);
+    crf_hooks();
     menu::install();
 }
 
