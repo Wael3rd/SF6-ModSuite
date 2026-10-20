@@ -160,6 +160,15 @@ README_TXT = CRLF.join([
     "",
 ])
 
+def manager_contract():
+    # The Slotsloader Manager contract the loader implements (MANAGER_CONTRACT in loader_core.cpp,
+    # docs/MANAGER_CONTRACT.md): the Manager reads it from this modinfo.ini
+    import re
+    src = open(os.path.join(REPO, "costumes", "loader", "loader_core.cpp"), encoding="utf-8").read()
+    m = re.search(r"MANAGER_CONTRACT\s*=\s*(\d+)", src)
+    if not m: sys.exit("MANAGER_CONTRACT introuvable dans loader_core.cpp")
+    return int(m.group(1))
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="1.0")
@@ -201,7 +210,8 @@ def main():
         "version=%s\n"
         "description=Turns installed costume mods (Fluffy paks) into EXTRA outfit slots at game launch, keeping the original outfit. Costume mods can also be dropped as downloaded (.zip, .7z, .rar) in reframework/costume_mods/<Character>/. Experimental: stage mods dropped in reframework/stage_mods/ become variants of their stage, UP / DOWN on the stage select screen. Install once; then install mods as usual and restart the game.\n"
         "author=Wael\n"
-        "NameAsBundle=SF6 Slots Loader\n" % a.version)
+        "NameAsBundle=SF6 Slots Loader\n"
+        "SlotsloaderContract=%d\n" % (a.version, manager_contract()))
     readme = README_TXT % a.version
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("modinfo.ini", modinfo)

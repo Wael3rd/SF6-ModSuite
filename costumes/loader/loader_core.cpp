@@ -113,7 +113,11 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rto-grouped-addons";
+static const char* LOADER_BUILD_ID = "2026-10-20-rto-manager-contract";
+// Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
+// ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
+// scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
+static const int MANAGER_CONTRACT = 1;
 
 // ============================================================================
 // Utility
@@ -1393,8 +1397,10 @@ struct RtoMod {
     std::string name, source, defaults_from;
     std::vector<RtoGroup> groups;   // in the order their files are laid over each other (later wins)
     std::vector<RtoOption> options;
-    // Every combination build_modular makes (variant slots): its costume id, label and options worn
-    struct Variant { std::string mod_id, label; std::vector<size_t> selected; };
+    // Every combination build_modular makes (variant slots): its costume id, label and options worn.
+    // row: the label RuntimeOptions=off gives that outfit, the variant Slotsloader Manager shows and turns
+    // on or off (variants.json); empty for a former outfit only kept for the migration of its slot.
+    struct Variant { std::string mod_id, label; std::vector<size_t> selected; std::string row; };
     std::vector<Variant> variants;
 };
 struct RtoFile { std::string kind, target, path; };
@@ -1614,6 +1620,250 @@ static void write_options_json(const std::string& path, const std::vector<SlotIn
     fclose(f);
 }
 
+// ============================================================================
+// Slotsloader Manager variant choices (docs/MANAGER_CONTRACT.md). From ZZtaii's Slotsloader fork
+// (1.10.0), MIT: variant_choices.json (written by the Manager, read here) turns chosen variants of a mod
+// off; variants.json (written here) lists every variant of every mod, on and off. Both name a mod by
+// outfits.json's "source" and a variant by its "label".
+// ============================================================================
+
+// A small JSON reader for a file another program writes: objects, arrays, strings (escapes, \u
+// surrogate pairs to UTF-8), numbers, true, false, null. (from ZZtaii's Slotsloader fork (1.10.0), MIT)
+struct JsonReader {
+    const std::string& s;
+    size_t i = 0;
+    explicit JsonReader(const std::string& t) : s(t) {}
+    void ws() { while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i; }
+    bool eat(char c) { ws(); if (i < s.size() && s[i] == c) { ++i; return true; } return false; }
+    bool word(const char* w) {
+        ws();
+        size_t n = strlen(w);
+        if (s.compare(i, n, w) != 0) return false;
+        i += n;
+        return true;
+    }
+    bool hex4(uint32_t& v) {
+        if (i + 4 > s.size()) return false;
+        v = 0;
+        for (int k = 0; k < 4; ++k) {
+            char c = s[i++];
+            v <<= 4;
+            if (c >= '0' && c <= '9') v |= uint32_t(c - '0');
+            else if (c >= 'a' && c <= 'f') v |= uint32_t(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') v |= uint32_t(c - 'A' + 10);
+            else return false;
+        }
+        return true;
+    }
+    static void utf8(std::string& o, uint32_t cp) {
+        if (cp < 0x80) o += char(cp);
+        else if (cp < 0x800) { o += char(0xC0 | (cp >> 6)); o += char(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { o += char(0xE0 | (cp >> 12)); o += char(0x80 | ((cp >> 6) & 0x3F)); o += char(0x80 | (cp & 0x3F)); }
+        else { o += char(0xF0 | (cp >> 18)); o += char(0x80 | ((cp >> 12) & 0x3F));
+               o += char(0x80 | ((cp >> 6) & 0x3F)); o += char(0x80 | (cp & 0x3F)); }
+    }
+    bool string(std::string& out) {
+        if (!eat('"')) return false;
+        out.clear();
+        while (i < s.size()) {
+            unsigned char c = (unsigned char)s[i++];
+            if (c == '"') return true;
+            if (c < 0x20) return false;
+            if (c != '\\') { out += char(c); continue; }
+            if (i >= s.size()) return false;
+            switch (s[i++]) {
+            case '"': out += '"'; break;
+            case '\\': out += '\\'; break;
+            case '/': out += '/'; break;
+            case 'b': out += '\b'; break;
+            case 'f': out += '\f'; break;
+            case 'n': out += '\n'; break;
+            case 'r': out += '\r'; break;
+            case 't': out += '\t'; break;
+            case 'u': {
+                uint32_t cp;
+                if (!hex4(cp)) return false;
+                if (cp >= 0xD800 && cp <= 0xDBFF) {
+                    uint32_t lo;
+                    if (i + 1 >= s.size() || s[i] != '\\' || s[i + 1] != 'u') return false;
+                    i += 2;
+                    if (!hex4(lo) || lo < 0xDC00 || lo > 0xDFFF) return false;
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                } else if (cp >= 0xDC00 && cp <= 0xDFFF) return false;
+                utf8(out, cp);
+                break;
+            }
+            default: return false;
+            }
+        }
+        return false;
+    }
+    bool skip(int depth = 0) {
+        if (depth > 64) return false;
+        ws();
+        if (i >= s.size()) return false;
+        if (s[i] == '"') { std::string t; return string(t); }
+        if (s[i] == '{') {
+            ++i;
+            if (eat('}')) return true;
+            do { std::string k; if (!string(k) || !eat(':') || !skip(depth + 1)) return false; } while (eat(','));
+            return eat('}');
+        }
+        if (s[i] == '[') {
+            ++i;
+            if (eat(']')) return true;
+            do { if (!skip(depth + 1)) return false; } while (eat(','));
+            return eat(']');
+        }
+        if (word("true") || word("false") || word("null")) return true;
+        size_t a = i;
+        bool digit = false;
+        while (i < s.size() && (isdigit((unsigned char)s[i]) || (s[i] && strchr("+-.eE", s[i]))))
+            digit |= isdigit((unsigned char)s[i++]) != 0;
+        return i > a && digit;
+    }
+};
+
+// variant_choices.json: { "version": 1, "archives": { "<source>": { "<label>": true|false } } }.
+// Only an explicit false turns a variant off; any other value is ignored.
+using VariantChoices = std::map<std::string, std::map<std::string, bool>>;
+static VariantChoices g_variant_choices;
+
+static bool parse_variant_choices(const std::string& txt, VariantChoices& out, std::string& why) {
+    out.clear();
+    JsonReader j(txt);
+    if (txt.compare(0, 3, "\xEF\xBB\xBF") == 0) j.i = 3;
+    auto bad = [&](const char* what) { why = std::string(what) + " at byte " + std::to_string(j.i); out.clear(); return false; };
+    if (!j.eat('{')) return bad("not a JSON object");
+    if (!j.eat('}')) {
+        do {
+            std::string key;
+            if (!j.string(key) || !j.eat(':')) return bad("bad key");
+            if (key != "archives") { if (!j.skip()) return bad("bad value"); continue; }
+            if (!j.eat('{')) return bad("\"archives\" is not an object");
+            if (j.eat('}')) continue;
+            do {
+                std::string src;
+                if (!j.string(src) || !j.eat(':')) return bad("bad source");
+                if (!j.eat('{')) return bad("a source's entry is not an object");
+                auto& labels = out[src];
+                if (j.eat('}')) continue;
+                do {
+                    std::string label;
+                    if (!j.string(label) || !j.eat(':')) return bad("bad label");
+                    if (j.word("true")) labels[label] = true;
+                    else if (j.word("false")) labels[label] = false;
+                    else if (!j.skip()) return bad("bad value");
+                } while (j.eat(','));
+                if (!j.eat('}')) return bad("a source's entry is not closed");
+            } while (j.eat(','));
+            if (!j.eat('}')) return bad("\"archives\" is not closed");
+        } while (j.eat(','));
+        if (!j.eat('}')) return bad("the object is not closed");
+    }
+    j.ws();
+    if (j.i != txt.size()) return bad("text after the object");
+    return true;
+}
+
+// Read at every launch, before the fingerprint (which includes them). Absent: every variant is on.
+// Malformed: every variant is on, one WARN; the file is never rewritten here.
+static void load_variant_choices(const std::string& path) {
+    g_variant_choices.clear();
+    if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    std::string txt = read_file_text(path.c_str()), why;
+    if (!parse_variant_choices(txt, g_variant_choices, why)) {
+        logf("  WARN: variant_choices.json cannot be read (%s): every variant is on\n", why.c_str());
+        return;
+    }
+    size_t off = 0;
+    for (auto& [src, labels] : g_variant_choices)
+        for (auto& [label, on] : labels) off += on ? 0 : 1;
+    if (off) logf("  variant choices: %zu variant%s off in variant_choices.json\n", off, off > 1 ? "s" : "");
+}
+
+// The Manager's source key is the path below costume_mods with '/'; it compares case-insensitively
+static std::string choice_source_key(const std::string& s) {
+    std::string k = str_lower(s);
+    for (auto& c : k) if (c == '\\') c = '/';
+    while (!k.empty() && k.back() == '/') k.pop_back();
+    while (!k.empty() && k.front() == '/') k.erase(0, 1);
+    return k;
+}
+static bool variant_chosen_off(const std::string& source, const std::string& label) {
+    if (g_variant_choices.empty() || source.empty()) return false;
+    const std::string key = choice_source_key(source);
+    for (auto& [src, labels] : g_variant_choices) {
+        if (choice_source_key(src) != key) continue;
+        auto b = labels.find(label);
+        if (b != labels.end() && !b->second) return true;
+    }
+    return false;
+}
+
+// A source the Manager can name: something put in costume_mods (not a Fluffy pak, not Fluffy's own
+// archives, not the game's loose natives files)
+static bool choice_source(const ModSource& ms) {
+    return !ms.source.empty() && ms.kind != "fluffy pak"
+        && ms.source.compare(0, 19, "Fluffy Mod Manager/") != 0
+        && ms.source.compare(0, 7, "natives") != 0;
+}
+
+// Every variant the scan made, per mod (source) in the loader's order, for variants.json
+struct VariantRow { std::string label; bool enabled = true; std::vector<std::string> mod_ids; };
+struct VariantArchive { std::string source, fighter_dir; std::vector<VariantRow> variants; };
+static std::vector<VariantArchive> g_variant_archives;
+// The mod file paths each variant (mod_id of the scan's output) put into the files of all mods: a
+// variant turned off takes out the ones no variant that stays uses (from ZZtaii's Slotsloader fork
+// (1.10.0), MIT)
+static std::unordered_map<std::string, std::vector<std::string>> g_mod_paths;
+static void note_mod_paths(const std::string& mod_id, const std::unordered_map<std::string, ModFileRef>& files) {
+    auto& v = g_mod_paths[mod_id];
+    for (auto& [p, mf] : files) v.push_back(p);
+}
+
+// variants.json: every variant of every mod this scan found, on and off, in the loader's order, with
+// the outfit it became ("Outfit V") or null. Written whole to a temporary file, then renamed over.
+// RuntimeOptions=on: the variants of a mod made one outfit are the outfits off would make; every one
+// left on has that outfit as its slot (docs/MANAGER_CONTRACT.md).
+static void write_variants_json(const std::string& path, const std::vector<SlotInfo>& slots) {
+    std::unordered_map<std::string, std::string> slot_of;   // mod_id -> its first outfit
+    for (auto& sl : slots) slot_of.emplace(sl.mod_id, sl.outfit_name);
+    char when[32];
+    SYSTEMTIME st; GetLocalTime(&st);
+    sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    const char* layout = g_rto_layout == RtoLayout::One ? "on" : g_rto_layout == RtoLayout::Variants ? "variants" : "off";
+    std::string js = std::string("{\n  \"generated\": \"") + when + "\",\n  \"loader\": \""
+                   + json_escape(LOADER_BUILD_ID) + "\",\n  \"contract\": " + std::to_string(MANAGER_CONTRACT)
+                   + ",\n  \"runtime_options\": \"" + layout + "\",\n  \"archives\": [";
+    for (size_t a = 0; a < g_variant_archives.size(); ++a) {
+        auto& ar = g_variant_archives[a];
+        js += std::string(a ? "," : "") + "\n    {\"source\": \"" + json_escape(ar.source) + "\", \"fighter_dir\": \""
+            + json_escape(ar.fighter_dir) + "\", \"variants\": [";
+        for (size_t v = 0; v < ar.variants.size(); ++v) {
+            auto& row = ar.variants[v];
+            std::string slot;
+            if (row.enabled)
+                for (auto& id : row.mod_ids)
+                    if (auto it = slot_of.find(id); it != slot_of.end()) { slot = it->second; break; }
+            js += std::string(v ? "," : "") + "\n      {\"label\": \"" + json_escape(row.label) + "\", \"enabled\": "
+                + (row.enabled ? "true" : "false") + ", \"slot\": "
+                + (slot.empty() ? std::string("null") : "\"" + json_escape(slot) + "\"") + "}";
+        }
+        js += "\n    ]}";
+    }
+    js += "\n  ]\n}\n";
+    std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    bool ok = f && fwrite(js.data(), 1, js.size(), f) == js.size();
+    if (f) ok = (fclose(f) == 0) && ok;
+    if (ok) ok = MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (!ok) {
+        DeleteFileA(tmp.c_str());
+        logf("  WARN: could not write %s\n", path.c_str());
+    }
+}
+
 static std::vector<SlotInfo> assign_slots(
     const std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
     const VanillaIndex& inv, Registry& reg, const StaticMeta& meta) {
@@ -1683,8 +1933,14 @@ static std::vector<SlotInfo> assign_slots(
                     si.new_folder = buf;
                 }
             } else {
-                int cno = smallest_free(taken_cno[mc.fighter],
-                                        meta.slot_min, meta.slot_max);
+                // A new outfit goes after the highest number in use, so a later install is listed last
+                // instead of filling the gap a removed mod left; gaps are filled only once the fighter's
+                // last reserved number is taken. Outfits already installed keep their numbers (above).
+                // (from ZZtaii's Slotsloader fork (1.10.0), MIT)
+                const std::set<int>& t = taken_cno[mc.fighter];
+                int cno = t.empty() ? meta.slot_min : std::max(meta.slot_min, *t.rbegin() + 1);
+                if (cno > meta.slot_max || !meta.find(mc.fighter, cno))
+                    cno = smallest_free(t, meta.slot_min, meta.slot_max);
                 if (cno < 0) {
                     printf("  WARN: %s has no free outfit slot left (%d to %d all used), %s not installed\n",
                            mc.fighter_dir.c_str(), meta.slot_min, meta.slot_max, mod_label(mod_id).c_str());
@@ -5114,16 +5370,18 @@ static std::string combined_mod_id(const std::vector<size_t>& parts) {
 }
 
 // Pushes one costume made of several options, files merged in the given order (later ones win). Its id
-// comes from the options' ids in `id_order` when given, else in the merge order.
+// comes from the options' ids in `id_order` when given, else in the merge order; `id` when given (the
+// one outfit of RuntimeOptions=on wearing another set of options keeps its slot).
 static void push_combined(const std::vector<size_t>& parts, const std::string& label, ScanOutputs& o,
                           const std::string& info_rel, const std::string& info_path,
                           const std::shared_ptr<const RtoMod>& rto = nullptr,
                           const std::vector<size_t>& rto_selected = {},
-                          const std::vector<size_t>& id_order = {}) {
+                          const std::vector<size_t>& id_order = {},
+                          const std::string& id_given = {}) {
     std::unordered_map<std::string, ModFileRef> merged;
     for (auto i : parts)
         for (auto& [pth, mf] : g_units[i].files) merged[pth] = mf;
-    const std::string id = combined_mod_id(id_order.empty() ? parts : id_order);
+    const std::string id = !id_given.empty() ? id_given : combined_mod_id(id_order.empty() ? parts : id_order);
     const char* idb = id.c_str();
     printf("\n  variant: %s\n", label.c_str());
     auto costumes = detect_mod_costumes(merged, o.inv, false, true);
@@ -5135,6 +5393,7 @@ static void push_combined(const std::vector<size_t>& parts, const std::string& l
     if (!parts.empty()) g_mod_source[idb] = g_mod_source[g_units[parts[0]].mod_id];
     o.mods_out.push_back({idb, std::move(costumes)});
     for (auto i : parts) o.all_mod_out.insert(g_units[i].files.begin(), g_units[i].files.end());
+    for (auto i : parts) note_mod_paths(idb, g_units[i].files);
     o.infos_out.push_back({info_rel, info_path});
 }
 
@@ -5547,7 +5806,7 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
                 if (!shadowed) kept.insert(kept.begin(), *it);
             }
             c.selected = std::move(kept);
-            rto->variants.push_back({combined_mod_id(c.id_order), c.label, c.selected});
+            rto->variants.push_back({combined_mod_id(c.id_order), c.label, c.selected, c.label});
         }
         combos.push_back(std::move(c));
         for (size_t a = 0; a < axes.size(); ++a) {           // next combination
@@ -5565,6 +5824,17 @@ static void build_modular(const std::vector<size_t>& tree, ScanOutputs& o) {
     if (g_rto_layout == RtoLayout::One && combos.size() > 1) {
         printf("    one outfit (RuntimeOptions=on): the first combination, the %zu others are options chosen in game\n",
                combos.size() - 1);
+        // Slotsloader Manager's variant choices: the outfit wears the first combination left on, under
+        // the first combination's id (its slot stays); every one off: apply_variant_choices drops it
+        auto src = g_mod_source.find(g_units[tree[0]].mod_id);
+        const std::string source = src == g_mod_source.end() ? std::string() : src->second.source;
+        size_t k = 0;
+        while (k < combos.size() && variant_chosen_off(source, combos[k].label)) ++k;
+        if (k > 0 && k < combos.size()) {
+            printf("    worn by default: %s (variant_choices.json turns the first %zu off)\n", combos[k].label.c_str(), k);
+            combos[0].idx = combos[k].idx;
+            combos[0].selected = combos[k].selected;
+        }
         combos.resize(1);
         combos[0].label = root;
     }
@@ -5669,10 +5939,12 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
     // The one outfit: the outfit alone, or with the add-ons of its sub-folder (that combination's id)
     const Var main = worn.empty() ? Var{{j}, unit_label(b), base_sel} : var_of(worn);
     const std::string main_id = worn.empty() ? b.mod_id : combined_mod_id(main.parts);
-    rto->variants.push_back({main_id, main.label, main.sel});
+    // row: the outfit as RuntimeOptions=off names it (the outfit alone: its own name)
+    rto->variants.push_back({main_id, main.label, main.sel, worn.empty() ? mod_label(b.mod_id) : main.label});
+    std::vector<const Var*> rows{&main};   // the outfits off makes, the one outfit's first
     for (auto& x : vars) {
         const std::string id = combined_mod_id(x.parts);
-        if (id != main_id) rto->variants.push_back({id, x.label, x.sel});
+        if (id != main_id) { rto->variants.push_back({id, x.label, x.sel, x.label}); rows.push_back(&x); }
     }
     // The outfit alone had a slot before it was put with its add-ons: that slot moves here too
     if (!worn.empty()) rto->variants.push_back({b.mod_id, unit_label(b), base_sel});
@@ -5692,12 +5964,26 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
     for (auto& op : rto->options) if (op.mode != "base") n_opt++;
     printf("    runtime options: %zu groups, %zu options stored for the in-game menu\n", rto->groups.size(), n_opt);
     if (g_rto_layout == RtoLayout::One) {
-        if (worn.empty())
+        // Slotsloader Manager's variant choices: the outfit wears the first outfit off makes that is left
+        // on, under the one outfit's id (its slot stays); every one off: apply_variant_choices drops it
+        size_t k = 0;
+        while (k < rows.size() && variant_chosen_off(rto->source, rto->variants[k].row)) ++k;
+        const Var& wear = k < rows.size() ? *rows[k] : main;
+        if (&wear != &main)
+            printf("    worn by default: %s (variant_choices.json turns the first %zu off)\n", wear.label.c_str(), k);
+        if (worn.empty()) {
             printf("    one outfit (RuntimeOptions=on): %s, its add-ons chosen in game\n", unit_label(b).c_str());
-        else {
+            if (&wear != &main) {   // the outfit alone made in finalize_units is made with those add-ons instead
+                auto e2 = std::find_if(o.mods_out.begin(), o.mods_out.end(),
+                                       [&](const auto& m) { return m.first == b.mod_id; });
+                if (e2 != o.mods_out.end()) o.mods_out.erase(e2);
+                push_combined(wear.parts, mod_label(b.mod_id), o, b.u.rel + " (with add-ons)", b.info_path, rto,
+                              wear.sel, {}, b.mod_id);
+            }
+        } else {
             printf("    one outfit (RuntimeOptions=on): %s, put with its add-ons in one sub-folder: worn by default, "
                    "chosen in game\n", main.label.c_str());
-            push_combined(main.parts, main.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, main.sel);
+            push_combined(wear.parts, main.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, wear.sel, main.parts);
         }
     } else
         for (auto& x : vars) push_combined(x.parts, x.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, x.sel);
@@ -5807,6 +6093,7 @@ static void finalize_units(ScanOutputs& o) {
         if (uf.costumes.empty() || modular.count(i) || complete_addon_of.count(i)) continue;
         o.mods_out.push_back({uf.mod_id, uf.costumes});
         o.all_mod_out.insert(uf.files.begin(), uf.files.end());
+        note_mod_paths(uf.mod_id, uf.files);
         o.infos_out.push_back({uf.u.rel, uf.info_path});
     }
 
@@ -5840,6 +6127,7 @@ static void finalize_units(ScanOutputs& o) {
             print_costumes(costumes);
             o.mods_out.push_back({a.mod_id, std::move(costumes)});
             o.all_mod_out.insert(a.files.begin(), a.files.end());
+            note_mod_paths(a.mod_id, a.files);
             o.infos_out.push_back({a.u.rel, a.info_path});
             continue;
         }
@@ -6466,6 +6754,89 @@ static void scan_costume_mods(
     purge_stale_archive_cache();
 }
 
+// Lists every variant the scan made, per mod, for variants.json, and takes out the ones
+// variant_choices.json turns off: no slot, no registry record (their numbers are free again; the
+// other variants keep theirs), and their files only when no variant that stays uses them. (from
+// ZZtaii's Slotsloader fork (1.10.0), MIT.) RuntimeOptions=on: a mod made one outfit lists the outfits
+// off would make (RtoMod::Variant::row); the outfit goes only when every one of them is off (which one it
+// wears by default is chosen in build_modular / build_addon_options). Fluffy paks, Fluffy's own
+// archives and the game's loose files are not listed: the Manager names sources in costume_mods only.
+static void apply_variant_choices(std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
+                                  std::unordered_map<std::string, ModFileRef>& all_mod_files) {
+    g_variant_archives.clear();
+    std::unordered_set<std::string> off_ids, on_ids;
+    auto row_of = [&](const std::string& source, const std::string& fighter_dir, const std::string& label) -> VariantRow& {
+        auto ar = std::find_if(g_variant_archives.begin(), g_variant_archives.end(),
+                               [&](const VariantArchive& a) { return a.source == source; });
+        if (ar == g_variant_archives.end()) {
+            g_variant_archives.push_back({source, fighter_dir, {}});
+            ar = g_variant_archives.end() - 1;
+        }
+        auto row = std::find_if(ar->variants.begin(), ar->variants.end(),
+                                [&](const VariantRow& r) { return r.label == label; });
+        if (row == ar->variants.end()) {
+            VariantRow r;
+            r.label = label;
+            r.enabled = !variant_chosen_off(source, label);
+            ar->variants.push_back(std::move(r));
+            row = ar->variants.end() - 1;
+        }
+        return *row;
+    };
+    for (auto& [mid, cs] : mods) {
+        if (cs.empty()) continue;
+        auto ms = g_mod_source.find(mid);
+        if (ms == g_mod_source.end() || !choice_source(ms->second)) continue;
+        const std::string& source = ms->second.source;
+        const auto& rto = cs[0].rto;
+        if (g_rto_layout == RtoLayout::One && rto) {
+            bool any_on = false;
+            for (auto& v : rto->variants) {
+                if (v.row.empty()) continue;
+                VariantRow& r = row_of(source, cs[0].fighter_dir, v.row);
+                if (std::find(r.mod_ids.begin(), r.mod_ids.end(), mid) == r.mod_ids.end()) r.mod_ids.push_back(mid);
+                any_on |= r.enabled;
+            }
+            (any_on ? on_ids : off_ids).insert(mid);
+            continue;
+        }
+        VariantRow& r = row_of(source, cs[0].fighter_dir, mod_label(mid));
+        r.mod_ids.push_back(mid);
+        (r.enabled ? on_ids : off_ids).insert(mid);
+    }
+    for (auto& ar : g_variant_archives) {
+        size_t off = 0;
+        for (auto& r : ar.variants) off += r.enabled ? 0 : 1;
+        if (off) printf("  variants off (choice): %zu of %zu for %s\n", off, ar.variants.size(), ar.source.c_str());
+    }
+    if (off_ids.empty()) return;
+    std::unordered_set<std::string> used;
+    for (auto& [mid, cs] : mods)
+        if (!off_ids.count(mid))
+            if (auto it = g_mod_paths.find(mid); it != g_mod_paths.end()) used.insert(it->second.begin(), it->second.end());
+    for (auto& id : off_ids)
+        if (auto it = g_mod_paths.find(id); it != g_mod_paths.end())
+            for (auto& p : it->second)
+                if (!used.count(p)) all_mod_files.erase(p);
+    mods.erase(std::remove_if(mods.begin(), mods.end(), [&](const auto& e) { return off_ids.count(e.first) > 0; }),
+               mods.end());
+}
+
+// The variants variant_choices.json turns off (what it means, not its bytes: a file rewritten with the
+// same choices, or one that only adds true, rebuilds nothing). Empty when every variant is on, so the
+// fingerprint of an install without choices stays as it was. (from ZZtaii's Slotsloader fork (1.10.0), MIT)
+static std::string variant_choices_fingerprint() {
+    std::string all;
+    size_t n = 0;
+    for (auto& [source, labels] : g_variant_choices)
+        for (auto& [label, on] : labels)
+            if (!on) { all += choice_source_key(source) + "\t" + label + "\n"; n++; }
+    if (!n) return {};
+    char buf[64];
+    snprintf(buf, sizeof buf, ";choices:%zu:%016llx", n, (unsigned long long)fnv1a64(all));
+    return buf;
+}
+
 // ============================================================================
 // Fingerprint (paks + costume_mods folders)
 // ============================================================================
@@ -6818,6 +7189,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     log_open(game_dir);
     logf("=== SF6 Costume Slot Loader ===\n");
+    // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): its variant choices, read before the fingerprint
+    const std::string variants_path = registry_dir + "\\variants.json";
+    g_variant_archives.clear();
+    g_mod_paths.clear();
+    load_variant_choices(registry_dir + "\\variant_choices.json");
 
     // Base pak path
     std::string base_path;
@@ -6916,6 +7292,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         registry.possession.clear();
         registry.fingerprint.clear();
         save_registry(reg_path.c_str(), registry);
+        write_variants_json(variants_path, {});
         auto t1 = std::chrono::high_resolution_clock::now();
         logf("Done (no mods) in %.1f ms\n", std::chrono::duration<double,std::milli>(t1-t0).count());
         log_close(); return 0;
@@ -6970,6 +7347,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                        + base_pak_fingerprint(base_path);
     if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
         new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
+    new_fp += variant_choices_fingerprint();   // empty while every variant is on
     const bool options_missing = g_rto_layout != RtoLayout::Off
         && GetFileAttributesA((registry_dir + "\\" + RTO_FILE).c_str()) == INVALID_FILE_ATTRIBUTES;
     int target_num = top_foreign + 1;
@@ -7118,6 +7496,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         scan_costume_mods(game_dir, inv, mods_with_costumes, all_mod_files,
                           mod_pak_readers, folder_infos, all_upgraded_tex);
     }
+    // 5b'. Variants turned off in variant_choices.json are not built (before 5c: an identical variant
+    // that stays on must not be dropped as a copy of one turned off)
+    apply_variant_choices(mods_with_costumes, all_mod_files);
 
     if (mods_with_costumes.empty() || !std::any_of(mods_with_costumes.begin(),
             mods_with_costumes.end(), [](auto& p){ return !p.second.empty(); })) {
@@ -7135,6 +7516,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         auto registry = load_registry(reg_path.c_str());
         registry.slots.clear(); registry.possession.clear(); registry.fingerprint.clear();
         save_registry(reg_path.c_str(), registry);
+        write_variants_json(variants_path, {});   // the variants turned off are still listed
         log_close(); return 0;
     }
 
@@ -7169,7 +7551,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     printf("\nAssigning slots...\n");
     const std::vector<RegSlot> former_slots = registry.slots;   // for costume_options.json "former"
     auto slots = assign_slots(mods_with_costumes, inv, registry, meta);
-    if (slots.empty()) { logf("No slots to create.\n"); log_close(); return 0; }
+    if (slots.empty()) { logf("No slots to create.\n"); write_variants_json(variants_path, {}); log_close(); return 0; }
 
     // Build possession for registry
     registry.possession.clear();
@@ -7433,6 +7815,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);
+    write_variants_json(variants_path, slots);
     if (g_rto_layout != RtoLayout::Off) {
         write_options_json(registry_dir + "\\" + RTO_FILE, slots, target_name, former_slots);
         logf("  %s: options of %zu slots\n", RTO_FILE, (size_t)std::count_if(slots.begin(), slots.end(),

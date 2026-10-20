@@ -482,7 +482,8 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
   as extra option groups of every slot whose costume uses the parts they replace. Lot B.
 - `other` files (cloth, physics user files) cannot be swapped at runtime: their options apply at the next launch
   only (or not at all with `on`, the menu says so).
-- Slotsloader Manager compatibility (`variants.json` / `variant_choices.json`): later, as its own task.
+- Slotsloader Manager compatibility (`variants.json` / `variant_choices.json`): done, see
+  [MANAGER_CONTRACT.md](MANAGER_CONTRACT.md) (with `on`, the Manager's variant choice sets the outfit's defaults).
 
 ## Phases
 

@@ -43,6 +43,15 @@
   `natives` folder: outfits that use such a texture are no longer left out as "texture missing"; runtime options
   check their base copies against the same files (our pak, other tools' patch paks, the game's paks with the DLC,
   loose copies) (fork 1.10.1).
+- Slotsloader Manager contract 1 (`docs/MANAGER_CONTRACT.md`): the loader writes `variants.json` (every variant of
+  every mod in `costume_mods`, on and off, with its outfit) and reads the Manager's `variant_choices.json` at launch:
+  a variant turned off gets no outfit and its files stay out of the pak; with `RuntimeOptions=on` the variants are
+  the outfits `off` would make, the one outfit wears the first one left on by default (same outfit number) and is
+  not built when every one is off. The contract number is in `variants.json` (`"contract": 1`) and in the
+  package's `modinfo.ini` (`SlotsloaderContract=1`) (fork 1.10.0).
+- A new outfit takes the number after the highest one in use for its fighter instead of a gap a removed mod left
+  (listed last); outfits already installed keep their numbers (fork 1.10.0).
+- Not ported: the fork's character-swap repairs (1.10.4, `swap_repairs.txt` is ignored).
 
 ## 1.16.3 (2026-10-19) — SF6 Mod Suite
 
