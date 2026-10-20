@@ -53,6 +53,9 @@
   the outfits `off` would make, the one outfit wears the first one left on by default (same outfit number) and is
   not built when every one is off. The contract number is in `variants.json` (`"contract": 1`) and in the
   package's `modinfo.ini` (`SlotsloaderContract=1`) (fork 1.10.0).
+- Mods the Slotsloader Manager installed with "Replace original" (loose files, its patch paks) no longer also make an
+  extra outfit: read from the Manager's record (`manager_installs.json`, else its `replace-state.json`; ZZtaii's
+  format) (`docs/MANAGER_CONTRACT.md`).
 - A new outfit takes the number after the highest one in use for its fighter instead of a gap a removed mod left
   (listed last); outfits already installed keep their numbers (fork 1.10.0).
 - Runtime costume options: an outfit put with its add-ons in one sub-folder is named after the outfit alone ("Ingrid -

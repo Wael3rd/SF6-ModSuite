@@ -34,6 +34,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <bcrypt.h>
+#include <tlhelp32.h>
 #pragma comment(lib, "bcrypt.lib")
 
 // ============================================================================
@@ -1784,6 +1785,81 @@ struct JsonReader {
         return i > a && digit;
     }
 };
+
+// A whole JSON document as a tree, for records another program writes (manager_installs.json, the
+// Slotsloader Manager's replace-state.json). Object keys compare case-insensitively ("Mods" / "mods").
+struct JsonValue {
+    enum Kind { Null, Bool, Num, Str, Arr, Obj } kind = Null;
+    bool b = false;
+    double n = 0;
+    std::string s;
+    std::vector<JsonValue> items;
+    std::vector<std::pair<std::string, JsonValue>> members;
+    const JsonValue* get(const char* key) const {
+        if (kind != Obj) return nullptr;
+        for (auto& m : members) if (_stricmp(m.first.c_str(), key) == 0) return &m.second;
+        return nullptr;
+    }
+    std::string str(const char* key) const {
+        const JsonValue* v = get(key);
+        return v && v->kind == Str ? v->s : std::string();
+    }
+    const std::vector<JsonValue>& arr(const char* key) const {
+        static const std::vector<JsonValue> none;
+        const JsonValue* v = get(key);
+        return v && v->kind == Arr ? v->items : none;
+    }
+};
+
+static bool json_parse(JsonReader& j, JsonValue& v, int depth = 0) {
+    if (depth > 64) return false;
+    j.ws();
+    if (j.i >= j.s.size()) return false;
+    const char c = j.s[j.i];
+    if (c == '"') { v.kind = JsonValue::Str; return j.string(v.s); }
+    if (c == '{') {
+        ++j.i;
+        v.kind = JsonValue::Obj;
+        if (j.eat('}')) return true;
+        do {
+            std::string k;
+            if (!j.string(k) || !j.eat(':')) return false;
+            v.members.emplace_back(std::move(k), JsonValue{});
+            if (!json_parse(j, v.members.back().second, depth + 1)) return false;
+        } while (j.eat(','));
+        return j.eat('}');
+    }
+    if (c == '[') {
+        ++j.i;
+        v.kind = JsonValue::Arr;
+        if (j.eat(']')) return true;
+        do {
+            v.items.emplace_back();
+            if (!json_parse(j, v.items.back(), depth + 1)) return false;
+        } while (j.eat(','));
+        return j.eat(']');
+    }
+    if (j.word("true")) { v.kind = JsonValue::Bool; v.b = true; return true; }
+    if (j.word("false")) { v.kind = JsonValue::Bool; return true; }
+    if (j.word("null")) return true;
+    size_t a = j.i;
+    bool digit = false;
+    while (j.i < j.s.size() && (isdigit((unsigned char)j.s[j.i]) || (j.s[j.i] && strchr("+-.eE", j.s[j.i]))))
+        digit |= isdigit((unsigned char)j.s[j.i++]) != 0;
+    if (!digit) return false;
+    v.kind = JsonValue::Num;
+    v.n = strtod(j.s.substr(a, j.i - a).c_str(), nullptr);
+    return true;
+}
+
+// The whole text (a UTF-8 BOM allowed) is one JSON value
+static bool json_parse_text(const std::string& txt, JsonValue& v) {
+    JsonReader j(txt);
+    if (txt.compare(0, 3, "\xEF\xBB\xBF") == 0) j.i = 3;
+    if (!json_parse(j, v)) return false;
+    j.ws();
+    return j.i == txt.size();
+}
 
 // variant_choices.json: { "version": 1, "archives": { "<source>": { "<label>": true|false } } }.
 // Only an explicit false turns a variant off; any other value is ignored.
@@ -5655,6 +5731,7 @@ struct FluffyState {
 static FluffyState g_fluffy;
 
 static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv);
+static const std::map<std::string, std::string>& manager_claimed(const VanillaIndex& inv);
 
 static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     const VanillaIndex& inv = o.inv;
@@ -5683,6 +5760,21 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     } else {
         int ignored = 0, upgraded = 0;
         uf.files = scan_folder_mod(u.dir, inv, ignored, upgraded);
+        if (u.game_install) {
+            // Mods the Slotsloader Manager installed over the game's outfits (Replace original): no outfit
+            const auto& claimed = manager_claimed(inv);
+            std::map<std::string, size_t> by_mod;
+            for (auto it = uf.files.begin(); it != uf.files.end();) {
+                auto c = claimed.find(it->first);
+                if (c == claimed.end()) { ++it; continue; }
+                by_mod[c->second]++;
+                it = uf.files.erase(it);
+            }
+            for (auto& [mod, n] : by_mod)
+                printf("    %s: installed by the Slotsloader Manager (Replace original): no outfit (%zu files)\n",
+                       mod.c_str(), n);
+            if (!by_mod.empty() && uf.files.empty()) return false;
+        }
         if (u.game_install && !g_fluffy.claimed.empty()) {
             const auto& claimed = fluffy_claimed(inv);
             size_t before = uf.files.size();
@@ -7033,10 +7125,11 @@ static void sub_dirs(const std::string& dir, std::vector<std::string>& out) {
     FindClose(h);
 }
 
-// Where people keep Fluffy (it is portable, unzipped anywhere): the user's Documents, Desktop and
-// Downloads, the game folder and the one above it, and the root of each local drive. Each place,
-// its folders, and the folders of those whose name suggests tools or mods are tried.
-static std::string search_fluffy(const std::string& game_dir) {
+// Where people keep a portable tool (Fluffy, the Slotsloader Manager: unzipped anywhere): the user's
+// Documents, Desktop and Downloads, the game folder and the one above it, and the root of each local
+// drive. Each place, its folders, and the folders of those whose name has one of the hints are tried.
+static std::string search_tool_dir(const std::string& game_dir, const std::vector<const char*>& hints,
+                                   const std::function<bool(const std::string&)>& serves) {
     std::vector<std::string> roots;
     auto add = [&](const std::string& p) {
         if (p.empty()) return;
@@ -7060,22 +7153,26 @@ static std::string search_fluffy(const std::string& game_dir) {
         char root[4] = { char('A' + i), ':', '\\', 0 };
         if (GetDriveTypeA(root) == DRIVE_FIXED) add(root);
     }
-    static const char* hints[] = { "fluffy", "mod", "game", "tool", "util", "app", "program" };
     for (auto& r : roots) {
-        if (fluffy_serves(r, game_dir)) return r;
+        if (serves(r)) return r;
         std::vector<std::string> d1;
         sub_dirs(r, d1);
-        for (auto& d : d1) if (fluffy_serves(d, game_dir)) return d;
+        for (auto& d : d1) if (serves(d)) return d;
         for (auto& d : d1) {
             std::string low = str_lower(d.substr(d.find_last_of('\\') + 1));
-            if (std::none_of(std::begin(hints), std::end(hints),
+            if (std::none_of(hints.begin(), hints.end(),
                              [&](const char* hn) { return low.find(hn) != std::string::npos; })) continue;
             std::vector<std::string> d2;
             sub_dirs(d, d2);
-            for (auto& e : d2) if (fluffy_serves(e, game_dir)) return e;
+            for (auto& e : d2) if (serves(e)) return e;
         }
     }
     return {};
+}
+
+static std::string search_fluffy(const std::string& game_dir) {
+    return search_tool_dir(game_dir, { "fluffy", "mod", "game", "tool", "util", "app", "program" },
+                           [&](const std::string& d) { return fluffy_serves(d, game_dir); });
 }
 
 static const char* kSettingsTemplate =
@@ -7087,6 +7184,11 @@ static const char* kSettingsTemplate =
     "; (Documents, Desktop, Downloads, the game folder and the root of each drive).\r\n"
     "; Example: FluffyModManager=D:\\Tools\\FluffyModManager\r\n"
     "FluffyModManager=\r\n"
+    ";\r\n"
+    "; SlotsloaderManager: the folder of the Slotsloader Manager (the folder that holds its Data folder).\r\n"
+    "; Mods it installed with \"Replace original\" replace the game's outfit and get no extra slot.\r\n"
+    "; Left empty, the loader looks for it by itself (same places as Fluffy).\r\n"
+    "SlotsloaderManager=\r\n"
     ";\r\n"
     "; RuntimeOptions: costume options chosen in game (in progress, see docs/RUNTIME_OPTIONS.md).\r\n"
     ";   off: one outfit per combination of a modular mod's options, as before (default)\r\n"
@@ -7310,28 +7412,287 @@ static void warn_fluffy_archive_list(const std::string& registry_dir, const std:
          "only then let Fluffy re-read the archives (Patch day in the README)\n", list.c_str());
 }
 
+static std::string current_tex_ver(const VanillaIndex& inv) {
+    auto it = inv.suffixes.find("tex");
+    return it != inv.suffixes.end() ? it->second : std::string();
+}
+
+// A claimed file as the scan names it ("natives/stm/...", old texture versions renamed to the current
+// one); empty when it is not a game file the scan reads
+static std::string claimed_scan_name(const std::string& file, const std::string& tex_ver) {
+    auto idx = file.find("natives/stm/");
+    if (idx == std::string::npos) return {};
+    std::string p = file.substr(idx);
+    for (int oi = 0; oi < N_OLD_TEX && !tex_ver.empty(); oi++) {
+        std::string old_suf = std::string(".tex.") + OLD_TEX_SUFFIXES[oi];
+        if (str_ends_with(p, old_suf.c_str())) {
+            p = p.substr(0, p.size() - strlen(OLD_TEX_SUFFIXES[oi])) + tex_ver;
+            break;
+        }
+    }
+    return p;
+}
+
 // The claimed files as the scan names them (old texture versions renamed to the current one)
 static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv) {
     static std::set<std::string> out;
     static bool done = false;
     if (done) return out;
     done = true;
-    std::string tex_ver;
-    { auto it = inv.suffixes.find("tex"); if (it != inv.suffixes.end()) tex_ver = it->second; }
-    for (std::string p : g_fluffy.claimed) {
-        auto idx = p.find("natives/stm/");
-        if (idx == std::string::npos) continue;
-        p = p.substr(idx);
-        for (int oi = 0; oi < N_OLD_TEX && !tex_ver.empty(); oi++) {
-            std::string old_suf = std::string(".tex.") + OLD_TEX_SUFFIXES[oi];
-            if (str_ends_with(p, old_suf.c_str())) {
-                p = p.substr(0, p.size() - strlen(OLD_TEX_SUFFIXES[oi])) + tex_ver;
-                break;
-            }
-        }
-        out.insert(p);
+    const std::string tex_ver = current_tex_ver(inv);
+    for (auto& f : g_fluffy.claimed) {
+        std::string p = claimed_scan_name(f, tex_ver);
+        if (!p.empty()) out.insert(p);
     }
     return out;
+}
+
+// ============================================================================
+// Slotsloader Manager "Replace original" installs (docs/MANAGER_CONTRACT.md). ZZtaii's Slotsloader
+// Manager can install a mod over the game's own outfit: its files go loose in natives\ (a mod's .pak as
+// the next patch pak). Such an install is the original outfit, not an extra one: its files and paks make
+// no slot. A mod also put in costume_mods stays an extra outfit (the user put it there on purpose).
+// Record read: manager_installs.json in SF6_Costumes_Data (written by the Manager, preferred), else the
+// Manager's own Data\replace-state.json ("sf6-replace-state-v1", ZZtaii's format), found like Fluffy.
+// ============================================================================
+
+static const char* MANAGER_INSTALLS_FILE = "manager_installs.json";
+static const char* MANAGER_INSTALLS_FORMAT = "sf6-manager-installs-1";
+static const char* MANAGER_STATE_FORMAT = "sf6-replace-state-v1";
+
+struct ManagerPak {
+    std::string name, sha256, mod;       // "re_chunk_000.pak.patch_NNN.pak" (lower case), the mod's name
+    long long size = -1;                 // -1: not given
+};
+struct ManagerState {
+    std::string record;                            // the file read, empty when none
+    std::map<std::string, std::string> claimed;    // loose file ("natives/stm/...", lower case) -> mod name
+    std::vector<ManagerPak> paks;                  // patch paks its mods added
+    int mods = 0, off = 0, gone = 0, changed = 0;  // mods on / off, listed files missing / changed since
+};
+static ManagerState g_manager;
+
+static long long file_size_of(const std::string& path) {
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(long_w(a2w_path(path)).c_str(), GetFileExInfoStandard, &fa)
+        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return -1;
+    return (long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow);
+}
+
+static std::string sha256_file_hex(const std::string& path) {
+    FILE* f = _wfopen(long_w(a2w_path(path)).c_str(), L"rb");
+    if (!f) return {};
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE h = nullptr;
+    std::string hex;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0
+        && BCryptCreateHash(alg, &h, nullptr, 0, nullptr, 0, 0) == 0) {
+        std::vector<unsigned char> buf(1 << 20);
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), f)) > 0) BCryptHashData(h, buf.data(), (ULONG)n, 0);
+        UCHAR d[32];
+        if (BCryptFinishHash(h, d, 32, 0) == 0) {
+            char b[65];
+            for (int i = 0; i < 32; i++) sprintf(b + i * 2, "%02x", d[i]);
+            hex = b;
+        }
+    }
+    if (h) BCryptDestroyHash(h);
+    if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    fclose(f);
+    return hex;
+}
+
+static bool is_patch_pak_name(const std::string& low) {
+    static const char pre[] = "re_chunk_000.pak.patch_";
+    return low.compare(0, sizeof(pre) - 1, pre) == 0 && str_ends_with(low, ".pak");
+}
+
+// Reads one record into out. own_format: manager_installs.json, else replace-state.json (which names
+// its game folder). False, with why, when it is not a record of this game folder.
+static bool read_manager_record(const std::string& path, const std::string& game_dir, bool own_format,
+                                ManagerState& out, std::string& why) {
+    out = ManagerState{};
+    std::string txt = read_text_file(path);
+    JsonValue root;
+    if (txt.empty() || !json_parse_text(txt, root) || root.kind != JsonValue::Obj) {
+        why = "not a JSON object";
+        return false;
+    }
+    const std::string fmt = root.str("format"), want = own_format ? MANAGER_INSTALLS_FORMAT : MANAGER_STATE_FORMAT;
+    if (fmt != want) {
+        why = "unknown format \"" + fmt + "\" (this loader reads \"" + want + "\")";
+        return false;
+    }
+    if (!own_format) {
+        std::string gr = root.str("GameRoot");
+        if (!gr.empty() && norm_dir(gr) != norm_dir(game_dir)) {
+            why = "it manages another game folder: " + gr;
+            return false;
+        }
+    }
+    // Files the Manager left to another tool ("Keep current file") are no longer its own
+    std::set<std::string> released;
+    for (auto& r : root.arr("Released")) {
+        std::string p = fluffy_norm_file(r.str("Path"));
+        if (!p.empty()) released.insert(p);
+    }
+    for (auto& m : root.arr("mods")) {
+        if (m.kind != JsonValue::Obj) continue;
+        std::string name = m.str("name");
+        if (name.empty()) name = m.str("id");
+        if (name.empty()) name = "(no name)";
+        const JsonValue* en = m.get("enabled");
+        if (en && en->kind == JsonValue::Bool && !en->b) { out.off++; continue; }
+        out.mods++;
+        auto take = [&](const JsonValue& f) {
+            std::string p = fluffy_norm_file(f.str("path"));
+            if (p.empty() || p.find("..") != std::string::npos || released.count(p)) return;
+            const JsonValue* sz = f.get("size");
+            long long size = sz && sz->kind == JsonValue::Num && sz->n >= 0 ? (long long)sz->n : -1;
+            if (p.find('/') == std::string::npos && is_patch_pak_name(p)) {
+                out.paks.push_back({ p, str_lower(f.str("sha256")), name, size });
+                return;
+            }
+            if (p.compare(0, 8, "natives/") != 0) return;
+            std::string full = game_dir + "\\" + p;
+            for (auto& c : full) if (c == '/') c = '\\';
+            long long have = file_size_of(full);
+            if (have < 0) { out.gone++; return; }                    // not in the game: nothing to claim
+            if (size >= 0 && have != size) { out.changed++; return; } // another tool wrote over it since
+            out.claimed.emplace(p, name);                             // first = highest priority (deployed)
+        };
+        for (auto& f : m.arr("files")) take(f);
+        for (auto& f : m.arr("paks")) take(f);
+    }
+    out.record = path;
+    return true;
+}
+
+static void log_manager_record(const ManagerState& m) {
+    logf("    %d mods installed with Replace original (%d off): %zu game files and %zu patch paks make no outfit",
+         m.mods, m.off, m.claimed.size(), m.paks.size());
+    if (m.gone || m.changed)
+        logf(" (listed but not claimed: %d missing, %d changed by another tool since)", m.gone, m.changed);
+    logf("\n");
+}
+
+// The Manager is portable ("Slotsloader Manager.exe" with its Data folder beside it, anywhere): a folder
+// is the one when its Data\replace-state.json is a record of this game folder
+static bool manager_serves(const std::string& dir, const std::string& game_dir, ManagerState* out,
+                           std::string* why) {
+    std::string p = join_dir(dir, "Data\\replace-state.json");
+    if (GetFileAttributesA(p.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    ManagerState tmp;
+    std::string w;
+    if (read_manager_record(p, game_dir, false, out ? *out : tmp, w)) return true;
+    if (why) *why = p + ": " + w;
+    return false;
+}
+
+// A Slotsloader Manager running now (it may have started the game): the folder of its exe
+static std::vector<std::string> running_manager_dirs() {
+    std::vector<std::string> dirs;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return dirs;
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+        std::string exe = str_lower(w2a(pe.szExeFile));
+        if (exe.find("slotsloader") == std::string::npos) continue;
+        HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!p) continue;
+        wchar_t path[MAX_PATH * 2];
+        DWORD n = MAX_PATH * 2;
+        if (QueryFullProcessImageNameW(p, 0, path, &n)) {
+            std::string d = w2a(path);
+            auto sl = d.find_last_of('\\');
+            if (sl != std::string::npos) dirs.push_back(d.substr(0, sl));
+        }
+        CloseHandle(p);
+    }
+    CloseHandle(snap);
+    return dirs;
+}
+
+// Finds what the Slotsloader Manager installed with "Replace original" (g_manager)
+static void find_manager(const std::string& game_dir, const std::string& costume_mods_dir,
+                         const std::string& registry_dir) {
+    g_manager = ManagerState{};
+    std::string why;
+    const std::string own = registry_dir + "\\" + MANAGER_INSTALLS_FILE;
+    if (GetFileAttributesA(own.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        logf("  Slotsloader Manager: %s (written by the Manager)\n", MANAGER_INSTALLS_FILE);
+        if (read_manager_record(own, game_dir, true, g_manager, why)) { log_manager_record(g_manager); return; }
+        logf("    WARN: %s not read: %s; its Data\\replace-state.json is looked for instead\n",
+             MANAGER_INSTALLS_FILE, why.c_str());
+    }
+    const std::string remembered = registry_dir + "\\manager_location.txt";
+    std::string dir, how, last_why;
+    std::string set = read_setting(costume_mods_dir + "\\settings.ini", "slotsloadermanager");
+    if (!set.empty()) {
+        if (manager_serves(set, game_dir, nullptr, &last_why)) { dir = set; how = "settings.ini"; }
+        else logf("  WARN: settings.ini names %s as the Slotsloader Manager's folder: %s\n", set.c_str(),
+                  last_why.empty() ? "no Data\\replace-state.json there (no Replace-original install yet)"
+                                   : last_why.c_str());
+        last_why.clear();   // said once
+    }
+    if (dir.empty()) {
+        std::string rem = trim_ws(read_text_file(remembered));
+        if (!rem.empty() && manager_serves(rem, game_dir, nullptr, &last_why)) { dir = rem; how = "found before"; }
+    }
+    if (dir.empty())
+        for (auto& d : running_manager_dirs())
+            if (manager_serves(d, game_dir, nullptr, &last_why)) { dir = d; how = "running"; break; }
+    if (dir.empty()) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        dir = search_tool_dir(game_dir, { "slots", "manager", "mod", "tool", "util", "app", "program" },
+                              [&](const std::string& d) { return manager_serves(d, game_dir, nullptr, &last_why); });
+        double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t0).count();
+        if (dir.empty()) {
+            logf("  Slotsloader Manager: no Replace-original install found (searched in %.0f ms; its folder "
+                 "can be given in reframework\\costume_mods\\settings.ini)\n", ms);
+            if (!last_why.empty()) logf("    not read: %s\n", last_why.c_str());
+            DeleteFileA(remembered.c_str());
+            return;
+        }
+        char b[48];
+        snprintf(b, sizeof(b), "found in %.0f ms", ms);
+        how = b;
+        if (FILE* f = fopen(remembered.c_str(), "wb")) { fputs(dir.c_str(), f); fclose(f); }
+    }
+    logf("  Slotsloader Manager: %s (%s), Data\\replace-state.json\n", dir.c_str(), how.c_str());
+    if (manager_serves(dir, game_dir, &g_manager, &why)) log_manager_record(g_manager);
+    else logf("    WARN: not read: %s\n", why.c_str());   // changed between the two reads
+}
+
+// The Manager's claimed loose files as the scan names them -> the mod's name
+static const std::map<std::string, std::string>& manager_claimed(const VanillaIndex& inv) {
+    static std::map<std::string, std::string> out;
+    static bool done = false;
+    if (done) return out;
+    done = true;
+    const std::string tex_ver = current_tex_ver(inv);
+    for (auto& [f, mod] : g_manager.claimed) {
+        std::string p = claimed_scan_name(f, tex_ver);
+        if (!p.empty()) out.emplace(p, mod);
+    }
+    return out;
+}
+
+// The Manager's record of a patch pak in the game folder: same name, and same size (else same
+// SHA-256) when the record gives one, since patch numbers get reused
+static const ManagerPak* manager_pak_of(const std::string& pak_path) {
+    auto sl = pak_path.find_last_of("\\/");
+    const std::string name = str_lower(sl == std::string::npos ? pak_path : pak_path.substr(sl + 1));
+    for (auto& mp : g_manager.paks) {
+        if (mp.name != name) continue;
+        if (mp.size >= 0) { if (file_size_of(pak_path) != mp.size) continue; }
+        else if (!mp.sha256.empty() && sha256_file_hex(pak_path) != mp.sha256) continue;
+        return &mp;
+    }
+    return nullptr;
 }
 
 static bool has_loose_files(const std::string& game_dir) {
@@ -8001,7 +8362,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     const bool has_loose = has_loose_files(game_dir);   // Fluffy Mod Manager's loose files
     // Fluffy is looked for only when it has put files in the game (loose files or a mod pak)
     g_fluffy = FluffyState{};
-    if (has_loose || !mod_paks.empty()) find_fluffy(game_dir, costume_mods_dir, registry_dir);
+    g_manager = ManagerState{};
+    if (has_loose || !mod_paks.empty()) {
+        find_fluffy(game_dir, costume_mods_dir, registry_dir);
+        find_manager(game_dir, costume_mods_dir, registry_dir);   // the Slotsloader Manager's Replace-original installs
+    }
 
     // 3b. No mod paks AND no costume_mods -> clean up and exit
     if (mod_paks.empty() && !has_costume_mods && !has_loose) {
@@ -8067,6 +8432,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     if (!g_fluffy.ini.empty()) {
         folder_infos.push_back({ "fluffy/installed.ini", g_fluffy.ini });
         for (auto& pk : g_fluffy.picks) folder_infos.push_back({ "fluffy/" + pk.name, pk.path });
+    }
+    if (!g_manager.record.empty()) {   // an install / uninstall in the Manager rebuilds
+        auto sl = g_manager.record.find_last_of('\\');
+        folder_infos.push_back({ "manager/" + g_manager.record.substr(sl + 1), g_manager.record });
     }
 
     // 3d. Fingerprint check for early exit
@@ -8195,6 +8564,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         scan_mod_pak(*reader, inv, known, unknown, upgraded_tex);
         all_upgraded_tex.insert(upgraded_tex.begin(), upgraded_tex.end());
         printf("    resolved: %zu paths, unattributed: %zu\n", known.size(), unknown.size());
+        if (const ManagerPak* mp = manager_pak_of(pi.path)) {
+            printf("    %s: installed by the Slotsloader Manager (Replace original): no outfit\n", mp->mod.c_str());
+            game_patch_readers.push_back({pi.num, reader.get()});   // the game still loads it
+            mod_pak_readers.push_back(std::move(reader));
+            continue;
+        }
         if (!g_fluffy.claimed.empty() && !known.empty()) {
             const auto& claimed = fluffy_claimed(inv);
             if (std::all_of(known.begin(), known.end(), [&](auto& kv) { return claimed.count(kv.first) > 0; })) {

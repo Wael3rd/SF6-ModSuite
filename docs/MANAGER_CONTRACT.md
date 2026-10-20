@@ -3,7 +3,8 @@
 ZZtaii's Slotsloader Manager installs costume mods for the Slots Loader and reads what
 the loader wrote at the last launch. This page says what our loader (`amd_ags_x64.dll` + `costume_loader.exe`,
 `costumes/loader/loader_core.cpp`) provides to the Manager, under which **contract number**, and what the Manager
-needs to change to accept our loader. The variant code below comes from ZZtaii's Slotsloader fork (1.10.0, MIT).
+needs to change to accept our loader. The variant code below comes from ZZtaii's Slotsloader fork (1.10.0, MIT);
+the Replace-original record follows the Manager's own `replace-state.json` (ZZtaii).
 
 ## Contract number
 
@@ -44,10 +45,81 @@ contract `N - 1` unless this page says otherwise.
   as without it. Porting it means the fork's swap-repair module (`patch.cpp`, about 200 lines with verified file
   fingerprints) and changes in the pak read paths of every mod file, the scene USER files and one Mai model-parts
   case: not small and not isolated, left for its own task.
-- **Replace original installs**: the loader still makes an outfit of its own from loose game files and from
-  foreign patch paks, so an outfit the Manager installed with "Replace original" can also appear as an extra
-  outfit. Not covered yet.
 - `variants.json` is not rewritten on a launch that rebuilds nothing (same as the fork).
+
+## Replace original installs
+
+With **Replace original**, the Manager writes a mod's files loose under the game's `natives/` (the PAK method
+also turns off the matching rows of the base pak) and installs a mod's own `.pak` as the next
+`re_chunk_000.pak.patch_NNN.pak`. Such a mod replaces the game's outfit: it is not an extra one. The Manager's
+installs have priority, so the loader makes **no outfit** from them:
+
+- a loose game file an enabled Manager mod installed (and still the same size on disk) is left out of the
+  "natives" source, the way files Fluffy Mod Manager installed are;
+- a patch pak an enabled Manager mod installed (same file name, and same size, else same SHA-256, when the
+  record gives one: patch numbers get reused) is not a source of outfits; the game still loads it and the loader
+  still reads it as a game pak;
+- disabled mods, files missing from the game, files another tool wrote over since, and files the Manager released
+  ("Keep current file", `Released[]`) claim nothing;
+- the same mod also put in `reframework/costume_mods` stays an extra outfit (the user put it there on purpose).
+
+The log says where the record came from, how many mods / files / paks it claims, and for each source left out
+"`<mod>`: installed by the Slotsloader Manager (Replace original): no outfit". The record file is part of the
+rebuild fingerprint: an install, uninstall or enable change in the Manager rebuilds the pak at the next launch.
+
+### What the loader reads
+
+1. **`reframework/data/SF6_Costumes_Data/manager_installs.json`** (requested from the Manager, format below). When
+   it is there and readable it is the record, and nothing else is looked for. An unknown `format` or a file that
+   does not parse logs one WARN and the loader falls back to 2.
+2. Until the Manager writes it: the Manager's own **`Data/replace-state.json`** (`"Format": "sf6-replace-state-v1"`,
+   ZZtaii's format, read as the Manager writes it), when its `GameRoot` is this game folder. The Manager is portable
+   and leaves no pointer, so the folder is found the way the loader finds Fluffy: `SlotsloaderManager=` in
+   `reframework/costume_mods/settings.ini`, else the folder found before (`manager_location.txt` in
+   `SF6_Costumes_Data`), else a running Manager, else a search of Documents, Desktop, Downloads, the game folder and
+   the one above it and each drive root (and their sub-folders named like a tool). From it the loader takes
+   `Mods[]` (`Name`, `Enabled`, `Files[]` `Path` / `Sha256` / `Size`) and `Released[]`; `Paks[]` (the base pak
+   stamps) is not used.
+
+Neither file is ever written by the loader. Both are read only when the game folder has loose costume files or a
+foreign patch pak (the only things a Replace-original install leaves).
+
+### `manager_installs.json` (asked of the Manager)
+
+Write it whole after every install, uninstall, enable / disable and priority change of a Replace-original mod
+(temporary file in the same folder, then renamed over it), UTF-8 without BOM. Delete it, or write an empty `mods`,
+when no Replace-original mod is installed.
+
+```json
+{
+  "format": "sf6-manager-installs-1",
+  "generated": "2026-10-20T21:00:00Z",
+  "manager": "Slotsloader Manager 1.0.8",
+  "mods": [
+    {
+      "id": "4f1c...",
+      "name": "Gym Cammy",
+      "installed_utc": "2026-10-20T20:58:12Z",
+      "enabled": true,
+      "files": [
+        { "path": "natives/stm/product/model/esf/esf017/001/01/esf017_001_01.mesh.230110883",
+          "sha256": "9b2e...", "size": 1843216 }
+      ],
+      "paks": [
+        { "path": "re_chunk_000.pak.patch_004.pak", "sha256": "77aa...", "size": 3386324 }
+      ]
+    }
+  ]
+}
+```
+
+- `path`: relative to the game folder, `/` or `\`, any case (the same paths as `replace-state.json`'s
+  `Files[].Path`). `files` holds the loose files, `paks` the patch paks the mod added (a patch pak listed under
+  `files` counts the same).
+- `size` (bytes) is what the loader checks; `sha256` is used for a pak only when `size` is missing. Both optional.
+- `enabled: false`: the mod claims nothing. Mods in priority order (first = the one whose file is in the game).
+- `generated`, `manager`, `id`, `installed_utc` are for logs and support; the loader does not need them.
+- A later, incompatible layout gets a new `format` string; fields may be added to this one freely.
 
 ## RuntimeOptions and what the Manager sees
 
@@ -84,3 +156,7 @@ internal static bool HonoursContract(ModComponent c)
 
 At run time, `variants.json`'s `"contract"` tells which contract the installed loader honours (a missing field = a
 loader before the contract). `VariantChoices.ReadReport` can keep ignoring it.
+
+Second, for Replace original: write `reframework/data/SF6_Costumes_Data/manager_installs.json` as above. Until then
+the loader reads `Data/replace-state.json` wherever it can find the Manager; a Manager folder it cannot find
+(unusual place, no `SlotsloaderManager=` in `settings.ini`) means its Replace-original installs show up twice again.
