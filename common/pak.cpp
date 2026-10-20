@@ -324,7 +324,7 @@ PakWriter::~PakWriter() {
     if (spill_) CloseHandle(HANDLE(spill_));   // FILE_FLAG_DELETE_ON_CLOSE: the spill file goes with it
 }
 
-bool PakWriter::spill_to(const char* path, uint64_t min_size) {
+bool PakWriter::spill_to(const char* path, uint64_t min_size, uint64_t keep_in_memory) {
     if (spill_) return true;
     HANDLE h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
@@ -335,6 +335,7 @@ bool PakWriter::spill_to(const char* path, uint64_t min_size) {
     DeviceIoControl(h, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &ret, nullptr);
     spill_ = h;
     spill_min_ = min_size;
+    keep_in_memory_ = keep_in_memory;
     spill_end_ = 0;
     return true;
 }
@@ -342,6 +343,7 @@ bool PakWriter::spill_to(const char* path, uint64_t min_size) {
 void PakWriter::store(RawEntry& e) {
     e.size = e.blob.size();
     if (!spill_ || given_back_ || e.blob.size() < spill_min_) return;
+    if (kept_in_memory_ + e.blob.size() <= keep_in_memory_) { kept_in_memory_ += e.blob.size(); return; }
     const uint64_t at = spill_end_;
     for (size_t put = 0; put < e.blob.size();) {
         const uint64_t pos = at + put;
@@ -488,6 +490,16 @@ bool PakWriter::head(uint64_t hash, size_t n, std::vector<uint8_t>& out) const {
     const RawEntry& src = (e->alias >= 0) ? entries_[size_t(e->alias)] : *e;
     out.resize(size_t(std::min<uint64_t>(n, src.size)));
     return read_stored(src, 0, out.data(), out.size());
+}
+
+bool PakWriter::range(uint64_t hash, uint64_t at, size_t n, std::vector<uint8_t>& out, uint64_t* total) const {
+    const RawEntry* e = find(hash);
+    if (!e || (e->attributes & 0xFF) != 0) return false;
+    const RawEntry& src = (e->alias >= 0) ? entries_[size_t(e->alias)] : *e;
+    if (total) *total = src.size;
+    if (at > src.size || n > src.size - at) return false;
+    out.resize(n);
+    return read_stored(src, at, out.data(), n);
 }
 
 bool PakWriter::replace(uint64_t hash, std::vector<uint8_t> data) {

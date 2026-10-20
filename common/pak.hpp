@@ -129,10 +129,11 @@ public:
     PakWriter& operator=(const PakWriter&) = delete;
 
     // Data of min_size bytes or more goes to this scratch file as it is added instead of staying in
-    // memory (a costume pak is many GB: held in memory it paged the whole PC out). The file is
-    // deleted when the writer goes away, crash included. False (everything stays in memory) when it
-    // cannot be made. The pak written is the same either way.
-    bool spill_to(const char* path, uint64_t min_size = 1 << 20);
+    // memory (a costume pak is many GB: held in memory it paged the whole PC out), once such data
+    // already held in memory reaches keep_in_memory bytes. The file is deleted when the writer goes
+    // away, crash included. False (everything stays in memory) when it cannot be made. The pak written
+    // is the same either way.
+    bool spill_to(const char* path, uint64_t min_size = 1 << 20, uint64_t keep_in_memory = 0);
 
     // Store a pre-compressed blob verbatim (passthrough).
     void add_raw(uint64_t hash, std::vector<uint8_t> blob,
@@ -154,6 +155,8 @@ public:
     std::vector<uint8_t> get(uint64_t hash) const;
     // The first n bytes (fewer if shorter) of an entry stored uncompressed; false otherwise.
     bool head(uint64_t hash, size_t n, std::vector<uint8_t>& out) const;
+    // n bytes at `at` of an entry stored uncompressed; false otherwise or past its end. total: its size.
+    bool range(uint64_t hash, uint64_t at, size_t n, std::vector<uint8_t>& out, uint64_t* total = nullptr) const;
     // Replaces the data of an entry (stored uncompressed). Entries that shared its data keep it.
     bool replace(uint64_t hash, std::vector<uint8_t> data);
 
@@ -191,6 +194,7 @@ private:
     uint64_t source_bytes_ = 0;
     void* spill_ = nullptr;    // HANDLE of the spill file
     uint64_t spill_min_ = 0;
+    uint64_t keep_in_memory_ = 0, kept_in_memory_ = 0;
     uint64_t spill_end_ = 0;
     uint64_t given_back_ = 0;  // spill bytes below this were given back by write()
 };

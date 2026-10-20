@@ -5364,6 +5364,19 @@ static void mdf2_masks(const std::vector<uint8_t>& b, std::vector<MatMasks>& out
     }
 }
 
+// Channel means of a colour mask (texture_channel_means). A texture of the pak being built is read in
+// part, its header and its small level: most are many MB, and they wait in the writer's spill file.
+static bool mask_means(slotcheck::GameFiles& gf, const std::string& p, float mean[4]) {
+    const uint64_t h = pak_path_hash(std::string_view(p));
+    uint64_t size = 0, off = 0, len = 0;
+    std::vector<uint8_t> head, level;
+    if (gf.writer->find(h) && gf.writer->range(h, 0, 0, head, &size)) {
+        return gf.writer->head(h, TEXTURE_HEAD_MAX, head) && texture_small_level(head, size, off, len)
+            && gf.writer->range(h, off, size_t(len), level) && texture_level_means(head, size, level, mean);
+    }
+    return texture_channel_means(gf.load(p), mean);
+}
+
 // "[[c0,c1],...]" for colours 1 to 10 (null where the colour file is missing), each square an RGBA
 // value as via.Color stores it (R in the low byte)
 // folder: where the colour files are; name_folder: the folder their names carry (a slot keeps the
@@ -5386,7 +5399,7 @@ static std::string compute(slotcheck::GameFiles& gf, const std::string& scene_p,
             for (int j = 0; j < 2; j++) {
                 const std::string& ref = j ? m.mask2 : m.mask1;
                 float mean[4];
-                if (!ref.empty() && texture_channel_means(gf.load(scene_ref_pak_path(ref, suffixes)), mean))
+                if (!ref.empty() && mask_means(gf, scene_ref_pak_path(ref, suffixes), mean))
                     for (int k = 0; k < 4; k++) v[j * 4 + k] = mean[k];
             }
             cov[m.name] = v;
@@ -10689,9 +10702,20 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     log_step("slots assigned");
     printf("\nAssembling output pak (minimal)...\n");
     PakWriter writer;
-    // The big files wait in a scratch file beside the pak, not in memory (it pages the PC out)
-    if (!writer.spill_to((target_path + ".spill").c_str()))
-        logf("  WARN: cannot create %s.spill, the pak is built in memory\n", target_path.c_str());
+    // The big files wait in a scratch file beside the pak, past what the free memory holds without
+    // paging (half of what is free beyond 4 GB, the game itself still to load; 8 GB at most)
+    {
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof(ms);
+        const uint64_t gb = uint64_t(1) << 30;
+        uint64_t keep = 0;
+        if (GlobalMemoryStatusEx(&ms) && ms.ullAvailPhys > 4 * gb) keep = std::min((ms.ullAvailPhys - 4 * gb) / 2, 8 * gb);
+        if (writer.spill_to((target_path + ".spill").c_str(), 1 << 20, keep))
+            logf("  big files kept in memory up to %.1f GB (%.1f GB free), then in %s.spill\n", keep / double(gb),
+                 ms.ullAvailPhys / double(gb), target_name);
+        else
+            logf("  WARN: cannot create %s.spill, the pak is built in memory\n", target_path.c_str());
+    }
     std::unordered_set<std::string> written_paths;
 
     g_relocated_mod_paths.clear();

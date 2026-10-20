@@ -1298,7 +1298,9 @@ size_t mdf2_rebind_textures(std::vector<uint8_t>& data,
     return n;
 }
 
-bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
+// The level texture_channel_means reads: format, block size, level size in pixels and blocks, place in the file
+struct SmallLevel { int fmt, bs; uint32_t mw, mh, bw, bh; uint64_t off, size; };
+static bool small_level(const std::vector<uint8_t>& b, uint64_t file_size, SmallLevel& lv) {
     if (b.size() < 40 || memcmp(b.data(), "TEX\0", 4) != 0) return false;
     const uint16_t w = rd<uint16_t>(b, 8), h = rd<uint16_t>(b, 10);
     const int n = b[15] / 16, fmt = rd<int32_t>(b, 16);
@@ -1315,12 +1317,22 @@ bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
         if (40 + 16ull * (i + 1) > b.size() || mw < 4 || mh < 4) return false;
         const uint64_t off = rd<uint64_t>(b, 40 + 16ull * i);
         const uint32_t bw = (mw + 3) / 4, bh = (mh + 3) / 4;
-        if (off + uint64_t(bw) * bh * bs > b.size()) return false;
+        if (off + uint64_t(bw) * bh * bs > file_size) return false;
+        lv = {fmt, bs, mw, mh, bw, bh, off, uint64_t(bw) * bh * bs};
+        return true;
+    }
+    return false;
+}
+
+static void level_means(const SmallLevel& lv, const uint8_t* data, float out[4]) {
+    const int fmt = lv.fmt, bs = lv.bs;
+    const uint32_t mw = lv.mw, mh = lv.mh, bw = lv.bw, bh = lv.bh;
+    {
         double sum[4] = {0, 0, 0, 0};
         uint8_t px[4 * 4 * 4];
         for (uint32_t by = 0; by < bh; by++)
             for (uint32_t bx = 0; bx < bw; bx++) {
-                const uint8_t* blk = b.data() + off + (uint64_t(by) * bw + bx) * bs;
+                const uint8_t* blk = data + (uint64_t(by) * bw + bx) * bs;
                 memset(px, 0, sizeof px);
                 switch (fmt) {
                     case 71: case 72: bcdec_bc1(blk, px, 16); break;
@@ -1342,7 +1354,28 @@ bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
                         for (int c = 0; c < 4; c++) sum[c] += px[(y * 4 + x) * 4 + c];
             }
         for (int c = 0; c < 4; c++) out[c] = float(sum[c] / (255.0 * mw * mh));
-        return true;
     }
-    return false;
+}
+
+bool texture_channel_means(const std::vector<uint8_t>& b, float out[4]) {
+    SmallLevel lv;
+    if (!small_level(b, b.size(), lv)) return false;
+    level_means(lv, b.data() + lv.off, out);
+    return true;
+}
+
+bool texture_small_level(const std::vector<uint8_t>& head, uint64_t file_size, uint64_t& off, uint64_t& size) {
+    SmallLevel lv;
+    if (!small_level(head, file_size, lv)) return false;
+    off = lv.off;
+    size = lv.size;
+    return true;
+}
+
+bool texture_level_means(const std::vector<uint8_t>& head, uint64_t file_size, const std::vector<uint8_t>& level,
+                         float out[4]) {
+    SmallLevel lv;
+    if (!small_level(head, file_size, lv) || level.size() != lv.size) return false;
+    level_means(lv, level.data(), out);
+    return true;
 }

@@ -96,6 +96,12 @@ bool cmd_tints(const std::vector<uint8_t>& data, std::vector<CmdCluster>& out);
 // Mean of each channel (0..1, RGBA) of a block-compressed texture over its first mip level whose sides
 // are both 64 or less (BC1, BC3, BC4, BC5, BC7). False when that level is missing or smaller than 4x4.
 bool texture_channel_means(const std::vector<uint8_t>& tex, float out[4]);
+// The same, from parts of the file: head = its first bytes (TEXTURE_HEAD_MAX is enough), file_size = its
+// size. texture_small_level gives the place of the level to read; texture_level_means its means once read.
+constexpr size_t TEXTURE_HEAD_MAX = 40 + 16 * 15;
+bool texture_small_level(const std::vector<uint8_t>& head, uint64_t file_size, uint64_t& off, uint64_t& size);
+bool texture_level_means(const std::vector<uint8_t>& head, uint64_t file_size, const std::vector<uint8_t>& level,
+                         float out[4]);
 
 // EXPERIMENTAL. Rebuilds a mod's material file (.mdf2) on the game's own file for the same part: same
 // material names required (false otherwise, out untouched); the result is the game's file, with each
