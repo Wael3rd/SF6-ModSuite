@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <mutex>
 #include <set>
 
 namespace slots::costumes {
@@ -67,6 +68,15 @@ bool g_show_nsfw = false;
 uint64_t g_settings_stamp = 0;       // size and date of settings.json when read (0: never read / missing)
 bool g_nsfw_apply = false;           // a change not applied yet (Battle Settings was open)
 bool g_nsfw_row = false;             // the in-game row (nsfw_option.cpp) shows the setting: the file is followed even with no NSFW content
+// The game's list of a fighter's outfits (CostumeInventory.GetCostumeNoList: character select screens, Battle Settings)
+// leaves the NSFW outfits out while they are hidden (ownership::nsfw_drops: an unlock-all script keeps them in it
+// whatever their ownership; 20/10, C. Viper's Lace lingerie still listed with the row Off). The hook runs on any
+// thread: it reads g_nsfw_nos (written once by load_registry, before the hooks) and g_hide_nsfw only.
+std::map<int, std::vector<uint32_t>> g_nsfw_nos;     // fighter -> its NSFW outfits' costume numbers
+std::atomic<bool> g_hide_nsfw{true};                 // !g_show_nsfw
+std::atomic<uint32_t> g_list_drops{0};               // NSFW outfits left out of the game's lists (log)
+uint32_t g_list_drops_logged = 0;
+void set_show_nsfw(bool on) { g_show_nsfw = on; g_hide_nsfw.store(!on, std::memory_order_relaxed); }
 
 bool visible(const Slot& s) {
     return g_book.shown(s.fighter, s.base) && ownership::nsfw_shown(s.nsfw, g_show_nsfw);
@@ -207,7 +217,10 @@ void load_registry() {
         s.record_id = r ? static_cast<int>(r->as_int()) : 0;
         if (s.fighter <= 0 || s.costume_no <= 0) continue;
         if (const Json* nm = e.get("name")) s.name = nm->as_str();
-        if (const Json* ns = e.get("nsfw"); ns && ns->kind == Json::Bool && ns->b) { s.nsfw = true; ++g_nsfw_slots; }
+        if (const Json* ns = e.get("nsfw"); ns && ns->kind == Json::Bool && ns->b) {
+            s.nsfw = true; ++g_nsfw_slots;
+            g_nsfw_nos[s.fighter].push_back(static_cast<uint32_t>(s.costume_no));
+        }
         if (auto b = base_of.find({s.fighter, s.costume_no}); b != base_of.end()) s.base = b->second;
         if (auto l = label_of.find({s.fighter, s.costume_no}); l != label_of.end()) s.label = l->second;
         if (const Json* sw = e.get("swatches"); sw && sw->kind == Json::Array) {
@@ -252,7 +265,7 @@ bool read_nsfw_setting(const char* why) {
     }
     if (on == g_show_nsfw && std::strcmp(why, "start") != 0) return false;
     const bool changed = on != g_show_nsfw;
-    g_show_nsfw = on;
+    set_show_nsfw(on);
     logf("costumes: Display NSFW Outfits %s (%s): %zu NSFW outfit%s %s%s", on ? "on" : "off", why, g_nsfw_slots,
          g_nsfw_slots == 1 ? "" : "s", on ? "shown" : "hidden", rto::nsfw_options() ? ", NSFW options too" : "");
     return changed;
@@ -1294,6 +1307,49 @@ int pre_holder_ctor(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
+// ---- hook: the game's list of a fighter's outfits (CostumeInventory.GetCostumeNoList(chara)) ----
+// While NSFW outfits are hidden, the fighter's NSFW outfits are taken out of the list it returns (a new list, the
+// caller's only: the Color Mod adds to ColorInventory.GetColorList's the same way). Nothing else is read or written.
+thread_local int tl_list_fighter = -1;
+std::mutex g_list_mx;                                   // the list type's methods, resolved once
+TD* g_list_td = nullptr;
+Method *g_list_count = nullptr, *g_list_item = nullptr, *g_list_remove = nullptr;
+
+int pre_costume_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_list_fighter = (argc >= 3 && !g_closing.load(std::memory_order_relaxed) && g_hide_nsfw.load(std::memory_order_relaxed))
+                          ? static_cast<int32_t>(reinterpret_cast<uintptr_t>(argv[2])) : -1;
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void drop_nsfw_from_list(Obj* list, const std::vector<uint32_t>& nos) {
+    std::lock_guard lk(g_list_mx);
+    TD* td = list->get_type_definition();
+    if (td != g_list_td) {
+        g_list_td = td;
+        g_list_count = method_of(td, "get_Count", 0);
+        g_list_item = method_of(td, "get_Item", 1);
+        g_list_remove = method_of(td, "RemoveAt", 1);
+    }
+    if (!g_list_count || !g_list_item || !g_list_remove) return;
+    auto rc = call(g_list_count, list);
+    if (rc.exception_thrown) return;
+    std::vector<uint32_t> listed;
+    for (int i = 0, n = static_cast<int>(rc.dword); i < n; ++i) {
+        auto r = call(g_list_item, list, { arg_i32(i) });
+        if (r.exception_thrown) return;
+        listed.push_back(r.dword);
+    }
+    for (int i : ownership::nsfw_drops(listed, nos))
+        if (!call(g_list_remove, list, { arg_i32(i) }).exception_thrown) g_list_drops.fetch_add(1, std::memory_order_relaxed);
+}
+void post_costume_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const int fid = tl_list_fighter;
+    tl_list_fighter = -1;
+    if (fid < 0 || !ret_val || !*ret_val || !g_hide_nsfw.load(std::memory_order_relaxed)) return;
+    auto it = g_nsfw_nos.find(fid);
+    if (it == g_nsfw_nos.end()) return;
+    try { drop_nsfw_from_list(reinterpret_cast<Obj*>(*ret_val), it->second); } catch (...) {}
+}
+
 // ---- hooks: screens ----
 template <perf::Id ID> int pre_menu_open(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)  { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_MENU_OPEN); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 template <perf::Id ID> int pre_menu_close(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_MENU_CLOSE); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
@@ -1322,7 +1378,7 @@ void set_display_nsfw(bool on) {
     if (ok) g_settings_stamp = settings_stamp();
     logf("costumes: Display NSFW Outfits %s (option row)%s", on ? "on" : "off", ok ? "" : ": settings.json NOT written");
     if (on == g_show_nsfw) return;
-    g_show_nsfw = on;
+    set_show_nsfw(on);
     g_nsfw_apply = true;
 }
 
@@ -1355,6 +1411,8 @@ void install_hooks() {
     hook_all(ui, "Start", pre_select_start<perf::HkCosUI10501Start>, nullptr);
     hook_all(ui, "End", pre_select_end<perf::HkCosUI10501End>, nullptr);
     hook_all(tdb->find_type("app.menu.UIFlowTitle"), "onDestroy", pre_title_end, nullptr);
+    // Only with NSFW outfits installed: a fighter's outfit list, without them while they are hidden
+    if (g_nsfw_slots) hook_all(tdb->find_type("app.InventoryManager.CostumeInventory"), "GetCostumeNoList", pre_costume_list, post_costume_list);
 }
 
 bool busy() {
@@ -1406,6 +1464,11 @@ void tick(uint32_t ev) {
     if (ev & EV_MENU_OPEN) { g_menu_open = true; on_menu_open(); }
     if ((ev & EV_MENU_CLOSE) && g_menu_open) { g_menu_open = false; on_menu_close(); safety_net(); }
     if (ev & (EV_SELECT_START | EV_SELECT_END)) safety_net();
+    if (ev & (EV_MENU_CLOSE | EV_SELECT_END))
+        if (uint32_t d = g_list_drops.load(std::memory_order_relaxed); d != g_list_drops_logged) {
+            logf("costumes: NSFW outfits left out of the game's outfit lists (hidden): %u so far", d);
+            g_list_drops_logged = d;
+        }
     // A changed NSFW setting, outside Battle Settings: ownership at once (shown / hidden in the next list), and with the
     // setting off a choice of an NSFW outfit back to Outfit 1 (safety_net, drop_nsfw_choices)
     if (g_nsfw_apply && g_boot_done && !g_menu_open) {

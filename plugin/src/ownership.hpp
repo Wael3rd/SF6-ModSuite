@@ -66,6 +66,18 @@ private:
 // (the select screens and Battle Settings do not list it), like a slot made from an outfit the player does not own.
 inline bool nsfw_shown(bool nsfw, bool display_nsfw) { return !nsfw || display_nsfw; }
 
+// Taking the ownership back is not enough when an unlock-all script hooks app.DlcManager.IsValidDlcItem: every DLC
+// record is then valid, the slots' included, and the game's list keeps them. So the list itself
+// (CostumeInventory.GetCostumeNoList, read by the select screens and Battle Settings) is filtered: the positions of
+// the fighter's NSFW outfits in it, last first (removed one at a time, the earlier positions stay right).
+inline std::vector<int> nsfw_drops(const std::vector<uint32_t>& listed, const std::vector<uint32_t>& nsfw_outfits) {
+    std::vector<int> out;
+    for (int i = static_cast<int>(listed.size()) - 1; i >= 0; --i)
+        if (std::find(nsfw_outfits.begin(), nsfw_outfits.end(), listed[static_cast<size_t>(i)]) != nsfw_outfits.end())
+            out.push_back(i);
+    return out;
+}
+
 // The colour the save gets when a hidden NSFW outfit's choice goes back to Outfit 1: the colour chosen with the
 // outfit, else the one the save holds, when Outfit 1 has it; else Outfit 1's first colour. -1: leave the save's
 // colour as it is (Outfit 1's colours not known).

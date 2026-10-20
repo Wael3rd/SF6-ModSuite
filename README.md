@@ -178,8 +178,8 @@ Mods left in `costume_mods` are looked at too, by name (creators tag their mods,
   effect at the next screen that lists outfits (character select, Battle Settings), without a relaunch; the outfits
   stay installed either way; editing the file by hand works too, and the row follows it.
 - **Hidden** means not listed by the character select screens or Battle Settings / Fighter Settings, like an outfit
-  you do not own. A fighter whose Battle Settings outfit is an NSFW one goes back to its Outfit 1 when they are
-  hidden.
+  you do not own (the game's list of the fighter's outfits is filtered, so an unlock-all script does not bring them
+  back). A fighter whose Battle Settings outfit is an NSFW one goes back to its Outfit 1 when they are hidden.
 - **Numbers**: a fighter's NSFW outfits come after its other outfits in the costume list (ten numbers further, so
   outfits added later to `costume_mods` still come before them), and keep their numbers from one launch to the next.
   A mod moved from one folder to the other, or that becomes NSFW by its name (or stops being NSFW), is numbered again

@@ -71,6 +71,18 @@ int main() {
     check(!slots::ownership::nsfw_shown(true, false), "NSFW outfit, setting off: hidden");
     check(slots::ownership::nsfw_shown(true, true), "NSFW outfit, setting on: shown");
     {
+        // The game's list keeps NSFW outfits whatever their ownership with an unlock-all script (C. Viper 20/10:
+        // outfits 38 Lace lingerie and 39 Barefoot NSFW, the others shown): their positions, last first
+        using slots::ownership::nsfw_drops;
+        const std::vector<uint32_t> listed = {0, 1, 2, 3, 4, 13, 22, 25, 26, 27, 38, 39};
+        check(nsfw_drops(listed, {38, 39}) == std::vector<int>({11, 10}), "NSFW outfits dropped from the list, last first");
+        check(nsfw_drops(listed, {}).empty(), "no NSFW outfit: the list unchanged");
+        check(nsfw_drops({0, 1, 4}, {38}).empty(), "an NSFW outfit not listed: nothing dropped");
+        std::vector<uint32_t> l = listed;
+        for (int i : nsfw_drops(l, {13, 39})) l.erase(l.begin() + i);
+        check(l == std::vector<uint32_t>({0, 1, 2, 3, 4, 22, 25, 26, 27, 38}), "removed one at a time: the right ones go");
+    }
+    {
         using slots::ownership::outfit1_colour;
         const std::vector<int> o1 = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
         check(outfit1_colour(3, 0, o1) == 3, "back to Outfit 1: the colour chosen with the outfit");
