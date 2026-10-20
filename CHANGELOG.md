@@ -23,7 +23,11 @@
   (add-ons replacing a same file are one choice: Leon Hair / Trimmed Hair); a group its author asks exactly one option of ("2! Skin", "Choose one") is offered without None
   (unless its options share files with another group's); an option for a part the outfit takes from another folder
   (Leon's hair add-ons, the game's hair in `000/02/`) now replaces that part. A modular mod none of whose options
-  has a body mesh (Mai face accessories) still makes no outfit, with a WARN instead of nothing.
+  has a body mesh (Mai face accessories) still makes no outfit, with a WARN instead of nothing. An outfit the user
+  put with its add-on archives in one sub-folder (`Ken\Ken SFV\` with KenSFV and Ken SFV Hair V2) is one outfit
+  too, its add-ons worn by default (what the sub-folder made before, same slot) and chosen in game; before, it made
+  the combined outfit without options. A chain is no longer put back under a mesh that stays (a part's mesh without
+  a way back keeps its own chain).
 - Joint constraints a mod ships (`.jcns`) are used by its outfit, as a replacement install uses them: the outfit gets
   its own copy of the game's `_jcs.user` naming them (or the mod's own, repointed), and its scene follows it. Before,
   the outfit drove the mod's mesh with the game's constraints (A.K.I. bare-legs mods with added toe bones). A

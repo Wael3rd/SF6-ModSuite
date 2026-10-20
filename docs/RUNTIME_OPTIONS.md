@@ -110,8 +110,13 @@ with a WARN) are also one mod:
   group (`pick`, with None) named after the word their names share ("Hair": Leon Hair / Trimmed Hair). The former
   add-on outfits are its `variants` (saved choices of their slots move to it, `former`), the complete add-on's
   own former outfit too. `variants`: the outfits of `off`, with the options stored.
+- Add-ons the user put with the outfit in one sub-folder (`Ken\Ken SFV\` holding KenSFV and Ken SFV Hair V2; the
+  separate add-on archives of Ingrid's Fly In A Bucket): `off` makes the outfit with them only, never alone. `on`:
+  the same one outfit with its add-ons as options, worn by default (`defaults`): the combination `off` makes (the
+  one with the most add-ons of the sub-folder), whose id it keeps (its slot as before); the outfit alone and the
+  other combinations are its `variants`. Option ids as above (the add-on's folder).
 - Not when an add-on brings files for another costume folder than the outfit's (the runtime swaps the slot's own
-  folders only), nor for separate add-ons the user put with the outfit in one sub-folder (all worn): `off` rules.
+  folders only; Cammy's Belly_cammy02 + BellyHair01_Cammy, hair made for `001/02/`): `off` rules.
 
 An **add-on mod** (a modular mod none of whose options has a body mesh: "Mai face accessories", whose options
 replace the shared head `000/00/` or Outfit 2's head) still makes nothing, now with a WARN; its options belong on
@@ -159,6 +164,8 @@ natives/stm/product/model/esf/<fighter>/<slot folder>/rto/<option id>/_/<path in
     only where the mod keeps the game's material file (C. Viper lace lingerie: Outfit 2's body, refused).
   - a texture from the game (none of the mod's base files ships it): only with the proportions of the slot's own.
   - the mod's base files (main files) are used when they fit.
+  - a chain: not when a mesh of its part (same folder) has no base copy: the slot's own mesh stays, its own chain
+    stays with it (Ken SFV Hair V2: the game's hair chain under the mod's hair; loader `2026-10-20-rto-grouped-addons`).
   The loader logs each refusal (`runtime options: no base copy of ... (why)`).
 - **Required groups**: a pick group one of whose options ships a file the slot wears with no base copy, and no pick
   of another group ships it, is listed in the slot's `required`: the menu offers it **without None** (the group

@@ -113,7 +113,7 @@ static const int   N_OLD_TEX = 1;
 // slot keeps its number for good: saved choices and replays name slots by number. Id of the static
 // table's first name message ("Outfit I"), static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_BUILD_ID = "2026-10-20-rtofit-zzfixes-567";
+static const char* LOADER_BUILD_ID = "2026-10-20-rto-grouped-addons";
 
 // ============================================================================
 // Utility
@@ -3476,6 +3476,19 @@ static void add_slot_files(PakWriter& writer,
                         if (why.empty()) why = slotcheck::material_fit(writer, base_pak, inv.suffixes, m, d);
                 }
                 if (!why.empty()) { no_base(p, src, why); continue; }
+            } else if (low.find("_chain.chain.") != std::string::npos) {
+                // A chain moves the joints of its part's mesh: when that mesh has no base copy (the slot's own
+                // stays), the slot's own chain stays with it (Ken SFV Hair V2: the game's hair chain would have
+                // been put back under the mod's hair mesh)
+                const std::string dir = low.substr(0, low.rfind('/') + 1);
+                std::string why;
+                for (auto& q : chosen) {
+                    const std::string ql = str_lower(q);
+                    if (why.empty() && ql.compare(0, dir.size(), dir) == 0 && ql.find('/', dir.size()) == std::string::npos
+                        && ql.find(".mesh.") != std::string::npos && !base_mesh.count(ql))
+                        why = "its part's mesh has no base copy";
+                }
+                if (!why.empty()) { no_base(p, src, why); continue; }
             } else if (low.find(".tex.") != std::string::npos && !src) {
                 // The game's texture under an option's: only with the proportions of the slot's own (another
                 // layout would be mapped wrong on the mod's mesh)
@@ -5599,7 +5612,12 @@ static std::string shared_word(const std::vector<std::string>& names) {
 // own id: its slot as before), every add-on chosen in game, any number of them; "variants": the outfits
 // RuntimeOptions=off makes as well. False (nothing done) when an add-on brings files for another outfit
 // folder (the runtime swaps files of the slot's own folders only) or the outfit was not made.
-static bool build_addon_options(size_t j, const std::vector<size_t>& adds, bool apart, ScanOutputs& o) {
+// sets: the add-ons of each outfit RuntimeOptions=off makes with it. worn: add-ons the user put with the
+// outfit in one sub-folder (off makes the outfit with them, never alone): the one outfit wears them by
+// default and keeps the id of that combination (its slot as before).
+static bool build_addon_options(size_t j, const std::vector<size_t>& adds,
+                                const std::vector<std::vector<size_t>>& sets, const std::vector<size_t>& worn,
+                                ScanOutputs& o) {
     const auto& b = g_units[j];
     for (auto a : adds) if (!g_units[a].targets.empty() && !shares_target(g_units[a], b)) return false;
     auto e = std::find_if(o.mods_out.begin(), o.mods_out.end(), [&](const auto& m) { return m.first == b.mod_id; });
@@ -5639,27 +5657,33 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds, bool 
     rto->defaults_from = "loader";
     if (auto src = g_mod_source.find(b.mod_id); src != g_mod_source.end()) rto->source = src->second.source;
     const std::vector<size_t> base_sel = {unit_option[j]};
-    // The outfits RuntimeOptions=off makes (one per add-on, plus all of them when they replace no same
-    // file; the outfit alone past three add-ons): ready-made sets, and the slots they had move here
+    // The outfits RuntimeOptions=off makes (`sets`): ready-made sets, and the slots they had move here
     struct Var { std::vector<size_t> parts; std::string label; std::vector<size_t> sel; };
-    std::vector<Var> vars;
-    std::vector<std::vector<size_t>> sets;
-    if (adds.size() <= 3) {
-        for (auto a : adds) sets.push_back({a});
-        if (adds.size() >= 2 && apart) sets.push_back(adds);
-    }
-    rto->variants.push_back({b.mod_id, unit_label(b), base_sel});
-    for (auto& v : sets) {
+    auto var_of = [&](const std::vector<size_t>& v) {
         Var x{{j}, unit_label(b), base_sel};
         for (auto a : v) { x.parts.push_back(a); x.label += " + " + unit_label(g_units[a]); x.sel.push_back(unit_option[a]); }
-        rto->variants.push_back({combined_mod_id(x.parts), x.label, x.sel});
-        vars.push_back(std::move(x));
+        return x;
+    };
+    std::vector<Var> vars;
+    for (auto& v : sets) vars.push_back(var_of(v));
+    // The one outfit: the outfit alone, or with the add-ons of its sub-folder (that combination's id)
+    const Var main = worn.empty() ? Var{{j}, unit_label(b), base_sel} : var_of(worn);
+    const std::string main_id = worn.empty() ? b.mod_id : combined_mod_id(main.parts);
+    rto->variants.push_back({main_id, main.label, main.sel});
+    for (auto& x : vars) {
+        const std::string id = combined_mod_id(x.parts);
+        if (id != main_id) rto->variants.push_back({id, x.label, x.sel});
     }
+    // The outfit alone had a slot before it was put with its add-ons: that slot moves here too
+    if (!worn.empty()) rto->variants.push_back({b.mod_id, unit_label(b), base_sel});
     // A complete add-on was an outfit of its own before (its id): its slot moves to the outfit with it
     for (auto a : adds)
         if (!g_units[a].costumes.empty())
             rto->variants.push_back({g_units[a].mod_id, unit_label(g_units[a]), {base_sel[0], unit_option[a]}});
-    for (auto& mc : e->second) { mc.rto = rto; mc.rto_selected = base_sel; }
+    if (worn.empty())
+        for (auto& mc : e->second) { mc.rto = rto; mc.rto_selected = base_sel; }
+    else   // off never makes it alone
+        o.mods_out.erase(e);
     std::string names;
     for (auto a : adds) names += (names.empty() ? "" : ", ") + unit_label(g_units[a]);
     printf("\n  %s: %zu add-on%s as runtime options (%s)\n", unit_label(b).c_str(), adds.size(),
@@ -5667,9 +5691,15 @@ static bool build_addon_options(size_t j, const std::vector<size_t>& adds, bool 
     size_t n_opt = 0;
     for (auto& op : rto->options) if (op.mode != "base") n_opt++;
     printf("    runtime options: %zu groups, %zu options stored for the in-game menu\n", rto->groups.size(), n_opt);
-    if (g_rto_layout == RtoLayout::One)
-        printf("    one outfit (RuntimeOptions=on): %s, its add-ons chosen in game\n", unit_label(b).c_str());
-    else
+    if (g_rto_layout == RtoLayout::One) {
+        if (worn.empty())
+            printf("    one outfit (RuntimeOptions=on): %s, its add-ons chosen in game\n", unit_label(b).c_str());
+        else {
+            printf("    one outfit (RuntimeOptions=on): %s, put with its add-ons in one sub-folder: worn by default, "
+                   "chosen in game\n", main.label.c_str());
+            push_combined(main.parts, main.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, main.sel);
+        }
+    } else
         for (auto& x : vars) push_combined(x.parts, x.label, o, b.u.rel + " (with add-ons)", b.info_path, rto, x.sel);
     return true;
 }
@@ -5839,8 +5869,29 @@ static void finalize_units(ScanOutputs& o) {
         // outfit is made, not the costume alone as well
         bool grouped = false;
         for (auto a : adds) if (user_grouped(g_units[a], b)) grouped = true;
-        // Runtime options: the outfit with its add-ons chosen in game (any number of them)
-        if (g_rto_layout != RtoLayout::Off && !separate && !grouped && build_addon_options(j, adds, apart, o)) continue;
+        // The outfits made with add-ons (the add-ons of each): all of them for separate ones in its
+        // sub-folder; else one per add-on, plus all of them when they replace no same file; none past
+        // three add-ons (the base alone)
+        std::vector<std::vector<size_t>> variants;
+        if (separate) variants.push_back(adds);
+        else if (adds.size() <= 3) {
+            for (auto a : adds) variants.push_back({a});
+            if (adds.size() >= 2 && apart) variants.push_back(adds);
+        }
+        // Runtime options: the outfit with its add-ons chosen in game (any number of them). Put with its
+        // add-ons in one sub-folder, it wears by default the combination made without options (the most
+        // add-ons of that sub-folder), never the outfit alone.
+        std::vector<size_t> worn;
+        if (grouped && !variants.empty()) {
+            size_t best = 0, best_n = 0;
+            for (size_t v = 0; v < variants.size(); ++v) {
+                size_t n = 0;
+                for (auto a : variants[v]) if (user_grouped(g_units[a], b)) n++;
+                if (n > best_n || (n == best_n && variants[v].size() > variants[best].size())) { best = v; best_n = n; }
+            }
+            worn = variants[best];
+        }
+        if (g_rto_layout != RtoLayout::Off && build_addon_options(j, adds, variants, worn, o)) continue;
         if (adds.size() > 3 && !separate) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());
@@ -5851,15 +5902,9 @@ static void finalize_units(ScanOutputs& o) {
                              [&](const auto& e) { return e.first == b.mod_id; }), o.mods_out.end());
             printf("\n  %s: put with its add-on(s) in one sub-folder, only the combined outfit is made\n", unit_label(b).c_str());
         }
-        std::vector<std::vector<size_t>> variants;
-        if (separate) {
-            variants.push_back(adds);
+        if (separate)
             printf("  %s: %zu separate add-ons in its sub-folder, only the complete outfit (all of them) is made\n",
                    unit_label(b).c_str(), adds.size());
-        } else {
-            for (auto a : adds) variants.push_back({a});
-            if (adds.size() >= 2 && apart) variants.push_back(adds);
-        }
         for (auto& v : variants) {
             std::vector<size_t> parts{j};
             std::string label = unit_label(b);
