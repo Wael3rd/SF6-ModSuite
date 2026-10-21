@@ -45,11 +45,10 @@
 // PENDING: saved (costume_choices.json, the target side) only when the popup is confirmed (its Param's IsDecide); the
 // popup closed without Confirm drops it. Every option file of the outfit is asked for when its options open
 // (rto::popup_preload, kept while the popup is up). Confirmed with the same costume and colour (the game rebuilds
-// nothing): the fighter's swap is held until every file is ready and made in one pass behind the pause menu
-// (rto::fighters_refresh with a hold side; not ready when the menu starts closing: as each file is ready), and once the
-// pause menu has closed (TrainingManager._MenuState held at CLOSING, or NONE) the battle is restarted as the menu's Restart Battle
-// does (TrainingManager.set_IsReqRefresh(true), offline Training only, once; not when the player restarted himself,
-// nor when a Confirm of this pause changed the costume or colour: the game reloads then). Decide / Back leave the mode
+// nothing): the fighter keeps what it wears (rto::fighters_refresh with a hold side), the battle is restarted as the
+// menu's Restart Battle does as soon as the pause menu has closed (TrainingManager.set_IsReqRefresh(true), offline
+// Training only, once; not when the player restarted himself, nor when a Confirm of this pause changed the costume or
+// colour: the game reloads then), and the swap is made in the restart's black screen (_TrainingState leaving NOW). Decide / Back leave the mode
 // keeping the changes; the Esc that leaves it must not close the pause menu: the Color Mod's Esc guard covers this
 // mode (SF6Slots_PopupGuard), so the popup mode needs a Color Mod that says it does (SF6ColorMod_PanelCaps bit 2: its popup DI mode takes the claim
 // of the target side, its popup guide carries our entry, its guard asks ours); otherwise it stays off. The popup is
@@ -750,9 +749,16 @@ struct Popup {
     int left = -1;                                  // the pending options' files not ready yet, last count (-1 unknown)
 };
 Popup g_pop;
-// After a Confirm in the popup, until the pause menu closes: the options-only swap held behind the menu, and the
-// training restart asked for when the menu has closed (the pause menu's own "Restart Battle": set_IsReqRefresh)
-struct PauseWatch { bool on = false, hold = false, restart = false; int state = -2; uint32_t since = 0; };
+// After an options-only Confirm in the popup: the fighter's swap held, the training restart asked for as soon as the
+// pause menu closes (the pause menu's own "Restart Battle": set_IsReqRefresh), the swap released on its black screen
+struct PauseWatch {
+    bool on = false, hold = false, restart = false;
+    bool player = false;                            // the player's own Restart Battle seen (MenuState 1 / 2)
+    bool reload = false;                            // a Confirm of this pause changed the costume / colour: the game reloads
+    bool retried = false, released = false;
+    int state = -2, ts = -2;                        // the menu's and the training's states last seen
+    uint32_t since = 0, closed_at = 0, req_at = 0, released_at = 0;
+};
 PauseWatch g_pw;
 uint32_t g_pop_event = 0;                           // the last EV_POPUP
 std::atomic<bool> g_pop_on{ false };
@@ -1446,10 +1452,15 @@ int popup_confirm(bool same) {
     g_pop.pending.clear();
     g_pop.left = -1;
     // costume or colour changed too: the game rebuilds the fighters itself once the menu closes (no restart of ours,
-    // one asked for by an earlier Confirm of this pause dropped); options only: the swap held behind the pause menu
-    // (all files ready, one pass), a restart when the menu has closed
+    // one asked for by an earlier Confirm of this pause dropped); options only: the fighter keeps what it wears, the
+    // battle is restarted as soon as the menu closes and the swap made in its black screen
     const int ms = training_menu_state();
-    if (!same && g_pw.restart) { g_pw.restart = false; logf("rto select: popup confirmed with a costume / colour change: the game reloads, no restart of ours"); }
+    if (!same && ms > 0) {
+        if (g_pw.restart) logf("rto select: popup confirmed with a costume / colour change: the game reloads, no restart of ours");
+        if (!g_pw.on) { g_pw = PauseWatch{}; g_pw.on = true; g_pw.since = g_frame; }
+        g_pw.reload = true;
+        g_pw.restart = false;
+    }
     if (!n) return 0;
     save_choices();
     choices_changed();
@@ -1458,11 +1469,12 @@ int popup_confirm(bool same) {
     if (same && ms > 0) {
         if (!g_pw.on) { g_pw = PauseWatch{}; g_pw.on = true; g_pw.since = g_frame; }
         g_pw.hold = true;
-        g_pw.restart = true;
+        g_pw.restart = !g_pw.reload;
     }
     logf("rto select: popup confirmed: the options of %d outfit(s) saved for P%d (%s), %s", n, g_pop.target, what.c_str(),
          !same ? "the costume / colour changed too: worn once the game rebuilt the fighter"
-         : ms > 0 ? "worn behind the pause menu once every file is ready, the battle restarted when the menu closes"
+         : ms > 0 && !g_pw.reload ? "the battle restarted as the pause menu closes, the options worn in its black screen"
+         : ms > 0 ? "worn when the pause menu closes (the game reloads the fighter: a costume / colour change of this pause)"
                   : "worn by the fighter now");
     return n;
 }
@@ -1473,37 +1485,99 @@ bool popup_same(Obj* mfs) {
     const auto c = ret_i32(mfs, "GetCostumeId"), n = ret_i32(mfs, "GetColorId");
     return c && n && f == g_pop.bf && *c == g_pop.bc && *n == g_pop.bn;
 }
-// Each frame from a Confirm until the pause menu has closed: the hold ends when the menu starts closing (the swap then
-// as soon as ready), the restart is asked for once it has closed, offline Training only, once; the player's own
-// Restart Battle meanwhile (MenuState 1 / 2) makes ours needless. A closed pause menu stays at CLOSING (3), NONE (0) is
-// rare (seen 21/10: 4 -> 3 and no further): closed = CLOSING held kClosedFrames, or NONE.
-constexpr uint32_t kClosedFrames = 10;
+// Each frame from an options-only Confirm until the restart is over:
+// - the restart is asked for once the pause menu has closed: a closed training pause menu stays at CLOSING (3; NONE is
+//   rare, seen 21/10: 4 -> 3 and no further), asked kClosedFrames after 4 -> 3 (the earliest the request was not tried
+//   earlier than: the fight shows until the restart's fade), offline Training only, once; the player's own Restart
+//   Battle meanwhile (MenuState 1 / 2) makes ours needless (its black screen releases the swap the same way);
+// - the swap is released on the restart's black screen: the training state leaving NOW (2 REFRESH_START, 3
+//   REFRESH_WAIT, observed 21/10 for a few frames, the screen black around them). The request not taken (the state
+//   still NOW kRetryFrames after it and IsReqRefresh read back false): asked once more. Never left NOW within
+//   kGiveUpFrames: released anyway (the swap as before). No restart of ours (a costume / colour change too, not a
+//   Training battle): released when the menu closes, as before.
+// The fade controller's fields are logged at the request and at each training state change (a sharper "screen is
+// black" signal for later; read only).
+constexpr uint32_t kClosedFrames = 2, kRetryFrames = 20, kGiveUpFrames = 120, kDoneFrames = 300;
+void pw_release(const char* why) {
+    if (!g_pw.hold) return;
+    g_pw.hold = false;
+    g_pw.released = true;
+    g_pw.released_at = g_frame;
+    fighters_hold_end(why);
+}
+bool request_restart(Obj* tm) {
+    const Ret r = call(tm, "set_IsReqRefresh", { arg_bool(true) });
+    if (r.exception_thrown) { logf("rto select: training restart NOT requested (set_IsReqRefresh raised)"); return false; }
+    return true;
+}
 void pause_tick() {
     if (!g_pw.on) return;
-    const int ms = training_menu_state();
+    const int ms = training_menu_state(), ts = training_state();
     if (ms != g_pw.state) {
-        if (g_pw.state != -2) logf("rto select: training pause menu state %d -> %d", g_pw.state, ms);
+        if (g_pw.state != -2) logf("rto select: training pause menu state %d -> %d at frame %u", g_pw.state, ms, g_frame);
+        if (ms == 3 && g_pw.state != 3) g_pw.closed_at = g_frame;
         g_pw.state = ms;
         g_pw.since = g_frame;
     }
-    if ((ms == 1 || ms == 2) && g_pw.restart) { g_pw.restart = false; logf("rto select: the battle restarts from the pause menu: no restart of ours"); }
-    if (ms > 0 && ms != 3) return;                  // still in the pause menu
-    if (g_pw.hold) { g_pw.hold = false; fighters_hold_end(ms == 3 ? "the pause menu closing" : "the pause menu closed"); }
-    if (ms == 3 && g_frame - g_pw.since < kClosedFrames) return;   // CLOSING: let the menu finish closing
-    if (g_pw.restart) {
+    if (ts != g_pw.ts) {
+        if (g_pw.ts != -2) logf("rto select: training state %d -> %d at frame %u (menu state %d); fade controller: %s", g_pw.ts, ts,
+                                g_frame, ms, fade_fields().c_str());
+        g_pw.ts = ts;
+    }
+    if ((ms == 1 || ms == 2) && !g_pw.player) {
+        g_pw.player = true;
+        if (g_pw.restart) { g_pw.restart = false; logf("rto select: the battle restarts from the pause menu: no restart of ours"); }
+    }
+    // the black screen of a restart (ours or the player's): the held swap made now
+    if (g_pw.hold && (ts == 2 || ts == 3) && (g_pw.req_at || g_pw.player)) pw_release("the restart's black screen");
+    if (ms < 0) { pw_release("no TrainingManager any more"); g_pw = PauseWatch{}; return; }
+    if (!g_pw.req_at) {
+        if (ms > 0 && ms != 3) return;              // still in the pause menu (or the player's restart under way)
+        if (!g_pw.closed_at) g_pw.closed_at = g_frame;
+        if (!g_pw.restart) {
+            if (g_pw.player && g_pw.hold) { g_pw.req_at = g_frame; return; }   // the player's restart: its black screen
+            pw_release("the pause menu closed, no restart of ours");
+            g_pw = PauseWatch{};
+            return;
+        }
+        if (ms == 3 && g_frame - g_pw.closed_at < kClosedFrames) return;   // CLOSING: kClosedFrames
         Obj* tm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.training.TrainingManager"));
         const int mode = costumes::battle_mode();
-        if ((ms == 0 || ms == 3) && alive(tm) && mode == 2 && !costumes::online()) {
-            const Ret r = call(tm, "set_IsReqRefresh", { arg_bool(true) });
-            logf(r.exception_thrown ? "rto select: training restart NOT requested (set_IsReqRefresh raised)"
-                                    : "rto select: training restart requested at frame %u (set_IsReqRefresh, as Restart Battle): the options "
-                                      "confirmed in the pause menu", g_frame);
-        } else {
-            logf("rto select: training restart not requested (%s)", ms < 0 || !alive(tm) ? "no TrainingManager any more"
+        if (!alive(tm) || mode != 2 || costumes::online()) {
+            logf("rto select: training restart not requested (%s)", !alive(tm) ? "no TrainingManager any more"
                  : mode != 2 ? "not a Training battle" : "online");
+            pw_release("no restart");
+            g_pw = PauseWatch{};
+            return;
+        }
+        if (!request_restart(tm)) { pw_release("no restart"); g_pw = PauseWatch{}; return; }
+        g_pw.req_at = g_frame;
+        logf("rto select: training restart requested at frame %u, %u frames after the pause menu closed (set_IsReqRefresh, as "
+             "Restart Battle; menu state %d, training state %d); fade controller: %s", g_frame, g_frame - g_pw.closed_at, ms, ts,
+             fade_fields().c_str());
+        return;
+    }
+    // requested (or the player's restart): the black screen awaited
+    if (g_pw.hold && !g_pw.player && !g_pw.retried && ts == 1 && g_frame - g_pw.req_at >= kRetryFrames) {
+        g_pw.retried = true;
+        Obj* tm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.training.TrainingManager"));
+        bool ok = false;
+        const bool pending = alive(tm) && call_bool(tm, "get_IsReqRefresh", {}, &ok);
+        if (alive(tm) && ok && !pending) {
+            logf("rto select: training restart not taken %u frames after the request (still NOW, IsReqRefresh false): asked once more",
+                 g_frame - g_pw.req_at);
+            request_restart(tm);
+        } else {
+            logf("rto select: training restart still awaited %u frames after the request (IsReqRefresh %s)", g_frame - g_pw.req_at,
+                 !ok ? "unread" : pending ? "true" : "false");
         }
     }
-    g_pw = PauseWatch{};
+    if (g_pw.hold && g_frame - g_pw.req_at >= kGiveUpFrames) {
+        logf("rto select: the training state never left NOW within %u frames of the restart: the swap released anyway", kGiveUpFrames);
+        pw_release("no black screen seen");
+    }
+    // over: the restart done (back to NOW after the release) or long enough
+    if ((g_pw.released && ts == 1 && g_frame > g_pw.released_at) || g_frame - g_pw.req_at >= kDoneFrames) g_pw = PauseWatch{};
 }
 // The popup closed or rebuilt (or the module stops): its mode left (dropped when gone), the changes not confirmed dropped
 void popup_end(const char* why) {

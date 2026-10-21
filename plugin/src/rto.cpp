@@ -22,8 +22,8 @@
 // PlayerBehavior.SetupAppearance, or an outfit mounted for a fight, or the Training popup's options confirmed:
 // fighters_refresh): a watch of 10 s, then nothing until the next event. A model re-applies when the choices'
 // version changed since its last pass, rebuilt or not. After the Training popup's Confirm of options only, that
-// fighter's swap is held until every file is ready (g_hold_side), then made in one pass behind the pause menu; the
-// popup's option files are asked for ahead while it is up (g_warm_pop).
+// fighter's swap is held (g_hold_side: it keeps what it wears) until the restart's black screen releases it
+// (fighters_hold_end), then made in one pass with the files asked for ahead while the popup was up (g_warm_pop).
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -64,8 +64,8 @@ bool g_warm_done = false;
 std::set<std::string> g_warm;       // files of the choices made in the menu, kept loaded
 std::set<std::string> g_warm_prev;  // files of every option of the outfit the preview wears, kept while it wears it
 std::set<std::string> g_warm_pop;   // files of every option of the outfits the Training popup's options showed (this visit)
-// The Training popup confirmed (options only): that fighter's swap (0 P1, 1 P2) waits until every file is ready, then is
-// made whole behind the pause menu; -1 none. g_hold_id tells one hold from the next (Model::hold_id: passed)
+// The Training popup confirmed (options only): that fighter's swap (0 P1, 1 P2) is held, the fighter keeps what it
+// wears, until fighters_hold_end (the restart's black screen); -1 none. g_hold_id tells one hold from the next
 int g_hold_side = -1;
 uint32_t g_hold_id = 0;
 uint32_t g_gc_at = 0;
@@ -207,14 +207,16 @@ int files_left(const std::map<std::string, Want>& want, int* total) {
     if (total) *total = n;
     return left;
 }
-// TrainingManager._MenuState (0 NONE, 3 CLOSING, 4 FIRST, 11 CHARA_SELECT, ...: small values, its low byte whatever the
-// enum's size), -1 without a TrainingManager
-int menu_state_now() {
+// A TrainingManager state field: _MenuState (MenuState: 0 NONE, 1 READY, 2 SETUPED, 3 CLOSING, 4 FIRST, 11 CHARA_SELECT
+// ..) or _TrainingState (ETrainingState: 0 NONE, 1 NOW, 2 REFRESH_START, 3 REFRESH_WAIT); small values: its low byte,
+// whatever the enum's size. -1 without a TrainingManager
+int tm_state(const char* field) {
     Obj* tm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.training.TrainingManager"));
     if (!alive(tm)) return -1;
-    void* p = field_ptr(tm, "_MenuState");
+    void* p = field_ptr(tm, field);
     return p ? static_cast<int>(*static_cast<uint8_t*>(p)) : -1;
 }
+int menu_state_now() { return tm_state("_MenuState"); }
 void backoff(const std::string& path) {
     auto it = g_res.find(path);
     if (it == g_res.end()) return;
@@ -268,7 +270,7 @@ struct Model {
     uint32_t ver = 0, next = 0, walk_at = 0, check_at = 0, since = 0;
     uint32_t seen = 0;                           // the frame its root was found (VS screen models)
     std::set<std::string> told;                  // log lines given once
-    uint32_t hold_id = 0, hold_told = 0;         // the hold (g_hold_id) it passed / it said it waits for
+    uint32_t hold_told = 0, hold_ready = 0;      // the hold (g_hold_id) it told it waits for / told its files ready
 };
 Model g_models[7];                                // preview, P1, P2 (fighters), select P1, select P2, VS P1, VS P2
 // The character select builds a side's model under the same GameObject (its root stays): looked at more often, and the
@@ -467,22 +469,23 @@ void pass(Model& md) {
     bool pending = false, colour = false;
     const char* side_name = md.side == 1 ? "P2" : "P1";
 
-    // The Training popup confirmed: this fighter's swap waits (behind the pause menu) until every file its options need
-    // is ready, then is made in one pass (a part unit's chain stopped a frame before its swap); never half loaded
-    if (g_hold_side >= 0 && &md == &g_models[1 + g_hold_side] && md.hold_id != g_hold_id && md.units.empty() && md.verify.empty()) {
+    // The Training popup confirmed (options only): this fighter keeps what it wears until the restart's black screen
+    // (fighters_hold_end), its files loading meanwhile (asked for here too); then one pass swaps every part (a part
+    // unit's chain stopped a frame before its swap, its textures on the next pass), all of it inside the black screen
+    if (g_hold_side >= 0 && &md == &g_models[1 + g_hold_side] && md.units.empty() && md.verify.empty()) {
         int total = 0;
         const int left = files_left(want, &total);
-        if (left) {
-            if (md.hold_told != g_hold_id) {
-                md.hold_told = g_hold_id;
-                logf("rto: %s %s: its options wait for %d of their %d files (held behind the pause menu)", md.name, side_name, left, total);
-            }
-            md.next = g_frame + 1;
-            return;
+        if (md.hold_told != g_hold_id) {
+            md.hold_told = g_hold_id;
+            logf("rto: %s %s: its options held until the restart's black screen (%d of their %d files still loading)", md.name,
+                 side_name, left, total);
         }
-        md.hold_id = g_hold_id;
-        logf("rto: %s %s: the %d files of its options ready: swapped behind the pause menu at frame %u (menu state %d)", md.name,
-             side_name, total, g_frame, menu_state_now());
+        if (!left && md.hold_ready != g_hold_id) {
+            md.hold_ready = g_hold_id;
+            logf("rto: %s %s: the %d files of its options ready (held)", md.name, side_name, total);
+        }
+        md.next = g_frame + (left ? 5 : 10);
+        return;
     }
 
     // 0. part units in flight (a chain stopped): checked a frame after their swap, then their chain runs again
@@ -1208,18 +1211,33 @@ void fighters_refresh(const char* why, int hold_side) {
     if (hold_side == 0 || hold_side == 1) {
         g_hold_side = hold_side;
         ++g_hold_id;
-        logf("rto: P%d's swap held until every file is ready (behind the pause menu, state %d)", hold_side + 1, menu_state_now());
+        logf("rto: P%d's swap held until the restart's black screen (menu state %d)", hold_side + 1, menu_state_now());
     }
 }
 void fighters_hold_end(const char* why) {
     if (g_hold_side < 0) return;
-    const Model& md = g_models[1 + g_hold_side];
-    if (md.hold_id != g_hold_id)
-        logf("rto: P%d's held swap: %s before every file was ready: swapped as each one is ready", g_hold_side + 1, why);
+    Model& md = g_models[1 + g_hold_side];
+    int left = 0, total = 0;
+    if (md.slot && alive_as(md.root, T.go)) left = files_left(desired(g_m, *md.slot, chosen_of(g_m, *md.slot, g_c, md.side)), &total);
+    logf("rto: P%d's held swap released at frame %u (%s; menu state %d, training state %d): %d of %d files ready, %s",
+         g_hold_side + 1, g_frame, why, menu_state_now(), tm_state("_TrainingState"), total - left, total,
+         left ? "the rest swapped as each one is ready" : "swapped now");
     g_hold_side = -1;
-    if (g_watch_until && g_watch_until < g_frame + 600) g_watch_until = g_frame + 600;   // the rest as soon as ready
+    md.next = 0;                                     // its pass now (watch_tick runs after the popup's tick)
+    g_watch_next = 0;
+    if (g_watch_until < g_frame + 600) g_watch_until = g_frame + 600;
 }
 int training_menu_state() { return menu_state_now(); }
+int training_state() { return tm_state("_TrainingState"); }
+// Read only, for the log: the fields of the game's fade controller singleton (app.bFadeController), to find a sharper
+// "screen is black" signal than the training state later
+std::string fade_fields() {
+    Obj* fc = reinterpret_cast<Obj*>(api().get_managed_singleton("app.bFadeController"));
+    if (!alive(fc)) return "no app.bFadeController singleton";
+    std::string f = fields_of(fc);
+    if (f.size() > 600) f = f.substr(0, 600) + "...";
+    return f;
+}
 size_t popup_preload(const std::vector<const Slot*>& slots) {
     std::set<std::string> want;
     for (const Slot* s : slots) {

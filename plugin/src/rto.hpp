@@ -40,13 +40,17 @@ void save_choices();                  // written at once (small file)
 void choices_changed();               // the models re-apply (the preview now, fighters at their next build)
 // A fighters watch started now (10 s, as after a model build): the fighters (PlayerBehavior, _PlayerID 0 / 1) wear the
 // choices of their side again, without a rebuild (the Training popup confirmed with the same costume and colour: the
-// game rebuilds nothing). Nothing on the character select. hold_side 0 / 1: that fighter's swap waits until every file
-// of its options is ready, then is made in one pass (behind the Training pause menu), until fighters_hold_end
+// game rebuilds nothing). Nothing on the character select. hold_side 0 / 1: that fighter keeps what it wears (its
+// files loading meanwhile) until fighters_hold_end
 void fighters_refresh(const char* why, int hold_side = -1);
-// The pause menu closes: a held swap not made yet is made as each file is ready (the watch goes on)
+// The held swap released (the Training restart's black screen, or no restart): made now, in one pass when every file is
+// ready, else each part as soon as ready
 void fighters_hold_end(const char* why);
-// app.training.TrainingManager._MenuState (0 NONE, 3 CLOSING, 4 FIRST, 11 CHARA_SELECT), -1 without a TrainingManager
+// app.training.TrainingManager._MenuState (0 NONE, 1 READY, 2 SETUPED, 3 CLOSING, 4 FIRST, 11 CHARA_SELECT) and
+// _TrainingState (0 NONE, 1 NOW, 2 REFRESH_START, 3 REFRESH_WAIT); -1 without a TrainingManager
 int training_menu_state();
+int training_state();
+std::string fade_fields();            // the fade controller singleton's fields, for the log
 // The Training popup's options mode: the files of every option of these outfits asked for ahead and kept loaded (the
 // Battle Settings preview's rule); an empty list lets them go. How many files are kept.
 size_t popup_preload(const std::vector<const Slot*>& slots);

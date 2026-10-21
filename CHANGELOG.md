@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Slots Loader
+- Training pause menu, costume options confirmed (costume and colour unchanged): the fighter no longer changes behind
+  the pause menu. The battle restarts (as Restart Battle) as soon as the pause menu closes, and the fighter changes
+  during the restart's black screen, all at once (the options' files are loaded while you choose). When the costume or
+  colour changed too, the game reloads the fighter itself, as before.
+
 ## 1.18.0 (2026-10-21) — SF6 Mod Suite
 
 | Package | Version | |
