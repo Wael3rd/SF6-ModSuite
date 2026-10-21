@@ -50,6 +50,10 @@ void fighters_hold_end(const char* why);
 // _TrainingState (0 NONE, 1 NOW, 2 REFRESH_START, 3 REFRESH_WAIT); -1 without a TrainingManager
 int training_menu_state();
 int training_state();
+// The frame a fighter's model (side 0 P1, 1 P2: a new GameObject) was last found by a fighters watch, 0 never
+uint32_t fighter_built_at(int side);
+// PlayerBehavior.SetupAppearance calls so far (a model built), 0 when that event is ignored (called all the time)
+uint32_t model_builds();
 std::string fade_fields();            // the fade controller singleton's fields, for the log
 // The Training popup's options mode: the files of every option of these outfits asked for ahead and kept loaded (the
 // Battle Settings preview's rule); an empty list lets them go. How many files are kept.

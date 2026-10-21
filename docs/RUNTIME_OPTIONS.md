@@ -999,25 +999,34 @@ does, the fallback above is the next step.
   the menu closed). (1) Every option file of the outfit is asked for when its options open in the popup
   (`rto::popup_preload`, the Battle Settings preview's `warm_preview` rule, kept in `g_warm_pop` while the popup is up,
   let go when it closes; the confirmed ones stay as the choices' `g_warm`); `rto select: popup: the N files of the
-  pending options are ready` when they all are. (2) A Confirm whose only change is options (the popup's fighter,
-  costume and colour are those it opened with): that fighter keeps what it wears (`fighters_refresh(why, side)`,
+  pending options are ready` when they all are. (2) ANY Confirm with option changes (22/10: the "same costume and
+  colour as when the popup opened" test said "changed" on an options-only Confirm, and that path swapped the fighter
+  at once, seen before the game's reload fade): that fighter keeps what it wears (`fighters_refresh(why, side)`,
   `g_hold_side`: its passes return before any swap, its files still asked for; `rto: P1 P1: its options held until
-  the restart's black screen (N of M files still loading)`, then `.. the M files of its options ready (held)`). (3) The
+  the restart's black screen (N of M files still loading)`, then `.. the M files of its options ready (held)`); the
+  popup's open-vs-now comparison is only logged. (2b) The decision, 4 frames after the menu's 4 FIRST -> 3 CLOSING (a
+  closed training pause menu stays at CLOSING; NONE 0 also counts): the game's own reload of the fighters seen since
+  the Confirm (post-hook of `app.battle.BattleFlowMap.SetupReloadBattleAsset(app.battle.BattleDesc)` answering true,
+  or a pre-hook of `app.bFlowBase.requestTransition` asking scene 20 = `app.battle.bBattleAssetReloadFlow`; traced
+  22/10: both in one frame as the menu closed, the fighters rebuilt about 3 s later; the hooks only store the frame,
+  installed at the first frame): no restart of ours, the held fighter is never changed (the game destroys it), the
+  hold ends when the game rebuilt it (a new fighter GameObject found by the watch, or a `SetupAppearance` since) or
+  after 600 frames, and the rebuilt fighter wears the options through the fighters watch; logged `rto select: the game
+  reloads the fighters (..) at frame F, N frames after the pause menu closed` (the distance, to tune the 4 frames). A
+  reload signal after our own request is not taken (ours may cause it; logged). Not seen: options only, (3). (3) The
   restart: `app.training.TrainingManager.set_IsReqRefresh(true)`, the pause menu's own Restart Battle flow (checked
   21/10: MenuState 1 / 2 / 3, `_TrainingState` NOW 1 -> REFRESH_WAIT 3 (REFRESH_START 2) for a few frames, back to
-  NOW), asked 2 frames after the menu's 4 FIRST -> 3 CLOSING (a closed training pause menu stays at CLOSING; NONE 0
-  also counts), from LateUpdateBehavior, the singleton fetched then, only when the battle's `Rule.GameMode` is 2
+  NOW), asked at the decision, from LateUpdateBehavior, the singleton fetched then, only when the battle's `Rule.GameMode` is 2
   (Training) and not online, once per pause. Not taken (still NOW 20 frames later and `get_IsReqRefresh` false): asked
   once more (logged). (4) The swap: released when `_TrainingState` leaves NOW (2 or 3) after the request, the screen
   black then: one pass swaps every part with the files ready (a part unit's chain stopped a frame before its swap, its
   textures on the next pass, still black); `rto: P1's held swap released at frame F (the restart's black screen; menu
   state m, training state t): N of M files ready, swapped now`. Never left NOW within 120 frames: released anyway (the
-  swap as before, logged). No restart of ours: a Confirm of the same pause changed the costume or colour (the game
-  reloads the fighter itself; the hold, if any, released when the menu closes), not a Training battle / online / no
+  swap as before, logged). No restart of ours: the game's reload seen (2b), not a Training battle / online / no
   TrainingManager (released at once); the player's own Restart Battle (MenuState 1 / 2 seen): no request, its black
   screen releases the swap the same way. Logs: `rto select: training pause menu state a -> b at frame F`, `rto select:
   training state a -> b at frame F (menu state m); fade controller: ..`, `rto select: training restart requested at
-  frame F, N frames after the pause menu closed ..` (or why not). The fade controller singleton's fields
+  frame F ..` (with the frames since the menu closed, or why not). The fade controller singleton's fields
   (`app.bFadeController`, read only, logged at the request and at each training state change) are there to find a
   sharper "screen is black" signal later (the game's types name `app.bFadeBase.eState` None / FadeOut / FadeIn); the
   training state is what is used. `_MenuState` / `_TrainingState` are read as their low byte (small enum values,

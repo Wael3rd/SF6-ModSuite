@@ -923,6 +923,7 @@ void preview_tick() {
 }
 
 uint32_t g_fighters_at = 0;         // both fighters seen built since the VS screen's models were looked for (vs_tick)
+uint32_t g_fighter_at[2] = {};      // the frame each fighter's model (a new GameObject) was last found (fighter_built_at)
 void watch_tick() {
     if (g_frame >= g_watch_until && g_hold_side < 0) {
         g_watch_until = 0;
@@ -943,7 +944,7 @@ void watch_tick() {
         if (T.pb_applied && !ret_bool(T.pb_applied, pb)) continue;     // its resources are not set up yet
         Model& md = g_models[1 + id];
         seen[id] = true;
-        if (go != md.root) { reset(md); md.root = go; }
+        if (go != md.root) { reset(md); md.root = go; if (go) g_fighter_at[id] = g_frame; }
         if (go) process(md, net ? 0 : id, true);      // online: the player's own fighter wears P1's options
         if (!md.units.empty()) g_watch_next = g_frame + 1;
         else if (!md.settled && md.next && md.next < g_watch_next) g_watch_next = md.next;   // a held swap: its next frame
@@ -1228,6 +1229,8 @@ void fighters_hold_end(const char* why) {
     if (g_watch_until < g_frame + 600) g_watch_until = g_frame + 600;
 }
 int training_menu_state() { return menu_state_now(); }
+uint32_t fighter_built_at(int side) { return side == 0 || side == 1 ? g_fighter_at[side] : 0; }
+uint32_t model_builds() { return g_model_noisy ? 0 : g_builds.load(std::memory_order_relaxed); }
 int training_state() { return tm_state("_TrainingState"); }
 // Read only, for the log: the fields of the game's fade controller singleton (app.bFadeController), to find a sharper
 // "screen is black" signal than the training state later

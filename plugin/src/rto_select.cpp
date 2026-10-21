@@ -44,16 +44,17 @@
 // copies made in the popup flow's own update (app.UIFlowCharacterDetailSetting.Wait OnUpdate). A change there is
 // PENDING: saved (costume_choices.json, the target side) only when the popup is confirmed (its Param's IsDecide); the
 // popup closed without Confirm drops it. Every option file of the outfit is asked for when its options open
-// (rto::popup_preload, kept while the popup is up). Confirmed with the same costume and colour (the game rebuilds
-// nothing): the fighter keeps what it wears (rto::fighters_refresh with a hold side), the battle is restarted as the
-// menu's Restart Battle does as soon as the pause menu has closed (TrainingManager.set_IsReqRefresh(true), offline
-// Training only, once; not when the player restarted himself, nor when a Confirm of this pause changed the costume or
-// colour: the game reloads then), and the swap is made in the restart's black screen (_TrainingState leaving NOW). Decide / Back leave the mode
-// keeping the changes; the Esc that leaves it must not close the pause menu: the Color Mod's Esc guard covers this
-// mode (SF6Slots_PopupGuard), so the popup mode needs a Color Mod that says it does (SF6ColorMod_PanelCaps bit 2: its popup DI mode takes the claim
-// of the target side, its popup guide carries our entry, its guard asks ours); otherwise it stays off. The popup is
-// found from an event (EV_POPUP: its MatchingFighterSetting set up or written, its flow's update), then followed each
-// frame while it shows.
+// (rto::popup_preload, kept while the popup is up). A Confirm with option changes: the fighter keeps what it wears
+// (rto::fighters_refresh with a hold side) until the pause menu closes. Then the game's own reload of the fighters seen
+// (a costume / colour changed too: BattleFlowMap.SetupReloadBattleAsset / the transition to scene 20, as the menu
+// closes): it is left to the game (the rebuilt fighter wears the options); not seen within a few frames: the battle is
+// restarted as the menu's Restart Battle does (TrainingManager.set_IsReqRefresh(true), offline Training only, once; not
+// when the player restarted himself) and the swap is made in the restart's black screen (_TrainingState leaving NOW). Decide / Back leave the mode keeping the
+// changes; the Esc that leaves it must not close the pause menu: the Color Mod's Esc guard covers this mode
+// (SF6Slots_PopupGuard), so the popup mode needs a Color Mod that says it does (SF6ColorMod_PanelCaps bit 2: its popup
+// DI mode takes the claim of the target side, its popup guide carries our entry, its guard asks ours); otherwise it
+// stays off. The popup is found from an event (EV_POPUP: its MatchingFighterSetting set up or written, its flow's
+// update), then followed each frame while it shows.
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -332,6 +333,23 @@ void post_popup_update(void**, REFrameworkTypeDefinitionHandle, unsigned long lo
     post(EV_POPUP);
     if (!g_copy_on.load(std::memory_order_acquire)) return;
     try { make_copies(kPop, kPop); } catch (...) { ++g_ck[1].refused; g_ck[1].status.store(-2000, std::memory_order_release); }
+}
+// The game reloads the fighters (a costume / colour changed in the popup, or anything else): BattleFlowMap.
+// SetupReloadBattleAsset answered true, or a flow asked for the transition to scene 20 (app.battle.bBattleAssetReloadFlow;
+// traced 22/10: the two in the same frame, as the pause menu closed, the fighters rebuilt about 3 s later). The hooks
+// only store the frame and which one (any thread).
+std::atomic<uint32_t> g_reload_at{ 0 };
+std::atomic<int> g_reload_how{ 0 };                 // 1 SetupReloadBattleAsset, 2 the transition to scene 20
+std::atomic<uint32_t> g_reload_false_at{ 0 };       // SetupReloadBattleAsset answered false (logged only)
+void post_reload_setup(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return;
+    const bool r = ret_val && (reinterpret_cast<uintptr_t>(*ret_val) & 0xFF) != 0;
+    if (r) { g_reload_how.store(1); g_reload_at.store(g_frame); }
+    else g_reload_false_at.store(g_frame);
+}
+int pre_flow_transition(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {   // requestTransition(Index, ..)
+    if (!g_closing.load(std::memory_order_relaxed) && u32_of(argv[2]) == 20) { g_reload_how.store(2); g_reload_at.store(g_frame); }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 // What else tells the popup is up: its MatchingFighterSetting set up or written (Fighter Settings' too: the popup is then
 // not found, nothing more)
@@ -752,12 +770,13 @@ Popup g_pop;
 // After an options-only Confirm in the popup: the fighter's swap held, the training restart asked for as soon as the
 // pause menu closes (the pause menu's own "Restart Battle": set_IsReqRefresh), the swap released on its black screen
 struct PauseWatch {
-    bool on = false, hold = false, restart = false;
+    bool on = false, hold = false;
     bool player = false;                            // the player's own Restart Battle seen (MenuState 1 / 2)
-    bool reload = false;                            // a Confirm of this pause changed the costume / colour: the game reloads
-    bool retried = false, released = false;
+    bool reload = false;                            // the game's own reload of the fighters seen (g_reload_at)
+    bool retried = false, released = false, late_told = false;
+    int side = 0;                                   // the fighter held (0 P1, 1 P2: the popup's target)
     int state = -2, ts = -2;                        // the menu's and the training's states last seen
-    uint32_t since = 0, closed_at = 0, req_at = 0, released_at = 0;
+    uint32_t confirm_at = 0, since = 0, closed_at = 0, req_at = 0, released_at = 0, reload_at = 0, builds = 0;
 };
 PauseWatch g_pw;
 uint32_t g_pop_event = 0;                           // the last EV_POPUP
@@ -1451,31 +1470,24 @@ int popup_confirm(bool same) {
     }
     g_pop.pending.clear();
     g_pop.left = -1;
-    // costume or colour changed too: the game rebuilds the fighters itself once the menu closes (no restart of ours,
-    // one asked for by an earlier Confirm of this pause dropped); options only: the fighter keeps what it wears, the
-    // battle is restarted as soon as the menu closes and the swap made in its black screen
-    const int ms = training_menu_state();
-    if (!same && ms > 0) {
-        if (g_pw.restart) logf("rto select: popup confirmed with a costume / colour change: the game reloads, no restart of ours");
-        if (!g_pw.on) { g_pw = PauseWatch{}; g_pw.on = true; g_pw.since = g_frame; }
-        g_pw.reload = true;
-        g_pw.restart = false;
-    }
+    // The fighter is never changed now: held (it keeps what it wears) while the pause menu is up, the decision taken as
+    // the menu closes (pause_tick): the game reloads the fighters (its own fade; the rebuilt one wears the options) or
+    // not (options only: our restart, the swap in its black screen). What the popup showed when it opened vs now is only
+    // logged (22/10: a colour restore walk or an early read made it say "changed" while only the options were)
     if (!n) return 0;
     save_choices();
     choices_changed();
-    const bool hold = same && ms > 0;
-    fighters_refresh("the Training popup confirmed", hold ? g_pop.target - 1 : -1);
-    if (same && ms > 0) {
-        if (!g_pw.on) { g_pw = PauseWatch{}; g_pw.on = true; g_pw.since = g_frame; }
+    const int ms = training_menu_state();
+    fighters_refresh("the Training popup confirmed", ms > 0 ? g_pop.target - 1 : -1);
+    if (ms > 0) {
+        if (!g_pw.on) { g_pw = PauseWatch{}; g_pw.on = true; g_pw.since = g_pw.confirm_at = g_frame; }
         g_pw.hold = true;
-        g_pw.restart = !g_pw.reload;
+        g_pw.side = g_pop.target - 1;
+        g_pw.builds = model_builds();
     }
-    logf("rto select: popup confirmed: the options of %d outfit(s) saved for P%d (%s), %s", n, g_pop.target, what.c_str(),
-         !same ? "the costume / colour changed too: worn once the game rebuilt the fighter"
-         : ms > 0 && !g_pw.reload ? "the battle restarted as the pause menu closes, the options worn in its black screen"
-         : ms > 0 ? "worn when the pause menu closes (the game reloads the fighter: a costume / colour change of this pause)"
-                  : "worn by the fighter now");
+    logf("rto select: popup confirmed at frame %u: the options of %d outfit(s) saved for P%d (%s), %s (the popup's fighter / "
+         "costume / colour %s the ones it opened with: for the log only)", g_frame, n, g_pop.target, what.c_str(),
+         ms > 0 ? "held until the pause menu closes" : "worn by the fighter now", same ? "are" : "are NOT");
     return n;
 }
 // The popup's fighter, costume and colour now are the ones it opened with (the game then rebuilds nothing)
@@ -1485,19 +1497,20 @@ bool popup_same(Obj* mfs) {
     const auto c = ret_i32(mfs, "GetCostumeId"), n = ret_i32(mfs, "GetColorId");
     return c && n && f == g_pop.bf && *c == g_pop.bc && *n == g_pop.bn;
 }
-// Each frame from an options-only Confirm until the restart is over:
-// - the restart is asked for once the pause menu has closed: a closed training pause menu stays at CLOSING (3; NONE is
-//   rare, seen 21/10: 4 -> 3 and no further), asked kClosedFrames after 4 -> 3 (the earliest the request was not tried
-//   earlier than: the fight shows until the restart's fade), offline Training only, once; the player's own Restart
-//   Battle meanwhile (MenuState 1 / 2) makes ours needless (its black screen releases the swap the same way);
-// - the swap is released on the restart's black screen: the training state leaving NOW (2 REFRESH_START, 3
-//   REFRESH_WAIT, observed 21/10 for a few frames, the screen black around them). The request not taken (the state
-//   still NOW kRetryFrames after it and IsReqRefresh read back false): asked once more. Never left NOW within
-//   kGiveUpFrames: released anyway (the swap as before). No restart of ours (a costume / colour change too, not a
-//   Training battle): released when the menu closes, as before.
+// Each frame from a Confirm (the fighter held) until it is over:
+// - the decision, kDecideFrames after the pause menu closed (4 FIRST -> 3 CLOSING; a closed training pause menu stays at
+//   CLOSING, NONE also counts): the game's own reload of the fighters seen since the Confirm (g_reload_at: it came as
+//   the menu closed, 22/10) -> no restart of ours, the held fighter is never changed (it is destroyed), the hold ends
+//   once the game rebuilt it (a new fighter GameObject or a SetupAppearance since; the rebuilt one wears the options
+//   through the fighters watch) or after kRebuildGiveUp; not seen -> options only: our restart (set_IsReqRefresh, as the
+//   pause menu's Restart Battle; offline Training only, once) and the swap in its black screen. The player's own
+//   Restart Battle meanwhile (MenuState 1 / 2): no request, its black screen releases the swap the same way;
+// - the black screen: the training state leaving NOW (2 REFRESH_START, 3 REFRESH_WAIT, observed 21/10 for a few frames,
+//   the screen black around them). The request not taken (still NOW kRetryFrames after it, IsReqRefresh read back
+//   false): asked once more. Never left NOW within kGiveUpFrames: released anyway (the swap as before).
 // The fade controller's fields are logged at the request and at each training state change (a sharper "screen is
 // black" signal for later; read only).
-constexpr uint32_t kClosedFrames = 2, kRetryFrames = 20, kGiveUpFrames = 120, kDoneFrames = 300;
+constexpr uint32_t kDecideFrames = 4, kRetryFrames = 20, kGiveUpFrames = 120, kDoneFrames = 300, kRebuildGiveUp = 600;
 void pw_release(const char* why) {
     if (!g_pw.hold) return;
     g_pw.hold = false;
@@ -1524,9 +1537,40 @@ void pause_tick() {
                                 g_frame, ms, fade_fields().c_str());
         g_pw.ts = ts;
     }
-    if ((ms == 1 || ms == 2) && !g_pw.player) {
-        g_pw.player = true;
-        if (g_pw.restart) { g_pw.restart = false; logf("rto select: the battle restarts from the pause menu: no restart of ours"); }
+    if ((ms == 1 || ms == 2) && !g_pw.player) { g_pw.player = true; logf("rto select: the battle restarts from the pause menu: no restart of ours"); }
+    if (const uint32_t ff = g_reload_false_at.exchange(0))
+        logf("rto select: BattleFlowMap.SetupReloadBattleAsset answered false at frame %u (not taken as a reload)", ff);
+    // the game's own reload of the fighters since the Confirm
+    // (one after our own request is not taken: it may be our restart's own flow; the black screen releases the swap)
+    const uint32_t ra = g_reload_at.load();
+    if (!g_pw.reload && ra && ra >= g_pw.confirm_at && g_pw.req_at && ra >= g_pw.req_at && !g_pw.late_told) {
+        g_pw.late_told = true;
+        logf("rto select: a fighter reload signal at frame %u, %u frames after our restart request: not taken as the game's "
+             "reload (ours may cause it)", ra, ra - g_pw.req_at);
+    }
+    if (!g_pw.reload && ra && ra >= g_pw.confirm_at && (!g_pw.req_at || ra < g_pw.req_at)) {
+        g_pw.reload = true;
+        g_pw.reload_at = ra;
+        char rel[64] = "before the pause menu closed";
+        if (g_pw.closed_at) std::snprintf(rel, sizeof rel, "%d frames after the pause menu closed", static_cast<int>(ra - g_pw.closed_at));
+        logf("rto select: the game reloads the fighters (%s) at frame %u, %s: no restart of ours, the held fighter left as it is "
+             "(the rebuilt one wears the options)%s", g_reload_how.load() == 1 ? "BattleFlowMap.SetupReloadBattleAsset" : "transition to "
+             "scene 20, bBattleAssetReloadFlow", ra, rel, g_pw.req_at ? "; our restart was already asked for" : "");
+        g_pw.builds = model_builds();
+    }
+    if (g_pw.reload) {
+        if (g_pw.hold) {
+            const uint32_t built = fighter_built_at(g_pw.side), builds = model_builds();
+            if (built > g_pw.reload_at || (builds && builds != g_pw.builds)) {
+                logf("rto select: the game rebuilt the fighter at frame %u (%u frames after its reload)", g_frame, g_frame - g_pw.reload_at);
+                pw_release("the game rebuilt the fighter");
+            } else if (g_frame - g_pw.reload_at >= kRebuildGiveUp) {
+                logf("rto select: no fighter rebuilt within %u frames of the game's reload: the hold released", kRebuildGiveUp);
+                pw_release("no rebuild seen");
+            }
+        }
+        if (!g_pw.hold) g_pw = PauseWatch{};
+        return;
     }
     // the black screen of a restart (ours or the player's): the held swap made now
     if (g_pw.hold && (ts == 2 || ts == 3) && (g_pw.req_at || g_pw.player)) pw_release("the restart's black screen");
@@ -1534,13 +1578,9 @@ void pause_tick() {
     if (!g_pw.req_at) {
         if (ms > 0 && ms != 3) return;              // still in the pause menu (or the player's restart under way)
         if (!g_pw.closed_at) g_pw.closed_at = g_frame;
-        if (!g_pw.restart) {
-            if (g_pw.player && g_pw.hold) { g_pw.req_at = g_frame; return; }   // the player's restart: its black screen
-            pw_release("the pause menu closed, no restart of ours");
-            g_pw = PauseWatch{};
-            return;
-        }
-        if (ms == 3 && g_frame - g_pw.closed_at < kClosedFrames) return;   // CLOSING: kClosedFrames
+        if (g_frame - g_pw.closed_at < kDecideFrames) return;   // the game's reload, if any, comes as the menu closes
+        if (!g_pw.hold) { g_pw = PauseWatch{}; return; }
+        if (g_pw.player) { g_pw.req_at = g_frame; return; }    // the player's restart: its black screen
         Obj* tm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.training.TrainingManager"));
         const int mode = costumes::battle_mode();
         if (!alive(tm) || mode != 2 || costumes::online()) {
@@ -1552,9 +1592,9 @@ void pause_tick() {
         }
         if (!request_restart(tm)) { pw_release("no restart"); g_pw = PauseWatch{}; return; }
         g_pw.req_at = g_frame;
-        logf("rto select: training restart requested at frame %u, %u frames after the pause menu closed (set_IsReqRefresh, as "
-             "Restart Battle; menu state %d, training state %d); fade controller: %s", g_frame, g_frame - g_pw.closed_at, ms, ts,
-             fade_fields().c_str());
+        logf("rto select: no game reload within %u frames of the pause menu closing: options only. Training restart requested at "
+             "frame %u (set_IsReqRefresh, as Restart Battle; menu state %d, training state %d); fade controller: %s",
+             g_frame - g_pw.closed_at, g_frame, ms, ts, fade_fields().c_str());
         return;
     }
     // requested (or the player's restart): the black screen awaited
@@ -1639,6 +1679,13 @@ void install_popup_hooks() {
     Method* upd = own_method(tdb->find_type("app.UIFlowCharacterDetailSetting.Wait"), "OnUpdate");
     const bool flow = upd && upd->get_function_raw() && upd->add_hook(hook_pass, post_popup_update, false);
     g_ck[1].hook = flow && SF6CORE_HAS(A(), ui_clone_control);
+    // the game's reload of the fighters (a costume / colour changed in the popup): the restart of ours is not needed then
+    Method* rs = own_method(tdb->find_type("app.battle.BattleFlowMap"), "SetupReloadBattleAsset");
+    const bool reload1 = rs && rs->get_function_raw() && rs->add_hook(hook_pass, post_reload_setup, false);
+    Method* rt = own_method(tdb->find_type("app.bFlowBase"), "requestTransition");
+    const bool reload2 = rt && rt->get_function_raw() && rt->add_hook(pre_flow_transition, hook_post_pass, false);
+    logf("rto select: the game's fighter reload followed from %s%s%s", reload1 ? "BattleFlowMap.SetupReloadBattleAsset" : "",
+         reload1 && reload2 ? " and " : "", reload2 ? "bFlowBase.requestTransition (scene 20)" : !reload1 ? "nothing (not found)" : "");
     logf("rto select: Training popup followed from %d of its part's methods%s; its arrows %s", n,
          flow ? " and app.UIFlowCharacterDetailSetting.Wait.OnUpdate" : " (its flow's update not hooked)",
          g_ck[1].hook ? "in the rows' left margin" : "before the titles");
