@@ -33,6 +33,23 @@
 // The owner of each side's panel is kept here (SF6Slots_SelectPanelClaim, below): this mode takes it before borrowing
 // the rows and gives it back after, the Color Mod (0.22.5 and later) does the same for its DI mode and refuses X while
 // we hold it. A Color Mod that does not know the claim (no SF6ColorMod_DiPanelActive export) turns this mode off.
+//
+// The Training pause menu's character popup ("P1 / P2 Character Select": agent GenericCharacterDetailSetting_FG, flow
+// app.UIFlowCharacterDetailSetting; six rows: Costume, Color, Control Type, Button Preset, Button Release Input, Stick
+// Sensitivity) gets the same mode (index kPop below), for the outfit its Costume row shows (its live
+// UIPartsMatchingFighterSetting: FighterId, GetCostumeId; not necessarily the one worn in the fight) and its target
+// side (Param SettingTargetPlayerIndex): R1 on any pad or the key (the pause menu answers whoever opened it; one panel,
+// no other player's to tell apart), the six rows borrowed as the select's four (the Color Mod's popup DI mode: the
+// part's mArrSpin / mGroup, its SetMessage* / Setup* skipped, GetCostumeId / GetColorId = what it had), the arrows'
+// copies made in the popup flow's own update (app.UIFlowCharacterDetailSetting.Wait OnUpdate). A change there is
+// PENDING: saved (costume_choices.json, the target side) only when the popup is confirmed (its Param's IsDecide), then
+// worn by that side's fighter at once (rto::fighters_refresh: the game rebuilds nothing when the costume and colour did
+// not change); the popup closed without Confirm drops it. Decide / Back leave the mode keeping the changes; the Esc
+// that leaves it must not close the pause menu: the Color Mod's Esc guard covers this mode (SF6Slots_PopupGuard), so
+// the popup mode needs a Color Mod that says it does (SF6ColorMod_PanelCaps bit 2: its popup DI mode takes the claim
+// of the target side, its popup guide carries our entry, its guard asks ours); otherwise it stays off. The popup is
+// found from an event (EV_POPUP: its MatchingFighterSetting set up or written, its flow's update), then followed each
+// frame while it shows.
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -42,15 +59,27 @@
 #include <cmath>
 #include <cstdio>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <optional>
 
 namespace slots::rto::select {
 namespace {
 
+constexpr int kPop = 3;                             // g_s / g_h index of the Training popup (1 / 2: the select's sides)
+constexpr int kMaxRows = 6;                         // the popup's rows
 constexpr const char* kRowNames[kPanelRows] = { "p_Spin_costume", "p_Spin_color", "p_Spin_type", "p_Spin_preset" };
+constexpr const char* kPopupRows[kMaxRows] = { "p_Spin_costume", "p_Spin_color", "p_Spin_type", "p_Spin_preset",
+                                               "p_Spin_disen", "p_Spin_stick" };
 constexpr int kColorRow = 1;                        // the Color row: its value text is never written back (a fault)
 constexpr const char* kAgentNames[2] = { "ui10505", "ui10507" };
+constexpr const char* kPopupAgent = "GenericCharacterDetailSetting_FG";
+// A panel: a side's panel of the select (its Param: Spins / Group) or the Training popup (its
+// UIPartsMatchingFighterSetting: mArrSpin / mGroup, as the Color Mod's popup DI mode)
+struct Kind { int rows; const char* const* names; const char* spins; const char* group; bool popup; };
+constexpr Kind kSelectKind{ kPanelRows, kRowNames, "Spins", "Group", false };
+constexpr Kind kPopupKind{ kMaxRows, kPopupRows, "mArrSpin", "mGroup", true };
+const char* tag(int s) { return s == 1 ? "P1" : s == 2 ? "P2" : "popup"; }
 constexpr const char* kSettings = "reframework/data/SF6_CostumeSlots_data/settings.json";
 constexpr const char* kEntryLabel = "Costume options";   // English only: the plugin has no locale system
 // app.InputDigitalFlag (Down 1, Trigger 2, Release 4, Repeat 8): a press is one Trigger, a held key a Repeat (the DI
@@ -71,14 +100,14 @@ std::atomic<int> g_owner[3];
 struct Act { enum Kind { Step, Move, Leave } kind = Step; int row = -1; int dir = 0; };   // row -1: the focused one
 struct HookSide {
     bool active = false;
-    uint64_t param = 0, agent = 0, group = 0;
-    uint64_t spin[kPanelRows] = {};
+    uint64_t param = 0, agent = 0, group = 0;       // param: the select's Param, the popup's MatchingFighterSetting
+    uint64_t spin[kMaxRows] = {};
     int32_t ci = -1, co = -1;
     std::deque<Act> acts;
     uint32_t last_step = 0, last_move = 0;
 };
 std::mutex g_hmx;
-HookSide g_h[3];
+HookSide g_h[kPop + 1];
 std::atomic<bool> g_any{ false };
 std::unordered_map<uint64_t, uint32_t> g_cancel;    // param -> frame until which IsDecide / IsCancel answer false
 std::atomic<uint32_t> g_cancel_until{ 0 };          // the last frame of any cancel block (the gate's fast exit)
@@ -89,15 +118,15 @@ bool acts(void* flag) { return (static_cast<uint32_t>(reinterpret_cast<uintptr_t
 uint32_t u32_of(void* a) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(a) & 0xFFFFFFFF); }
 
 int side_by_spin(uint64_t a, int* row) {
-    for (int s = 1; s <= 2; ++s) {
+    for (int s = 1; s <= kPop; ++s) {
         if (!g_h[s].active) continue;
-        for (int k = 0; k < kPanelRows; ++k) if (g_h[s].spin[k] == a) { *row = k; return s; }
+        for (int k = 0; k < kMaxRows; ++k) if (g_h[s].spin[k] && g_h[s].spin[k] == a) { *row = k; return s; }
     }
     return 0;
 }
-int side_by_param(uint64_t a) { for (int s = 1; s <= 2; ++s) if (g_h[s].active && g_h[s].param == a) return s; return 0; }
-int side_by_agent(uint64_t a) { for (int s = 1; s <= 2; ++s) if (g_h[s].active && g_h[s].agent == a) return s; return 0; }
-int side_by_group(uint64_t a) { for (int s = 1; s <= 2; ++s) if (g_h[s].active && g_h[s].group == a) return s; return 0; }
+int side_by_param(uint64_t a) { for (int s = 1; s <= kPop; ++s) if (g_h[s].active && g_h[s].param == a) return s; return 0; }
+int side_by_agent(uint64_t a) { for (int s = 1; s <= kPop; ++s) if (g_h[s].active && g_h[s].agent == a) return s; return 0; }
+int side_by_group(uint64_t a) { for (int s = 1; s <= kPop; ++s) if (g_h[s].active && g_h[s].group == a) return s; return 0; }
 bool cancel_blocked(uint64_t a) { auto it = g_cancel.find(a); return it != g_cancel.end() && g_frame < it->second; }
 
 void push_step(int s, int row, int dir) {
@@ -234,42 +263,53 @@ int pre_group_move(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned 
     } catch (...) { g_hook_faults.fetch_add(1); return kCall; }
 }
 
-// ---- the arrows' copies, made inside the select flow's update (any thread; the frame asks, header) ----
+// ---- the arrows' copies, made inside the panel flow's own update (any thread; the frame asks, header) ----
 constexpr const char* kArrowName = "e_text_slots_arrow";   // not "p_...": never taken for a UI part (R20)
-constexpr int kArrowRows[2] = { 0, kPanelRows - 1 };       // ▲ on the first row, ▼ on the last
 constexpr int kArrowMaxRefused = 3;
-struct CopyReq { uintptr_t agent = 0; uint32_t frame = 0; };
+struct CopyReq { uintptr_t agent = 0; uint32_t frame = 0; int last = 0; };   // last: the last row shown (its ▼)
 std::mutex g_copy_mx;
-CopyReq g_copy_req[3];
+CopyReq g_copy_req[kPop + 1];
 std::atomic<bool> g_copy_on{ false };
-std::atomic<int> g_copy_refused{ 0 }, g_copy_made{ 0 }, g_copy_status{ 1000 };
-std::atomic<uint32_t> g_flow_updates{ 0 };                  // the flow's update seen (its post-hook ran)
+// per kind of panel (0 the select's, 1 the popup): its flow's update hooked, seen, the copies made and refused, the
+// arrows before the titles for the session (no copy can be made there)
+struct CopyKind {
+    std::atomic<int> refused{ 0 }, made{ 0 }, status{ 1000 };
+    std::atomic<uint32_t> updates{ 0 };             // the flow's update seen (its post-hook ran)
+    bool hook = false, off = false;
+};
+CopyKind g_ck[2];
+CopyKind& ck(int s) { return g_ck[s == kPop ? 1 : 0]; }
 
-void make_copies() {
-    CopyReq req[3];
+void make_copies(int lo, int hi) {
+    CopyReq req[kPop + 1];
     {
         std::lock_guard<std::mutex> lk(g_copy_mx);
-        for (int s = 1; s <= 2; ++s) {
+        bool left = false;
+        for (int s = 1; s <= kPop; ++s) {
+            if (s < lo || s > hi) { left = left || g_copy_req[s].agent; continue; }
             if (g_copy_req[s].agent && g_frame - g_copy_req[s].frame <= 2) req[s] = g_copy_req[s];   // older: asked again
             g_copy_req[s] = CopyReq{};
         }
-        g_copy_on.store(false, std::memory_order_release);
+        g_copy_on.store(left, std::memory_order_release);
     }
-    for (int s = 1; s <= 2; ++s) {
+    for (int s = lo; s <= hi; ++s) {
         Obj* agent = reinterpret_cast<Obj*>(req[s].agent);
         if (!agent || !alive(agent)) continue;
+        const Kind& kd = s == kPop ? kPopupKind : kSelectKind;
+        CopyKind& c_k = ck(s);
         void* cm = call_obj(agent, "get_ControlMain");
-        for (int k : kArrowRows) {
-            void* row = cm ? A()->ui_find_child(cm, kRowNames[k], 8) : nullptr;
+        for (int k : { 0, req[s].last }) {           // ▲ on the first row, ▼ on the last shown
+            if (k < 0 || k >= kd.rows) continue;
+            void* row = cm ? A()->ui_find_child(cm, kd.names[k], 8) : nullptr;
             void* title = row ? A()->ui_find_child(row, "e_text_title", 4) : nullptr;
             Obj* parent = title ? call_obj(reinterpret_cast<Obj*>(title), "get_Parent") : nullptr;
-            if (!parent) { ++g_copy_refused; g_copy_status.store(-3000, std::memory_order_release); continue; }
+            if (!parent) { ++c_k.refused; c_k.status.store(-3000, std::memory_order_release); continue; }
             if (A()->ui_find_child(parent, kArrowName, 0)) continue;
             void* c = nullptr;
             const SF6CoreStatus st = A()->ui_clone_control(C(), title, parent, kArrowName, &c);
-            g_copy_status.store(st == SF6CORE_OK && !c ? -1000 : static_cast<int>(st), std::memory_order_release);
-            if (st != SF6CORE_OK || !c) { ++g_copy_refused; continue; }
-            ++g_copy_made;
+            c_k.status.store(st == SF6CORE_OK && !c ? -1000 : static_cast<int>(st), std::memory_order_release);
+            if (st != SF6CORE_OK || !c) { ++c_k.refused; continue; }
+            ++c_k.made;
             A()->ui_set_visible(C(), c, 0);                 // placed and shown by the frame
             A()->ui_set_force_invisible(C(), c, 1);
         }
@@ -277,33 +317,50 @@ void make_copies() {
 }
 void post_flow_update(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return;
-    g_flow_updates.fetch_add(1, std::memory_order_relaxed);
+    g_ck[0].updates.fetch_add(1, std::memory_order_relaxed);
     if (!g_copy_on.load(std::memory_order_acquire)) return;
-    try { make_copies(); } catch (...) { ++g_copy_refused; g_copy_status.store(-2000, std::memory_order_release); }   // /EHa: SEH too
+    try { make_copies(1, 2); } catch (...) { ++g_ck[0].refused; g_ck[0].status.store(-2000, std::memory_order_release); }   // /EHa: SEH too
+}
+// The popup flow's own update: the popup is up (EV_POPUP keeps it followed), and the arrows' copies of the popup
+void post_popup_update(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return;
+    g_ck[1].updates.fetch_add(1, std::memory_order_relaxed);
+    post(EV_POPUP);
+    if (!g_copy_on.load(std::memory_order_acquire)) return;
+    try { make_copies(kPop, kPop); } catch (...) { ++g_ck[1].refused; g_ck[1].status.store(-2000, std::memory_order_release); }
+}
+// What else tells the popup is up: its MatchingFighterSetting set up or written (Fighter Settings' too: the popup is then
+// not found, nothing more)
+int pre_popup_event(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (!g_closing.load(std::memory_order_relaxed)) post(EV_POPUP);
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+// A type's own method of that name (never a parent's: a flow's parent runs for every flow of the game)
+Method* own_method(TD* td, const char* name) {
+    if (td) for (auto* m : td->get_methods()) if (m && m->get_name() && std::strcmp(m->get_name(), name) == 0) return m;
+    return nullptr;
 }
 
 // Installed the first time a side is borrowed (a player who never uses the mode pays nothing): the DI mode's set
 bool g_hooks_tried = false, g_hooks_ok = false;
-bool g_arrow_hook = false;                          // the flow's update hooked: arrow copies can be made
+bool g_mfs_ok = false;                              // the popup's MatchingFighterSetting hooked: the popup mode can start
 void install_hooks() {
     g_hooks_tried = true;
     auto* tdb = api().tdb();
     int n = 0, missing = 0;
     auto hook = [&](TD* td, const char* name, REFPreHookFn pre, REFPostHookFn post) {
         Method* m = td ? td->find_method(name) : nullptr;
-        if (m && m->add_hook(pre, post ? post : hook_post_pass, false)) ++n;
-        else ++missing;
+        if (m && m->add_hook(pre, post ? post : hook_post_pass, false)) { ++n; return true; }
+        ++missing;
+        return false;
     };
     TD* spin = tdb->find_type("app.UIPartsSpin");
-    hook(spin, "Add", pre_spin_step<1, false>, nullptr);
-    hook(spin, "AddNum", pre_spin_step<1, false>, nullptr);
-    hook(spin, "MouseAdd", pre_spin_step<1, false>, nullptr);
-    hook(spin, "Sub", pre_spin_step<-1, false>, nullptr);
-    hook(spin, "SubNum", pre_spin_step<-1, false>, nullptr);
-    hook(spin, "MouseSub", pre_spin_step<-1, false>, nullptr);
-    hook(spin, "InputRight", pre_spin_step<1, true>, nullptr);
-    hook(spin, "InputLeft", pre_spin_step<-1, true>, nullptr);
-    hook(spin, "InputDirection", pre_spin_dir, nullptr);
+    struct H { const char* name; REFPreHookFn pre; };
+    int n_input = 0;                                // the spin / agent / group set: both modes need it
+    for (const H& h : { H{ "Add", pre_spin_step<1, false> }, H{ "AddNum", pre_spin_step<1, false> }, H{ "MouseAdd", pre_spin_step<1, false> },
+                        H{ "Sub", pre_spin_step<-1, false> }, H{ "SubNum", pre_spin_step<-1, false> }, H{ "MouseSub", pre_spin_step<-1, false> },
+                        H{ "InputRight", pre_spin_step<1, true> }, H{ "InputLeft", pre_spin_step<-1, true> }, H{ "InputDirection", pre_spin_dir } })
+        n_input += hook(spin, h.name, h.pre, nullptr) ? 1 : 0;
     TD* param = tdb->find_type("app.UIFlowUI10505.Param");
     for (const char* nm : { "SelectChangeCostume", "SelectChangeColorChip", "SelectChangeControllerType", "SetMessageCostume",
                             "SetMessageColor", "SetMessagePreset", "SetMessageList", "setCostume", "setColor", "setCostumeAndColor" })
@@ -312,25 +369,30 @@ void install_hooks() {
     hook(param, "getCostume", pre_param_get<true>, post_ret);
     hook(param, "getColor", pre_param_get<false>, post_ret);
     TD* agent = tdb->find_type("app.UIAgent");
-    hook(agent, "InputLeft", pre_agent_lr<-1>, nullptr);
-    hook(agent, "InputRight", pre_agent_lr<1>, nullptr);
-    hook(agent, "InputUp", pre_agent_ud<-1>, nullptr);
-    hook(agent, "InputDown", pre_agent_ud<1>, nullptr);
-    hook(agent, "InputDirection", pre_agent_dir, nullptr);
-    hook(agent, "InputDecide", pre_agent_leave, nullptr);
-    hook(agent, "InputCancel", pre_agent_leave, nullptr);
-    hook(tdb->find_type("app.UIPartsGroup"), "MoveFocus", pre_group_move, nullptr);
+    for (const H& h : { H{ "InputLeft", pre_agent_lr<-1> }, H{ "InputRight", pre_agent_lr<1> }, H{ "InputUp", pre_agent_ud<-1> },
+                        H{ "InputDown", pre_agent_ud<1> }, H{ "InputDirection", pre_agent_dir }, H{ "InputDecide", pre_agent_leave },
+                        H{ "InputCancel", pre_agent_leave } })
+        n_input += hook(agent, h.name, h.pre, nullptr) ? 1 : 0;
+    n_input += hook(tdb->find_type("app.UIPartsGroup"), "MoveFocus", pre_group_move, nullptr) ? 1 : 0;
+    // the Training popup's part (the Color Mod's popup DI mode set): its own repaints skipped, its getters answer what
+    // it had; the popup's Param is not a method gate (its IsDecide is a field: our Decide never reaches the flow)
+    TD* mfs = tdb->find_type("app.UIPartsMatchingFighterSetting");
+    int n_mfs = 0;
+    for (const char* nm : { "SelectChangeCostume", "SelectChangeColorChip", "SelectChangeControllerType", "SelectChangePresetIndex",
+                            "SetMessage", "SetMessageColor", "SetupSpin", "SetupPresetSpin", "SetupPresetSpinCursor",
+                            "SelectionChanged", "SelectionChanged_Spin", "ChangeEverything" })
+        if (hook(mfs, nm, pre_param_skip, nullptr)) ++n_mfs;
+    const bool getters = hook(mfs, "GetCostumeId", pre_param_get<true>, post_ret) && hook(mfs, "GetColorId", pre_param_get<false>, post_ret);
     // the steps, the moves and the way out are what the mode needs; without them it never starts
     g_hooks_ok = spin && param && agent && n >= 20;
-    logf("rto select: %d hooks installed, %d not found: the costume options mode on the character select %s", n, missing,
-         g_hooks_ok ? "is ready" : "is off");
+    g_mfs_ok = spin && agent && mfs && getters && n_mfs >= 8 && n_input >= 12;
+    logf("rto select: %d hooks installed, %d not found: the costume options mode on the character select %s, in the "
+         "Training popup %s (%d of its part's hooks)", n, missing, g_hooks_ok ? "is ready" : "is off",
+         g_mfs_ok ? "is ready" : "is off", n_mfs + (getters ? 2 : 0));
     // the arrows' copies (R19: inside the select flow's own update); without it the arrows go before the titles
-    // Its own OnUpdate only (never a parent's: that one runs for every flow of the game)
-    TD* cs = tdb->find_type("app.UIFlowUI10505.CharaSetting");
-    Method* upd = nullptr;
-    if (cs) for (auto* m : cs->get_methods()) if (m && m->get_name() && std::strcmp(m->get_name(), "OnUpdate") == 0) { upd = m; break; }
-    g_arrow_hook = SF6CORE_HAS(A(), ui_clone_control) && upd && upd->get_function_raw() && upd->add_hook(hook_pass, post_flow_update, false);
-    logf("rto select: arrows %s", g_arrow_hook ? "in the rows' left margin (copies made in app.UIFlowUI10505.CharaSetting.OnUpdate)"
+    Method* upd = own_method(tdb->find_type("app.UIFlowUI10505.CharaSetting"), "OnUpdate");
+    g_ck[0].hook = SF6CORE_HAS(A(), ui_clone_control) && upd && upd->get_function_raw() && upd->add_hook(hook_pass, post_flow_update, false);
+    logf("rto select: arrows %s", g_ck[0].hook ? "in the rows' left margin (copies made in app.UIFlowUI10505.CharaSetting.OnUpdate)"
          : !SF6CORE_HAS(A(), ui_clone_control) ? "before the titles (the core has no ui_clone_control, 0.8.2)"
          : "before the titles (app.UIFlowUI10505.CharaSetting.OnUpdate not hooked)");
 }
@@ -383,13 +445,12 @@ std::string focused_row(Obj* agent) {
     Obj* ctrl = item ? get_obj(item, "<Control>k__BackingField") : nullptr;
     return ctrl ? str(call_obj(ctrl, "get_Name")) : std::string();
 }
-int row_index(const std::string& nm) { for (int k = 0; k < kPanelRows; ++k) if (nm == kRowNames[k]) return k; return -1; }
-
 struct RowParts { void* ctrl = nullptr; void* title = nullptr; void* text = nullptr; void* list = nullptr; void* chip = nullptr;
                   void* rect0 = nullptr; void* rect1 = nullptr; void* arrow[2] = {}; };
-RowParts parts_of(void* cm, int k) {
+RowParts parts_of(void* cm, const Kind& kd, int k) {
     RowParts p;
-    p.ctrl = find(cm, kRowNames[k]);
+    if (k < 0 || k >= kd.rows) return p;
+    p.ctrl = find(cm, kd.names[k]);
     if (!p.ctrl) return p;
     p.title = find(p.ctrl, "e_text_title", 4);
     p.text = find(p.ctrl, "e_text", 4);
@@ -428,15 +489,16 @@ struct Side {
     Obj* group = nullptr;
     const Slot* slot = nullptr;
     int opt = 0;                                    // the choices' side (0 P1, 1 P2)
+    int claim = 0;                                  // the claim held (SF6Slots_SelectPanelClaim side: 1 / 2), 0 none
     std::vector<Row> rows;
     std::vector<std::string> chosen, shown;
     PanelWindow w;
     int32_t ci = -1, co = -1;
-    RowSave rs[kPanelRows];
+    RowSave rs[kMaxRows];
     float ref_pos[3] = {}; bool has_ref_pos = false;
     float ref_region[2] = { 300, 0 }; bool has_ref_region = false;
     uint32_t entered_at = 0;
-    // the arrows (kArrowRows): where each copy goes, read once a visit (the glyph's width until it is drawn), its
+    // the arrows (on the first and the last row shown): where each copy goes, read once a visit (the glyph's width until it is drawn), its
     // anchored layout written every frame while shown (the same values the game puts back: never a fight)
     struct Arrow {
         bool geo = false, failed = false, styled = false, shown = false, measured = false, checked = false, laid = false;
@@ -450,12 +512,29 @@ struct Side {
         std::string text, row_el, prio_el;
     } arrow[2];
     uint32_t arrow_asked = 0;                       // the first frame a copy was asked for and not found since
+    // the panel's kind and how many of its rows are borrowed (the select: 4; the popup: its six, fewer when the
+    // last ones are missing)
+    const Kind* kind = &kSelectKind;
+    int n = kPanelRows;
+    int found = kPanelRows;                         // the rows found (n .. found - 1: left out, hidden while on)
 };
-Side g_s[3];
+Side g_s[kPop + 1];
+// The rows of the panel: the screen row of a row name, -1 if not one of ours
+int row_index(const Side& st, const std::string& nm) {
+    for (int k = 0; k < st.n; ++k) if (nm == st.kind->names[k]) return k;
+    return -1;
+}
+// A side reset, its panel still followed (agent, param, the outfit it showed, the key's state)
+Side follow(int s, const Side& old) {
+    Side n;
+    n.agent = old.agent; n.param = old.param; n.was_active = old.was_active; n.active_since = old.active_since;
+    n.fighter = old.fighter; n.costume = old.costume; n.changed_at = old.changed_at; n.key_was = old.key_was;
+    if (s == kPop) { n.kind = &kPopupKind; n.n = n.found = kMaxRows; }
+    return n;
+}
 bool g_was_up = false;                              // the character select was up last frame
 int g_faults = 0;
 bool g_off = false;
-bool g_arrows_off = false;                          // no arrow copy can be made: the arrows go before the titles
 int g_hollow = -1;                                  // the hollow glyphs drawn by the game's font: -1 unknown, 0 no, 1 yes
 
 // ---- the trigger: R1 / the key, read per player ----
@@ -538,22 +617,27 @@ uint32_t any_pad_mask() {
         if (Obj* pad = list_item(devs, i)) { auto r = call(pad, "get_Button"); if (!r.exception_thrown) mask |= r.dword; }
     return mask;
 }
-// The button / key of one player: app.InputManager's own per-player reading (the Color Mod's X rule), else any device
+// The button / key of one player: app.InputManager's own per-player reading (the Color Mod's X rule), else any device.
+// side 0: any player (the Training popup: the pause menu answers whoever opened it, and it has one panel only)
 bool trigger_down(int side) {
     if (!game_has_focus()) return false;
     const bool key = g_keys.vk && (GetAsyncKeyState(g_keys.vk) & 0x8000) != 0;
+    if (side == 0 && key) return true;
     if (Obj* im = reinterpret_cast<Obj*>(api().get_managed_singleton("app.InputManager"))) {
         static Method* m_flags = nullptr;
         static Method* m_kb = nullptr;
         if (!m_flags) m_flags = method_of(im->get_type_definition(), "GetGamePadRawFlags", 2);
         if (!m_kb) m_kb = method_of(im->get_type_definition(), "GetKeyboardMousePlayerIndex", 0);
         if (m_flags) {
-            if (g_keys.pad_bit) {
-                auto r = call(m_flags, im, { reinterpret_cast<void*>(static_cast<uintptr_t>(g_keys.pad_bit)), arg_i32(side - 1) });
-                if (!r.exception_thrown && (r.dword & 1)) return true;
+            if (g_keys.pad_bit)
+                for (int p = side ? side - 1 : 0; p <= (side ? side - 1 : 1); ++p) {
+                    auto r = call(m_flags, im, { reinterpret_cast<void*>(static_cast<uintptr_t>(g_keys.pad_bit)), arg_i32(p) });
+                    if (!r.exception_thrown && (r.dword & 1)) return true;
+                }
+            if (side) {
+                auto kb = call(m_kb, im);
+                if (!kb.exception_thrown) return key && static_cast<int32_t>(kb.dword) == side - 1;
             }
-            auto kb = call(m_kb, im);
-            if (!kb.exception_thrown) return key && static_cast<int32_t>(kb.dword) == side - 1;
         }
     }
     return key || (g_keys.pad_bit && (any_pad_mask() & g_keys.pad_bit) != 0);
@@ -561,7 +645,9 @@ bool trigger_down(int side) {
 
 // ---- the Color Mod: its DI mode borrows the same panel ----
 using DiActiveFn = int (*)(int side);
+using CapsFn = int (*)();
 DiActiveFn g_cm_di = nullptr;
+int g_cm_caps = 0;                                  // SF6ColorMod_PanelCaps: 1 the select's claim, 2 the popup's (below)
 bool g_cm_checked = false, g_cm_loaded = false;
 uint32_t g_cm_stale_since[3] = {};
 void color_mod_check() {
@@ -570,12 +656,20 @@ void color_mod_check() {
     HMODULE h = GetModuleHandleW(L"SF6_ColorModNative.dll");
     g_cm_loaded = h != nullptr;
     g_cm_di = h ? reinterpret_cast<DiActiveFn>(GetProcAddress(h, "SF6ColorMod_DiPanelActive")) : nullptr;
+    const CapsFn caps = h ? reinterpret_cast<CapsFn>(GetProcAddress(h, "SF6ColorMod_PanelCaps")) : nullptr;
+    g_cm_caps = caps ? caps() : (g_cm_di ? 1 : 0);
     logf("rto select: Color Mod %s", !g_cm_loaded ? "not loaded" : g_cm_di
          ? "loaded, its DI mode takes the panel's claim: one owner per panel"
          : "loaded but older (no SF6ColorMod_DiPanelActive): costume options on the character select are OFF (its DI mode "
            "borrows the same rows; two writers on one panel crashed the game)");
+    logf("rto select: costume options in the Training popup %s", (g_cm_caps & 2)
+         ? "on (the Color Mod's popup DI mode takes the claim, its guide and Esc guard cover them)"
+         : !g_cm_loaded ? "OFF: they need the Color Mod (its Esc guard keeps the pause menu open when Back leaves them)"
+         : "OFF: the Color Mod loaded does not share the popup (no SF6ColorMod_PanelCaps bit 2: its DI mode borrows the "
+           "same rows without the claim)");
 }
 bool color_mod_ok() { color_mod_check(); return !g_cm_loaded || g_cm_di; }
+bool popup_cm_ok() { color_mod_check(); return g_cm_loaded && (g_cm_caps & 2) != 0; }
 bool di_on(int side) { return g_cm_di && g_cm_di(side) != 0; }
 
 // A claim of the Color Mod left behind (its DI mode no longer on for a second): freed
@@ -611,7 +705,7 @@ void hook_side_set(int s, const Side& st) {
     h.param = reinterpret_cast<uint64_t>(st.param);
     h.agent = reinterpret_cast<uint64_t>(st.agent);
     h.group = reinterpret_cast<uint64_t>(st.group);
-    for (int k = 0; k < kPanelRows; ++k) h.spin[k] = reinterpret_cast<uint64_t>(st.rs[k].spin);
+    for (int k = 0; k < st.n; ++k) h.spin[k] = reinterpret_cast<uint64_t>(st.rs[k].spin);
     h.ci = st.ci; h.co = st.co;
     g_any.store(true);
 }
@@ -622,7 +716,7 @@ void hook_side_clear(int s) {
         g_cancel_until.store(g_frame + kCancelBlock);
     }
     g_h[s] = HookSide{};
-    g_any.store(g_h[1].active || g_h[2].active);
+    g_any.store(g_h[1].active || g_h[2].active || g_h[kPop].active);
     for (auto it = g_cancel.begin(); it != g_cancel.end();) it = g_frame >= it->second + 600 ? g_cancel.erase(it) : std::next(it);
 }
 bool pull(int s, Act& a) {
@@ -633,18 +727,40 @@ bool pull(int s, Act& a) {
     return true;
 }
 
-void release(int s) { int want = kOurs; g_owner[s].compare_exchange_strong(want, kFree); }
+void release(int claim) { if (claim < 1 || claim > 2) return; int want = kOurs; g_owner[claim].compare_exchange_strong(want, kFree); }
+
+// ---- the Training popup: this visit (the pending changes) and the Esc guard (SF6Slots_PopupGuard, any thread) ----
+struct Pending { const Slot* slot = nullptr; int opt = 0; std::vector<std::string> shown, chosen; };
+struct Popup {
+    Obj* agent = nullptr;                           // GenericCharacterDetailSetting_FG (never add_ref'd, R21)
+    Obj* flow = nullptr;                            // its flow's Param (SettingTargetPlayerIndex, IsDecide, MatchingFighterSetting)
+    bool up = false;
+    uint32_t since = 0;                             // the frame this visit started
+    int target = 1;                                 // the side it sets: 1 P1, 2 P2
+    bool decided = false;
+    std::map<std::string, Pending> pending;         // mod key -> the options changed this visit, saved on Confirm
+};
+Popup g_pop;
+uint32_t g_pop_event = 0;                           // the last EV_POPUP
+std::atomic<bool> g_pop_on{ false };
+std::atomic<uint32_t> g_pop_left{ 0 };              // the frame the popup's mode was left
+constexpr uint32_t kPopGuard = 15;                  // frames after leaving during which the Esc guard still holds
+void pop_flag(int s, bool on) {
+    if (s != kPop) return;
+    g_pop_on.store(on);
+    if (!on) g_pop_left.store(g_frame);
+}
 
 // The mode dropped without a write (the panel is gone)
 void drop(int s, const char* why) {
     if (!g_s[s].on) return;
     hook_side_clear(s);
-    release(s);
-    const int keep_f = g_s[s].fighter, keep_c = g_s[s].costume;
-    const uint32_t keep_at = g_s[s].changed_at;
-    g_s[s] = Side{};
-    g_s[s].fighter = keep_f; g_s[s].costume = keep_c; g_s[s].changed_at = keep_at;
-    logf("rto select: P%d costume options mode dropped (%s)", s, why);
+    release(g_s[s].claim);
+    pop_flag(s, false);
+    Side n = follow(s, g_s[s]);
+    n.agent = nullptr; n.param = nullptr; n.was_active = false; n.active_since = 0; n.key_was = false;
+    g_s[s] = std::move(n);
+    logf("rto select: %s costume options mode dropped (%s)", tag(s), why);
 }
 
 void commit(Side& st) {
@@ -657,11 +773,18 @@ void commit(Side& st) {
     save_choices();
     choices_changed();                              // the select model wears it on the next pass of rto.cpp
 }
+// The popup: kept for the Confirm (shown: the set its saved choices gave when first edited this visit, for keep_hidden)
+void pend(const Side& st) {
+    Pending& p = g_pop.pending[st.slot->mod];
+    if (!p.slot) { p.slot = st.slot; p.opt = st.opt; p.shown = st.shown; }
+    p.chosen = st.chosen;
+}
 
+CopyKind& ck_of(const Side& st) { return g_ck[st.kind->popup ? 1 : 0]; }
 std::string row_title(const Side& st, int k) {
     const int i = st.w.win + k;
     // the arrow is a copy in the row's left margin (paint_arrows); in the title only when no copy can be made
-    const char* a = g_arrows_off ? panel_arrow(k, st.w.win, static_cast<int>(st.rows.size())) : "";
+    const char* a = ck_of(st).off ? panel_arrow(k, st.w.win, static_cast<int>(st.rows.size()), st.n) : "";
     return std::string(a) + clip_name(st.rows[static_cast<size_t>(i)].title, kTitleChars);
 }
 
@@ -799,7 +922,7 @@ void arrow_style(void* c, Side::Arrow& ar, int s, int k) {
         SF6CoreArg pr{}; pr.type = SF6CORE_ARG_I64; pr.v.i = ar.prio;
         A()->obj_invoke(C(), c, "set_Priority(System.UInt16)", &pr, 1, nullptr);
     }
-    logf("rto select: P%d arrow row %d: anchored, page alignment %s, priority %d (was %d; row's highest %d, %s)", s, k,
+    logf("rto select: %s arrow row %d: anchored, page alignment %s, priority %d (was %d; row's highest %d, %s)", tag(s), k,
          left < 0 ? "unread (the title's kept)" : how.c_str(), ar.prio, had, ar.row_prio, ar.prio_el.c_str());
 }
 void arrow_hide(void* c, Side::Arrow& ar) {
@@ -850,9 +973,9 @@ void arrow_place(void* c, Side::Arrow& ar, void* title, int s, int k, bool focus
         char at[48] = "?";
         if (ret_floats(co, "get_GlobalPosition", gp, 2))
             std::snprintf(at, sizeof at, "%.0f .. %.0f", gp[0] - w * std::fabs(ar.gsx), gp[0]);
-        logf("rto select: P%d arrow row %d: drawn at x %s, glyph at %.0f (title x %.0f - %.0f, glyph %.0f wide %s; row frame "
+        logf("rto select: %s arrow row %d: drawn at x %s, glyph at %.0f (title x %.0f - %.0f, glyph %.0f wide %s; row frame "
              "x %.0f %s, for reference; anchored, priority %d; colour %08x, title's %08x, row %s; its layout found changed "
-             "by the game on %d of %d frames)", s, k, at, left, ar.title_lg, kArrowOffset, ar.glyph,
+             "by the game on %d of %d frames)", tag(s), k, at, left, ar.title_lg, kArrowOffset, ar.glyph,
              ar.measured ? "drawn" : "font size", ar.row_lg, ar.row_el.c_str(), ar.prio, cc, tc,
              focused ? "focused" : "not focused", ar.resets, ar.frames);
     }
@@ -862,9 +985,11 @@ void arrow_place(void* c, Side::Arrow& ar, void* title, int s, int k, bool focus
 // (U+25B2 / U+25BC) on the focused row; filled only when the game's font does not draw the hollow ones (measured
 // once, logged once)
 void paint_arrows(Side& st, int s, void* cm) {
-    if (g_arrows_off) {                             // a copy already shown on the other row goes too
+    CopyKind& c_k = ck_of(st);
+    const int arrow_rows[2] = { 0, st.n - 1 };      // ▲ on the first row, ▼ on the last shown
+    if (c_k.off) {                                  // a copy already shown on the other row goes too
         for (int a = 0; a < 2; ++a)
-            if (st.arrow[a].shown) if (void* c = arrow_copy(parts_of(cm, kArrowRows[a]).title)) arrow_hide(c, st.arrow[a]);
+            if (st.arrow[a].shown) if (void* c = arrow_copy(parts_of(cm, *st.kind, arrow_rows[a]).title)) arrow_hide(c, st.arrow[a]);
         return;
     }
     const int n = static_cast<int>(st.rows.size());
@@ -872,15 +997,15 @@ void paint_arrows(Side& st, int s, void* cm) {
     bool missing = false;
     for (int a = 0; a < 2; ++a) {
         Side::Arrow& ar = st.arrow[a];
-        const int k = kArrowRows[a];
-        RowParts p = parts_of(cm, k);
+        const int k = arrow_rows[a];
+        RowParts p = parts_of(cm, *st.kind, k);
         const bool hollow = k != focus && g_hollow != 0;
-        std::string glyph = panel_arrow(k, st.w.win, n, kPanelRows, hollow);
+        std::string glyph = panel_arrow(k, st.w.win, n, st.n, hollow);
         while (!glyph.empty() && glyph.back() == ' ') glyph.pop_back();
         void* c = arrow_copy(p.title);
         if (!c) { if (!glyph.empty()) missing = true; continue; }
         if (glyph.empty() || ar.failed) { arrow_hide(c, ar); continue; }
-        if (!ar.geo && !arrow_geo(ar, p.ctrl, p.title)) { ar.failed = true; logf("rto select: P%d arrow row %d: the title's place unread, no arrow", s, k); continue; }
+        if (!ar.geo && !arrow_geo(ar, p.ctrl, p.title)) { ar.failed = true; logf("rto select: %s arrow row %d: the title's place unread, no arrow", tag(s), k); continue; }
         if (!ar.styled) arrow_style(c, ar, s, k);
         // written only when it changes (never an identical set_Message; the core compares too)
         if (glyph != ar.text && A()->ui_set_text(C(), c, glyph.c_str()) == SF6CORE_OK) { ar.text = glyph; ar.text_at = g_frame; ar.measured = false; }
@@ -914,22 +1039,23 @@ void paint_arrows(Side& st, int s, void* cm) {
     }
     if (!missing) { st.arrow_asked = 0; return; }
     if (!st.arrow_asked) st.arrow_asked = g_frame;
-    const int refused = g_copy_refused.load();
-    if (!g_arrow_hook || refused >= kArrowMaxRefused || g_frame - st.arrow_asked > kArrowWait) {
-        g_arrows_off = true;
-        logf("rto select: arrows before the titles from now on (%s; copies made %d, refused %d, last status %d, flow updates seen %u)",
-             !g_arrow_hook ? "no hook" : refused >= kArrowMaxRefused ? "copies refused" : "no copy within a second",
-             g_copy_made.load(), refused, g_copy_status.load(), g_flow_updates.load());
+    const int refused = c_k.refused.load();
+    if (!c_k.hook || refused >= kArrowMaxRefused || g_frame - st.arrow_asked > kArrowWait) {
+        c_k.off = true;
+        logf("rto select: %sarrows before the titles from now on (%s; copies made %d, refused %d, last status %d, flow updates seen %u)",
+             st.kind->popup ? "popup: " : "", !c_k.hook ? "no hook" : refused >= kArrowMaxRefused ? "copies refused" : "no copy within a second",
+             c_k.made.load(), refused, c_k.status.load(), c_k.updates.load());
         return;
     }
     std::lock_guard<std::mutex> lk(g_copy_mx);
-    g_copy_req[s] = { reinterpret_cast<uintptr_t>(st.agent), g_frame };
+    g_copy_req[s] = { reinterpret_cast<uintptr_t>(st.agent), g_frame, st.n - 1 };
     g_copy_on.store(true, std::memory_order_release);
 }
 // Leaving: both copies hidden (and locked)
 void hide_arrows(Side& st, void* cm) {
+    const int arrow_rows[2] = { 0, st.n - 1 };
     for (int a = 0; a < 2; ++a) {
-        RowParts p = parts_of(cm, kArrowRows[a]);
+        RowParts p = parts_of(cm, *st.kind, arrow_rows[a]);
         if (void* c = arrow_copy(p.title)) { st.arrow[a].shown = true; arrow_hide(c, st.arrow[a]); }
     }
 }
@@ -943,8 +1069,8 @@ void paint(Side& st, int s) {
     void* cm = control_main(st.agent);
     if (!cm) return;
     const int n = static_cast<int>(st.rows.size());
-    for (int k = 0; k < kPanelRows; ++k) {
-        RowParts p = parts_of(cm, k);
+    for (int k = 0; k < st.n; ++k) {
+        RowParts p = parts_of(cm, *st.kind, k);
         if (!p.ctrl) continue;
         const int i = st.w.win + k;
         if (i >= n) { vis(p.ctrl, false); continue; }   // no option row for it: hidden (shown again when leaving)
@@ -963,14 +1089,15 @@ void paint(Side& st, int s) {
         if (p.text && st.has_ref_region) A()->ui_set_region_size(C(), p.text, st.ref_region[0], st.ref_region[1]);   // compares
         spin_set(st.rs[k].spin, 0, 1 + static_cast<int32_t>(r.labels.size()), r.value);
     }
+    for (int k = st.n; k < st.found; ++k) vis(parts_of(cm, *st.kind, k).ctrl, false);   // a row left out (no spin): hidden
     paint_arrows(st, s, cm);
 }
 
 // The focus row the game shows -> the cursor (a mouse hover moves the focus without our hooks)
 void sync_focus(Side& st) {
-    const int k = row_index(focused_row(st.agent));
+    const int k = row_index(st, focused_row(st.agent));
     if (k < 0) return;
-    const PanelWindow w = panel_focus(st.w, static_cast<int>(st.rows.size()), k);
+    const PanelWindow w = panel_focus(st.w, static_cast<int>(st.rows.size()), k, st.n);
     if (w.cur != st.w.cur) st.w = w;
 }
 void focus_row(Side& st, int k) {
@@ -979,41 +1106,76 @@ void focus_row(Side& st, int k) {
     inv_i(st.group, "ChangeFocusIndex", k);
 }
 
+// The popup's spin of a row: the one whose control is that row (its own index first), nullptr when none is; the k-th
+// when no spin's control name can be read (the Color Mod's popup DI mode takes them by index)
+Obj* spin_of_row(Obj* spins, const char* row, int k) {
+    bool named = false;
+    auto is = [&](Obj* sp) {
+        Obj* c = sp ? get_obj(sp, "<Control>k__BackingField") : nullptr;
+        const std::string nm = c ? str(call_obj(c, "get_Name")) : std::string();
+        named = named || !nm.empty();
+        return nm == row;
+    };
+    if (Obj* sp = list_item(spins, k); is(sp)) return sp;
+    for (int i = 0, cnt = list_count(spins); i < cnt; ++i) if (Obj* sp = list_item(spins, i); is(sp)) return sp;
+    return named ? nullptr : list_item(spins, k);
+}
+
 bool enter(int s, const char** why) {
     Side& st = g_s[s];
-    const Slot* slot = select_slot(s, nullptr);
+    const bool pop = s == kPop;
+    const Kind& kd = pop ? kPopupKind : kSelectKind;
+    const Slot* slot = nullptr;
+    if (pop) {                                      // the outfit the popup's Costume row shows (its live part)
+        int32_t f = -1;
+        get_i32(st.param, "FighterId", f);
+        slot = outfit_slot(f, ret_i32(st.param, "GetCostumeId").value_or(-1));
+    } else {
+        slot = select_slot(s, nullptr);
+    }
     if (!slot) { *why = "this outfit has no options"; return false; }
     if (!g_hooks_tried) install_hooks();
-    if (!g_hooks_ok) { *why = "the hooks are not installed"; return false; }
+    if (pop ? !g_mfs_ok : !g_hooks_ok) { *why = "the hooks are not installed"; return false; }
     Obj* cm = control_main(st.agent);
-    Obj* spins = get_obj(st.param, "Spins");
-    Obj* group = get_obj(st.param, "Group");
+    Obj* spins = get_obj(st.param, kd.spins);
+    Obj* group = get_obj(st.param, kd.group);
     if (!cm || !spins || !group || list_count(spins) < kPanelRows) { *why = "the panel is not built"; return false; }
+    const int claim = pop ? g_pop.target : s;       // the popup: the claim of the side it sets (the select is not up)
     int want = kFree;
-    if (!g_owner[s].compare_exchange_strong(want, kOurs) && want != kOurs) { *why = "the Color Mod's DI mode holds this panel"; return false; }
-    Side n;
-    n.agent = st.agent; n.param = st.param; n.was_active = st.was_active; n.active_since = st.active_since;
-    n.fighter = st.fighter; n.costume = st.costume; n.changed_at = st.changed_at; n.key_was = st.key_was;
+    if (!g_owner[claim].compare_exchange_strong(want, kOurs) && want != kOurs) { *why = "the Color Mod's DI mode holds this panel"; return false; }
+    Side n = follow(s, st);
     n.group = group;
     n.slot = slot;
-    n.opt = costumes::online() ? 0 : s - 1;
-    n.chosen = chosen_of(manifest(), *slot, choices(), n.opt);
-    n.shown = n.chosen;
+    n.claim = claim;
+    n.opt = pop ? claim - 1 : costumes::online() ? 0 : s - 1;
+    // the popup: this visit's pending changes of that outfit, if any
+    const auto pend_it = pop ? g_pop.pending.find(slot->mod) : g_pop.pending.end();
+    if (pend_it != g_pop.pending.end() && pend_it->second.opt == n.opt) { n.chosen = pend_it->second.chosen; n.shown = pend_it->second.shown; }
+    else { n.chosen = chosen_of(manifest(), *slot, choices(), n.opt); n.shown = n.chosen; }
     n.rows = rows(manifest(), *slot, n.chosen);
-    if (n.rows.empty()) { release(s); *why = "no option row"; return false; }
-    for (int k = 0; k < kPanelRows; ++k) {
+    if (n.rows.empty()) { release(claim); *why = "no option row"; return false; }
+    // the rows: the select's four; the popup's found in order (four at least), each one's spin found by its row; a
+    // row found without a spin and the ones after it are left out (hidden while on)
+    if (pop) {
+        n.found = 0;
+        while (n.found < kd.rows && parts_of(cm, kd, n.found).ctrl) ++n.found;
+        n.n = n.found;
+    }
+    for (int k = 0; k < n.found; ++k) {
         RowSave& rs = n.rs[k];
-        rs.spin = list_item(spins, k);
-        if (!rs.spin) { release(s); *why = "a row's spin is missing"; return false; }
+        RowParts p = parts_of(cm, kd, k);
+        if (!p.ctrl) { release(claim); *why = "a row is missing"; return false; }
+        rs.visible = call_bool(reinterpret_cast<Obj*>(p.ctrl), "get_Visible");
+        if (k >= n.n) continue;
+        rs.spin = pop ? spin_of_row(spins, kd.names[k], k) : list_item(spins, k);
+        if (!rs.spin && pop && k >= kPanelRows) { n.n = k; continue; }
+        if (!rs.spin) { release(claim); *why = "a row's spin is missing"; return false; }
         rs.smin = ret_i32(rs.spin, "get_MinNum").value_or(0);
         rs.smax = ret_i32(rs.spin, "get_MaxNum").value_or(0);
         get_i32(rs.spin, "_Num", rs.snum);
         bool ok = false;
         rs.disabled = call_bool(rs.spin, "get_IsDisable", {}, &ok);
         rs.has_disabled = ok;
-        RowParts p = parts_of(cm, k);
-        if (!p.ctrl) { release(s); *why = "a row is missing"; return false; }
-        rs.visible = call_bool(reinterpret_cast<Obj*>(p.ctrl), "get_Visible");
         if (p.text) { rs.text = message(p.text); rs.has_text = true; }
         if (p.list) rs.has_pos = ret_floats(reinterpret_cast<Obj*>(p.list), "get_Position", rs.pos, 3);
         if (p.text) rs.has_region = ret_floats(reinterpret_cast<Obj*>(p.text), "get_RegionSize", rs.region, 2);
@@ -1021,24 +1183,31 @@ bool enter(int s, const char** why) {
             if (p.arrow[a]) { rs.arrow_locked[a] = call_bool(reinterpret_cast<Obj*>(p.arrow[a]), "get_ForceInvisible", {}, &ok); rs.has_arrow[a] = ok; }
         if (p.title) rs.has_mid = A()->ui_get_message_id(p.title, rs.mid) == SF6CORE_OK;
     }
+    if (n.n < kPanelRows) { release(claim); *why = "a row is missing"; return false; }
     n.has_ref_pos = n.rs[0].has_pos;
     std::copy(n.rs[0].pos, n.rs[0].pos + 3, n.ref_pos);
     n.has_ref_region = n.rs[0].has_region;
     std::copy(n.rs[0].region, n.rs[0].region + 2, n.ref_region);
-    n.ci = ret_i32(st.param, "get__cacheCostumeIndex").value_or(-1);
-    n.co = ret_i32(st.param, "get__cacheColorIndex").value_or(-1);
+    // the indexes the getters answer meanwhile: the select's cache pair; the popup's part has none, its getters are asked
+    n.ci = ret_i32(st.param, pop ? "GetCostumeId" : "get__cacheCostumeIndex").value_or(-1);
+    n.co = ret_i32(st.param, pop ? "GetColorId" : "get__cacheColorIndex").value_or(-1);
+    if (pop) {                                      // the popup's spins hold the indexes (the Color Mod's popup DI mode)
+        if (n.ci >= 0) n.rs[0].snum = n.ci;
+        if (n.co >= 0) n.rs[1].snum = n.co;
+    }
     // the cursor: where the game's focus is when that row exists, else the first row
-    const int fk = row_index(focused_row(st.agent));
-    n.w = panel_clamp({ fk >= 0 ? fk : 0, 0 }, static_cast<int>(n.rows.size()));
+    const int fk = row_index(n, focused_row(st.agent));
+    n.w = panel_clamp({ fk >= 0 ? fk : 0, 0 }, static_cast<int>(n.rows.size()), n.n);
     n.on = true;
     n.entered_at = g_frame;
     st = std::move(n);
     hook_side_set(s, st);                           // from now on the panel's input is ours
+    pop_flag(s, true);
     // the titles: their message link cut (kept), so the text written stays; a title already showing what we write
     // gets one write that differs first (the real write must differ, the DI mode's rule)
     const uint8_t empty[16] = {};
-    for (int k = 0; k < kPanelRows; ++k) {
-        RowParts p = parts_of(cm, k);
+    for (int k = 0; k < st.n; ++k) {
+        RowParts p = parts_of(cm, kd, k);
         if (!p.title || !st.rs[k].has_mid) continue;
         A()->ui_set_message_id(C(), p.title, empty);
         const int i = st.w.win + k;
@@ -1046,28 +1215,30 @@ bool enter(int s, const char** why) {
         const std::string want_t = row_title(st, k);
         if (message(p.title) == want_t) put_text(p.title, want_t + " ");
     }
-    for (int k = 0; k < kPanelRows; ++k) inv_b(st.rs[k].spin, "set_IsDisable", false);
+    for (int k = 0; k < st.n; ++k) inv_b(st.rs[k].spin, "set_IsDisable", false);
     if (st.w.cur - st.w.win != fk) focus_row(st, st.w.cur - st.w.win);
     paint(st, s);
-    logf("rto select: P%d costume options mode ON: %s/%s (%s), %zu rows, options of %s%s", s, slot->fighter_dir.c_str(),
-         slot->folder.c_str(), slot->label.c_str(), st.rows.size(), st.opt ? "P2" : "P1", costumes::online() ? " (online)" : "");
+    logf("rto select: %s costume options mode ON: %s/%s (%s), %zu rows in %d, options of %s%s", tag(s), slot->fighter_dir.c_str(),
+         slot->folder.c_str(), slot->label.c_str(), st.rows.size(), st.n, st.opt ? "P2" : "P1",
+         pop ? " (kept until the popup is confirmed)" : costumes::online() ? " (online)" : "");
     return true;
 }
 
 // Leaving: the rows given back, the game's repaint first, then what it did not put back (R36)
 void leave(int s, const char* why) {
     Side st = std::move(g_s[s]);
-    g_s[s] = Side{};
-    g_s[s].agent = st.agent; g_s[s].param = st.param; g_s[s].was_active = st.was_active; g_s[s].active_since = st.active_since;
-    g_s[s].fighter = st.fighter; g_s[s].costume = st.costume; g_s[s].changed_at = st.changed_at; g_s[s].key_was = st.key_was;
+    g_s[s] = follow(s, st);
     hook_side_clear(s);                             // the game's own calls below must run (and IsCancel blocked 15 frames)
+    pop_flag(s, false);
+    const Kind& kd = *st.kind;
     void* cm = control_main(st.agent);
     if (cm) hide_arrows(st, cm);
-    for (int k = 0; k < kPanelRows; ++k) {
+    for (int k = 0; k < st.found; ++k) {
         const RowSave& rs = st.rs[k];
+        RowParts p = cm ? parts_of(cm, kd, k) : RowParts{};
+        if (k >= st.n) { if (p.ctrl) vis(p.ctrl, rs.visible); continue; }   // a row left out: as it was
         spin_set(rs.spin, rs.smin, rs.smax, rs.snum);
         if (rs.has_disabled) inv_b(rs.spin, "set_IsDisable", rs.disabled);
-        RowParts p = cm ? parts_of(cm, k) : RowParts{};
         if (p.title && rs.has_mid) A()->ui_set_message_id(C(), p.title, rs.mid);
         if (p.ctrl) vis(p.ctrl, rs.visible);
         if (p.chip) { vis(p.chip, true); vis(p.rect0, true); vis(p.rect1, true); }
@@ -1075,27 +1246,34 @@ void leave(int s, const char* why) {
         if (p.text && rs.has_region) A()->ui_set_region_size(C(), p.text, rs.region[0], rs.region[1]);
         for (int a = 0; a < 2; ++a) if (p.arrow[a] && rs.has_arrow[a] && rs.arrow_locked[a]) A()->ui_set_force_invisible(C(), p.arrow[a], 1);
     }
-    if (st.ci >= 0) inv_i(st.param, "set__cacheCostumeIndex", st.ci);
-    if (st.co >= 0) inv_i(st.param, "set__cacheColorIndex", st.co);
-    inv(st.param, "SetMessageCostume"); inv(st.param, "SetMessageColor");
-    inv(st.param, "SelectChangeColorChip");
-    // The select screen's SetMessageCostume / SetMessageColor alone reset the selection to costume 0 / colour 0 (the
-    // DI mode's finding, 06/10): the game's own setter puts the selection, the texts, the chips and the model back
-    if (st.ci >= 0 && st.co >= 0) inv_ii(st.param, "setCostumeAndColor", st.ci, st.co);
+    if (kd.popup) {
+        // The popup's own repaint (the Color Mod's popup DI mode exit): its part reads GetCostumeId / GetColorId again,
+        // which answer the game's values now (no cache pair to put back, no setter: the selection never moved)
+        inv(st.param, "SetMessageColor"); inv(st.param, "SetMessage");
+        inv(st.param, "SelectChangeColorChip");
+    } else {
+        if (st.ci >= 0) inv_i(st.param, "set__cacheCostumeIndex", st.ci);
+        if (st.co >= 0) inv_i(st.param, "set__cacheColorIndex", st.co);
+        inv(st.param, "SetMessageCostume"); inv(st.param, "SetMessageColor");
+        inv(st.param, "SelectChangeColorChip");
+        // The select screen's SetMessageCostume / SetMessageColor alone reset the selection to costume 0 / colour 0 (the
+        // DI mode's finding, 06/10): the game's own setter puts the selection, the texts, the chips and the model back
+        if (st.ci >= 0 && st.co >= 0) inv_ii(st.param, "setCostumeAndColor", st.ci, st.co);
+    }
     if (cm)
-        for (int k = 0; k < kPanelRows; ++k) {                         // never the Color row's value text (a native fault)
+        for (int k = 0; k < st.n; ++k) {                               // never the Color row's value text (a native fault)
             if (k == kColorRow || !st.rs[k].has_text) continue;
-            RowParts p = parts_of(cm, k);
+            RowParts p = parts_of(cm, kd, k);
             if (p.text && !st.rs[k].text.empty()) put_text(p.text, st.rs[k].text);
         }
-    release(s);
-    logf("rto select: P%d costume options mode OFF (%s)", s, why);
+    release(st.claim);
+    logf("rto select: %s costume options mode OFF (%s)", tag(s), why);
 }
 
 // One step of a row's value (row: the screen row, -1 the focused one)
 void step(Side& st, int s, int screen_row, int dir) {
     if (screen_row < 0) {
-        screen_row = row_index(focused_row(st.agent));
+        screen_row = row_index(st, focused_row(st.agent));
         if (screen_row < 0) screen_row = st.w.cur - st.w.win;
     }
     const int i = st.w.win + screen_row;
@@ -1107,19 +1285,19 @@ void step(Side& st, int s, int screen_row, int dir) {
     std::vector<std::string> notes;
     apply_row(manifest(), *st.slot, st.chosen, r, v, &notes);
     for (auto& n : notes) logf("rto select: %s", n.c_str());
-    commit(st);
+    if (s == kPop) pend(st); else commit(st);
     st.rows = rows(manifest(), *st.slot, st.chosen);
-    st.w = panel_clamp(st.w, static_cast<int>(st.rows.size()));
-    logf("rto select: P%d %s: %s = %s (%zu options, saved for %s)", s, st.slot->mod.c_str(), r.title.c_str(),
+    st.w = panel_clamp(st.w, static_cast<int>(st.rows.size()), st.n);
+    logf("rto select: %s %s: %s = %s (%zu options, %s %s)", tag(s), st.slot->mod.c_str(), r.title.c_str(),
          v >= 1 && v <= static_cast<int>(r.labels.size()) ? r.labels[static_cast<size_t>(v - 1)].c_str() : "?", st.chosen.size(),
-         st.opt ? "P2" : "P1");
+         s == kPop ? "pending for" : "saved for", st.opt ? "P2" : "P1");
 }
 
 // Once per visit, a second after a panel settled: the game's own guide bars (their texts with the glyphs), and a
 // warning when they already show our button or key (the game would act on the same press). The select screen's
 // bindings could not be read offline (no dump of its input table): this is the check in the game.
 bool g_guide_logged = false;
-void log_game_guide() {
+void log_game_guide(const char* where) {
     g_guide_logged = true;
     void* buf[4] = {};
     const uint32_t n = A()->ui_agents("InputGuide", buf, 4);
@@ -1134,18 +1312,41 @@ void log_game_guide() {
             Obj* btn = ctrl ? reinterpret_cast<Obj*>(A()->ui_find_child(ctrl, "c_guideBtn", 8)) : nullptr;
             for (Obj* c = btn ? call_obj(btn, "get_Child") : nullptr; c; c = call_obj(c, "get_Next")) {
                 if (str(call_obj(c, "get_Name")) == "e_text_0") continue;   // the corner: the Color Mod's (and our) entries
-                const std::string m = message(c);
+                std::string m = message(c);
+                if (const auto sep = m.find("      <ICON"); sep != std::string::npos) m.resize(sep);   // the Color Mod's suffix
                 if (!m.empty()) all += (all.empty() ? "" : " | ") + m;
             }
         }
     }
-    logf("rto select: the game's guide on the character select: %s", all.empty() ? "(no text found)" : all.c_str());
+    logf("rto select: the game's guide %s: %s", where, all.empty() ? "(no text found)" : all.c_str());
     const bool pad_used = !g_keys.pad_icon.empty() && all.find(g_keys.pad_icon) != std::string::npos;
     const bool key_used = !g_keys.key_icon.empty() && all.find(g_keys.key_icon) != std::string::npos;
     if (pad_used || key_used)
-        logf("rto select: WARNING: the game's guide here already shows %s%s%s: the game may act on that press too (change "
-             "select_options_button / select_options_key in settings.json)", pad_used ? g_keys.pad_icon.c_str() : "",
+        logf("rto select: WARNING: the game's guide %s already shows %s%s%s: the game may act on that press too (change "
+             "select_options_button / select_options_key in settings.json)", where, pad_used ? g_keys.pad_icon.c_str() : "",
              pad_used && key_used ? " and " : "", key_used ? g_keys.key_icon.c_str() : "");
+}
+
+// The mode's frame while on: the acts the hooks caught, the focus, the paint. False when it left. pub: the side whose
+// guide entry this panel publishes
+bool run(Side& st, int s, bool press, int pub) {
+    sync_focus(st);
+    Act a;
+    for (int guard = 0; guard < 8 && pull(s, a); ++guard) {
+        if (a.kind == Act::Leave) { leave(s, "Decide / Back"); publish(pub, false); return false; }
+        if (a.kind == Act::Move) {
+            st.w = panel_move(st.w, static_cast<int>(st.rows.size()), a.dir, st.n);
+            focus_row(st, st.w.cur - st.w.win);
+        } else {
+            step(st, s, a.row, a.dir);
+            if (st.rows.empty()) { leave(s, "no option row left"); publish(pub, false); return false; }
+        }
+    }
+    // R1 / the key do nothing while the options show (Decide or Back leave); the guide corner offers nothing
+    if (press) logf("rto select: %s %s pressed while the options show: nothing (Decide / Back leave)", tag(s), g_keys.pad_name.c_str());
+    paint(st, s);
+    publish(pub, false);
+    return true;
 }
 
 // ---- per frame ----
@@ -1177,31 +1378,13 @@ void side_tick(int s, bool net) {
     const bool press = down && !st.key_was;
     st.key_was = down;
 
-    if (st.on) {
-        sync_focus(st);
-        Act a;
-        for (int guard = 0; guard < 8 && pull(s, a); ++guard) {
-            if (a.kind == Act::Leave) { leave(s, "Decide / Back"); publish(s, false); return; }
-            if (a.kind == Act::Move) {
-                st.w = panel_move(st.w, static_cast<int>(st.rows.size()), a.dir);
-                focus_row(st, st.w.cur - st.w.win);
-            } else {
-                step(st, s, a.row, a.dir);
-                if (st.rows.empty()) { leave(s, "no option row left"); publish(s, false); return; }
-            }
-        }
-        // R1 / the key do nothing while the options show (Decide or Back leave); the guide corner offers nothing
-        if (press) logf("rto select: P%d %s pressed while the options show: nothing (Decide / Back leave)", s, g_keys.pad_name.c_str());
-        paint(st, s);
-        publish(s, false);
-        return;
-    }
+    if (st.on) { run(st, s, press, s); return; }
 
     // not on: the entry and the key
     uint32_t since = 0;
     const Slot* slot = active ? select_slot(s, &since) : nullptr;
     const bool settled = active && g_frame - st.active_since > kSettleFrames;
-    if (active && !g_guide_logged && g_frame - st.active_since > 60) log_game_guide();
+    if (active && !g_guide_logged && g_frame - st.active_since > 60) log_game_guide("on the character select");
     const bool has = slot && since >= st.changed_at;
     const bool other_active = [&] {
         Side& o = g_s[3 - s];
@@ -1227,6 +1410,43 @@ void side_tick(int s, bool net) {
     logf("rto select: P%d %s pressed: %s", s, g_keys.pad_name.c_str(), why ? why : "the mode just closed");
 }
 
+// ---- the Training popup ----
+// Confirmed: this visit's changes saved for the popup's side and worn by that side's fighter at once (the game rebuilds
+// the fighters only when the costume or the colour changed: rto's fighters watch applies them either way)
+void popup_confirm() {
+    int n = 0;
+    std::string what;
+    for (auto& [mod, p] : g_pop.pending) {
+        if (!p.slot || same_set(p.chosen, p.shown)) continue;
+        auto& sd = choices().mods[mod][static_cast<size_t>(p.opt)];
+        const std::vector<std::string> saved = sd.changed ? sd.ids : p.slot->defaults;
+        sd.changed = true;
+        sd.ids = keep_hidden(manifest(), *p.slot, saved, p.shown, p.chosen);   // a hidden NSFW choice stays saved
+        sd.names.clear();
+        what += (what.empty() ? "" : ", ") + p.slot->fighter_dir + "/" + p.slot->folder;
+        ++n;
+    }
+    g_pop.pending.clear();
+    if (!n) return;
+    save_choices();
+    choices_changed();
+    fighters_refresh("the Training popup confirmed");
+    logf("rto select: popup confirmed: the options of %d outfit(s) saved for P%d (%s), worn by the fighter now", n,
+         g_pop.target, what.c_str());
+}
+// The popup closed or rebuilt (or the module stops): its mode left (dropped when gone), the changes not confirmed dropped
+void popup_end(const char* why) {
+    if (!g_pop.up && !g_s[kPop].on) return;
+    Side& st = g_s[kPop];
+    if (st.on) { if (alive(st.agent) && alive(st.param)) leave(kPop, why); else drop(kPop, why); }
+    size_t n = 0;
+    for (auto& [mod, p] : g_pop.pending) if (p.slot && !same_set(p.chosen, p.shown)) ++n;
+    if (n) logf("rto select: popup left without Confirm (%s): the pending options of %zu outfit(s) dropped", why, n);
+    if (g_pop.up) publish(g_pop.target, false);
+    g_pop = Popup{};
+    g_s[kPop] = follow(kPop, Side{});
+}
+
 } // namespace
 
 void leave_all(const char* why) {
@@ -1238,6 +1458,7 @@ void leave_all(const char* why) {
     }
     g_was_up = false;
     g_guide_logged = false;
+    popup_end(why);
 }
 
 void tick() {
@@ -1258,6 +1479,116 @@ void tick() {
         for (int s = 1; s <= 2; ++s) drop(s, "exception");
         if (g_faults >= 5) { g_off = true; logf("rto select: 5 faults, the costume options mode is off for this session"); }
     }
+}
+
+// ---- the Training popup: found from EV_POPUP, then followed each frame while it shows ----
+void install_popup_hooks() {
+    auto* tdb = api().tdb();
+    int n = 0;
+    // its part set up or written (it is built when the popup opens; Fighter Settings' part fires too: nothing found)
+    TD* mfs = tdb->find_type("app.UIPartsMatchingFighterSetting");
+    for (const char* nm : { "SetupSpin", "SetMessage" })
+        if (Method* m = mfs ? mfs->find_method(nm) : nullptr; m && m->add_hook(pre_popup_event, hook_post_pass, false)) ++n;
+    // its flow's own update (R19: the arrows' copies are made there; the popup is up while it runs)
+    Method* upd = own_method(tdb->find_type("app.UIFlowCharacterDetailSetting.Wait"), "OnUpdate");
+    const bool flow = upd && upd->get_function_raw() && upd->add_hook(hook_pass, post_popup_update, false);
+    g_ck[1].hook = flow && SF6CORE_HAS(A(), ui_clone_control);
+    logf("rto select: Training popup followed from %d of its part's methods%s; its arrows %s", n,
+         flow ? " and app.UIFlowCharacterDetailSetting.Wait.OnUpdate" : " (its flow's update not hooked)",
+         g_ck[1].hook ? "in the rows' left margin" : "before the titles");
+}
+
+bool popup_busy() { return g_pop.up || g_s[kPop].on || (g_pop_event && g_frame - g_pop_event < 30); }
+
+void popup_tick(bool announced) {
+    if (announced) g_pop_event = g_frame;
+    if (g_off || !A() || !C() || !SF6CORE_HAS(A(), ui_agents)) return;
+    try {
+        if (const uint32_t hf = g_hook_faults.exchange(0)) logf("rto select: %u exceptions in the hooks", hf);
+        color_mod_check();                          // once (every plugin is loaded before the first frame)
+        claims_tick();
+        void* buf[4] = {};
+        const uint32_t na = A()->ui_agents(kPopupAgent, buf, 4);
+        Obj* agent = na ? reinterpret_cast<Obj*>(buf[0]) : nullptr;   // the first one (the Color Mod's rule)
+        Obj* cm = control_main(agent);
+        bool ok = false;
+        const bool shown = cm && call_bool(cm, "get_ActualVisible", {}, &ok) && ok;
+        Obj* flow = shown ? param_of(agent) : nullptr;
+        Obj* mfs = flow ? get_obj(flow, "MatchingFighterSetting") : nullptr;
+        if (!shown || !alive(flow) || !alive(mfs)) {
+            // a Confirm seen as the popup went (hidden the frame it was decided): still a Confirm
+            bool d = false;
+            if (g_pop.up && !g_pop.decided && !g_pop.pending.empty() && alive(g_pop.flow) && get_bool(g_pop.flow, "IsDecide", d) && d)
+                popup_confirm();
+            popup_end("the popup closed");             // its mode (if on) left: the rows put back while it lives
+            return;
+        }
+        if (agent != g_pop.agent || flow != g_pop.flow) {   // a new visit
+            popup_end("the popup was rebuilt");
+            g_pop.agent = agent; g_pop.flow = flow; g_pop.up = true; g_pop.since = g_frame;
+            int32_t t = 0;
+            g_pop.target = get_i32(flow, "SettingTargetPlayerIndex", t) && t == 1 ? 2 : 1;
+            g_s[kPop] = follow(kPop, Side{});
+            g_guide_logged = false;
+            read_keys();
+            logf("rto select: Training popup up (P%d's settings): costume options %s", g_pop.target,
+                 popup_cm_ok() ? "offered on outfits that have them" : "off (see the Color Mod line above)");
+        }
+        Side& st = g_s[kPop];
+        // Confirm: the flow's IsDecide (the Color Mod's colour commit reads it too); the changes saved and worn
+        bool dec = false;
+        get_bool(flow, "IsDecide", dec);
+        if (dec && !g_pop.decided) {
+            if (st.on) leave(kPop, "the popup was confirmed");
+            popup_confirm();
+        }
+        g_pop.decided = dec;
+        if (st.on) {
+            if (!alive(st.agent) || !alive(st.param)) { drop(kPop, "the popup is gone"); return; }
+            if (mfs != st.param) { leave(kPop, "the popup's part was rebuilt"); return; }
+        } else {
+            st.agent = agent; st.param = mfs;
+        }
+        const bool down = trigger_down(0);
+        const bool press = down && !st.key_was;
+        st.key_was = down;
+        if (st.on) { run(st, kPop, press, g_pop.target); return; }
+
+        // not on: the entry and the key
+        int32_t f = -1;
+        get_i32(mfs, "FighterId", f);
+        const Slot* slot = outfit_slot(f, ret_i32(mfs, "GetCostumeId").value_or(-1));
+        const bool settled = g_frame - g_pop.since > kSettleFrames;
+        if (!g_guide_logged && g_frame - g_pop.since > 60) log_game_guide("in the Training popup");
+        const int ts = g_pop.target;
+        const char* why = nullptr;
+        if (!popup_cm_ok()) why = "the Color Mod does not share the popup (or is not loaded)";
+        else if (!settled) why = "the popup is not settled";
+        else if (!slot) why = "this outfit has no options";
+        else if (g_owner[ts].load() == kColorMod || di_on(ts)) why = "the Color Mod's DI mode holds the popup";
+        else if (SF6CORE_HAS(A(), opt_window_open) && A()->opt_window_open()) why = "an option window is open";
+        const bool on_row = settled && focused_row(agent).rfind("p_Spin_", 0) == 0;
+        if (!why && !on_row) why = "the popup is not focused";
+        publish(ts, !why);
+        if (!press) return;
+        if (!why) {
+            const char* err = nullptr;
+            if (!enter(kPop, &err)) logf("rto select: popup costume options not opened: %s", err ? err : "?");
+            return;
+        }
+        logf("rto select: popup %s pressed: %s", g_keys.pad_name.c_str(), why);
+    } catch (...) {
+        ++g_faults;
+        logf("rto select: EXCEPTION in the Training popup (%d)", g_faults);
+        drop(kPop, "exception");
+        if (g_faults >= 5) { g_off = true; logf("rto select: 5 faults, the costume options mode is off for this session"); }
+    }
+}
+
+bool popup_guard() {
+    if (g_pop_on.load()) return true;
+    const uint32_t left = g_pop_left.load();
+    return left && g_frame - left <= kPopGuard;
 }
 
 bool active(int side) { return side >= 1 && side <= 2 && g_s[side].on; }
@@ -1289,20 +1620,28 @@ int guide_entry(int side, int pad, char* buf, int cap) {
 
 } // namespace slots::rto::select
 
-// The owner of a side's panel on the character select (side 1 / 2), the one writer rule between the Slots Loader's
-// costume options mode (who 1) and the Color Mod's DI mode (who 2), which borrow the same four rows. op 1: take it,
-// 1 = granted (it was free, or already who's), 0 = the other one holds it; op 0: give it back (only who's), 1; op -1:
-// the owner now (0 free, 1, 2). Cheap, any thread, no game call.
+// The owner of a side's panel (side 1 / 2), the one writer rule between the Slots Loader's costume options mode (who 1)
+// and the Color Mod's DI mode (who 2), which borrow the same rows: a side's panel of the character select, and the
+// Training popup under the claim of the side it sets (SettingTargetPlayerIndex + 1; the select is never up then). op 1:
+// take it, 1 = granted (it was free, or already who's), 0 = the other one holds it; op 0: give it back (only who's), 1;
+// op -1: the owner now (0 free, 1, 2). Cheap, any thread, no game call.
 extern "C" __declspec(dllexport) int SF6Slots_SelectPanelClaim(int side, int who, int op) {
     try { return slots::rto::select::claim(side, who, op); } catch (...) { return 0; }
 }
 
-// The character select's guide entry of a side (1 / 2) for the Color Mod, which writes that side's guide corner
-// ("X Edit Drive Colors") alone and adds this after its own: "<ICON BtnR1> Costume options" (pad != 0) or the keyboard
-// key's glyph ("<ICON KeyE> Costume options" on AZERTY), UTF-8, NUL-terminated, copied into buf; its length, or 0
-// (buf empty) when that side's outfit has no options, its panel is not ready or held by the DI mode, or cap is too
-// small. Empty too while the side's panel shows the options (the key does nothing then; Decide / Back leave). Cheap, any
-// thread, no game call.
+// The guide entry of a side (1 / 2) for the Color Mod, which writes that guide alone and adds this after its own ("L1
+// Edit Drive Colors"): on the character select that side's corner, in the Training popup the popup's guide (side = the
+// side the popup sets). "<ICON BtnR1> Costume options" (pad != 0) or the keyboard key's glyph ("<ICON KeyC> Costume
+// options"), UTF-8, NUL-terminated, copied into buf; its length, or 0 (buf empty) when that outfit has no options, the
+// panel is not ready or held by the DI mode, or cap is too small. Empty too while the panel shows the options (the key
+// does nothing then; Decide / Back leave). Cheap, any thread, no game call.
 extern "C" __declspec(dllexport) int SF6Slots_SelectGuideEntry(int side, int pad, char* buf, int cap) {
     try { return slots::rto::select::guide_entry(side, pad, buf, cap); } catch (...) { return 0; }
+}
+
+// 1 while the Training popup's costume options mode is on, and for 15 frames after it was left, else 0: the Color Mod's
+// Esc guard (its InputCancel / CloseMenu hooks of the pause menu) holds meanwhile, so the Back that leaves the mode
+// neither closes the popup nor the pause menu. Cheap, any thread, no game call.
+extern "C" __declspec(dllexport) int SF6Slots_PopupGuard() {
+    try { return slots::rto::select::popup_guard() ? 1 : 0; } catch (...) { return 0; }
 }

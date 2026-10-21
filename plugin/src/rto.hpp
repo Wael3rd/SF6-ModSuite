@@ -3,7 +3,8 @@
 // rto.cpp: the manifest and the choices, the models (the Battle Settings preview, each fighter), the
 // resources each one needs (created ahead, applied once ready), when to apply.
 // rto_menu.cpp: the F hint on the costume row of Fighter Settings and the options menu (the core's
-// option service). rto_select.cpp: the same options in a side's panel of the character select.
+// option service). rto_select.cpp: the same options in a side's panel of the character select and in the Training
+// pause menu's character popup.
 //
 // Rules (slots.hpp): game objects only from LateUpdateBehavior; nothing while the character select
 // is open; in a fight, work only after an event (a fighter's model built), never per frame. Models,
@@ -37,6 +38,12 @@ const Manifest& manifest();
 Choices& choices();
 void save_choices();                  // written at once (small file)
 void choices_changed();               // the models re-apply (the preview now, fighters at their next build)
+// A fighters watch started now (10 s, as after a model build): the fighters (PlayerBehavior, _PlayerID 0 / 1) wear the
+// choices of their side again, without a rebuild (the Training popup confirmed with the same costume and colour: the
+// game rebuilds nothing). Nothing on the character select.
+void fighters_refresh(const char* why);
+// The slot of a fighter's outfit (costume number) when it has option rows (the menus offer it), nullptr otherwise
+const Slot* outfit_slot(int fighter, int costume_no);
 const Slot* preview_slot();           // the slot the Battle Settings preview wears, nullptr = none with options
 int preview_since();                  // the frame the preview was last identified (-1: no slot with options)
 // The fighter of the last Battle Settings preview model (its name, "esf001v00" = 1), -1 none; at: the frame it was seen
@@ -60,10 +67,17 @@ int tab_key(bool next, std::string* sym);
 }
 
 // rto_select.cpp: the costume options on the character select (R1 / C in a side's panel: its four rows show the
-// outfit's options, the Color Mod's DI mode technique); one owner per panel with the Color Mod's DI mode
+// outfit's options, the Color Mod's DI mode technique) and in the Training pause menu's character popup (its six
+// rows, the changes kept until the popup is confirmed); one owner per panel with the Color Mod's DI mode
 namespace select {
 void tick();                          // each frame while the character select is up (rto::tick)
-void leave_all(const char* why);      // the screen left: the panels given back (when still alive), state reset
+// The panels given back (when still alive), state reset: the select's (the screen left) and the popup's (its pending
+// changes dropped)
+void leave_all(const char* why);
+void install_popup_hooks();           // first frame: what tells the popup is up (EV_POPUP), its flow's update
+bool popup_busy();                    // the popup is up (or was just announced): popup_tick each frame
+void popup_tick(bool announced);      // each frame while popup_busy() or EV_POPUP (rto::tick, not on the select)
+bool popup_guard();                   // SF6Slots_PopupGuard
 bool active(int side);                // side 1 / 2 shows the options
 int claim(int side, int who, int op); // SF6Slots_SelectPanelClaim
 int guide_entry(int side, int pad, char* buf, int cap);   // SF6Slots_SelectGuideEntry

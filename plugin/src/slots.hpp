@@ -72,6 +72,7 @@ enum Event : uint32_t {
     EV_VS            = 1u << 9,   // VS screen shown or rewritten by the game
     EV_TITLE_END     = 1u << 10,  // title screen left (the game clears DLC ownership at login)
     EV_RTO_MODEL     = 1u << 11,  // a fighter's model was built (runtime costume options, rto.cpp)
+    EV_POPUP         = 1u << 12,  // the Training pause menu's character popup built or updated (rto_select.cpp)
     EV_DIAG          = 1u << 31,  // a method watched for the log was called
 };
 // Methods watched for the log only: which of them the game calls, and when

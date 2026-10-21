@@ -147,7 +147,8 @@ with the outfits each one gave, then the extra outfits by character. The report 
 
 A modular mod or an outfit with add-ons is **one** outfit whose options you choose in game, live, per player: on
 Fighter Settings press `F` (or click) on the Costume row of an outfit with options; on the character select press R1
-(pad) or C (keyboard) in your panel. Add-ons, retouches and outfits with parts taken off become options of the outfits
+(pad) or C (keyboard) in your panel; in Training, pause menu > P1 / P2 Character Select, R1 or C too (applied when
+you confirm the popup). Add-ons, retouches and outfits with parts taken off become options of the outfits
 they fit, the game's outfits included. Choices are kept in
 `reframework\data\SF6_CostumeSlots_data\costume_choices.json`.
 

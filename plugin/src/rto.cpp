@@ -19,8 +19,9 @@
 //
 // When: the preview while Battle Settings is up, each side's model while the character select is up and on the VS
 // screen that follows (polled every 10 frames, menu screens); a fighter after an event (its model built:
-// PlayerBehavior.SetupAppearance, or an outfit mounted for a fight): a watch of 10 s, then nothing until the
-// next event.
+// PlayerBehavior.SetupAppearance, or an outfit mounted for a fight, or the Training popup's options confirmed:
+// fighters_refresh): a watch of 10 s, then nothing until the next event. A model re-applies when the choices'
+// version changed since its last pass, rebuilt or not.
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -1118,8 +1119,7 @@ void fault(const char* where) {
     ++g_faults;
     logf("rto: EXCEPTION in %s (%d)", where, g_faults);
     for (auto& md : g_models) reset(md);
-    if (g_faults >= 5) { g_disabled = true; select::leave_all("runtime options off"); logf("rto: 5 faults, runtime options off for this session"); }
-}
+    if (g_faults >= 5) { g_disabled = true; select::leave_all("runtime options off"); logf("rto: 5 faults, runtime options off for this session"); }}
 
 } // namespace
 
@@ -1148,6 +1148,19 @@ void choices_changed() {
                 for (auto& [t, w] : desired(g_m, s, chosen_of(g_m, s, g_c, side))) if (!w.orig && want.size() < 64) want.insert(w.path);
     }
     g_warm = want;
+}
+void fighters_refresh(const char* why) {
+    if (!on() || g_select) return;
+    // watch_tick: each fighter's model compares its choices version with g_ver (choices_changed bumped it) and wears
+    // its side's choices again (pass); a rebuild that follows (the costume or colour changed too) extends the watch
+    if (!g_watch_until) { logf("rto: fighters watch (%s)", why); g_watch_start = g_frame; }
+    g_watch_until = g_frame + 600;
+    g_watch_next = 0;
+}
+const Slot* outfit_slot(int fighter, int costume_no) {
+    if (!on()) return nullptr;
+    const Slot* s = g_m.slot_of(fighter, costume_no);
+    return s && has_rows(s) ? s : nullptr;
 }
 int preview_since() {
     const Model& md = g_models[0];
@@ -1243,11 +1256,12 @@ void install_hooks() {
     g_color_hook = hook_all(T.pcc, "SetupColor", pre_color_setup, nullptr) > 0;   // VS screen models: found when built
     crf_hooks();
     menu::install();
+    select::install_popup_hooks();
 }
 
 bool busy() {
     if (!on()) return false;
-    if (g_bs || g_select || g_watch_until || g_vs_until || menu::busy()) return true;
+    if (g_bs || g_select || g_watch_until || g_vs_until || menu::busy() || select::popup_busy()) return true;
     return !g_warm_done && g_frame < 60 * 120;
 }
 
@@ -1299,6 +1313,7 @@ void tick(uint32_t ev) {
             }
         }
         if (g_select) { select::tick(); select_tick(); return; }
+        if ((ev & EV_POPUP) || select::popup_busy()) select::popup_tick((ev & EV_POPUP) != 0);   // Training pause menu
         bool fs = false;
         if (g_bs) {
             fs = fighter_settings_visible();

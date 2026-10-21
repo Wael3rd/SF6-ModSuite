@@ -972,6 +972,58 @@ does, the fallback above is the next step.
 - Logs: `rto select: ...` in `native_log.txt` (keys read, hooks installed, ON / OFF with the outfit and whose options,
   each change, each refused press and why).
 
+## Options in the Training popup: `plugin/src/rto_select.cpp` (no new core capability)
+
+- **What**: Training pause menu > "P1 / P2 Character Select" opens a popup (agent `GenericCharacterDetailSetting_FG`,
+  flow `app.UIFlowCharacterDetailSetting`, its Param's `SettingTargetPlayerIndex` = the side it sets, its part
+  `app.UIPartsMatchingFighterSetting` = the live choice; six rows: Costume, Color, Control Type, Button Preset, Button
+  Release Input, Stick Sensitivity). **R1** (any pad) or **C** (the same `select_options_button` / `select_options_key`
+  as the select) shows the options of the outfit the popup's Costume row shows (`FighterId`, `GetCostumeId` of its part:
+  not necessarily the one worn in the fight; `rto::outfit_slot`, the same `has_rows` test as the menus) in the popup's
+  own rows, exactly as the select's mode: titles lose their message link, own spin ranges, Left / Right change the
+  focused row, Up / Down move with a window over the rows and the ▲ / ▼ arrows when there are more than six (hollow /
+  filled), chips and unused rows hidden. Any pad, not the target side's: the pause menu answers whoever opened it, the
+  popup has one panel (on the select each player has his own). The Color Mod's Drive colours DI mode in the popup moved
+  from X / Square to **L1** (any pad) / X (keyboard), as on the select.
+- **Pending until Confirm** (Wael, 21/10): a change made there is kept for this visit of the popup (per outfit, the
+  target side) and shown again if the options are reopened; **Confirm** (the popup's Param `IsDecide`, the edge the
+  Color Mod's colour commit reads) saves them (`costume_choices.json`, `keep_hidden` as the select) and calls
+  `rto::fighters_refresh`: `choices_changed()` bumps the choices' version and a fighters watch starts (10 s), whose
+  `process` re-applies any fighter whose version differs (PlayerBehavior `_PlayerID` 0 / 1, the side's choices, no
+  rebuild needed: the game rebuilds nothing when the costume and colour did not change). When they changed too, the
+  game rebuilds the fighters about a second after the menu closes (21/10: no TrainingManager flag changes) and
+  `SetupAppearance` extends the same watch. Closing the popup without Confirm (Back / Esc on its normal rows) drops the
+  pending changes (logged). Inside the options, Decide or Back return to the popup's normal rows keeping them.
+- **The first Esc**: the popup's Back leaves the mode only. Our hook on the popup agent's `InputCancel` takes it, and
+  the Color Mod's Esc guard (its `UIAgent.InputCancel` / TrainingManager `RequestCloseMenu` / `CloseMenu` hooks, made
+  for its popup DI mode) also holds while the plugin's popup mode is on and 15 frames after
+  (`int SF6Slots_PopupGuard()`), so the pause menu does not close. The popup mode therefore needs a Color Mod that says
+  it covers it: `int SF6ColorMod_PanelCaps()` bit 2 (its popup DI mode takes the claim, its popup guide carries our
+  entry, its guard asks ours); without it (no Color Mod, or an older one) the popup mode stays off (logged once).
+- **How** (differences with the select): the part's `mArrSpin` / `mGroup` (the Color Mod's popup DI mode); each row's
+  spin found by its control's name (its own index first; by index when no name can be read); the rows found in order,
+  four at least; a row whose spin is missing and the rows after it left out (hidden while on). Hooks (installed with
+  the select's, the first time a mode is used): `UIPartsMatchingFighterSetting` SelectChange* / SetMessage /
+  SetMessageColor / Setup*Spin* / SelectionChanged* / ChangeEverything skipped, `GetCostumeId` / `GetColorId` = what
+  it had (the outfit never changes meanwhile); the spin / agent / group set is the select's. The popup's Param is not
+  a method gate (its `IsDecide` is a field; our Decide never reaches the flow). Leaving: rows put back as on the
+  select, then the part's own repaint (`SetMessageColor`, `SetMessage`, `SelectChangeColorChip`; no cache pair, no
+  setter), then the value texts it did not put back, never the Color row's. Arrows: copies made in the popup flow's own
+  update (`app.UIFlowCharacterDetailSetting.Wait` OnUpdate, its own method only); without it, before the titles.
+- **Found from an event** (the plugin never polls): `EV_POPUP` from `UIPartsMatchingFighterSetting.SetupSpin` /
+  `SetMessage` (the popup builds its part; Fighter Settings' part fires too, nothing is found then) and from the popup
+  flow's update; then followed each frame while it shows (`popup_busy`).
+- **One owner**: the popup is held under the claim of the side it sets (`SF6Slots_SelectPanelClaim`, side 1 / 2; the
+  select is never up then). The Color Mod's popup DI mode now takes it too, refuses L1 / X while the plugin holds it;
+  the plugin refuses R1 / C while the DI mode holds it. While the plugin holds it the Color Mod's tracker paints no
+  chip on the popup's Color row and its colour-restore walk (Add / Sub on that spin) waits.
+- **Guide**: the Color Mod writes the popup's guide suffix alone ("L1 Edit Drive Colors" / "X Edit Drive Colors"),
+  then the plugin's entry for the side the popup sets (`SF6Slots_SelectGuideEntry(target, pad, ..)`: "R1 Costume
+  options" / "C Costume options" while that outfit has options and the popup is ready, nothing while the options show);
+  its own entry left out while the plugin holds the popup, the whole suffix while its DI mode is on.
+- Logs: `rto select: Training popup ...`, `rto select: popup ...` (ON / OFF, each pending change, confirmed / dropped),
+  `rto: fighters watch (the Training popup confirmed)`.
+
 ## Saved choices and slot numbers
 
 With `on`, the single outfit of a modular mod is its first combination: same files and same id as the first
@@ -1018,7 +1070,8 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
 
 - Lot B limits: a model the game rebuilds in a fight without one of the two events (round reload, replay seek...) is
   not seen until the next one (the probes saw no rebuild on Training resets); the Training pause menu's Character
-  Settings popup has no menu (its preview is not handled); menu texts are English only; no mouse click on the
+  Settings popup has the select's in-row menu only (no preview: the fighter wears the options once the popup is
+  confirmed); menu texts are English only; no mouse click on the
   costume row; whether the pad's A on the costume row does something in the game was not checked.
 - **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
   are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as
