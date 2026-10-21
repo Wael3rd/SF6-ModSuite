@@ -1,6 +1,9 @@
 // screens::dipanel::mode — port of func/DIPanelMode.lua M.enter / M.exit / M.toggle / M.tick (native path) and its
 // step. Game reads through REFramework (getters), writes through the core's display API and obj_invoke, as the Lua's
 // CoreUI calls did. Special Attacks stays gated off (the Lua's spgate answered false): its row is hidden, never ours.
+// One owner per panel (slots_panel.hpp): the select's panels and the training popup (under the claim of the side it
+// sets) are taken before their rows are borrowed and given back last; L1 / X is refused while the Slots Loader's costume
+// options hold them.
 
 #include "dipanel_mode.hpp"
 
@@ -187,12 +190,13 @@ void push(int side) {
 bool enter(int side, MO* param, MO* agent, MO* owner, bool popup, const char* spins_field, const char* group_field,
            const std::vector<std::string>& host_hide, int fighter, int costume) {
     if (side < 1 || side > 2 || g_s[side].on || !param || !agent || !owner || !api()) return false;
-    // the select panel has one owner: the Slots Loader's costume options borrow the same rows (slots_panel.hpp)
-    if (!popup && !slots_panel::take(side)) {
-        cmn::journal("DI panel P%d: the Slots Loader's costume options hold this panel, X ignored", side);
+    // one owner per panel: the Slots Loader's costume options borrow the same rows (slots_panel.hpp); the popup under
+    // the claim of the side it sets
+    if (!slots_panel::take(side)) {
+        cmn::journal("DI panel %sP%d: the Slots Loader's costume options hold this panel, L1 / X ignored", popup ? "(training popup) " : "", side);
         return false;
     }
-    auto fail = [&]() { if (!popup) slots_panel::release(side); return false; };
+    auto fail = [&]() { slots_panel::release(side); return false; };
     Side st;
     st.popup = popup; st.param = param; st.agent = agent; st.owner = owner;
     st.spins_field = spins_field; st.group_field = group_field;
@@ -325,7 +329,7 @@ void exit(int side) {
     dc::save_di(s.fighter);
     vfx::feed::mark_di_dirty();
     dc::save_dr(s.fighter);                                               // parry / rush: their own file
-    if (!s.popup) slots_panel::release(side);                             // the panel's claim given back last
+    slots_panel::release(side);                                           // the panel's claim given back last
     cmn::journal("DI panel mode OFF P%d", side);
 }
 
@@ -356,7 +360,7 @@ void tick(int side, uint64_t host_agent) {
     if (!st.on) return;
     if (!alive(st.param) || !alive(st.agent)) {                           // gone: tell the hooks, drop the side
         dipanel::leave(side);
-        if (!st.popup) slots_panel::release(side);
+        slots_panel::release(side);
         g_s[side] = Side{};
         return;
     }

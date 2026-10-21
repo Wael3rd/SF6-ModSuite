@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Slots Loader
+- **Costume options in the Training pause menu**: in "P1 / P2 Character Select", R1 (pad) or C (keyboard; the same
+  `select_options_button` / `select_options_key` as the character select) shows the options of the outfit the popup's
+  Costume row shows, in the popup's own rows, like the character select (Left / Right change, Up / Down move, ▲ / ▼
+  when there are more than six rows). The changes are applied when the popup is confirmed (the fighter wears them at
+  once, even when the costume and colour did not change); closing the popup without confirming drops them. Decide or
+  Back return to the popup's rows. Needs the Color Mod of this release (it keeps the pause menu open on that Back and
+  shows the entry in the popup's guide); otherwise this menu stays off.
+
+### SF6 Color Mod
+- Training pause menu, "P1 / P2 Character Select": the Drive colours rows open with **L1** on the pad (was X /
+  Square), X on the keyboard, as on the character select. The popup's guide shows "L1 Edit Drive Colors" followed by
+  the Slots Loader's "R1 Costume options" when the outfit has options. The popup's Drive colours mode and the Slots
+  Loader's costume options never hold the popup together.
+
 ## 1.17.2 (2026-10-20) — SF6 Mod Suite
 
 | Package | Version | |

@@ -6,6 +6,8 @@
 // refused while the Slots Loader holds the panel. Without that DLL (or an older one without the export) there is
 // nothing to share: take() always grants. The Slots Loader reads SF6ColorMod_DiPanelActive (main.cpp) to free a claim
 // we left behind and to know we take part in the claim at all (an older Color Mod turns its mode off).
+// The training popup (pause menu > P1 / P2 Character Select) is shared the same way (SF6ColorMod_PanelCaps bit 2): our popup DI mode (L1 / X) takes the claim of the side the popup sets, the popup's guide carries its R1 / C
+// entry after ours, and our Esc guard holds while its popup mode is on (popup_guard).
 #pragma once
 
 #include <string>
@@ -18,5 +20,8 @@ bool slots_holds(int side);           // the Slots Loader's costume options show
 // The Slots Loader's guide entry for side's corner ("<ICON BtnR1> Costume options", the keyboard glyph when !pad);
 // "" when that side's outfit has no options or no such export. Each call also keeps the entry fresh.
 std::string guide_entry(int side, bool pad);
+// The Slots Loader's popup costume options are on, or were left less than 15 frames ago (SF6Slots_PopupGuard): the Esc
+// that leaves them must not reach the pause menu. false without that DLL / export. Any thread.
+bool popup_guard();
 
 }  // namespace screens::slots_panel

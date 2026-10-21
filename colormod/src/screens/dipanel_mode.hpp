@@ -13,7 +13,8 @@ namespace screens::dipanel::mode {
 
 // character select: L1 / X on that player's panel -> "on", "already on" (nothing: A / B leave, 0.22.6) or "failed"
 std::string enter_select(int side, uint64_t param, uint64_t agent, int fighter, int costume);
-// training pause > Character Settings popup: X (edit.di_panel.enter with the MatchingFighterSetting as owner)
+// training pause > Character Settings popup: L1 / X (edit.di_panel.enter with the MatchingFighterSetting as owner); the
+// claim of the side the popup sets is taken as on the select (the Slots Loader's popup costume options borrow its rows)
 bool enter_popup(int side, uint64_t param, uint64_t agent, uint64_t mfs, int fighter, int costume);
 bool active(int side);
 // the training popup's DI mode is on, or was left less than 15 frames ago: the Esc that leaves it must not reach the

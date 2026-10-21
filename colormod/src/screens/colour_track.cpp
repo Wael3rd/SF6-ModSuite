@@ -462,8 +462,15 @@ void guide_text_fix() {
                     want += "      " + g_slots_entry;
                 const bool on_select = g_menus[g.right ? 1 : 0].active;
                 const bool in_di_any = di_active(1) || di_active(2);
-                if (!fsm.hidden_now && !on_select && !g.right && !in_di_any && !fsm.visible)
-                    want += (pad ? "      <ICON BtnL> " : "      <ICON KeyX> ") + L("hint.edit_di_color");
+                // the training popup: our L1 / X entry, then the Slots Loader's "R1 Costume options" for the side the popup
+                // sets (SF6Slots_SelectGuideEntry: we are the one writer of this guide); ours left out while its costume
+                // options hold the popup (L1 / X refused then), the whole suffix while our DI mode is on
+                if (!fsm.hidden_now && !on_select && !g.right && !in_di_any && !fsm.visible) {
+                    const int ps = tcs.target == 2 ? 2 : 1;
+                    if (!screens::slots_panel::slots_holds(ps)) want += (pad ? "      <ICON BtnL1> " : "      <ICON KeyX> ") + L("hint.edit_di_color");
+                    const std::string se = tcs.visible ? screens::slots_panel::guide_entry(ps, pad) : std::string();
+                    if (!se.empty()) want += "      " + se;
+                }
                 const uint64_t pa = (uint64_t)(uintptr_t)g.part.get(), ta = (uint64_t)(uintptr_t)g.text.get(), ca = (uint64_t)(uintptr_t)g.ctrl.get();
                 screens::guide::set_fix(pa, ta, ca, g.right, want);
             }
@@ -765,6 +772,10 @@ void tick_training_settings() {
         tcs.live_refresh = r;
     }
     tcs.decided = dec;
+    if (screens::slots_panel::slots_holds(tcs.target)) {             // its costume options show in the popup's rows (the
+        if (nb("screens_tracker")) screens::tracker::leave_menu(tcs.target + 10);   // Color row is an option row): no
+        return;                                                    // chips painted on it
+    }
     if (k > 0 && tcs.rect0 && tcs.rect1) {
         if (const Entry* entry = entry_k(entries_for(g_list_f, g_list_c), k))
             if (const auto chip = entry_chip(g_list_f, g_list_c, *entry))
@@ -912,7 +923,8 @@ void resolve_pad() {
 bool pad_btn_down() { resolve_pad(); return (pad_mask() & g_pad.btn) != 0; }
 
 // The DI mode key of one player on the character select: L1 on the pad (0.22.6; X / Square before), X on the keyboard.
-// app.InputManager's own per-player reading, else any device. Fighter Settings and the Training popup keep X / Square.
+// app.InputManager's own per-player reading, else any device. Fighter Settings keeps X / Square; the Training popup:
+// popup_di_down.
 bool side_di_down(int side) {
     resolve_pad();
     if (MO* im = API::get()->get_managed_singleton("app.InputManager")) {
@@ -927,6 +939,23 @@ bool side_di_down(int side) {
         }
     }
     return key_down(0x58) || (pad_mask() & g_pad.l1) != 0;
+}
+
+// The DI mode key in the Training popup: L1 on any pad (X / Square before: the Slots Loader's costume options take R1
+// there, as on the select), X on the keyboard. Any player: the pause menu answers whoever opened it and the popup is one
+// panel (on the select each player has his own, hence side_di_down's per-player reading).
+bool popup_di_down() {
+    resolve_pad();
+    if (key_down(0x58) || (pad_mask() & g_pad.l1) != 0) return true;
+    if (MO* im = API::get()->get_managed_singleton("app.InputManager")) {
+        static API::Method* m_flags = nullptr;
+        if (!m_flags) m_flags = im->get_type_definition()->find_method("GetGamePadRawFlags");
+        for (int32_t p = 0; m_flags && p <= 1; ++p) {
+            auto r = m_flags->invoke(im, std::vector<void*>{ ll::arg_u32(g_pad.l1), ll::arg_i32(p) });
+            if (!r.exception_thrown && (r.dword & 1)) return true;
+        }
+    }
+    return false;
 }
 
 // imgui.get_mouse / get_display_size: the game window's client area, refreshed while the game has the focus
@@ -1143,7 +1172,7 @@ void editor_tick() {
     int di_side = (g_menus[1].active && !g_menus[0].active) ? 2 : 1;
     MO* popup_mfs = nullptr;
     if (!fsm.visible && tcs.visible) {                                 // training pause > Character Settings popup
-        di_down = key_down(0x58) || pad_btn_down();
+        di_down = popup_di_down();
         const json& s = sel_of(tcs.target);
         di_fighter = num(lj::index(s, "fighter")); di_costume = num(lj::index(s, "costume"));
         di_side = tcs.target;
@@ -1198,7 +1227,7 @@ void editor_tick() {
         di_down = false;                                               // consumed per side
     } else if (di_down && !edit.di_was_down && tcs.visible && !edit.active && !window_open()) {
         if (popup_mfs && tcs.agent) {                                  // the popup's own rows become the DI rows
-            if (di_active(di_side)) cmn::journal("DI panel (training popup) P%d: already on, X ignored (B leaves)", di_side);
+            if (di_active(di_side)) cmn::journal("DI panel (training popup) P%d: already on, L1 / X ignored (B leaves)", di_side);
             else {
                 const bool ok = nb("screens_dipanel") && screens::dipanel::mode::enter_popup(di_side, addr(tcs.param), addr(tcs.agent),
                                                                                              (uint64_t)(uintptr_t)popup_mfs, (int)di_fighter.value_or(0), (int)di_costume.value_or(0));
@@ -1268,6 +1297,8 @@ void fs_restore_step() {
 void tcs_restore_step() {
     if (tcs.restore_steps <= 0 || !tcs.spin || !tcs.text) return;
     if (g_F - tcs.opened_at < 30) return;
+    if (screens::slots_panel::slots_holds(tcs.target)) return;     // its costume options hold the rows: the walk's Add /
+                                                                    // Sub would step an option; it goes on once they leave
     if (!alive(tcs.spin.get()) || !alive(tcs.text.get())) { tcs.restore_steps = 0; return; }
     json& s = sel_of(tcs.target);
     track_path(s);
@@ -1359,7 +1390,11 @@ bool boot() {                                                      // the main c
 // Same for the popup's DI mode (the Drive rows borrowed): its own hook (screens/dipanel) leaves the mode on the popup
 // agent's InputCancel, but the pause menu's agent took the same press and closed the whole menu, the mode's exit then
 // refreshing a popup being torn down (a caught NullReference in SelectChangeColorChip). Pre-existing, Lua included.
-bool esc_blocked() { return (edit.active && edit.di_simple && window_open()) || screens::dipanel::mode::popup_esc_guard(); }
+// The Slots Loader's costume options in the popup (R1 / C, the same rows borrowed) leave on Back too: our guard holds for
+// them as well (SF6Slots_PopupGuard: on, or left less than 15 frames ago).
+bool esc_blocked() {
+    return (edit.active && edit.di_simple && window_open()) || screens::dipanel::mode::popup_esc_guard() || screens::slots_panel::popup_guard();
+}
 int pre_input_cancel(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     try {

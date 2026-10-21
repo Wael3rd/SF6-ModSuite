@@ -51,6 +51,12 @@ extern "C" __declspec(dllexport) int SF6ColorMod_DiPanelActive(int side) {
     try { return screens::dipanel::mode::active(side) ? 1 : 0; } catch (...) { return 0; }
 }
 
+// The Slots Loader asks it what we share with its costume options modes: bit 1 the character select's panels (the
+// claim above), bit 2 the training popup (our popup DI mode takes the claim of the side the popup sets, the popup's
+// guide carries its entry after ours, our Esc guard also holds while its popup mode is on: SF6Slots_PopupGuard). Without
+// bit 2 its popup mode stays off (it borrows the same rows). Cheap, any thread, no game call.
+extern "C" __declspec(dllexport) int SF6ColorMod_PanelCaps() { return 1 | 2; }
+
 namespace {
 
 bool decide_squares(int fighter, int only_side, uint32_t& c0, uint32_t& c1) {
