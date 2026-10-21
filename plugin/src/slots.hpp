@@ -149,6 +149,7 @@ namespace costumes {
     void tick(uint32_t events);
     bool online();                    // an online battle is loaded or played (its description says so)
     bool select_active();             // the character select screen is open (read now, not watched)
+    int battle_mode();                // the battle description's app.EGameMode (2 Training), -1 none (read now)
     std::string slot_label(int fighter, int costume_no);   // one of our outfits: its label (outfits.json), else ""
     int slot_by_name(int fighter, const std::string& name); // one of our outfits by its game name ("Outfit II"), else -1
     bool display_nsfw();              // settings.json "display_nsfw": NSFW outfits and options shown

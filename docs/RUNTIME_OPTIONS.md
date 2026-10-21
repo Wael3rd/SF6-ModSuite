@@ -994,6 +994,24 @@ does, the fallback above is the next step.
   game rebuilds the fighters about a second after the menu closes (21/10: no TrainingManager flag changes) and
   `SetupAppearance` extends the same watch. Closing the popup without Confirm (Back / Esc on its normal rows) drops the
   pending changes (logged). Inside the options, Decide or Back return to the popup's normal rows keeping them.
+- **No visible swap** (Wael 21/10, plan A, after a small jump at Confirm): (1) every option file of the outfit is asked
+  for when its options open in the popup (`rto::popup_preload`, the Battle Settings preview's `warm_preview` rule, kept
+  in `g_warm_pop` while the popup is up, let go when it closes; the confirmed ones stay as the choices' `g_warm`);
+  `rto select: popup: the N files of the pending options are ready` when they all are. (2) A Confirm whose only change
+  is options (the popup's fighter, costume and colour are those it opened with): the game goes back to the pause
+  menu (`TrainingManager._MenuState` 11 CHARA_SELECT -> 4 FIRST, the menu covers the screen) and that fighter's swap is
+  held (`fighters_refresh(why, side)`, `g_hold_side`) until every file its options need is ready, then made in one pass
+  (`rto: P1 P1: the N files of its options ready: swapped behind the pause menu at frame F (menu state 4)`; a part
+  unit's chain is stopped a frame before its swap, its textures follow on the next pass). Not ready when the menu starts
+  closing (state 3 CLOSING): the hold ends, each part swaps as soon as ready (as before). (3) Once the menu has closed
+  (3 CLOSING -> 0 NONE), the battle is restarted as the pause menu's Restart Battle does:
+  `app.training.TrainingManager.set_IsReqRefresh(true)` (checked 21/10: the same flow, MenuState 1 / 2 / 3,
+  _TrainingState REFRESH_WAIT then NOW), from LateUpdateBehavior, the singleton fetched then, only when the battle's
+  `Rule.GameMode` is 2 (Training) and not online, once per pause; not when a Confirm of the same pause changed the
+  costume or colour (the game reloads the fighter itself), nor when the player chose Restart Battle meanwhile (MenuState
+  1 / 2 seen). Logs: `rto select: training pause menu state a -> b`, `rto select: training restart requested at frame
+  F` (or why not). `_MenuState` is read as its low byte (small enum values, whatever the enum's size); no
+  TrainingManager: no hold, no restart (the swap as before).
 - **The first Esc**: the popup's Back leaves the mode only. Our hook on the popup agent's `InputCancel` takes it, and
   the Color Mod's Esc guard (its `UIAgent.InputCancel` / TrainingManager `RequestCloseMenu` / `CloseMenu` hooks, made
   for its popup DI mode) also holds while the plugin's popup mode is on and 15 frames after
@@ -1071,7 +1089,7 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
 - Lot B limits: a model the game rebuilds in a fight without one of the two events (round reload, replay seek...) is
   not seen until the next one (the probes saw no rebuild on Training resets); the Training pause menu's Character
   Settings popup has the select's in-row menu only (no preview: the fighter wears the options once the popup is
-  confirmed); menu texts are English only; no mouse click on the
+  confirmed, behind the pause menu); menu texts are English only; no mouse click on the
   costume row; whether the pad's A on the costume row does something in the game was not checked.
 - **Fluffy installs**: a mod read from Fluffy's archive loads only the options checked in Fluffy, so only those
   are stored. Lot B: load the unchecked options too, as options only (no outfit), with the checked ones as

@@ -1542,6 +1542,12 @@ void tick(uint32_t ev) {
 
 bool online() { return online_now(); }
 bool select_active() { return select_screen_active(); }
+int battle_mode() {
+    auto* desc = battle_desc();
+    auto* rule = desc ? get_obj(desc, "Rule") : nullptr;
+    auto* p = rule ? field_ptr(rule, "GameMode") : nullptr;
+    return p ? *static_cast<uint8_t*>(p) : -1;
+}
 std::string slot_label(int fighter, int costume_no) {
     auto f = g_slot_of.find(fighter);
     if (f == g_slot_of.end()) return {};

@@ -10,6 +10,9 @@
   once, even when the costume and colour did not change); closing the popup without confirming drops them. Decide or
   Back return to the popup's rows. Needs the Color Mod of this release (it keeps the pause menu open on that Back and
   shows the entry in the popup's guide); otherwise this menu stays off.
+- No visible swap: the options' files are loaded while you choose; after Confirm the fighter changes behind the pause
+  menu, all at once, and the battle restarts (as Restart Battle) when you leave the pause menu. When the costume or
+  colour changed too, the game reloads the fighter itself, as before.
 
 ### SF6 Color Mod
 - Training pause menu, "P1 / P2 Character Select": the Drive colours rows open with **L1** on the pad (was X /

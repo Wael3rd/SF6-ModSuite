@@ -21,7 +21,9 @@
 // screen that follows (polled every 10 frames, menu screens); a fighter after an event (its model built:
 // PlayerBehavior.SetupAppearance, or an outfit mounted for a fight, or the Training popup's options confirmed:
 // fighters_refresh): a watch of 10 s, then nothing until the next event. A model re-applies when the choices'
-// version changed since its last pass, rebuilt or not.
+// version changed since its last pass, rebuilt or not. After the Training popup's Confirm of options only, that
+// fighter's swap is held until every file is ready (g_hold_side), then made in one pass behind the pause menu; the
+// popup's option files are asked for ahead while it is up (g_warm_pop).
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -61,6 +63,11 @@ std::atomic<uint32_t> g_model_calls{0};
 bool g_warm_done = false;
 std::set<std::string> g_warm;       // files of the choices made in the menu, kept loaded
 std::set<std::string> g_warm_prev;  // files of every option of the outfit the preview wears, kept while it wears it
+std::set<std::string> g_warm_pop;   // files of every option of the outfits the Training popup's options showed (this visit)
+// The Training popup confirmed (options only): that fighter's swap (0 P1, 1 P2) waits until every file is ready, then is
+// made whole behind the pause menu; -1 none. g_hold_id tells one hold from the next (Model::hold_id: passed)
+int g_hold_side = -1;
+uint32_t g_hold_id = 0;
 uint32_t g_gc_at = 0;
 
 // ---- game types and methods ----
@@ -186,6 +193,28 @@ Res* res_get(const std::string& path, const std::string& kind, bool resident) {
     return &(g_res[path] = r);
 }
 bool usable(const Res* r) { return r && r->holder && !r->dead && g_frame >= r->ready_at; }
+bool swappable(const std::string& kind) { return kind == "mesh" || kind == "material" || kind == "texture" || kind == "chain"; }
+// The files a set of options needs that are not ready yet (asked for now when not yet; one that cannot load is left
+// out); total: how many it needs
+int files_left(const std::map<std::string, Want>& want, int* total) {
+    int left = 0, n = 0;
+    for (auto& [t, w] : want) {
+        if (w.orig || w.path.empty() || !swappable(w.kind)) continue;
+        ++n;
+        const Res* r = res_get(w.path, w.kind, false);
+        if (!r->dead && !usable(r)) ++left;
+    }
+    if (total) *total = n;
+    return left;
+}
+// TrainingManager._MenuState (0 NONE, 3 CLOSING, 4 FIRST, 11 CHARA_SELECT, ...: small values, its low byte whatever the
+// enum's size), -1 without a TrainingManager
+int menu_state_now() {
+    Obj* tm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.training.TrainingManager"));
+    if (!alive(tm)) return -1;
+    void* p = field_ptr(tm, "_MenuState");
+    return p ? static_cast<int>(*static_cast<uint8_t*>(p)) : -1;
+}
 void backoff(const std::string& path) {
     auto it = g_res.find(path);
     if (it == g_res.end()) return;
@@ -198,7 +227,7 @@ void backoff(const std::string& path) {
 void res_gc() {
     size_t n = 0;
     for (auto it = g_res.begin(); it != g_res.end();) {
-        if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && g_frame - it->second.used > 600) {
+        if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && !g_warm_pop.count(it->first) && g_frame - it->second.used > 600) {
             if (it->second.holder) it->second.holder->release();
             it = g_res.erase(it); ++n;
         } else ++it;
@@ -239,6 +268,7 @@ struct Model {
     uint32_t ver = 0, next = 0, walk_at = 0, check_at = 0, since = 0;
     uint32_t seen = 0;                           // the frame its root was found (VS screen models)
     std::set<std::string> told;                  // log lines given once
+    uint32_t hold_id = 0, hold_told = 0;         // the hold (g_hold_id) it passed / it said it waits for
 };
 Model g_models[7];                                // preview, P1, P2 (fighters), select P1, select P2, VS P1, VS P2
 // The character select builds a side's model under the same GameObject (its root stays): looked at more often, and the
@@ -436,6 +466,24 @@ void pass(Model& md) {
     for (auto& [t, w] : want) if (!w.orig) if (auto it = g_res.find(w.path); it != g_res.end()) it->second.used = g_frame;
     bool pending = false, colour = false;
     const char* side_name = md.side == 1 ? "P2" : "P1";
+
+    // The Training popup confirmed: this fighter's swap waits (behind the pause menu) until every file its options need
+    // is ready, then is made in one pass (a part unit's chain stopped a frame before its swap); never half loaded
+    if (g_hold_side >= 0 && &md == &g_models[1 + g_hold_side] && md.hold_id != g_hold_id && md.units.empty() && md.verify.empty()) {
+        int total = 0;
+        const int left = files_left(want, &total);
+        if (left) {
+            if (md.hold_told != g_hold_id) {
+                md.hold_told = g_hold_id;
+                logf("rto: %s %s: its options wait for %d of their %d files (held behind the pause menu)", md.name, side_name, left, total);
+            }
+            md.next = g_frame + 1;
+            return;
+        }
+        md.hold_id = g_hold_id;
+        logf("rto: %s %s: the %d files of its options ready: swapped behind the pause menu at frame %u (menu state %d)", md.name,
+             side_name, total, g_frame, menu_state_now());
+    }
 
     // 0. part units in flight (a chain stopped): checked a frame after their swap, then their chain runs again
     for (auto it = md.units.begin(); it != md.units.end();) {
@@ -873,7 +921,7 @@ void preview_tick() {
 
 uint32_t g_fighters_at = 0;         // both fighters seen built since the VS screen's models were looked for (vs_tick)
 void watch_tick() {
-    if (g_frame >= g_watch_until) {
+    if (g_frame >= g_watch_until && g_hold_side < 0) {
         g_watch_until = 0;
         logf("rto: fighters watch done (%u model builds seen)", g_model_calls.exchange(0));
         res_gc();
@@ -895,6 +943,7 @@ void watch_tick() {
         if (go != md.root) { reset(md); md.root = go; }
         if (go) process(md, net ? 0 : id, true);      // online: the player's own fighter wears P1's options
         if (!md.units.empty()) g_watch_next = g_frame + 1;
+        else if (!md.settled && md.next && md.next < g_watch_next) g_watch_next = md.next;   // a held swap: its next frame
     }
     for (int i = 0; i < 2; ++i) if (!seen[i] && g_models[1 + i].root) reset(g_models[1 + i]);
     if (seen[0] && seen[1] && !g_fighters_at) g_fighters_at = g_frame;   // the fight is built (vs_tick: no VS screen to wait for)
@@ -1149,13 +1198,51 @@ void choices_changed() {
     }
     g_warm = want;
 }
-void fighters_refresh(const char* why) {
+void fighters_refresh(const char* why, int hold_side) {
     if (!on() || g_select) return;
     // watch_tick: each fighter's model compares its choices version with g_ver (choices_changed bumped it) and wears
     // its side's choices again (pass); a rebuild that follows (the costume or colour changed too) extends the watch
     if (!g_watch_until) { logf("rto: fighters watch (%s)", why); g_watch_start = g_frame; }
     g_watch_until = g_frame + 600;
     g_watch_next = 0;
+    if (hold_side == 0 || hold_side == 1) {
+        g_hold_side = hold_side;
+        ++g_hold_id;
+        logf("rto: P%d's swap held until every file is ready (behind the pause menu, state %d)", hold_side + 1, menu_state_now());
+    }
+}
+void fighters_hold_end(const char* why) {
+    if (g_hold_side < 0) return;
+    const Model& md = g_models[1 + g_hold_side];
+    if (md.hold_id != g_hold_id)
+        logf("rto: P%d's held swap: %s before every file was ready: swapped as each one is ready", g_hold_side + 1, why);
+    g_hold_side = -1;
+    if (g_watch_until && g_watch_until < g_frame + 600) g_watch_until = g_frame + 600;   // the rest as soon as ready
+}
+int training_menu_state() { return menu_state_now(); }
+size_t popup_preload(const std::vector<const Slot*>& slots) {
+    std::set<std::string> want;
+    for (const Slot* s : slots) {
+        if (!s) continue;
+        size_t n = 0;
+        auto add = [&](const File& f) {
+            if (f.path.empty() || f.path == f.target || n >= kWarmPreview || !swappable(f.kind)) return;
+            ++n;
+            if (want.insert(f.path).second) res_get(f.path, f.kind, false);
+        };
+        for (auto& [id, fs] : s->files)
+            if (!hidden(g_m, *s, id)) for (auto& f : fs) add(f);
+        for (auto& f : s->base) add(f);
+    }
+    if (want != g_warm_pop) {
+        if (want.empty()) logf("rto: the %zu files asked for by the Training popup's options no longer kept", g_warm_pop.size());
+        else logf("rto: %zu files of the Training popup's options asked for ahead", want.size());
+    }
+    g_warm_pop = std::move(want);
+    return g_warm_pop.size();
+}
+int options_files_left(const Slot& s, const std::vector<std::string>& chosen, int* total) {
+    return files_left(desired(g_m, s, chosen), total);
 }
 const Slot* outfit_slot(int fighter, int costume_no) {
     if (!on()) return nullptr;

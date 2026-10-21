@@ -42,11 +42,16 @@
 // no other player's to tell apart), the six rows borrowed as the select's four (the Color Mod's popup DI mode: the
 // part's mArrSpin / mGroup, its SetMessage* / Setup* skipped, GetCostumeId / GetColorId = what it had), the arrows'
 // copies made in the popup flow's own update (app.UIFlowCharacterDetailSetting.Wait OnUpdate). A change there is
-// PENDING: saved (costume_choices.json, the target side) only when the popup is confirmed (its Param's IsDecide), then
-// worn by that side's fighter at once (rto::fighters_refresh: the game rebuilds nothing when the costume and colour did
-// not change); the popup closed without Confirm drops it. Decide / Back leave the mode keeping the changes; the Esc
-// that leaves it must not close the pause menu: the Color Mod's Esc guard covers this mode (SF6Slots_PopupGuard), so
-// the popup mode needs a Color Mod that says it does (SF6ColorMod_PanelCaps bit 2: its popup DI mode takes the claim
+// PENDING: saved (costume_choices.json, the target side) only when the popup is confirmed (its Param's IsDecide); the
+// popup closed without Confirm drops it. Every option file of the outfit is asked for when its options open
+// (rto::popup_preload, kept while the popup is up). Confirmed with the same costume and colour (the game rebuilds
+// nothing): the fighter's swap is held until every file is ready and made in one pass behind the pause menu
+// (rto::fighters_refresh with a hold side; not ready when the menu starts closing: as each file is ready), and once the
+// pause menu has closed (TrainingManager._MenuState back to NONE) the battle is restarted as the menu's Restart Battle
+// does (TrainingManager.set_IsReqRefresh(true), offline Training only, once; not when the player restarted himself,
+// nor when a Confirm of this pause changed the costume or colour: the game reloads then). Decide / Back leave the mode
+// keeping the changes; the Esc that leaves it must not close the pause menu: the Color Mod's Esc guard covers this
+// mode (SF6Slots_PopupGuard), so the popup mode needs a Color Mod that says it does (SF6ColorMod_PanelCaps bit 2: its popup DI mode takes the claim
 // of the target side, its popup guide carries our entry, its guard asks ours); otherwise it stays off. The popup is
 // found from an event (EV_POPUP: its MatchingFighterSetting set up or written, its flow's update), then followed each
 // frame while it shows.
@@ -739,8 +744,16 @@ struct Popup {
     int target = 1;                                 // the side it sets: 1 P1, 2 P2
     bool decided = false;
     std::map<std::string, Pending> pending;         // mod key -> the options changed this visit, saved on Confirm
+    bool base = false;                              // the fighter / costume / colour it showed when it opened (read once)
+    int32_t bf = -1, bc = -1, bn = -1;
+    std::vector<const Slot*> preloaded;             // the outfits whose option files are asked for ahead (rto::popup_preload)
+    int left = -1;                                  // the pending options' files not ready yet, last count (-1 unknown)
 };
 Popup g_pop;
+// After a Confirm in the popup, until the pause menu closes: the options-only swap held behind the menu, and the
+// training restart asked for when the menu has closed (the pause menu's own "Restart Battle": set_IsReqRefresh)
+struct PauseWatch { bool on = false, hold = false, restart = false; int state = -2; uint32_t since = 0; };
+PauseWatch g_pw;
 uint32_t g_pop_event = 0;                           // the last EV_POPUP
 std::atomic<bool> g_pop_on{ false };
 std::atomic<uint32_t> g_pop_left{ 0 };              // the frame the popup's mode was left
@@ -1203,6 +1216,10 @@ bool enter(int s, const char** why) {
     st = std::move(n);
     hook_side_set(s, st);                           // from now on the panel's input is ours
     pop_flag(s, true);
+    if (pop && std::find(g_pop.preloaded.begin(), g_pop.preloaded.end(), slot) == g_pop.preloaded.end()) {
+        g_pop.preloaded.push_back(slot);            // a pick then swaps whole at the Confirm (the preview's rule)
+        popup_preload(g_pop.preloaded);
+    }
     // the titles: their message link cut (kept), so the text written stays; a title already showing what we write
     // gets one write that differs first (the real write must differ, the DI mode's rule)
     const uint8_t empty[16] = {};
@@ -1413,7 +1430,7 @@ void side_tick(int s, bool net) {
 // ---- the Training popup ----
 // Confirmed: this visit's changes saved for the popup's side and worn by that side's fighter at once (the game rebuilds
 // the fighters only when the costume or the colour changed: rto's fighters watch applies them either way)
-void popup_confirm() {
+int popup_confirm(bool same) {
     int n = 0;
     std::string what;
     for (auto& [mod, p] : g_pop.pending) {
@@ -1427,12 +1444,63 @@ void popup_confirm() {
         ++n;
     }
     g_pop.pending.clear();
-    if (!n) return;
+    g_pop.left = -1;
+    // costume or colour changed too: the game rebuilds the fighters itself once the menu closes (no restart of ours,
+    // one asked for by an earlier Confirm of this pause dropped); options only: the swap held behind the pause menu
+    // (all files ready, one pass), a restart when the menu has closed
+    const int ms = training_menu_state();
+    if (!same && g_pw.restart) { g_pw.restart = false; logf("rto select: popup confirmed with a costume / colour change: the game reloads, no restart of ours"); }
+    if (!n) return 0;
     save_choices();
     choices_changed();
-    fighters_refresh("the Training popup confirmed");
-    logf("rto select: popup confirmed: the options of %d outfit(s) saved for P%d (%s), worn by the fighter now", n,
-         g_pop.target, what.c_str());
+    const bool hold = same && ms > 0;
+    fighters_refresh("the Training popup confirmed", hold ? g_pop.target - 1 : -1);
+    if (same && ms > 0) {
+        if (!g_pw.on) { g_pw = PauseWatch{}; g_pw.on = true; g_pw.since = g_frame; }
+        g_pw.hold = true;
+        g_pw.restart = true;
+    }
+    logf("rto select: popup confirmed: the options of %d outfit(s) saved for P%d (%s), %s", n, g_pop.target, what.c_str(),
+         !same ? "the costume / colour changed too: worn once the game rebuilt the fighter"
+         : ms > 0 ? "worn behind the pause menu once every file is ready, the battle restarted when the menu closes"
+                  : "worn by the fighter now");
+    return n;
+}
+// The popup's fighter, costume and colour now are the ones it opened with (the game then rebuilds nothing)
+bool popup_same(Obj* mfs) {
+    int32_t f = -1;
+    if (!g_pop.base || !alive(mfs) || !get_i32(mfs, "FighterId", f)) return false;
+    const auto c = ret_i32(mfs, "GetCostumeId"), n = ret_i32(mfs, "GetColorId");
+    return c && n && f == g_pop.bf && *c == g_pop.bc && *n == g_pop.bn;
+}
+// Each frame from a Confirm until the pause menu has closed: the hold ends when the menu starts closing (the swap then
+// as soon as ready), the restart is asked for once it has closed (MenuState NONE), offline Training only, once; the
+// player's own Restart Battle meanwhile (MenuState 1 / 2) makes ours needless
+void pause_tick() {
+    if (!g_pw.on) return;
+    const int ms = training_menu_state();
+    if (ms != g_pw.state) {
+        if (g_pw.state != -2) logf("rto select: training pause menu state %d -> %d", g_pw.state, ms);
+        g_pw.state = ms;
+    }
+    if ((ms == 1 || ms == 2) && g_pw.restart) { g_pw.restart = false; logf("rto select: the battle restarts from the pause menu: no restart of ours"); }
+    if (ms > 0 && ms != 3) return;                  // still in the pause menu
+    if (g_pw.hold) { g_pw.hold = false; fighters_hold_end(ms == 3 ? "the pause menu closing" : "the pause menu closed"); }
+    if (ms == 3) return;                            // CLOSING: the restart waits for NONE
+    if (g_pw.restart) {
+        Obj* tm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.training.TrainingManager"));
+        const int mode = costumes::battle_mode();
+        if (ms == 0 && alive(tm) && mode == 2 && !costumes::online()) {
+            const Ret r = call(tm, "set_IsReqRefresh", { arg_bool(true) });
+            logf(r.exception_thrown ? "rto select: training restart NOT requested (set_IsReqRefresh raised)"
+                                    : "rto select: training restart requested at frame %u (set_IsReqRefresh, as Restart Battle): the options "
+                                      "confirmed in the pause menu", g_frame);
+        } else {
+            logf("rto select: training restart not requested (%s)", ms < 0 || !alive(tm) ? "no TrainingManager any more"
+                 : mode != 2 ? "not a Training battle" : "online");
+        }
+    }
+    g_pw = PauseWatch{};
 }
 // The popup closed or rebuilt (or the module stops): its mode left (dropped when gone), the changes not confirmed dropped
 void popup_end(const char* why) {
@@ -1443,6 +1511,7 @@ void popup_end(const char* why) {
     for (auto& [mod, p] : g_pop.pending) if (p.slot && !same_set(p.chosen, p.shown)) ++n;
     if (n) logf("rto select: popup left without Confirm (%s): the pending options of %zu outfit(s) dropped", why, n);
     if (g_pop.up) publish(g_pop.target, false);
+    if (!g_pop.preloaded.empty()) popup_preload({});   // the confirmed ones stay loaded as the choices' (choices_changed)
     g_pop = Popup{};
     g_s[kPop] = follow(kPop, Side{});
 }
@@ -1498,7 +1567,7 @@ void install_popup_hooks() {
          g_ck[1].hook ? "in the rows' left margin" : "before the titles");
 }
 
-bool popup_busy() { return g_pop.up || g_s[kPop].on || (g_pop_event && g_frame - g_pop_event < 30); }
+bool popup_busy() { return g_pop.up || g_s[kPop].on || g_pw.on || (g_pop_event && g_frame - g_pop_event < 30); }
 
 void popup_tick(bool announced) {
     if (announced) g_pop_event = g_frame;
@@ -1507,6 +1576,7 @@ void popup_tick(bool announced) {
         if (const uint32_t hf = g_hook_faults.exchange(0)) logf("rto select: %u exceptions in the hooks", hf);
         color_mod_check();                          // once (every plugin is loaded before the first frame)
         claims_tick();
+        pause_tick();
         void* buf[4] = {};
         const uint32_t na = A()->ui_agents(kPopupAgent, buf, 4);
         Obj* agent = na ? reinterpret_cast<Obj*>(buf[0]) : nullptr;   // the first one (the Color Mod's rule)
@@ -1519,7 +1589,7 @@ void popup_tick(bool announced) {
             // a Confirm seen as the popup went (hidden the frame it was decided): still a Confirm
             bool d = false;
             if (g_pop.up && !g_pop.decided && !g_pop.pending.empty() && alive(g_pop.flow) && get_bool(g_pop.flow, "IsDecide", d) && d)
-                popup_confirm();
+                popup_confirm(popup_same(get_obj(g_pop.flow, "MatchingFighterSetting")));
             popup_end("the popup closed");             // its mode (if on) left: the rows put back while it lives
             return;
         }
@@ -1535,14 +1605,32 @@ void popup_tick(bool announced) {
                  popup_cm_ok() ? "offered on outfits that have them" : "off (see the Color Mod line above)");
         }
         Side& st = g_s[kPop];
+        if (!g_pop.base && !st.on) {                // what it opened with (its getters are ours while the options show)
+            int32_t f = -1;
+            const auto c = ret_i32(mfs, "GetCostumeId"), n = ret_i32(mfs, "GetColorId");
+            if (get_i32(mfs, "FighterId", f) && c && n) { g_pop.base = true; g_pop.bf = f; g_pop.bc = *c; g_pop.bn = *n; }
+        }
         // Confirm: the flow's IsDecide (the Color Mod's colour commit reads it too); the changes saved and worn
         bool dec = false;
         get_bool(flow, "IsDecide", dec);
         if (dec && !g_pop.decided) {
             if (st.on) leave(kPop, "the popup was confirmed");
-            popup_confirm();
+            popup_confirm(popup_same(mfs));
         }
         g_pop.decided = dec;
+        // the pending options' files: told once they are all ready (counted every 10 frames)
+        if (!g_pop.pending.empty() && g_frame % 10 == 0) {
+            int left = 0, total = 0;
+            for (auto& [mod, p] : g_pop.pending) {
+                if (!p.slot || same_set(p.chosen, p.shown)) continue;
+                int t = 0;
+                left += options_files_left(*p.slot, p.chosen, &t);
+                total += t;
+            }
+            if (left == 0 && g_pop.left != 0 && total > 0)
+                logf("rto select: popup: the %d files of the pending options are ready (Confirm swaps them whole)", total);
+            g_pop.left = left;
+        }
         if (st.on) {
             if (!alive(st.agent) || !alive(st.param)) { drop(kPop, "the popup is gone"); return; }
             if (mfs != st.param) { leave(kPop, "the popup's part was rebuilt"); return; }
