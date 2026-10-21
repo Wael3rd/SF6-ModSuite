@@ -1004,7 +1004,7 @@ does, the fallback above is the next step.
   (`rto: P1 P1: the N files of its options ready: swapped behind the pause menu at frame F (menu state 4)`; a part
   unit's chain is stopped a frame before its swap, its textures follow on the next pass). Not ready when the menu starts
   closing (state 3 CLOSING): the hold ends, each part swaps as soon as ready (as before). (3) Once the menu has closed
-  (3 CLOSING -> 0 NONE), the battle is restarted as the pause menu's Restart Battle does:
+  (CLOSING 3 held 10 frames: a closed pause menu stays there; or NONE 0), the battle is restarted as the pause menu's Restart Battle does:
   `app.training.TrainingManager.set_IsReqRefresh(true)` (checked 21/10: the same flow, MenuState 1 / 2 / 3,
   _TrainingState REFRESH_WAIT then NOW), from LateUpdateBehavior, the singleton fetched then, only when the battle's
   `Rule.GameMode` is 2 (Training) and not online, once per pause; not when a Confirm of the same pause changed the
