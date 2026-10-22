@@ -773,7 +773,7 @@ struct PauseWatch {
     bool on = false, hold = false;
     bool player = false;                            // the player's own Restart Battle seen (MenuState 1 / 2)
     bool reload = false;                            // the game's own reload of the fighters seen (g_reload_at)
-    bool retried = false, released = false, late_told = false;
+    bool retried = false, released = false;
     int side = 0;                                   // the fighter held (0 P1, 1 P2: the popup's target)
     int state = -2, ts = -2;                        // the menu's and the training's states last seen
     uint32_t confirm_at = 0, since = 0, closed_at = 0, req_at = 0, released_at = 0, reload_at = 0, builds = 0;
@@ -1499,8 +1499,8 @@ bool popup_same(Obj* mfs) {
 }
 // Each frame from a Confirm (the fighter held) until it is over:
 // - the decision, kDecideFrames after the pause menu closed (4 FIRST -> 3 CLOSING; a closed training pause menu stays at
-//   CLOSING, NONE also counts): the game's own reload of the fighters seen since the Confirm (g_reload_at: it came as
-//   the menu closed, 22/10) -> no restart of ours, the held fighter is never changed (it is destroyed), the hold ends
+//   CLOSING, NONE also counts): the game's own reload of the fighters seen since the Confirm (g_reload_at) -> no restart
+//   of ours (one seen after our request still counts: it came 19 frames after the menu closed, 22/10), the held fighter is never changed (it is destroyed), the hold ends
 //   once the game rebuilt it (a new fighter GameObject or a SetupAppearance since; the rebuilt one wears the options
 //   through the fighters watch) or after kRebuildGiveUp; not seen -> options only: our restart (set_IsReqRefresh, as the
 //   pause menu's Restart Battle; offline Training only, once) and the swap in its black screen. The player's own
@@ -1540,15 +1540,10 @@ void pause_tick() {
     if ((ms == 1 || ms == 2) && !g_pw.player) { g_pw.player = true; logf("rto select: the battle restarts from the pause menu: no restart of ours"); }
     if (const uint32_t ff = g_reload_false_at.exchange(0))
         logf("rto select: BattleFlowMap.SetupReloadBattleAsset answered false at frame %u (not taken as a reload)", ff);
-    // the game's own reload of the fighters since the Confirm
-    // (one after our own request is not taken: it may be our restart's own flow; the black screen releases the swap)
+    // the game's own reload of the fighters since the Confirm, even after our request: our restart never sends one (22/10,
+    // options only: no signal), while the game's came 19 frames after the menu closed (colour + option), past kDecideFrames
     const uint32_t ra = g_reload_at.load();
-    if (!g_pw.reload && ra && ra >= g_pw.confirm_at && g_pw.req_at && ra >= g_pw.req_at && !g_pw.late_told) {
-        g_pw.late_told = true;
-        logf("rto select: a fighter reload signal at frame %u, %u frames after our restart request: not taken as the game's "
-             "reload (ours may cause it)", ra, ra - g_pw.req_at);
-    }
-    if (!g_pw.reload && ra && ra >= g_pw.confirm_at && (!g_pw.req_at || ra < g_pw.req_at)) {
+    if (!g_pw.reload && ra && ra >= g_pw.confirm_at) {
         g_pw.reload = true;
         g_pw.reload_at = ra;
         char rel[64] = "before the pause menu closed";
