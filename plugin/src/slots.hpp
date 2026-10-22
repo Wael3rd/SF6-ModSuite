@@ -155,8 +155,11 @@ namespace costumes {
     bool display_nsfw();              // settings.json "display_nsfw": NSFW outfits and options shown
     void nsfw_row_present(bool on);   // the in-game row exists: settings.json is followed even with no NSFW content
     void set_display_nsfw(bool on);   // the row changed: settings.json written, applied on the next tick
+    bool online_drivetech();          // settings.json "online_outfit": "DriveTech" (else Outfit 1) is the carrier
+    void set_online_drivetech(bool on);   // the row changed: settings.json written, applied on the next tick
 }
-// nsfw_option.cpp: the row "Display NSFW Outfits" in Options > Interface > Other Settings (core option service)
+// nsfw_option.cpp: the rows "Display NSFW Outfits" and "Outfit Others See" in Options > Interface > Other Settings
+// (core option service)
 namespace nsfwopt {
     void setup();                     // first frame, after rto::install_hooks (needs the core; once)
     void tick();                      // the row follows settings.json

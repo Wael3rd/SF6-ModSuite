@@ -8,7 +8,8 @@
 //     screen that lists outfits opens. A slot made from an outfit the player does not own (the
 //     game's own list of the character's outfits says so, ownership.hpp) is not owned: the select
 //     screen and Battle Settings do not list it;
-//   - online alias: Battle Settings keeps the character's carrier in the save (Outfit 1: carrier.hpp),
+//   - online alias: Battle Settings keeps the character's carrier in the save (Outfit 1 or DriveTech, the
+//     player's setting: carrier.hpp),
 //     which is what other players see, and the slot chosen there as an intent; when the game asks for
 //     the carrier's files for a match, the player's own fighter in the battle description gets the slot
 //     as the game's own local costume override and the slot's files are asked for next to the
@@ -114,6 +115,7 @@ struct Fighter {
     bool left_out = false;           // no carrier: no alias for this character
     std::set<int> costumes;          // the character's own outfits in the game's costume table
     std::set<int> base_colors; int base_min = 0; bool base_known = false;   // the carrier's colours
+    std::map<int, std::set<int>> colours;   // Outfit 1's and DriveTech's colours (the carrier's are copied above)
     std::vector<int> o1_colors;      // Outfit 1's colours (an NSFW outfit hidden goes back to it), empty: not known
 };
 std::map<int, Fighter> g_f;
@@ -121,15 +123,30 @@ std::map<int, Fighter> g_f;
 // Carriers decided (g_carriers_done), from the game's costume table (g_table_ok) or, when the table
 // gives no answer, from the folders of the scene
 bool g_carriers_done = false, g_table_ok = false;
+// The carrier the player chose (settings.json "online_outfit"): DriveTech, else Outfit 1. A change is applied by
+// the tick outside Battle Settings (g_carrier_apply): carriers decided again, saves moved (safety_net).
+bool g_online_dt = false;
+bool g_carrier_apply = false;
+
+// The fighter's carrier from the setting, with its colours when they are known
+void set_carrier(struct Fighter& fr);
 
 int carrier_of(int fid) {
     auto it = g_f.find(fid);
     return it == g_f.end() ? -1 : it->second.carrier;
 }
-// What the save data holds while a slot is the intent: the carrier (Outfit 1 until it is decided)
+// What the save data holds while a slot is the intent: the carrier (the setting's until it is decided)
 int save_cos_of(int fid) {
     int c = carrier_of(fid);
-    return c >= 0 ? c : carrier::kOutfit1;
+    return c >= 0 ? c : g_online_dt ? carrier::kDriveTech : carrier::kOutfit1;
+}
+
+void set_carrier(Fighter& fr) {
+    fr.carrier = carrier::choose(fr.costumes, g_online_dt);
+    auto c = fr.colours.find(fr.carrier);
+    fr.base_known = c != fr.colours.end() && !c->second.empty();
+    fr.base_colors = fr.base_known ? c->second : std::set<int>{};
+    fr.base_min = fr.base_known ? *c->second.begin() : 0;
 }
 std::string carrier_name(int fid) { return ownership::outfit_label(save_cos_of(fid)); }
 
@@ -141,12 +158,15 @@ int saved_carrier_of(int fid) {
     return it == g_saved_carrier.end() ? carrier::kDriveTech : it->second;
 }
 
-// The carriers in log lines: "Outfit 1", with the characters left out named
+// The carriers in log lines: the setting's outfit, with the characters that wear another named
 std::string carriers_text() {
+    const int want = g_online_dt ? carrier::kDriveTech : carrier::kOutfit1;
     std::string out;
     for (int fid : g_fighters)
-        if (carrier_of(fid) < 0) out += (out.empty() ? "" : ", ") + std::string("F") + std::to_string(fid);
-    return out.empty() ? std::string("Outfit 1") : "Outfit 1 (none for " + out + ")";
+        if (int c = carrier_of(fid); c != want)
+            out += (out.empty() ? "" : ", ") + (c < 0 ? std::string("none") : ownership::outfit_label(c)) + " for F" + std::to_string(fid);
+    const std::string w = ownership::outfit_label(want);
+    return out.empty() ? w : w + " (" + out + ")";
 }
 
 // ---- progress ----
@@ -225,21 +245,24 @@ void load_registry() {
 
 // A fresh settings.json: every key with its default (select_options_*: rto_select.cpp, the costume options on the
 // character select)
-const char* kSettingsDefault = "{\n    \"display_nsfw\": false,\n    \"select_options_button\": \"R1\",\n"
-                               "    \"select_options_key\": \"C\"\n}\n";
-// settings.json with display_nsfw set, the other keys kept as they are
-std::string settings_with_nsfw(bool on) {
+const char* kSettingsDefault = "{\n    \"display_nsfw\": false,\n    \"online_outfit\": \"Outfit 1\",\n"
+                               "    \"select_options_button\": \"R1\",\n    \"select_options_key\": \"C\"\n}\n";
+// settings.json with one key set, the other keys kept as they are
+std::string settings_with(const char* key, const Json& v) {
     Json j;
     std::string text = read_file(kSettings);
     if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);
     if (text.empty() || !json_parse(text, j) || j.kind != Json::Object) json_parse(kSettingsDefault, j);
+    bool set = false;
+    for (auto& kv : j.obj) if (kv.first == key) { kv.second = v; set = true; }
+    if (!set) j.obj.insert(j.obj.begin(), { key, v });
+    return json_write(j) + "\n";
+}
+std::string settings_with_nsfw(bool on) {
     Json v;
     v.kind = Json::Bool;
     v.b = on;
-    bool set = false;
-    for (auto& kv : j.obj) if (kv.first == "display_nsfw") { kv.second = v; set = true; }
-    if (!set) j.obj.insert(j.obj.begin(), { "display_nsfw", v });
-    return json_write(j) + "\n";
+    return settings_with("display_nsfw", v);
 }
 
 // settings.json's date and size in one number (0: no file)
@@ -248,22 +271,30 @@ uint64_t settings_stamp() {
     if (!GetFileAttributesExA(kSettings, GetFileExInfoStandard, &fa)) return 0;
     return ((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime) ^ fa.nFileSizeLow;
 }
-// Reads "display_nsfw" (false when the file or the key is missing). Returns true when the setting changed.
+// Reads "display_nsfw" (false when the file or the key is missing) and "online_outfit" ("DriveTech", else Outfit 1;
+// a change is applied by the tick). Returns true when the NSFW setting changed.
 bool read_nsfw_setting(const char* why) {
-    if (!g_nsfw_slots && !rto::nsfw_options() && !g_nsfw_row) return false;
     const uint64_t st = settings_stamp();
     if (st && st == g_settings_stamp) return false;
     g_settings_stamp = st;
-    bool on = false;
+    bool on = false, dt = false;
     Json j;
     std::string text = st ? read_file(kSettings) : std::string();
     if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);   // saved by an editor with a BOM
-    if (st && json_parse(text, j))
+    if (st && json_parse(text, j)) {
         if (const Json* d = j.get("display_nsfw"); d && d->kind == Json::Bool) on = d->b;
+        if (const Json* o = j.get("online_outfit"); o && o->kind == Json::String) dt = _stricmp(o->s.c_str(), "DriveTech") == 0;
+    }
     if (!st) {   // a fresh install: the file, so the setting can be found (off)
         CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
         if (write_file(kSettings, kSettingsDefault)) g_settings_stamp = settings_stamp();
     }
+    if (dt != g_online_dt || std::strcmp(why, "start") == 0) {
+        if (dt != g_online_dt) g_carrier_apply = true;
+        g_online_dt = dt;
+        logf("costumes: Outfit Others See: %s (%s)", dt ? "DriveTech" : "Outfit 1", why);
+    }
+    if (!g_nsfw_slots && !rto::nsfw_options() && !g_nsfw_row) return false;
     if (on == g_show_nsfw && std::strcmp(why, "start") != 0) return false;
     const bool changed = on != g_show_nsfw;
     set_show_nsfw(on);
@@ -314,7 +345,7 @@ void save_state() {
     bool first = true;
     for (auto& [fid, in] : g_intent) {
         char b[128], car[32] = "";
-        // the carrier the save was given, when it is not DriveTech (what a file without it means)
+        // the carrier the save was given, when it is not DriveTech (what a file without it means: 1.14 and before)
         if (int sc = saved_carrier_of(fid); sc != carrier::kDriveTech) snprintf(car, sizeof car, ", \"carrier\": %d", sc);
         if (auto tg = g_to_game.find(fid); tg != g_to_game.end()) {   // not done yet: the former slot stays
             if (tg->second.color >= 0) snprintf(b, sizeof b, "%s\n        \"%d\": { \"slot\": %d, \"color\": %d%s }", first ? "" : ",", fid, tg->second.from, tg->second.color, car);
@@ -751,7 +782,7 @@ void color_cleanup_slice() {
 constexpr int kTablePasses = 60;
 int g_table_passes = 0;
 
-// The carriers from the folders the scene has (fighterNNN/esfNNNv00), one walk: only when the costume
+// The carriers from the folders the scene has (fighterNNN/esfNNNv00 and ...v04), one walk: only when the costume
 // table gives no answer (a game update). false while the scene has no folder.
 bool carriers_from_folders() {
     if (!cache_folder_methods()) return false;
@@ -759,17 +790,18 @@ bool carriers_from_folders() {
     auto* root = sc ? call_obj(m_first_folder, sc) : nullptr;
     if (!root) return false;
     std::map<std::string, std::pair<int, int>> want;   // folder suffix -> fighter, costume
-    for (int fid : g_fighters) {
-        char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, carrier::kOutfit1);
-        want[b] = { fid, carrier::kOutfit1 };
-    }
+    for (int fid : g_fighters)
+        for (int c : { carrier::kOutfit1, carrier::kDriveTech }) {
+            char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, c);
+            want[b] = { fid, c };
+        }
     std::map<int, std::set<int>> has;
     walk_folders(root, 0, [&](Obj* f) {
         std::string p = fld_path(f);
         for (auto& [sfx, fc] : want) if (ends_with(p, sfx)) { has[fc.first].insert(fc.second); break; }
         return true;
     });
-    for (int fid : g_fighters) g_f[fid].carrier = carrier::choose(has[fid]);
+    for (int fid : g_fighters) { g_f[fid].costumes = has[fid]; set_carrier(g_f[fid]); }
     logf("costumes: the game's costume table gives no answer, carriers taken from the scene's folders");
     return true;
 }
@@ -801,7 +833,7 @@ void read_carriers() {
             for (int fid : g_fighters) {
                 auto& fr = g_f[fid];
                 for (auto& [cn, rid] : rid_of[fid]) fr.costumes.insert(cn);
-                fr.carrier = carrier::choose(fr.costumes);
+                set_carrier(fr);
             }
         } else if (++g_table_passes < kTablePasses || !carriers_from_folders()) return;
         else src = "the scene's folders";
@@ -809,7 +841,7 @@ void read_carriers() {
             auto& fr = g_f[fid];
             if (fr.carrier < 0) {
                 fr.left_out = true;
-                logf("[F%d] no Outfit 1 in %s: left out of the alias", fid, src);
+                logf("[F%d] neither Outfit 1 nor DriveTech in %s: left out of the alias", fid, src);
             }
         }
         g_carriers_done = true;
@@ -828,20 +860,23 @@ void read_carriers() {
                 }
             }
         }
+    // Both carriers' colours (the setting can change during the session), the current one's copied for use
     for (int fid : g_fighters) {
         auto& fr = g_f[fid];
-        if (fr.carrier < 0 || fr.base_known) continue;
-        auto r = rid_of[fid].find(fr.carrier);
-        if (r == rid_of[fid].end()) continue;
-        auto* cls = call_obj(m_cols, tm, { arg_i32(r->second), arg_bool(false) });
-        if (!cls) continue;
-        int n = list_count(cls), mn = 999;
-        for (int j = 0; j < n; ++j) {
-            int32_t c = 0;
-            if (auto* cr = list_item(cls, j); cr && get_i32(cr, "colorNo", c)) { fr.base_colors.insert(c); mn = std::min(mn, static_cast<int>(c)); }
+        for (int cn : { carrier::kOutfit1, carrier::kDriveTech }) {
+            auto r = rid_of[fid].find(cn);
+            if (fr.colours.count(cn) || r == rid_of[fid].end()) continue;
+            auto* cls = call_obj(m_cols, tm, { arg_i32(r->second), arg_bool(false) });
+            if (!cls) continue;
+            std::set<int> cs;
+            int n = list_count(cls);
+            for (int j = 0; j < n; ++j) {
+                int32_t c = 0;
+                if (auto* cr = list_item(cls, j); cr && get_i32(cr, "colorNo", c)) cs.insert(c);
+            }
+            if (!cs.empty()) fr.colours[cn] = cs;
         }
-        fr.base_min = mn < 999 ? mn : 0;
-        fr.base_known = true;
+        set_carrier(fr);
     }
     g_bc_done = std::all_of(g_fighters.begin(), g_fighters.end(), [](int fid) { return g_f[fid].carrier < 0 || g_f[fid].base_known; });
     if (g_bc_done) logf("costumes: %s colours read", carriers_text().c_str());
@@ -1029,11 +1064,12 @@ bool alias_everywhere() {
     return on;
 }
 
-// The carrier's files the game holds, per fighter: its loads minus its unloads of them (one per fighter wearing it)
-std::map<int, int> g_held;
+// The carrier's files the game holds, per fighter and carrier: its loads minus its unloads of them (one per fighter
+// wearing it). Per carrier: the setting may change while files of the former one are held.
+std::map<std::pair<int, int>, int> g_held;
 // Slots whose files the plugin asked for next to a carrier's and not unloaded yet, per fighter: never more than the
-// game holds of the carrier, so they go once every fighter in it is gone (a mirror's opponent leaving keeps them)
-struct Extra { int slot, cls, n; };
+// game holds of that carrier, so they go once every fighter in it is gone (a mirror's opponent leaving keeps them)
+struct Extra { int slot, cls, n, carrier; };
 std::map<int, std::vector<Extra>> g_extra;
 // Online matches ask for the fighters' files as managed files (requestManagedFighterAssetLoad, no unload: the game
 // releases them itself). The slot's asked for that way, per fighter: in the current batch of requests (until the
@@ -1158,7 +1194,7 @@ void tell_thread() {
 // The game asks for the files of `fid`'s carrier: the slot's files are asked for too, once per fighter of the
 // player's that will wear it (the description of the battle, or of the reload being set up)
 void on_carrier_load(Obj* map, int fid, int cls, int n) {
-    ++g_held[fid];
+    ++g_held[{ fid, carrier_of(fid) }];
     g_mlive.erase(fid);   // this battle's files are not managed ones
     DescInfo d;
     if (!read_desc(g_reload_desc ? g_reload_desc : battle_desc(), d, true)) return;
@@ -1185,25 +1221,29 @@ void on_carrier_load(Obj* map, int fid, int cls, int n) {
     g_in_request = false;
     if (wjournal::on()) wjournal::log("ALIAS_LOAD map=%p F%d v%d cls=%d n=%d ok=%d", (void*)map, fid, slot, cls, n, r.exception_thrown ? 0 : 1);
     if (r.exception_thrown) { logf("[F%d] alias: the slot's files could not be asked for: no alias", fid); return; }
-    g_extra[fid].push_back({ slot, cls, n });
+    g_extra[fid].push_back({ slot, cls, n, carrier_of(fid) });
     for (auto& f : d.f) if (f.fid == fid && wears_slot(d, f, slot)) dress(f, slot);
     alias_line(fid, ("slot v" + std::to_string(slot)).c_str(), d);
     logf("[F%d] alias: slot v%02d's files asked for next to %s's", fid, slot, carrier_name(fid).c_str());
 }
 
-// The game unloads the files of `fid`'s carrier: the slot's go with the last of them
-void on_carrier_unload(Obj* map, int fid) {
-    int& held = g_held[fid];
+// The game unloads the files of a carrier `cos` of `fid` it holds: the slot's asked for next to them go with the last
+void on_carrier_unload(Obj* map, int fid, int cos) {
+    int& held = g_held[{ fid, cos }];
     if (held > 0) --held;
     auto& ex = g_extra[fid];
-    while (static_cast<int>(ex.size()) > held) {
-        const Extra e = ex.back();
-        ex.pop_back();
+    for (;;) {
+        int with = 0;
+        for (auto& x : ex) with += x.carrier == cos;
+        if (with <= held) break;
+        auto it = std::find_if(ex.rbegin(), ex.rend(), [cos](const Extra& x) { return x.carrier == cos; });
+        const Extra e = *it;
+        ex.erase(std::next(it).base());
         g_in_request = true;
         auto r = call(m_req_unload, map, { arg_i32(fid), arg_i32(e.cls), arg_i32(e.slot), arg_i32(e.n) });
         g_in_request = false;
         if (wjournal::on()) wjournal::log("ALIAS_UNLOAD F%d v%d ok=%d", fid, e.slot, r.exception_thrown ? 0 : 1);
-        logf("[F%d] alias: slot v%02d's files unloaded with the last of %s's", fid, e.slot, carrier_name(fid).c_str());
+        logf("[F%d] alias: slot v%02d's files unloaded with the last of %s's", fid, e.slot, ownership::outfit_label(cos).c_str());
         if (!slot_held(fid, e.slot))
             for (auto d = g_dressed.begin(); d != g_dressed.end();) {
                 auto cur = d++;
@@ -1225,9 +1265,10 @@ int pre_asset_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsi
 int pre_asset_unload(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
-    auto it = g_f.find(fid);
-    if (it != g_f.end() && it->second.carrier >= 0 && cos == it->second.carrier)
-        try { std::lock_guard lk(g_alias_mx); on_carrier_unload(reinterpret_cast<Obj*>(argv[1]), fid); } catch (...) { g_in_request = false; }
+    try {
+        std::lock_guard lk(g_alias_mx);
+        if (auto h = g_held.find({ fid, cos }); h != g_held.end()) on_carrier_unload(reinterpret_cast<Obj*>(argv[1]), fid, cos);
+    } catch (...) { g_in_request = false; }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -1384,6 +1425,23 @@ void set_display_nsfw(bool on) {
     g_nsfw_apply = true;
 }
 
+bool online_drivetech() { return g_online_dt; }
+
+// The row "Outfit Others See" was changed in the game (core callback, game thread): written to settings.json, applied on
+// the next tick outside Battle Settings (carriers decided again, the saves that hold a slot's carrier moved)
+void set_online_drivetech(bool on) {
+    CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
+    Json v;
+    v.kind = Json::String;
+    v.s = on ? "DriveTech" : "Outfit 1";
+    const bool ok = write_file(kSettings, settings_with("online_outfit", v));
+    if (ok) g_settings_stamp = settings_stamp();
+    logf("costumes: Outfit Others See: %s (option row)%s", on ? "DriveTech" : "Outfit 1", ok ? "" : ": settings.json NOT written");
+    if (on == g_online_dt) return;
+    g_online_dt = on;
+    g_carrier_apply = true;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Module entry points
 // ---------------------------------------------------------------------------------------------
@@ -1435,7 +1493,7 @@ void install_hooks() {
 bool busy() {
     if (g_slots.empty()) return false;
     if (!g_boot_done || g_revoke_cursor >= kStaticMin || g_color_cursor >= kColorMin) return true;
-    return g_nsfw_apply;
+    return g_nsfw_apply || g_carrier_apply;
 }
 
 void tick(uint32_t ev) {
@@ -1461,7 +1519,7 @@ void tick(uint32_t ev) {
 
     // ---- NSFW outfits: settings.json read again (when it changed) at every screen that lists outfits, before the
     // ownership pass below (which then follows the new setting); applied once more below the Battle Settings work
-    if ((g_nsfw_slots || rto::nsfw_options() || g_nsfw_row) && (ev & (EV_TITLE_END | EV_SELECT_START | EV_SELECT_END | EV_MENU_OPEN | EV_MENU_CLOSE))
+    if ((ev & (EV_TITLE_END | EV_SELECT_START | EV_SELECT_END | EV_MENU_OPEN | EV_MENU_CLOSE))
         && read_nsfw_setting("settings.json changed"))
         g_nsfw_apply = true;
 
@@ -1490,6 +1548,18 @@ void tick(uint32_t ev) {
     if (g_nsfw_apply && g_boot_done && !g_menu_open) {
         g_nsfw_apply = false;
         give_ownership("Display NSFW Outfits changed");
+        safety_net();
+    }
+    // "Outfit Others See" changed, outside Battle Settings: every carrier decided again (the alias's hooks read it, under
+    // their lock), the saves that hold the former carrier for a slot moved to the new one (safety_net, carrier::stale).
+    // A fighter on screen keeps what it was built from; the files asked for with the former carrier are unloaded with it.
+    if (g_carrier_apply && g_carriers_done && g_bc_done && !g_menu_open) {
+        g_carrier_apply = false;
+        {
+            std::lock_guard lk(g_alias_mx);
+            for (int fid : g_fighters) set_carrier(g_f[fid]);
+        }
+        logf("costumes: carriers now %s", carriers_text().c_str());
         safety_net();
     }
 

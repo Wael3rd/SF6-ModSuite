@@ -13,6 +13,9 @@
 - **A Custom Room's training area shows your slot** (it showed the carrier): the game runs it as Training, but its
   outfit comes from Battle Settings.
 - The VS screen shows your slot too.
+- **New option: Outfit Others See** (Options > Interface > Other Settings, next to Display NSFW Outfits): Outfit 1
+  (default) or DriveTech, the outfit other players see while you wear a modded outfit. Characters without DriveTech
+  use Outfit 1. It applies from the next battle, without restarting the game.
 
 ### Known issues
 - Slots Loader 1.15.0: tested in a Custom Room against another platform (Ken in Outfit 1 on both sides: each saw

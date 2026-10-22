@@ -32,10 +32,15 @@ fight triggers none of these events: during a fight the plugin reads nothing but
 
 A slot chosen in Battle Settings is not a costume the other players have: the save data (and the network) keep one
 of the character's own outfits, the carrier, and the plugin dresses the player's own fighter in the slot on the
-player's screen only. The carrier is **Outfit 1** (costume 0) for every character (Slots Loader 1.15; DriveTech
-before, Outfit 1 for a character without it). It is checked at boot in the game's costume table
-(`CostumeInventory.GetMasterDataRecord`: `fighterId`, `costumeNo`; if the table gives no answer for 30 s, in the
-scene's folders `fighterNNN/esfNNNv00`); a character without it is left out of the alias (one log line).
+player's screen only. The carrier is the player's choice, **Outfit 1** (costume 0, the default since Slots Loader
+1.15) or **DriveTech** (costume 4; Outfit 1 for a character without it, Arjun): Options > Interface > Other Settings >
+"Outfit Others See" (core 0.9.0+), or `"online_outfit": "Outfit 1"` / `"DriveTech"` in
+`SF6_CostumeSlots_data\settings.json`. A change applies without a restart: outside Battle Settings the carriers are
+decided again and the saves that hold the former one for a slot are moved to the new one (from the next battle; a
+fighter on screen keeps what it was built from). The outfits each character has, and both carriers' colours, are read
+at boot in the game's costume table (`CostumeInventory.GetMasterDataRecord`: `fighterId`, `costumeNo`; if the table
+gives no answer for 30 s, the scene's folders `fighterNNN/esfNNNv00` / `v04`); a character with neither is left out
+of the alias (one log line).
 
 How (since 1.15): the battle description (`BattleFlowMap.m_desc`) has one `FighterDesc` per fighter, whose `Costume`
 is what the network holds; the game also keeps a local override per fighter (`SetOverwriteDesc` / `GetCostume`) and

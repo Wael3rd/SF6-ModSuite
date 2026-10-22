@@ -19,8 +19,11 @@ int main() {
     check(choose({0, 1, 2, 3, 4}) == O1, "Outfit 1 for every fighter, DriveTech or not");
     check(choose({0, 1}) == O1, "Outfit 1 without DriveTech (Arjun)");
     check(choose({0}) == O1, "Outfit 1 alone");
-    check(choose({1, 2, 4}) == -1, "no Outfit 1: no carrier");
+    check(choose({1, 2}) == -1, "neither Outfit 1 nor DriveTech: no carrier");
     check(choose({}) == -1, "no record: no carrier");
+    check(choose({0, 1, 4}, true) == DT, "DriveTech set: DriveTech where the fighter has it");
+    check(choose({0, 1}, true) == O1, "DriveTech set, no DriveTech (Arjun): Outfit 1");
+    check(choose({1, 4}) == DT, "no Outfit 1: DriveTech");
 
     // stale: the save still holds a former carrier (DriveTech until 1.14)
     check(stale(DT, O1, DT, true, true), "DriveTech carrier then, slot intent: to Outfit 1");
@@ -30,6 +33,8 @@ int main() {
     check(!stale(DT, O1, O2, true, true), "another outfit in the save: not a carrier, left");
     check(!stale(O1, O1, O1, true, true), "Outfit 1 then and now: nothing moves");
     check(!stale(DT, -1, DT, true, false), "no carrier now: nothing moves");
+    check(stale(O1, DT, O1, true, true), "setting changed to DriveTech, slot intent: to DriveTech");
+    check(!stale(O1, DT, O1, false, true), "setting changed to DriveTech, Outfit 1 chosen: the player's");
 
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;
