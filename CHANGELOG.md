@@ -12,10 +12,11 @@
   both, and copying the slot there would have dressed both). See [plugin/README.md](plugin/README.md).
 - **A Custom Room's training area shows your slot** (it showed the carrier): the game runs it as Training, but its
   outfit comes from Battle Settings.
+- The VS screen shows your slot too.
 
 ### Known issues
-- Slots Loader 1.15.0: tested offline (Training shortcut with the test switch, Custom Room training area); a real
-  online match with the new alias has not been played yet.
+- Slots Loader 1.15.0: tested in a Custom Room against another platform (Ken in Outfit 1 on both sides: each saw
+  the slot on the PC player only), not yet in Ranked or the Battle Hub.
 
 ## 1.18.1 (2026-10-22) — SF6 Mod Suite
 

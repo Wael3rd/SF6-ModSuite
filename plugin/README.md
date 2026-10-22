@@ -20,7 +20,7 @@ when it is done:
 | character select started (`app.battle.bBattleFighterSelectFlow.start`, `app.UIFlowUI10501.Start`) | ownership, save safety net |
 | Battle Settings shown (`app.UIFlowMatchingSetting.Param.CreatedObject` / `ShowedObject`) | the save shows the slot chosen there |
 | Battle Settings closed (`HidObject`, `OnEnd`; only after an open) | the slot becomes the intent, the save gets the carrier (what other players see) |
-| the game asks for / unloads a fighter's files (`app.battle.BattleFlowMap.requestNotManagedFighterAssetLoad` / `...Unload`), a reload (`SetupReloadBattleAsset`), the fighters built (`setupFighterAsset`) | the online alias (below), at once in the hook: these run on the flow map's own thread, where the game itself reads the battle description |
+| the game asks for / unloads a fighter's files (`app.battle.BattleFlowMap.requestNotManagedFighterAssetLoad` / `...Unload`, online `requestManagedFighterAssetLoad`), a reload (`SetupReloadBattleAsset`), the fighters built (`setupFighterAsset`) | the online alias (below), at once in the hook: these run on the flow map's own thread, where the game itself reads the battle description |
 | stage select shown / hidden, focus or preview changed (`app.menu.UIFlowStageSelect.Param`) | the variant's name between UP / DOWN hints, its preview, each stage's thumbnail in the list (core 0.8.1+) |
 | UP / DOWN on the stage select agent (`app.UIAgent.InputUp` / `InputDown`) | next / previous variant, `state.json` for the loader |
 | VS screen activated or rewritten (`app.esports.VSInfoOffline`) | the variant's name and image |
@@ -40,11 +40,13 @@ scene's folders `fighterNNN/esfNNNv00`); a character without it is left out of t
 How (since 1.15): the battle description (`BattleFlowMap.m_desc`) has one `FighterDesc` per fighter, whose `Costume`
 is what the network holds; the game also keeps a local override per fighter (`SetOverwriteDesc` / `GetCostume`) and
 builds the fighter's visual from it. When the game asks for the files of a character's carrier and the player
-controls that character in it with a slot as the intent, the slot's files are asked for too; just before the
-fighters are built, the player's `FighterDesc` gets the slot and its colour as its override. Each fighter is built
-from its own outfit: an opponent in the same character's Outfit 1 (a mirror) stays in Outfit 1. The slot's files are
-unloaded with the last of the carrier's the game holds, and the override is taken off then, or before fighters are
-built without it; never while the fighter built from it is on screen.
+controls that character in it with a slot as the intent, the slot's files are asked for too, the same way (online
+the game asks for them as managed files, which it releases itself), and the player's `FighterDesc` gets the slot and
+its colour as its override at once (the VS screen builds its models from the description before the fighters are
+built); just before the fighters are built it is checked again and kept only if the slot's files were asked for.
+Each fighter is built from its own outfit: an opponent in the same character's Outfit 1 (a mirror) stays in Outfit 1.
+The slot's files are unloaded with the last of the carrier's the game holds, and the override is taken off then, or
+before fighters are built without it; never while the fighter built from it is on screen.
 
 Where: online (`IsNetwork`: the fighter of our session member), and offline in a mode that takes the costume from
 Battle Settings (a fighter on a pad), never in a mode that picks costumes on a select screen (Arcade, Training,
@@ -103,9 +105,9 @@ Copy it into `reframework\plugins\` **with the game closed**. Headers: REFramewo
 
 ## Known limits
 
-- The alias follows the game's request for a fighter's files (`requestNotManagedFighterAssetLoad`); a battle whose
-  files are asked for another way (`requestManagedFighterAssetLoad`) is not aliased (one log line:
-  `alias: the game asked for Outfit 1's files as managed files: not followed`).
+- The alias follows the game's requests for a fighter's files (`requestNotManagedFighterAssetLoad`, online
+  `requestManagedFighterAssetLoad`); fighters built without such a request (a battle loaded through a select screen)
+  are left as the game built them (log: `the slot's files were not asked for before the fighters were built`).
 
 ## Runtime costume options (`rto*.cpp`, off unless the loader writes `costume_options.json`)
 
