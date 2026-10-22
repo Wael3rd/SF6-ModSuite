@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased — SF6 Slots Loader 1.15.0 (plugin only)
+## 1.18.2 (2026-10-22) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.15.0 | online alias on Outfit 1 (or DriveTech, new option), mirrors, Custom Room training area, VS screen |
+| SF6 Color Mod | 0.23.0 | unchanged |
+| SF6 Native Core | 0.9.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.14.1, then install Slots Loader 1.15.0. The Color
+Mod, Native Core and Recording Manager zips are the files of 1.18.1: nothing to do if they are installed. Only the
+plugin (`SF6_CostumeSlotsNative.dll`) changed; the loader did not, so the costume pak is not rebuilt.
 
 ### SF6 Slots Loader 1.15.0
 - **The online alias uses Outfit 1 for every character** (it used DriveTech, Outfit 1 only for Arjun): a slot chosen
@@ -18,8 +29,27 @@
   use Outfit 1. It applies from the next battle, without restarting the game.
 
 ### Known issues
-- Slots Loader 1.15.0: tested in a Custom Room against another platform (Ken in Outfit 1 on both sides: each saw
-  the slot on the PC player only), not yet in Ranked or the Battle Hub.
+- Slots Loader: the new online alias was tested in a Custom Room against another platform (Ken in Outfit 1 on both
+  sides, then with Outfit Others See on DriveTech), not yet in Ranked or the Battle Hub.
+- Slots Loader: a fighter built without the game asking for its files again (a Custom Room's training area right
+  after a match) keeps Outfit 1 (or DriveTech) until the next load; the log says so.
+- Slots Loader, Training pause menu: when the costume or colour changed, the fight shows for about half a second with
+  the old look after the pause menu closes, before the game's own reload fade (the game's timing).
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only.
+- Slots Loader, character select and Training pause menu popup: the costume options menu (R1 / C) and the Color
+  Mod's Drive colours (L1) use buttons the game may also use on those screens; this is not confirmed either way. If
+  the game's own guide there shows them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader, Training pause menu: after confirming options only, the battle restarts (as Restart Battle) a few
+  frames after the pause menu closes, so the fight shows briefly before the fade.
+- Slots Loader: the Training popup costume options have not been tested with P2 (the dummy) nor with a gamepad on the
+  Up / Down window.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
 
 ## 1.18.1 (2026-10-22) — SF6 Mod Suite
 
