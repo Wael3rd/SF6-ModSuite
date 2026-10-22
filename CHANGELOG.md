@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — SF6 Slots Loader 1.15.0 (plugin only)
+
+### SF6 Slots Loader 1.15.0
+- **The online alias uses Outfit 1 for every character** (it used DriveTech, Outfit 1 only for Arjun): a slot chosen
+  in Battle Settings is what you see on your screen, the other players see your Outfit 1. A save that held DriveTech
+  for a slot is moved to Outfit 1 by itself at the first start.
+- **Mirrors work.** The slot is now put on your own fighter only, through the game's own local costume override of
+  that fighter, with the slot's files loaded next to Outfit 1's. An opponent playing the same character in Outfit 1
+  stays in Outfit 1 on your screen while you wear your slot (before, a mirror on the carrier showed the carrier on
+  both, and copying the slot there would have dressed both). See [plugin/README.md](plugin/README.md).
+- **A Custom Room's training area shows your slot** (it showed the carrier): the game runs it as Training, but its
+  outfit comes from Battle Settings.
+
+### Known issues
+- Slots Loader 1.15.0: tested offline (Training shortcut with the test switch, Custom Room training area); a real
+  online match with the new alias has not been played yet.
+
 ## 1.18.1 (2026-10-22) — SF6 Mod Suite
 
 | Package | Version | |

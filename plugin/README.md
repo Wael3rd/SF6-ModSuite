@@ -15,13 +15,12 @@ when it is done:
 
 | Event (hooked method) | Work |
 |---|---|
-| boot (first frames, once) | colour records of the slots, their select screen data and colour squares, each character's carrier (below) with its folder and colours, ownership |
+| boot (first frames, once) | colour records of the slots, their select screen data and colour squares, each character's carrier (below) and its colours, ownership |
 | title screen destroyed (`app.menu.UIFlowTitle.onDestroy`) | ownership given back (the game clears DLC ownership at login) |
 | character select started (`app.battle.bBattleFighterSelectFlow.start`, `app.UIFlowUI10501.Start`) | ownership, save safety net |
 | Battle Settings shown (`app.UIFlowMatchingSetting.Param.CreatedObject` / `ShowedObject`) | the save shows the slot chosen there |
 | Battle Settings closed (`HidObject`, `OnEnd`; only after an open) | the slot becomes the intent, the save gets the carrier (what other players see) |
-| an outfit's visual manifest created (`app.battle.assets.FighterVisualHolder..ctor`: the game mounted its folder), outside the character select screen | for two seconds (the loading screen), for each character with an intent: once the carrier's manifest is there, the slot's folder is mounted, its manifest copied over the carrier's, the colour placed under a colour the carrier has |
-| Battle Settings shown, character select started (between matches) | the colours of the last alias put back |
+| the game asks for / unloads a fighter's files (`app.battle.BattleFlowMap.requestNotManagedFighterAssetLoad` / `...Unload`), a reload (`SetupReloadBattleAsset`), the fighters built (`setupFighterAsset`) | the online alias (below), at once in the hook: these run on the flow map's own thread, where the game itself reads the battle description |
 | stage select shown / hidden, focus or preview changed (`app.menu.UIFlowStageSelect.Param`) | the variant's name between UP / DOWN hints, its preview, each stage's thumbnail in the list (core 0.8.1+) |
 | UP / DOWN on the stage select agent (`app.UIAgent.InputUp` / `InputDown`) | next / previous variant, `state.json` for the loader |
 | VS screen activated or rewritten (`app.esports.VSInfoOffline`) | the variant's name and image |
@@ -29,18 +28,36 @@ when it is done:
 Without stage mods, the stage hooks are not installed; without costume slots, the costume ones are not. A
 fight triggers none of these events: during a fight the plugin reads nothing but its own memory.
 
-## The carrier of the online alias
+## The online alias
 
 A slot chosen in Battle Settings is not a costume the other players have: the save data (and the network) keep one
-of the character's own outfits, the carrier, and the plugin shows the slot over it on the player's screen only. The
-carrier is **DriveTech** (costume 4) when the game has it for the character, else **Outfit 1** (costume 0): Arjun
-(fighter 34, 13/10 update) has no DriveTech. It is read at boot from the game's costume table
-(`CostumeInventory.GetMasterDataRecord`: `fighterId`, `costumeNo`), so a DriveTech added by a later update is used
-by itself; if the table gives no answer for 30 s, from the scene's folders (`fighterNNN/esfNNNv04`, else `v00`).
-A character without either, or whose carrier folder is not in the scene after 10 s, is left out of the alias (one
-log line) and the others go on. `state.json` keeps the carrier the save was given when it is not DriveTech
-(`"carrier": 0`); when it changes, the safety net moves a save still holding the former carrier (with a slot as the
-intent, or a costume the character does not have) to the new one, in a colour it has.
+of the character's own outfits, the carrier, and the plugin dresses the player's own fighter in the slot on the
+player's screen only. The carrier is **Outfit 1** (costume 0) for every character (Slots Loader 1.15; DriveTech
+before, Outfit 1 for a character without it). It is checked at boot in the game's costume table
+(`CostumeInventory.GetMasterDataRecord`: `fighterId`, `costumeNo`; if the table gives no answer for 30 s, in the
+scene's folders `fighterNNN/esfNNNv00`); a character without it is left out of the alias (one log line).
+
+How (since 1.15): the battle description (`BattleFlowMap.m_desc`) has one `FighterDesc` per fighter, whose `Costume`
+is what the network holds; the game also keeps a local override per fighter (`SetOverwriteDesc` / `GetCostume`) and
+builds the fighter's visual from it. When the game asks for the files of a character's carrier and the player
+controls that character in it with a slot as the intent, the slot's files are asked for too; just before the
+fighters are built, the player's `FighterDesc` gets the slot and its colour as its override. Each fighter is built
+from its own outfit: an opponent in the same character's Outfit 1 (a mirror) stays in Outfit 1. The slot's files are
+unloaded with the last of the carrier's the game holds, and the override is taken off then, or before fighters are
+built without it; never while the fighter built from it is on screen.
+
+Where: online (`IsNetwork`: the fighter of our session member), and offline in a mode that takes the costume from
+Battle Settings (a fighter on a pad), never in a mode that picks costumes on a select screen (Arcade, Training,
+Versus, Team Battle: there a fighter in Outfit 1 really wears it). A Custom Room's training area is Training (game
+mode 2) but takes the costume from Battle Settings: it is told apart by its fighters, loaded before any of them has a
+pad, and the player is P1. Battles whose fighters were loaded through a select screen ask for no files and are left
+as the game built them. A replay (no player) is not aliased.
+
+`state.json` keeps the carrier the save was given (`"carrier": 0`); a save still holding a former carrier
+(DriveTech, written by 1.14 and before) with a slot as the intent is moved to the new one by the safety net, in a
+colour it has. For tests, `reframework\data\SF6_CostumeSlots_data\alias_everywhere.txt` present at start makes
+the modes that pick costumes on a select screen aliased too (the Training shortcut of Fighting Ground loads its
+fighters the way online matches do).
 
 ## Slots of outfits the player does not own
 
@@ -73,7 +90,7 @@ DLC checks makes every outfit valid: every slot is shown then.
 
 - `reframework/data/SF6_Costumes_Data/registry.json` (written by the loader): slots, record ids, colour squares.
 - `reframework/data/SF6_CostumeSlots_data/state.json`: the slot and colour chosen in Battle Settings, per character
-  (and the carrier the save was given, when it is not DriveTech).
+  (and the carrier the save was given).
 - `reframework/data/SF6_StageSlots_Data/registry.json` (written by the loader) and `state.json` (the chosen variants,
   watched by the loader).
 - Log: `reframework/data/SF6_CostumeSlots_data/native_log.txt` (the previous one is kept as `native_log.old.txt`).
@@ -86,12 +103,9 @@ Copy it into `reframework\plugins\` **with the game closed**. Headers: REFramewo
 
 ## Known limits
 
-- Mirror on the carrier: when another fighter of the battle is the same character in the same carrier, that character
-  is not aliased in that battle (both use the carrier's folder: the manifest overwritten could be the opponent's, who
-  would wear the slot on the player's screen); the player wears the carrier. Log:
-  `[F34] alias skipped: mirror on the carrier (Outfit 1)`.
-- `via.Folder.activate` / `deactivate` are not usable as events: the engine mounts folders without going through
-  them (a hook on them sees only the plugin's own calls). The manifest's constructor is.
+- The alias follows the game's request for a fighter's files (`requestNotManagedFighterAssetLoad`); a battle whose
+  files are asked for another way (`requestManagedFighterAssetLoad`) is not aliased (one log line:
+  `alias: the game asked for Outfit 1's files as managed files: not followed`).
 
 ## Runtime costume options (`rto*.cpp`, off unless the loader writes `costume_options.json`)
 

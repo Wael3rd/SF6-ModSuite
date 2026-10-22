@@ -8,13 +8,12 @@
 //     screen that lists outfits opens. A slot made from an outfit the player does not own (the
 //     game's own list of the character's outfits says so, ownership.hpp) is not owned: the select
 //     screen and Battle Settings do not list it;
-//   - online alias: Battle Settings keeps the character's carrier in the save (DriveTech, or Outfit 1
-//     for a character without DriveTech: carrier.hpp), which is what other players see, and the slot
-//     chosen there as an intent; when the game mounts the carrier's folder for a match, the slot's
-//     folder is mounted too and its visual manifest copied over the carrier's, for the player's own
-//     fighter only (the battle description says which one), never in a mirror on the carrier. A mount is
-//     seen through the manifest's constructor (FighterVisualHolder..ctor): via.Folder.activate is a
-//     native method the engine calls internally, its hook only saw our own calls (30/09).
+//   - online alias: Battle Settings keeps the character's carrier in the save (Outfit 1: carrier.hpp),
+//     which is what other players see, and the slot chosen there as an intent; when the game asks for
+//     the carrier's files for a match, the player's own fighter in the battle description gets the slot
+//     as the game's own local costume override and the slot's files are asked for next to the
+//     carrier's: that fighter is built from the slot, every other one from its own outfit, a mirror on
+//     the carrier included (see "Online alias" below).
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
 #include "slots.hpp"
 #include "slots_ui.hpp"
@@ -112,20 +111,10 @@ std::map<std::pair<int, int>, int> g_moved;
 // ---- per character ----
 struct Fighter {
     int carrier = -1;                // the alias's outfit (carrier.hpp), -1 not decided or none
-    bool left_out = false;           // no carrier, or its folder not found: no alias for this character
+    bool left_out = false;           // no carrier: no alias for this character
     std::set<int> costumes;          // the character's own outfits in the game's costume table
-    std::string dst_path;            // the carrier's folder (fighterNNN/esfNNNv04, ...v00)
-    Obj* dst_folder = nullptr;
     std::set<int> base_colors; int base_min = 0; bool base_known = false;   // the carrier's colours
     std::vector<int> o1_colors;      // Outfit 1's colours (an NSFW outfit hidden goes back to it), empty: not known
-    // alias
-    Obj* src_folder = nullptr;
-    uintptr_t swapped_addr = 0;
-    // colour swap in a CCVD: entries csw_a / csw_b hold each other's data (csw_da, csw_db before)
-    bool has_csw = false; uintptr_t csw_addr = 0; int csw_a = 0, csw_b = 0;
-    uintptr_t csw_da = 0, csw_db = 0;
-    uint32_t last_mount = 0;
-    std::string last_sig;
 };
 std::map<int, Fighter> g_f;
 
@@ -137,10 +126,10 @@ int carrier_of(int fid) {
     auto it = g_f.find(fid);
     return it == g_f.end() ? -1 : it->second.carrier;
 }
-// What the save data holds while a slot is the intent: the carrier (DriveTech until it is decided)
+// What the save data holds while a slot is the intent: the carrier (Outfit 1 until it is decided)
 int save_cos_of(int fid) {
     int c = carrier_of(fid);
-    return c >= 0 ? c : carrier::kDriveTech;
+    return c >= 0 ? c : carrier::kOutfit1;
 }
 std::string carrier_name(int fid) { return ownership::outfit_label(save_cos_of(fid)); }
 
@@ -152,25 +141,18 @@ int saved_carrier_of(int fid) {
     return it == g_saved_carrier.end() ? carrier::kDriveTech : it->second;
 }
 
-// The carriers in log lines: "DriveTech" while every character has it, else the others named
+// The carriers in log lines: "Outfit 1", with the characters left out named
 std::string carriers_text() {
-    std::string other;
-    for (int fid : g_fighters) {
-        int c = carrier_of(fid);
-        if (c < 0 || c == carrier::kDriveTech) continue;
-        other += (other.empty() ? "" : ", ") + ownership::outfit_label(c) + " for F" + std::to_string(fid);
-    }
-    return other.empty() ? std::string("DriveTech") : "DriveTech, " + other;
+    std::string out;
+    for (int fid : g_fighters)
+        if (carrier_of(fid) < 0) out += (out.empty() ? "" : ", ") + std::string("F") + std::to_string(fid);
+    return out.empty() ? std::string("Outfit 1") : "Outfit 1 (none for " + out + ")";
 }
-
-// Alias check after an outfit mount, until this frame (0: none). Each mount pushes it further.
-uint32_t g_mount_until = 0;
-bool g_select_logged = false;
 
 // ---- progress ----
 bool g_boot_done = false;
 uint32_t g_boot_last = 0;
-bool g_dst_done = false, g_bc_done = false, g_colors_done = false, g_ui_done = false;
+bool g_bc_done = false, g_colors_done = false, g_ui_done = false;
 bool g_owned_once = false;
 // sweeps of stale ownership, once per session, a slice per frame
 int g_revoke_cursor = -1;           // 5000..8199, -1 not started, -2 done
@@ -354,8 +336,6 @@ void set_intent_slot(int fid, int slot, const char* why) {
     if (!slot) in.color = -1;
     save_state();
     logf("[F%d] intent slot = %d (%s)", fid, slot, why);
-    auto& f = g_f[fid];
-    f.src_folder = nullptr; f.swapped_addr = 0;
 }
 void set_intent_color(int fid, int color, const char* why) {
     auto& in = g_intent[fid];
@@ -370,27 +350,18 @@ void set_intent_color(int fid, int color, const char* why) {
 // ---------------------------------------------------------------------------------------------
 
 Method *m_first_folder = nullptr, *m_f_child = nullptr, *m_f_next = nullptr, *m_f_path = nullptr;
-Method *m_f_active = nullptr, *m_f_activate = nullptr, *m_get_go = nullptr, *m_go_folder = nullptr;
-TD* td_holder = nullptr;
 
 bool cache_folder_methods() {
     if (m_f_path) return true;
     auto* tdb = api().tdb();
     auto* td_scene = tdb->find_type("via.Scene");
     auto* td_folder = tdb->find_type("via.Folder");
-    auto* td_c = tdb->find_type("via.Component");
-    auto* td_go = tdb->find_type("via.GameObject");
-    td_holder = tdb->find_type("app.battle.assets.FighterVisualHolder");
-    if (!td_scene || !td_folder || !td_c || !td_go || !td_holder) return false;
+    if (!td_scene || !td_folder) return false;
     m_first_folder = method_of(td_scene, "get_FirstFolder", 0);
     m_f_child = method_of(td_folder, "get_Child", 0);
     m_f_next = method_of(td_folder, "get_Next", 0);
-    m_f_active = method_of(td_folder, "get_Active", 0);
-    m_f_activate = method_of(td_folder, "activate", 0);
-    m_get_go = method_of(td_c, "get_GameObject", 0);
-    m_go_folder = method_of(td_go, "get_FolderSelf", 0);
     m_f_path = method_of(td_folder, "get_Path", 0);
-    return m_first_folder && m_f_child && m_f_next && m_f_active && m_f_activate && m_get_go && m_go_folder && m_f_path;
+    return m_first_folder && m_f_child && m_f_next && m_f_path;
 }
 
 std::string fld_path(Obj* f) { return str(call_obj(m_f_path, f)); }
@@ -398,74 +369,12 @@ std::string fld_path(Obj* f) { return str(call_obj(m_f_path, f)); }
 bool ends_with(const std::string& s, const std::string& sfx) {
     return sfx.size() <= s.size() && s.compare(s.size() - sfx.size(), sfx.size(), sfx) == 0;
 }
-// A slot folder lives under product/content/esf/... for a base character, under
-// ver_02_0300/content/esf/... for a DLC one: compared by the suffix content/esf/fighterNNN/esfNNNvNN
-std::string slot_suffix(int fid, int cos) {
-    char b[64]; snprintf(b, sizeof b, "content/esf/fighter%03d/esf%03dv%02d", fid, fid, cos);
-    return b;
-}
 
 template <typename Fn> void walk_folders(Obj* f, int depth, Fn&& fn) {
     if (!f || depth > 8) return;
     if (!fn(f)) return;
     walk_folders(call_obj(m_f_child, f), depth + 1, fn);
     walk_folders(call_obj(m_f_next, f), depth, fn);
-}
-
-// Every character's carrier folder, once the carriers are decided. A folder still missing after
-// kDstWalks complete walks (one per boot pass: 10 s; every folder was found at the first one so far)
-// leaves its character out of the alias, the others go on.
-constexpr int kDstWalks = 20;
-int g_dst_walks = 0;
-
-void find_dst_all() {
-    if (g_dst_done || !g_carriers_done || !cache_folder_methods()) return;
-    auto* sc = current_scene();
-    auto* root = sc ? call_obj(m_first_folder, sc) : nullptr;
-    if (!root) return;
-    std::map<std::string, int> want;
-    for (int fid : g_fighters) {
-        auto& fr = g_f[fid];
-        if (fr.left_out || !fr.dst_path.empty()) continue;
-        char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, fr.carrier);
-        want[b] = fid;
-    }
-    if (want.empty()) { g_dst_done = true; return; }
-    walk_folders(root, 0, [&](Obj* f) {
-        if (want.empty()) return false;
-        std::string p = fld_path(f);
-        for (auto it = want.begin(); it != want.end(); ++it) {
-            if (ends_with(p, it->first)) {
-                auto& fr = g_f[it->second];
-                fr.dst_path = p; fr.dst_folder = f;
-                want.erase(it);
-                break;
-            }
-        }
-        return true;
-    });
-    if (!want.empty() && ++g_dst_walks >= kDstWalks) {
-        for (auto& [sfx, fid] : want) {
-            g_f[fid].left_out = true;
-            logf("[F%d] %s folder %s not found: left out of the alias", fid, carrier_name(fid).c_str(), sfx.c_str());
-        }
-        want.clear();
-    }
-    g_dst_done = want.empty();
-    if (g_dst_done) logf("costumes: %s folders found", carriers_text().c_str());
-}
-
-Obj* find_folder(const std::string& suffix) {
-    if (!cache_folder_methods()) return nullptr;
-    auto* sc = current_scene();
-    auto* root = sc ? call_obj(m_first_folder, sc) : nullptr;
-    Obj* found = nullptr;
-    walk_folders(root, 0, [&](Obj* f) {
-        if (found) return false;
-        if (ends_with(fld_path(f), suffix)) { found = f; return false; }
-        return true;
-    });
-    return found;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -842,19 +751,18 @@ void color_cleanup_slice() {
 constexpr int kTablePasses = 60;
 int g_table_passes = 0;
 
-// The carriers from the folders the scene has (fighterNNN/esfNNNv04, else ...v00), one walk: only
-// when the costume table gives no answer (a game update). false while the scene has no folder.
+// The carriers from the folders the scene has (fighterNNN/esfNNNv00), one walk: only when the costume
+// table gives no answer (a game update). false while the scene has no folder.
 bool carriers_from_folders() {
     if (!cache_folder_methods()) return false;
     auto* sc = current_scene();
     auto* root = sc ? call_obj(m_first_folder, sc) : nullptr;
     if (!root) return false;
     std::map<std::string, std::pair<int, int>> want;   // folder suffix -> fighter, costume
-    for (int fid : g_fighters)
-        for (int c : { carrier::kDriveTech, carrier::kOutfit1 }) {
-            char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, c);
-            want[b] = { fid, c };
-        }
+    for (int fid : g_fighters) {
+        char b[64]; snprintf(b, sizeof b, "fighter%03d/esf%03dv%02d", fid, fid, carrier::kOutfit1);
+        want[b] = { fid, carrier::kOutfit1 };
+    }
     std::map<int, std::set<int>> has;
     walk_folders(root, 0, [&](Obj* f) {
         std::string p = fld_path(f);
@@ -901,9 +809,8 @@ void read_carriers() {
             auto& fr = g_f[fid];
             if (fr.carrier < 0) {
                 fr.left_out = true;
-                logf("[F%d] neither DriveTech nor Outfit 1 in %s: left out of the alias", fid, src);
-            } else if (fr.carrier != carrier::kDriveTech)
-                logf("[F%d] carrier: %s (no DriveTech in %s)", fid, carrier_name(fid).c_str(), src);
+                logf("[F%d] no Outfit 1 in %s: left out of the alias", fid, src);
+            }
         }
         g_carriers_done = true;
     }
@@ -1060,11 +967,33 @@ void insert_select_ui() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Online alias: the slot's folder over its carrier's (DriveTech, or Outfit 1: carrier.hpp)
+// Online alias: the player's fighter wears its slot, the save and the network keep the carrier (Outfit 1)
 // ---------------------------------------------------------------------------------------------
+//
+// The battle description (bFlowManager -> flow map -> m_desc) has one FighterDesc per fighter. Its Costume and
+// Color are what the save and the network hold (the carrier); next to them the game keeps a local override
+// (FighterDesc.SetOverwriteDesc / GetCostume / ResetOverwriteDesc) and builds the fighter's visual from it
+// (BattleFlowMap.setupFighterAsset). The fighters' files are asked for with the raw Costume, one request per
+// fighter (BattleFlowMap.requestNotManagedFighterAssetLoad / ...Unload(fighter, class, costume, n)).
+// So when the game asks for the files of a character's carrier and the player controls that character in it with
+// a slot as the intent, the slot's files are asked for too, right after the carrier's (whose request goes on: in a
+// mirror on the carrier the opponent is built from it); just before the fighters are built, the player's FighterDesc
+// gets the slot (and its colour) as its override, when the slot's files are held. The slot's files are unloaded
+// with the last of the carrier's the game holds: the two requests of a mirror are the same, so the plugin counts
+// them (22/10, Training: the opponent's change of outfit unloaded the slot under the player's fighter, invisible).
+// Seen in Training 22/10: the override alone gave an invisible fighter (the carrier's files, the slot's visual);
+// with the slot's files asked for, the player's Ken wore the slot and the other Ken, in Outfit 1 too, Outfit 1.
+// Before 1.15 the alias copied the slot's visual manifest over the carrier's; the two fighters of a mirror share
+// that manifest (both wore the slot, 22/10), so a mirror on the carrier was not aliased.
+// The hooks run on the flow map's own thread (its scene start), which is not the LateUpdateBehavior one: they read
+// and write the description there and call the game's requests themselves, as the game does on that thread (the
+// alias's own state is under a lock: the tick clears it between battles).
+// The game keeps an override past the battle (one survived the description's reset to its defaults, 22/10): every
+// override the plugin set is removed when its slot's files are unloaded and when fighters are built without it,
+// never while the fighter built from it is on screen (taken off when Battle Settings opened from Training's pause
+// menu, the game crashed 18 s later, 22/10).
 
-// The character select screen mounts and unmounts outfits itself: touching folders while it runs
-// hung the game (22/09). Checked when a mount is handled, not watched.
+// The character select screen mounts and unmounts outfits itself; the runtime costume options ask (rto.cpp)
 bool select_screen_active() {
     auto* fm = api().get_managed_singleton("app.UIFlowManager");
     auto* hs = fm ? get_obj(fm, "_Handles") : nullptr;
@@ -1085,195 +1014,54 @@ bool select_screen_active() {
     return false;
 }
 
-std::string holder_folder_path(Obj* comp) {
-    auto* go = call_obj(m_get_go, comp);
-    auto* fld = go ? call_obj(m_go_folder, go) : nullptr;
-    return fld ? fld_path(fld) : std::string{};
+Method *m_fd_set_ow = nullptr, *m_fd_reset_ow = nullptr, *m_fd_get_cos = nullptr;
+Method *m_req_load = nullptr, *m_req_unload = nullptr;
+std::atomic<DWORD> g_game_thread{0};   // the LateUpdateBehavior thread (tick), for the log
+std::recursive_mutex g_alias_mx;       // the alias's state below: hooks and tick
+bool g_menu_open = false;
+
+// For tests: with reframework/data/SF6_CostumeSlots_data/alias_everywhere.txt present at start, the modes that pick
+// costumes on a select screen are aliased too (the Training shortcut of Fighting Ground loads its fighters the way
+// online matches do), so the alias can be tried offline.
+bool alias_everywhere() {
+    static const bool on = GetFileAttributesA("reframework/data/SF6_CostumeSlots_data/alias_everywhere.txt") != INVALID_FILE_ATTRIBUTES;
+    return on;
 }
 
-// Entries a and b of a CCVD's colour list (Colors: List<{ColorId, Data}>)
-bool ccvd_pair(Obj* ccvd, int a, int b, Obj*& ea, Obj*& eb) {
-    ea = eb = nullptr;
-    auto* colors = ccvd ? get_obj(ccvd, "Colors") : nullptr;
-    int n = list_count(colors);
-    for (int i = 0; i < n; ++i) {
-        auto* it = list_item(colors, i);
-        int32_t id = -1;
-        if (it && get_i32(it, "ColorId", id)) { if (id == a) ea = it; else if (id == b) eb = it; }
-    }
-    return ea && eb;
-}
+// The carrier's files the game holds, per fighter: its loads minus its unloads of them (one per fighter wearing it)
+std::map<int, int> g_held;
+// Slots whose files the plugin asked for next to a carrier's and not unloaded yet, per fighter: never more than the
+// game holds of the carrier, so they go once every fighter in it is gone (a mirror's opponent leaving keeps them)
+struct Extra { int slot, cls, n; };
+std::map<int, std::vector<Extra>> g_extra;
+// The FighterDescs the plugin gave a slot as their override
+struct Dressed { int fid, slot, color; };
+std::map<Obj*, Dressed> g_dressed;
+Obj* g_reload_desc = nullptr;           // the description of a reload (SetupReloadBattleAsset), until fighters are built
+thread_local bool g_in_request = false; // the plugin's own request, seen by its hooks: let through
+std::atomic<bool> g_thread_told{false}, g_managed_told{false};
+std::string g_alias_sig;                // the last alias line (logged when it changes)
 
-// Whether this CCVD holds the fighter's swap: its two entries hold each other's data. Checked on
-// the data, not on the CCVD's address: a CCVD loaded again for the next match can take the address
-// of the one freed, unswapped.
-bool swap_in_place(const Fighter& fr, Obj* ccvd) {
-    Obj *ea, *eb;
-    if (!fr.has_csw || !ccvd_pair(ccvd, fr.csw_a, fr.csw_b, ea, eb)) return false;
-    return reinterpret_cast<uintptr_t>(get_obj(ea, "Data")) == fr.csw_db
-        && reinterpret_cast<uintptr_t>(get_obj(eb, "Data")) == fr.csw_da;
-}
+int arg_int(void* a) { return static_cast<int32_t>(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(a))); }
 
-// The carrier only has the colours of the master table; another colour announced to the network is a
-// communication error. The wanted colour's material data goes under the carrier's first colour.
-void apply_color(int fid, Obj* d_set) {
-    auto& fr = g_f[fid];
-    int want = g_intent[fid].color;
-    if (want < 0 || (fr.base_known && fr.base_colors.count(want))) return;
-    auto* ccvd = get_obj(d_set, "costumeColorVariation");
-    if (!ccvd) { logf("[F%d] colour: no costumeColorVariation", fid); return; }
-    if (fr.csw_b == want && swap_in_place(fr, ccvd)) return;   // this CCVD is swapped already
-    Obj *ea, *eb;
-    Obj *da = nullptr, *db = nullptr;
-    if (ccvd_pair(ccvd, fr.base_min, want, ea, eb)) { da = get_obj(ea, "Data"); db = get_obj(eb, "Data"); }
-    if (!da || !db) { logf("[F%d] colour: entries %d/%d not found", fid, fr.base_min, want); return; }
-    set_obj(ea, "Data", db); set_obj(eb, "Data", da);
-    if (wjournal::on()) wjournal::log("CCVD_SWAP ccvd=%p ea=%p Data old=%p new=%p eb=%p Data old=%p new=%p F%d a=%d b=%d",
-        (void*)ccvd, (void*)ea, (void*)da, (void*)db, (void*)eb, (void*)db, (void*)da, fid, fr.base_min, want);
-    fr.has_csw = true; fr.csw_addr = reinterpret_cast<uintptr_t>(ccvd); fr.csw_a = fr.base_min; fr.csw_b = want;
-    fr.csw_da = reinterpret_cast<uintptr_t>(da); fr.csw_db = reinterpret_cast<uintptr_t>(db);
-    logf("[F%d] colour %d placed under colour %d", fid, want, fr.base_min);
-}
-
-// Put back through a live object read again (the slot's CCVD), never a kept pointer
-void restore_color(int fid, Obj* src_h) {
-    auto& fr = g_f[fid];
-    if (!fr.has_csw) return;
-    auto* s_set = src_h ? get_obj(src_h, "_Setting") : nullptr;
-    auto* ccvd = s_set ? get_obj(s_set, "costumeColorVariation") : nullptr;
-    Obj *ea, *eb;
-    if (swap_in_place(fr, ccvd) && ccvd_pair(ccvd, fr.csw_a, fr.csw_b, ea, eb)) {
-        auto* da = get_obj(ea, "Data"); auto* db = get_obj(eb, "Data");
-        set_obj(ea, "Data", db); set_obj(eb, "Data", da);
-        if (wjournal::on()) wjournal::log("CCVD_RESTORE ccvd=%p ea=%p Data old=%p new=%p eb=%p Data old=%p new=%p F%d",
-            (void*)ccvd, (void*)ea, (void*)da, (void*)db, (void*)eb, (void*)db, (void*)da, fid);
-        logf("[F%d] colour put back", fid);
-    } else logf("[F%d] colour: the slot's CCVD was loaded again, nothing to put back", fid);
-    fr.has_csw = false;
-}
-
-// The manifests present now, with their folder's path (read once per pass, for every character)
-struct Holder { Obj* comp; std::string path; };
-std::vector<Holder> read_holders() {
-    std::vector<Holder> out;
-    if (!cache_folder_methods()) return out;
-    auto comps = find_components(td_holder);
-    int n = list_count(comps);
-    for (int i = 0; i < n; ++i) {
-        auto* c = list_item(comps, i);
-        if (!c) continue;
-        auto p = holder_folder_path(c);
-        if (!p.empty()) out.push_back({c, std::move(p)});
-    }
-    return out;
-}
-
-// One pass of the mount: the slot's folder is mounted once the game has mounted the carrier's
-// (never before: the game skips mounting the carrier when a folder of the character is already
-// active, and the load hangs), then the carrier's manifest is overwritten with the slot's.
-// true when done.
-bool mount_pass(int fid, const std::vector<Holder>& hs) {
-    auto& fr = g_f[fid];
-    int slot = g_intent[fid].slot;
-    if (!slot || fr.dst_path.empty()) return true;
-    std::string sfx = slot_suffix(fid, slot);
-    Obj *src_h = nullptr, *dst_h = nullptr;
-    for (auto& h : hs) {
-        if (ends_with(h.path, sfx)) src_h = h.comp;
-        else if (h.path == fr.dst_path && !dst_h) dst_h = h.comp;   // the first carrier (a mirror on it is not aliased: own_fighters)
-    }
-    char sig[32]; snprintf(sig, sizeof sig, "src=%s dst=%s", src_h ? "y" : "-", dst_h ? "y" : "-");
-    if (fr.last_sig != sig) { logf("[F%d] holders %s (n=%zu, v%d)", fid, sig, hs.size(), slot); fr.last_sig = sig; }
-
-    if (dst_h && !src_h) {
-        if (!fr.src_folder || !alive(fr.src_folder)) fr.src_folder = find_folder(sfx);
-        if (!fr.src_folder) return false;
-        auto r = call(m_f_active, fr.src_folder);
-        bool active = !r.exception_thrown && r.byte != 0;
-        if (!active && g_frame - fr.last_mount > 120) {
-            fr.last_mount = g_frame;
-            call(m_f_activate, fr.src_folder);
-            if (wjournal::on()) wjournal::log("MOUNT folder.activate obj=%p F%d v%d", (void*)fr.src_folder, fid, slot);
-            logf("[F%d] slot v%d mounted (the game mounted %s)", fid, slot, carrier_name(fid).c_str());
-        }
-        return false;
-    }
-    if (dst_h && src_h) {
-        if (!alive(dst_h) || !alive(src_h)) return false;   // safety: re-check before use
-        uintptr_t addr = reinterpret_cast<uintptr_t>(dst_h);
-        if (fr.swapped_addr == addr) return true;
-        auto* s_set = get_obj(src_h, "_Setting");
-        auto* d_set = get_obj(dst_h, "_Setting");
-        if (!s_set || !d_set) return false;
-        restore_color(fid, src_h);   // a swap left from the previous match, if its CCVD is still there
-        auto ow = call(d_set, "overwrite", { arg_obj(s_set) });
-        if (wjournal::on()) wjournal::log("MANIFEST overwrite dst=%p src=%p F%d v%d ok=%d", (void*)d_set, (void*)s_set, fid, slot, ow.exception_thrown ? 0 : 1);
-        logf("[F%d] manifest v%d -> v%d = %d", fid, slot, fr.carrier, ow.exception_thrown ? 0 : 1);
-        fr.swapped_addr = addr;
-        if (!ow.exception_thrown) {
-            apply_color(fid, d_set);
-            // what the fighter really wears, for the other mods reading its costume / colour (through the core)
-            ui::set_effective(fid, fr.carrier, slot, fr.has_csw ? fr.csw_b : -1);
-            if (wjournal::on()) wjournal::log("EFFECTIVE F%d shown=%d real=%d color=%d", fid, fr.carrier, slot, fr.has_csw ? fr.csw_b : -1);
-        }
-        return true;
-    }
-    return false;
-}
-
-// Between matches (a screen that shows the slot as an outfit of its own): its colours put back
-void restore_all() {
-    bool any = false;
-    for (auto& [fid, fr] : g_f) {
-        fr.swapped_addr = 0; any |= fr.has_csw;
-        if (fr.carrier < 0) continue;   // left out: never declared
-        ui::set_effective(fid, fr.carrier, -1, -1);
-        if (wjournal::on()) wjournal::log("EFFECTIVE_CLR F%d", fid);
-    }
-    if (!any) return;
-    auto hs = read_holders();
-    for (auto& [fid, fr] : g_f) {
-        if (!fr.has_csw) continue;
-        int slot = g_intent[fid].slot;
-        std::string sfx = slot ? slot_suffix(fid, slot) : std::string{};
-        Obj* src_h = nullptr;
-        for (auto& h : hs) if (!sfx.empty() && ends_with(h.path, sfx)) { src_h = h.comp; break; }
-        restore_color(fid, src_h);
-    }
-}
-
-// An intent the alias applies: a slot the player sees (a hidden slot's intent waits)
-bool any_intent() {
-    for (auto& [fid, in] : g_intent) if (in.slot && shown(fid, in.slot)) return true;
-    return false;
-}
-
-// The characters the player controls in the match being loaded, from its battle description
-// (bFlowManager -> flow map -> m_desc): online, the fighter of our session member; offline, a
-// fighter on a pad (the training dummy and the CPU have PadId -1). Kept only if it wears its carrier:
-// an opponent in DriveTech is not ours to dress (03/10), and only in a mode that takes the costume
-// from Battle Settings (online, Battle Hub cabinets). false when no player can be told apart
-// (no description yet, a replay): then every intent applies, as before.
-// `mirror`: the characters two fighters of the battle wear in their carrier (carrier::mirror), never
-// aliased in that battle, whoever the player is.
-std::string g_own_sig;
-bool own_fighters(std::set<int>& out, std::set<int>& mirror) {
-    out.clear(); mirror.clear();
-    auto* desc = battle_desc();
-    if (!desc) return false;
-    // A mode where the player picks the costume on a select screen (Arcade, Training, Versus, Team
-    // Battle): a slot is picked there as itself, so a fighter in its carrier really wears it and is
-    // not ours to dress (Sagat's Drive Tech picked in Training wore his slot, 04/10). The rule's
-    // GameMode is app.EGameMode, one byte: 1 Arcade, 2 Training, 3 and 4 Versus, 19 Team Battle.
+// A battle description: its fighters, which of them the player controls (online the fighter of our session member,
+// offline a fighter on a pad: the training dummy and the CPU have PadId -1; a replay has none), and whether its mode
+// picks costumes on a select screen (app.EGameMode, one byte: 1 Arcade, 2 Training, 3 and 4 Versus, 19 Team
+// Battle), where a fighter in its carrier really wears it (Sagat's Drive Tech picked in Training, 04/10).
+struct DescFighter { Obj* fd; int fid, cos, color; bool ours; int team, pad, member, ctrl; };
+struct DescInfo { std::vector<DescFighter> f; int mode = 0, self = -1; bool picked = false, net = false, room = false; };
+Obj* g_room_desc = nullptr;            // the description a load found to be a Custom Room's training area
+bool read_desc(Obj* desc, DescInfo& d, bool at_load) {
+    if (!desc || !alive(desc)) return false;
     uint8_t mode = 0;
     if (auto* rule = get_obj(desc, "Rule"))
         if (auto* p = field_ptr(rule, "GameMode")) mode = *static_cast<uint8_t*>(p);
-    const bool picked = mode == 1 || mode == 2 || mode == 3 || mode == 4 || mode == 19;
-    bool net = false; int32_t self = -1;
-    get_bool(desc, "IsNetwork", net);
+    d.mode = mode;
+    d.picked = (mode == 1 || mode == 2 || mode == 3 || mode == 4 || mode == 19) && !alias_everywhere();
+    int32_t self = -1;
+    get_bool(desc, "IsNetwork", d.net);
     get_i32(desc, "SelfSessionMemberindex", self);
-    bool found = false;
-    std::vector<std::pair<int, int>> worn;           // (fighter, costume) of every fighter of the battle
+    d.self = self;
     auto* teams = get_obj(desc, "Teams");
     int nt = list_count(teams);
     for (int t = 0; t < nt; ++t) {
@@ -1282,44 +1070,204 @@ bool own_fighters(std::set<int>& out, std::set<int>& mirror) {
         int nf = list_count(fs);
         for (int i = 0; i < nf; ++i) {
             auto* f = list_item(fs, i);
-            int32_t fid = 0, cos = -1, pad = -1, member = -1;
+            int32_t fid = 0, cos = -1, col = 0, pad = -1, member = -1, ctrl = -1;
             if (!f || !get_i32(f, "FighterId", fid)) continue;
-            get_i32(f, "Costume", cos); get_i32(f, "PadId", pad); get_i32(f, "SessionMemberIndex", member);
-            worn.emplace_back(fid, cos);
-            if (net ? (self < 0 || member != self) : pad < 0) continue;
-            found = true;
-            const int c = carrier_of(fid);
-            if (c >= 0 && cos == c && !picked) out.insert(fid);
+            get_i32(f, "Costume", cos); get_i32(f, "Color", col); get_i32(f, "PadId", pad); get_i32(f, "SessionMemberIndex", member);
+            if (auto* p = field_ptr(f, "CtrlType")) ctrl = *static_cast<uint8_t*>(p);
+            d.f.push_back({ f, fid, cos, col, d.net ? (self >= 0 && member == self) : pad >= 0, t, pad, member, ctrl });
         }
     }
-    for (int fid : g_fighters)
-        if (carrier::mirror(worn, fid, carrier_of(fid))) { mirror.insert(fid); out.erase(fid); }
-    bool all_dt = true;
-    for (int fid : out) all_dt &= carrier_of(fid) == carrier::kDriveTech;
-    std::string sig = !found ? "none" : out.empty() ? "-" : "";
-    for (int fid : out) sig += "F" + std::to_string(fid) + (all_dt ? std::string() : " (" + carrier_name(fid) + ")") + " ";
-    if (picked) sig += "(picked)";
-    for (int fid : mirror) sig += " mirror F" + std::to_string(fid);
-    if (sig != g_own_sig) {
-        if (!found) logf("costumes: alias for every intent (no player in the battle description)");
-        else if (picked) logf("costumes: no alias, game mode %d picks costumes on a select screen (%s)", mode, net ? "online" : "offline");
-        else logf("costumes: alias for the player's fighters in %s: %s (%s, game mode %d)",
-                  all_dt ? "DriveTech" : "their carrier", sig.substr(0, sig.find(" mirror")).c_str(), net ? "online" : "offline", mode);
-        // a mirror matters where an intent would apply: no player told apart, or a mode that aliases
-        if (!found || !picked)
-            for (int fid : mirror) {
-                auto in = g_intent.find(fid);
-                if (in == g_intent.end() || !in->second.slot || !shown(fid, in->second.slot)) continue;
-                logf("[F%d] alias skipped: mirror on the carrier (%s)", fid, carrier_name(fid).c_str());
-                ui::set_effective(fid, carrier_of(fid), -1, -1);   // a declaration left from the last match
-            }
-        g_own_sig = sig;
+    // The training area of a Custom Room: Training (game mode 2), offline, but its fighters are loaded before any of
+    // them has a pad (a Training of the player's own has P1 on pad 0, 22/10) and the player's outfit comes from
+    // Battle Settings. The player is P1 (team 0). Decided when the files are asked for (pads may be given before the
+    // fighters are built).
+    const bool no_pads = std::none_of(d.f.begin(), d.f.end(), [](const DescFighter& f) { return f.pad >= 0; });
+    if (at_load) g_room_desc = no_pads ? desc : nullptr;
+    if (!d.net && mode == 2 && (no_pads || desc == g_room_desc)) {
+        d.room = true;
+        d.picked = false;
+        for (auto& f : d.f) f.ours = f.team == 0;
     }
-    return found;
+    return true;
 }
 
+// The slot the player's fighter of `fid` wears over its carrier now (0: none): a slot the player sees, chosen in
+// Battle Settings (never while it is open)
+int wanted_slot(int fid) {
+    auto in = g_intent.find(fid);
+    return (in != g_intent.end() && in->second.slot && shown(fid, in->second.slot) && !g_menu_open) ? in->second.slot : 0;
+}
+bool wears_slot(const DescInfo& d, const DescFighter& f, int slot) {
+    return slot && f.ours && !d.picked && f.cos == carrier_of(f.fid);
+}
+bool slot_held(int fid, int slot) {
+    auto ex = g_extra.find(fid);
+    if (ex == g_extra.end()) return false;
+    for (auto& x : ex->second) if (x.slot == slot) return true;
+    return false;
+}
+void alias_line(int fid, const char* what, const DescInfo& d) {
+    char sig[512];
+    snprintf(sig, sizeof sig, "F%d %s (%s, game mode %d%s)", fid, what, d.net ? "online" : "offline", d.mode, d.room ? ", a Custom Room's training area" : "");
+    if (sig != g_alias_sig) { logf("costumes: alias, %s", sig); g_alias_sig = sig; }
+}
+
+// The override the plugin set, removed (the description is the game's again)
+void undress(Obj* fd, const char* why) {
+    auto it = g_dressed.find(fd);
+    if (it == g_dressed.end()) return;
+    const Dressed w = it->second;
+    g_dressed.erase(it);
+    if (alive(fd)) {
+        auto r = call(m_fd_reset_ow, fd);
+        if (wjournal::on()) wjournal::log("ALIAS_RESET fd=%p F%d v%d ok=%d (%s)", (void*)fd, w.fid, w.slot, r.exception_thrown ? 0 : 1, why);
+    }
+    ui::set_effective(w.fid, carrier_of(w.fid), -1, -1);
+    logf("[F%d] alias: slot v%02d taken off the player's fighter (%s)", w.fid, w.slot, why);
+}
+
+// ---- hooks: the fighters' files asked for and unloaded, the fighters built (BattleFlowMap) ----
+void tell_thread() {
+    if (g_thread_told.exchange(true)) return;
+    logf("costumes: fighter files asked for on thread %lu (LateUpdateBehavior: %lu)", GetCurrentThreadId(), g_game_thread.load());
+}
+
+// The game asks for the files of `fid`'s carrier: the slot's files are asked for too, once per fighter of the
+// player's that will wear it (the description of the battle, or of the reload being set up)
+void on_carrier_load(Obj* map, int fid, int cls, int n) {
+    ++g_held[fid];
+    DescInfo d;
+    if (!read_desc(g_reload_desc ? g_reload_desc : battle_desc(), d, true)) return;
+    const int slot = wanted_slot(fid);
+    int need = 0;
+    for (auto& f : d.f) if (f.fid == fid && wears_slot(d, f, slot)) ++need;
+    if (!need) {
+        std::string what = d.picked ? "picked on a select screen" : !slot ? "no slot" : "not the player's";
+        if (slot && !d.picked) {   // who the fighters are, for a battle where the player could not be told apart
+            auto* td = map ? map->get_type_definition() : nullptr;
+            what += " [" + (td ? td->get_full_name() : std::string("?")) + ", self " + std::to_string(d.self) + ":";
+            for (auto& f : d.f) what += " F" + std::to_string(f.fid) + "/c" + std::to_string(f.cos) + " pad " + std::to_string(f.pad)
+                                       + " member " + std::to_string(f.member) + " ctrl " + std::to_string(f.ctrl) + ";";
+            what += "]";
+        }
+        alias_line(fid, what.c_str(), d);
+        return;
+    }
+    int have = 0;
+    for (auto& x : g_extra[fid]) have += x.slot == slot;
+    if (have >= need) return;
+    g_in_request = true;
+    auto r = call(m_req_load, map, { arg_i32(fid), arg_i32(cls), arg_i32(slot), arg_i32(n) });
+    g_in_request = false;
+    if (wjournal::on()) wjournal::log("ALIAS_LOAD map=%p F%d v%d cls=%d n=%d ok=%d", (void*)map, fid, slot, cls, n, r.exception_thrown ? 0 : 1);
+    if (r.exception_thrown) { logf("[F%d] alias: the slot's files could not be asked for: no alias", fid); return; }
+    g_extra[fid].push_back({ slot, cls, n });
+    alias_line(fid, ("slot v" + std::to_string(slot)).c_str(), d);
+    logf("[F%d] alias: slot v%02d's files asked for next to %s's", fid, slot, carrier_name(fid).c_str());
+}
+
+// The game unloads the files of `fid`'s carrier: the slot's go with the last of them
+void on_carrier_unload(Obj* map, int fid) {
+    int& held = g_held[fid];
+    if (held > 0) --held;
+    auto& ex = g_extra[fid];
+    while (static_cast<int>(ex.size()) > held) {
+        const Extra e = ex.back();
+        ex.pop_back();
+        g_in_request = true;
+        auto r = call(m_req_unload, map, { arg_i32(fid), arg_i32(e.cls), arg_i32(e.slot), arg_i32(e.n) });
+        g_in_request = false;
+        if (wjournal::on()) wjournal::log("ALIAS_UNLOAD F%d v%d ok=%d", fid, e.slot, r.exception_thrown ? 0 : 1);
+        logf("[F%d] alias: slot v%02d's files unloaded with the last of %s's", fid, e.slot, carrier_name(fid).c_str());
+        if (!slot_held(fid, e.slot))
+            for (auto d = g_dressed.begin(); d != g_dressed.end();) {
+                auto cur = d++;
+                if (cur->second.fid == fid && cur->second.slot == e.slot) undress(cur->first, "its files unloaded");
+            }
+    }
+}
+
+int pre_asset_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
+    auto it = g_f.find(fid);
+    if (it != g_f.end() && it->second.carrier >= 0 && cos == it->second.carrier)
+        try { tell_thread(); std::lock_guard lk(g_alias_mx); on_carrier_load(reinterpret_cast<Obj*>(argv[1]), fid, arg_int(argv[3]), arg_int(argv[5])); }
+        catch (...) { g_in_request = false; }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+int pre_asset_unload(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
+    auto it = g_f.find(fid);
+    if (it != g_f.end() && it->second.carrier >= 0 && cos == it->second.carrier)
+        try { std::lock_guard lk(g_alias_mx); on_carrier_unload(reinterpret_cast<Obj*>(argv[1]), fid); } catch (...) { g_in_request = false; }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+// Another way the game asks for a fighter's files: not followed (logged once, for a character with a slot)
+int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6 || g_managed_told.load()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
+    auto in = g_intent.find(fid);
+    if (in != g_intent.end() && in->second.slot && cos == carrier_of(fid) && !g_managed_told.exchange(true))
+        logf("[F%d] alias: the game asked for %s's files as managed files: not followed", fid, carrier_name(fid).c_str());
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+// A reload of the fighters (a character or costume changed in the battle): its description, read by the loads it asks for
+int pre_reload_setup(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    std::lock_guard lk(g_alias_mx);
+    g_reload_desc = reinterpret_cast<Obj*>(argv[2]);
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+// The fighters are built from the description (argument 1): the player's fighter in its carrier gets the slot as its
+// override when the slot's files are held, and only then (the slot's visual without its files is an invisible
+// fighter); every other override of the plugin's is taken off
+int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    std::lock_guard lk(g_alias_mx);
+    try {
+        DescInfo d;
+        std::set<Obj*> keep;
+        if (read_desc(reinterpret_cast<Obj*>(argv[2]), d, false))
+            for (auto& f : d.f) {
+                const int slot = wanted_slot(f.fid);
+                if (!wears_slot(d, f, slot)) continue;
+                if (!slot_held(f.fid, slot)) {
+                    logf("[F%d] alias: the slot's files were not asked for before the fighters were built: not aliased (%s, game mode %d)",
+                         f.fid, d.net ? "online" : "offline", d.mode);
+                    continue;
+                }
+                const int col = g_intent[f.fid].color >= 0 ? g_intent[f.fid].color : f.color;
+                auto dr = g_dressed.find(f.fd);
+                auto now = call(m_fd_get_cos, f.fd);
+                if (dr == g_dressed.end() || dr->second.slot != slot || dr->second.color != col || now.exception_thrown
+                    || static_cast<int32_t>(now.dword) != slot) {
+                    auto r = call(m_fd_set_ow, f.fd, { arg_i32(slot), arg_i32(col) });
+                    if (wjournal::on()) wjournal::log("ALIAS_SET fd=%p F%d v%d c%d ok=%d", (void*)f.fd, f.fid, slot, col, r.exception_thrown ? 0 : 1);
+                    if (r.exception_thrown) { logf("[F%d] alias: the game refused the override", f.fid); continue; }
+                    g_dressed[f.fd] = { f.fid, slot, col };
+                    ui::set_effective(f.fid, carrier_of(f.fid), slot, col);
+                    logf("[F%d] alias: the player's fighter wears slot v%02d colour %d over %s", f.fid, slot, col, carrier_name(f.fid).c_str());
+                }
+                keep.insert(f.fd);
+            }
+        for (auto it = g_dressed.begin(); it != g_dressed.end();) {
+            auto cur = it++;
+            if (!keep.count(cur->first)) undress(cur->first, "not the player's slot in these fighters");
+        }
+    } catch (...) {}
+    g_reload_desc = nullptr;
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+
 // ---- hook: an outfit's visual manifest created (the game mounted its folder) ----
-// May run on a loading thread: it only records the event.
+// May run on a loading thread: it only records the event (runtime costume options follow it, rto.cpp).
 int pre_holder_ctor(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin(); post(EV_HOLDER); perf::end(perf::HkCosHolderCtor, pt);
@@ -1376,8 +1324,6 @@ template <perf::Id ID> int pre_select_start(int, void**, REFrameworkTypeDefiniti
 template <perf::Id ID> int pre_select_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_SELECT_END); perf::end(ID, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 int pre_title_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long)    { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); post(EV_TITLE_END); perf::end(perf::HkCosTitleOnDestroy, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 
-bool g_menu_open = false;
-
 } // namespace
 
 bool display_nsfw() { return g_show_nsfw; }
@@ -1416,6 +1362,20 @@ void install_hooks() {
     if (g_slots.empty()) { logf("costumes: no slot, no hook"); return; }
     auto* tdb = api().tdb();
     hook_all(tdb->find_type("app.battle.assets.FighterVisualHolder"), ".ctor", pre_holder_ctor, nullptr);
+    // online alias (see "Online alias")
+    auto* bfm = tdb->find_type("app.battle.BattleFlowMap");
+    m_fd_set_ow = method_of(tdb->find_type("app.battle.FighterDesc"), "SetOverwriteDesc", 2);
+    m_fd_reset_ow = method_of(tdb->find_type("app.battle.FighterDesc"), "ResetOverwriteDesc", 0);
+    m_fd_get_cos = method_of(tdb->find_type("app.battle.FighterDesc"), "GetCostume", 0);
+    m_req_load = method_of(bfm, "requestNotManagedFighterAssetLoad", 4);
+    m_req_unload = method_of(bfm, "requestNotManagedFighterAssetUnload", 4);
+    if (m_fd_set_ow && m_fd_reset_ow && m_fd_get_cos && m_req_load && m_req_unload) {
+        hook_all(bfm, "requestNotManagedFighterAssetLoad", pre_asset_load, nullptr);
+        hook_all(bfm, "requestNotManagedFighterAssetUnload", pre_asset_unload, nullptr);
+        hook_all(bfm, "requestManagedFighterAssetLoad", pre_managed_load, nullptr);
+        hook_all(bfm, "setupFighterAsset", pre_setup_fighters, nullptr);
+        hook_all(bfm, "SetupReloadBattleAsset", pre_reload_setup, nullptr);
+    } else logf("costumes: the battle description's costume override is missing (game update?): no alias");
     auto* ms = tdb->find_type("app.UIFlowMatchingSetting.Param");
     hook_all(ms, "CreatedObject", pre_menu_open<perf::HkCosMenuCreatedObject>, nullptr);
     hook_all(ms, "ShowedObject", pre_menu_open<perf::HkCosMenuShowedObject>, nullptr);
@@ -1437,25 +1397,24 @@ void install_hooks() {
 bool busy() {
     if (g_slots.empty()) return false;
     if (!g_boot_done || g_revoke_cursor >= kStaticMin || g_color_cursor >= kColorMin) return true;
-    if (g_nsfw_apply) return true;
-    return g_mount_until != 0;
+    return g_nsfw_apply;
 }
 
 void tick(uint32_t ev) {
+    g_game_thread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     if (g_slots.empty()) return;
 
     // ---- boot, once: every 30 frames until everything is in place (title screen, menus) ----
     if (!g_boot_done && g_frame - g_boot_last >= 30 && g_frame > 60) {
         g_boot_last = g_frame;
         read_carriers();
-        find_dst_all();
         insert_colors();
         insert_select_ui();
         bool owned = give_ownership("boot");
         if (owned && g_carriers_done) safety_net();   // the carriers first: the save gets the right one
-        g_boot_done = (g_dst_done && g_bc_done && g_colors_done && g_ui_done && owned) || g_frame > 60 * 600;
-        if (g_boot_done) logf("costumes: boot done (dst %d, colours %d, records %d, ui %d, owned %d)",
-                              g_dst_done, g_bc_done, g_colors_done, g_ui_done, owned ? 1 : 0);
+        g_boot_done = (g_bc_done && g_colors_done && g_ui_done && owned) || g_frame > 60 * 600;
+        if (g_boot_done) logf("costumes: boot done (colours %d, records %d, ui %d, owned %d)",
+                              g_bc_done, g_colors_done, g_ui_done, owned ? 1 : 0);
     }
 
     // ---- sweeps of stale ownership: a slice per frame, then never again ----
@@ -1496,48 +1455,7 @@ void tick(uint32_t ev) {
         safety_net();
     }
 
-    // ---- online alias: an outfit was mounted ----
-    // Between matches, on a screen that shows the slot as an outfit of its own, its colours are put
-    // back. On the character select screen the slot is a real outfit and the screen mounts folders
-    // itself: a mount seen there is not ours to follow, and a check in progress stops there. (The
-    // screen's own flow list says whether it is open: read when a mount is seen, never watched.)
-    // Elsewhere a mount opens a short check, pushed further by each mount (the slot's own folder,
-    // mounted by the check, is one): the manifests present are read every 3 frames until it ends,
-    // during the loading screen. A check that finds the select screen open stops.
-    if ((ev & (EV_SELECT_START | EV_MENU_OPEN)) && !g_mount_until) restore_all();
-    // Battle Settings shows outfits too, DriveTech among them: nothing is aliased there (a slot was
-    // mounted over the DriveTech it previewed, 03/10).
-    if ((ev & EV_HOLDER) && any_intent() && g_dst_done && !g_menu_open) {
-        if (select_screen_active()) {
-            if (!g_select_logged) { logf("costumes: outfit mounted by the select screen, left alone"); g_select_logged = true; }
-        } else {
-            g_select_logged = false;
-            if (!g_mount_until) {
-                logf("costumes: outfit mounted, alias check");
-                if (wjournal::on()) wjournal::log("ALIAS_START frame=%u", g_frame);
-                for (auto& [fid, fr] : g_f) { fr.swapped_addr = 0; fr.last_sig.clear(); }
-                g_own_sig.clear();
-            }
-            g_mount_until = g_frame + 60 * 2;
-        }
-    }
-    if (g_mount_until) {
-        if (g_frame >= g_mount_until) { g_mount_until = 0; if (wjournal::on()) wjournal::log("ALIAS_END frame=%u", g_frame); logf("costumes: alias check done"); }
-        else if (g_frame % 3 == 0) {
-            if (g_menu_open || select_screen_active()) {
-                g_mount_until = 0;
-                if (wjournal::on()) wjournal::log("ALIAS_STOP frame=%u reason=%s", g_frame, g_menu_open ? "menu" : "select");
-                logf("costumes: alias check stopped (%s)", g_menu_open ? "Battle Settings" : "select screen");
-                return;
-            }
-            auto hs = read_holders();
-            std::set<int> own, mirror;
-            bool known = own_fighters(own, mirror);
-            if (wjournal::on()) wjournal::log("ALIAS_TICK frame=%u holders=%zu known=%d own=%zu", g_frame, hs.size(), known ? 1 : 0, own.size());
-            for (auto& [fid, in] : g_intent)
-                if (in.slot && shown(fid, in.slot) && (!known || own.count(fid)) && !mirror.count(fid)) mount_pass(fid, hs);
-        }
-    }
+    // ---- online alias: it works in the hooks on the fighters' files (see "Online alias"), nothing here
 }
 
 bool online() { return online_now(); }
