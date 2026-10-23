@@ -48,10 +48,19 @@ builds the fighter's visual from it. When the game asks for the files of a chara
 controls that character in it with a slot as the intent, the slot's files are asked for too, the same way (online
 the game asks for them as managed files, which it releases itself), and the player's `FighterDesc` gets the slot and
 its colour as its override at once (the VS screen builds its models from the description before the fighters are
-built); just before the fighters are built it is checked again and kept only if the slot's files were asked for.
+built); just before the fighters are built it is checked again and kept only if the slot's files were asked for
+for that battle (online: in that match's requests, or the last match's for a rematch, which asks for none; a reload's
+description is used only by the flow map that set it up).
 Each fighter is built from its own outfit: an opponent in the same character's Outfit 1 (a mirror) stays in Outfit 1.
 The slot's files are unloaded with the last of the carrier's the game holds, and the override is taken off then, or
 before fighters are built without it; never while the fighter built from it is on screen.
+
+Online the network may hold another outfit than the carrier for the player's fighter (1.15.0: a character changed in
+Battle Settings inside a Custom Room sent the slot's number in the fighter profile, the room gave Outfit 1): the slot
+is worn over whatever outfit the network holds. While Battle Settings is open the save holds the slots (so the menu
+shows them); around the fighter profile the game builds, sends and checks (`app.TemporarilyDataManager`
+`CreatePostFighterProfileBody`, `UploadData`, `InvalidCheck`) the save holds the carriers, the slots are put back
+after.
 
 Where: online (`IsNetwork`: the fighter of our session member), and offline in a mode that takes the costume from
 Battle Settings (a fighter on a pad), never in a mode that picks costumes on a select screen (Arcade, Training,

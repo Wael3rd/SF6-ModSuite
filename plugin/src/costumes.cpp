@@ -1076,10 +1076,16 @@ std::map<int, std::vector<Extra>> g_extra;
 // fighters are built), and the last one (a rematch builds the fighters again without asking for files)
 std::map<int, int> g_mbatch;            // fighter -> slot files asked for as managed files since fighters were last built
 std::map<int, int> g_mlive;             // fighter -> slot of the last managed request
+// A new batch of managed requests (the first one after fighters were built) is a new match: the slot files of the
+// last one are the game's to release, they no longer count (23/10, user log: a Custom Room match on another character,
+// then back on the slot's character with the network holding Outfit 1: no request of the carrier, and the fighters
+// were built with the slot's override on files released two matches before: connection error)
+bool g_mbatch_open = false;
 // The FighterDescs the plugin gave a slot as their override
 struct Dressed { int fid, slot, color; };
 std::map<Obj*, Dressed> g_dressed;
 Obj* g_reload_desc = nullptr;           // the description of a reload (SetupReloadBattleAsset), until fighters are built
+Obj* g_reload_map = nullptr;            // the flow map that set that reload up
 thread_local bool g_in_request = false; // the plugin's own request, seen by its hooks: let through
 std::atomic<bool> g_thread_told{false};
 std::string g_alias_sig;                // the last alias line (logged when it changes)
@@ -1139,11 +1145,18 @@ int wanted_slot(int fid) {
     auto in = g_intent.find(fid);
     return (in != g_intent.end() && in->second.slot && shown(fid, in->second.slot) && !g_menu_open) ? in->second.slot : 0;
 }
+// Offline the player's fighter comes in the save's outfit, the carrier. Online in what the network holds: the carrier,
+// or another outfit when the server had another one (the Custom Room took Outfit 1 for a slot, 23/10): the slot is
+// worn over it all the same (the intent is the slot, others see that outfit).
 bool wears_slot(const DescInfo& d, const DescFighter& f, int slot) {
-    return slot && f.ours && !d.picked && f.cos == carrier_of(f.fid);
+    return slot && f.ours && !d.picked && (d.net || f.cos == carrier_of(f.fid));
 }
-bool slot_held(int fid, int slot) {
+// The slot's files asked for next to the carrier's: online only the managed ones of that battle count (the not managed
+// ones belong to the scene being left, a Custom Room's training area: the game unloads them while the online fighters
+// load, 23/10)
+bool slot_held(int fid, int slot, bool online_only = false) {
     if (auto m = g_mlive.find(fid); m != g_mlive.end() && m->second == slot) return true;
+    if (online_only) return false;
     auto ex = g_extra.find(fid);
     if (ex == g_extra.end()) return false;
     for (auto& x : ex->second) if (x.slot == slot) return true;
@@ -1191,13 +1204,34 @@ void tell_thread() {
     logf("costumes: fighter files asked for on thread %lu (LateUpdateBehavior: %lu)", GetCurrentThreadId(), g_game_thread.load());
 }
 
+// The description a request of `map` loads fighters for: the reload that map set up, else its own (else the current
+// flow map's). A reload whose fighters were never built through setupFighterAsset stayed set before 23/10, and the
+// next battle's requests read it: in a Custom Room, a character changed in the training area, then an online match on
+// the carrier read the training area's description (offline, game mode 2 = picked on a select screen): no alias at
+// the VS screen, then the slot dressed at setupFighterAsset on the training area's files, which the game unloads
+// there: connection error. A reload is now used only by its own flow map, for an offline or online battle like it.
+Obj* request_desc(Obj* map) {
+    Obj* own = map ? get_obj(map, "m_desc") : nullptr;
+    if (!alive(own)) own = battle_desc();
+    if (g_reload_desc) {
+        bool rn = false, on = false;
+        const bool same = map == g_reload_map && alive(g_reload_desc)
+                          && (!own || (get_bool(g_reload_desc, "IsNetwork", rn), get_bool(own, "IsNetwork", on), rn == on));
+        if (same) return g_reload_desc;
+        logf("costumes: alias, a reload's description left behind (its fighters were not built from it): dropped");
+        g_reload_desc = nullptr;
+        g_reload_map = nullptr;
+    }
+    return own;
+}
+
 // The game asks for the files of `fid`'s carrier: the slot's files are asked for too, once per fighter of the
 // player's that will wear it (the description of the battle, or of the reload being set up)
 void on_carrier_load(Obj* map, int fid, int cls, int n) {
     ++g_held[{ fid, carrier_of(fid) }];
     g_mlive.erase(fid);   // this battle's files are not managed ones
     DescInfo d;
-    if (!read_desc(g_reload_desc ? g_reload_desc : battle_desc(), d, true)) return;
+    if (!read_desc(request_desc(map), d, true)) return;
     const int slot = wanted_slot(fid);
     int need = 0;
     for (auto& f : d.f) if (f.fid == fid && wears_slot(d, f, slot)) ++need;
@@ -1273,10 +1307,11 @@ int pre_asset_unload(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
 }
 
 // The game asks for the files of `fid`'s carrier as managed files (online, 22/10): the slot's are asked for the same
-// way, once per fighter of the player's that will wear it in this batch
+// way, once per fighter of the player's that will wear it in this batch (the slot's intent alone is enough: online the
+// network may hold another outfit than the carrier, see wears_slot)
 void on_carrier_managed(Obj* map, int fid, int cls, int n) {
     DescInfo d;
-    if (!read_desc(g_reload_desc ? g_reload_desc : battle_desc(), d, true)) return;
+    if (!read_desc(request_desc(map), d, true)) return;
     const int slot = wanted_slot(fid);
     int need = 0;
     for (auto& f : d.f) if (f.fid == fid && wears_slot(d, f, slot)) ++need;
@@ -1290,7 +1325,13 @@ void on_carrier_managed(Obj* map, int fid, int cls, int n) {
     if (r.exception_thrown) { logf("[F%d] alias: the slot's files could not be asked for: no alias", fid); return; }
     ++have;
     g_mlive[fid] = slot;
-    for (auto& f : d.f) if (f.fid == fid && wears_slot(d, f, slot)) dress(f, slot);
+    for (auto& f : d.f)
+        if (f.fid == fid && wears_slot(d, f, slot)) {
+            if (f.cos != carrier_of(fid))
+                logf("[F%d] alias: the network holds %s for the player's fighter, not %s: the slot is worn over it", fid,
+                     ownership::outfit_label(f.cos).c_str(), carrier_name(fid).c_str());
+            dress(f, slot);
+        }
     alias_line(fid, ("slot v" + std::to_string(slot)).c_str(), d);
     logf("[F%d] alias: slot v%02d's files asked for (managed) next to %s's", fid, slot, carrier_name(fid).c_str());
 }
@@ -1298,10 +1339,21 @@ void on_carrier_managed(Obj* map, int fid, int cls, int n) {
 int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
+    try {
+        std::lock_guard lk(g_alias_mx);
+        if (!g_mbatch_open) {
+            g_mbatch_open = true;
+            for (auto& [f, s] : g_mlive) logf("[F%d] alias: slot v%02d's managed files are the last match's: no longer counted", f, s);
+            g_mlive.clear();
+        }
+    } catch (...) {}
     auto it = g_f.find(fid);
-    if (it != g_f.end() && it->second.carrier >= 0 && cos == it->second.carrier)
-        try { tell_thread(); std::lock_guard lk(g_alias_mx); on_carrier_managed(reinterpret_cast<Obj*>(argv[1]), fid, arg_int(argv[3]), arg_int(argv[5])); }
-        catch (...) { g_in_request = false; }
+    if (it != g_f.end() && it->second.carrier >= 0)
+        try {
+            tell_thread();
+            std::lock_guard lk(g_alias_mx);
+            if (cos == it->second.carrier || wanted_slot(fid)) on_carrier_managed(reinterpret_cast<Obj*>(argv[1]), fid, arg_int(argv[3]), arg_int(argv[5]));
+        } catch (...) { g_in_request = false; }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -1309,6 +1361,7 @@ int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
 int pre_reload_setup(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     std::lock_guard lk(g_alias_mx);
+    g_reload_map = reinterpret_cast<Obj*>(argv[1]);
     g_reload_desc = reinterpret_cast<Obj*>(argv[2]);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -1326,7 +1379,7 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
             for (auto& f : d.f) {
                 const int slot = wanted_slot(f.fid);
                 if (!wears_slot(d, f, slot)) continue;
-                if (!slot_held(f.fid, slot)) {
+                if (!slot_held(f.fid, slot, d.net)) {
                     logf("[F%d] alias: the slot's files were not asked for before the fighters were built: not aliased (%s, game mode %d)",
                          f.fid, d.net ? "online" : "offline", d.mode);
                     continue;
@@ -1339,10 +1392,58 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
         }
     } catch (...) {}
     g_reload_desc = nullptr;
+    g_reload_map = nullptr;
     g_mbatch.clear();
+    g_mbatch_open = false;
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
+
+// ---- hooks: the fighter profile the game sends to the server (app.TemporarilyDataManager) ----
+// While Battle Settings is open the save holds the slots (so the menu shows them). A character changed there sends
+// the profile at once, from the save: the server got the slot's number for Mai and the Custom Room gave her Outfit 1
+// (23/10, user log). Around the profile's building, sending and checking, the save holds the carriers (and a colour
+// they have); the slots are put back after, for the menu.
+struct Swapped { Obj* e; int fid, cos, col; };
+thread_local int tl_profile_depth = 0;
+std::vector<Swapped> g_swapped;         // under g_alias_mx
+
+// The slots and colours the profile hooks took out of the save, put back (Battle Settings still open)
+void put_back_swapped() {
+    if (g_menu_open)
+        for (auto& s : g_swapped)
+            if (alive(s.e) && get_cos(s.e) == save_cos_of(s.fid)) {
+                set_i32(s.e, "MatchingFighterCostume", s.cos);
+                set_i32(s.e, "MatchingFighterColor", s.col);
+            }
+    g_swapped.clear();
+}
+
+int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed) || tl_profile_depth++ > 0 || !g_menu_open) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    try {
+        std::lock_guard lk(g_alias_mx);
+        int n = 0;
+        for (auto& [fid, e] : save_entries()) {
+            const int v = get_cos(e), c = get_col(e);
+            if (!is_slot(fid, v)) continue;
+            g_swapped.push_back({ e, fid, v, c });
+            ++n;
+            set_i32(e, "MatchingFighterCostume", save_cos_of(fid));
+            const auto& fr = g_f[fid];
+            if (fr.base_known && !fr.base_colors.count(c)) set_i32(e, "MatchingFighterColor", fr.base_min);
+        }
+        static int told = 0;
+        if (n && told++ < 20)
+            logf("costumes: the fighter profile is read while Battle Settings is open: %d save entr%s hold the carrier for it",
+                 n, n == 1 ? "y" : "ies");
+    } catch (...) {}
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_profile(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (tl_profile_depth > 0 && --tl_profile_depth > 0) return;
+    try { std::lock_guard lk(g_alias_mx); if (!g_swapped.empty()) put_back_swapped(); } catch (...) {}
+}
 
 // ---- hook: an outfit's visual manifest created (the game mounted its folder) ----
 // May run on a loading thread: it only records the event (runtime costume options follow it, rto.cpp).
@@ -1472,6 +1573,10 @@ void install_hooks() {
         hook_all(bfm, "setupFighterAsset", pre_setup_fighters, nullptr);
         hook_all(bfm, "SetupReloadBattleAsset", pre_reload_setup, nullptr);
     } else logf("costumes: the battle description's costume override is missing (game update?): no alias");
+    // the fighter profile sent to the server: built, sent, checked (see "the fighter profile")
+    if (auto* tdm = tdb->find_type("app.TemporarilyDataManager"))
+        for (const char* m : { "CreatePostFighterProfileBody", "UploadData", "InvalidCheck" })
+            hook_all(tdm, m, pre_profile, post_profile);
     auto* ms = tdb->find_type("app.UIFlowMatchingSetting.Param");
     hook_all(ms, "CreatedObject", pre_menu_open<perf::HkCosMenuCreatedObject>, nullptr);
     hook_all(ms, "ShowedObject", pre_menu_open<perf::HkCosMenuShowedObject>, nullptr);
@@ -1535,8 +1640,11 @@ void tick(uint32_t ev) {
     // The open handler can run twice (CreatedObject and ShowedObject). A close counts only after an
     // open: the game calls HidObject on its way to other screens too (entering Versus), and a close
     // handled there reads DriveTech in the save and drops every intent (30/09).
-    if (ev & EV_MENU_OPEN) { g_menu_open = true; on_menu_open(); }
-    if ((ev & EV_MENU_CLOSE) && g_menu_open) { g_menu_open = false; on_menu_close(); safety_net(); }
+    if (ev & (EV_MENU_OPEN | EV_MENU_CLOSE)) {
+        std::lock_guard lk(g_alias_mx);
+        if (ev & EV_MENU_OPEN) { g_menu_open = true; on_menu_open(); }
+        if ((ev & EV_MENU_CLOSE) && g_menu_open) { put_back_swapped(); g_menu_open = false; on_menu_close(); safety_net(); }
+    }
     if (ev & (EV_SELECT_START | EV_SELECT_END)) safety_net();
     if (ev & (EV_MENU_CLOSE | EV_SELECT_END))
         if (uint32_t d = g_list_drops.load(std::memory_order_relaxed); d != g_list_drops_logged) {

@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.18.3 (2026-10-23) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.15.1 | Custom Room: no more connection error after a character change |
+| SF6 Color Mod | 0.23.0 | unchanged |
+| SF6 Native Core | 0.9.0 | unchanged |
+| SF6 Recording Manager | 2.1.2 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.15.0, then install Slots Loader 1.15.1. The Color
+Mod, Native Core and Recording Manager zips are the files of 1.18.2: nothing to do if they are installed. Only the
+plugin (`SF6_CostumeSlotsNative.dll`) changed; the loader did not, so the costume pak is not rebuilt.
+
+### SF6 Slots Loader 1.15.1
+- **Custom Room: no more "connection error" after a character change.** Playing a match with a modded outfit, then
+  a match with another character, then going back to the modded character showed Outfit 1 (or DriveTech) on the VS
+  screen and kicked both players back to the room. The plugin dressed your fighter in the slot using files loaded for
+  a match two matches before, which the game had already released. It now uses only the slot files loaded for the
+  current match (a rematch keeps the previous ones, as the game does).
+- **Changing character in Battle Settings no longer sends the modded outfit's number.** The game sends your fighter
+  profile to the server as soon as the character changes, while Battle Settings is open (where the save shows your
+  modded outfit); the room could then give you Outfit 1. The profile is now built with the outfit other players
+  should see.
+- Online, your modded outfit is worn over whatever outfit the network holds for you (before, only over the one set
+  in "Outfit Others See").
+- A reload set up in one place (a Custom Room's training area) is no longer read by the next online match.
+
+### Known issues
+- Slots Loader: replays show the outfit the other players saw (Outfit 1 or DriveTech), not your modded outfit:
+  a replay has no player the plugin can tell apart.
+- Slots Loader: the online alias was tested in Custom Rooms (against another platform, and with a character change
+  between matches), not yet in Ranked or the Battle Hub.
+- Slots Loader: a fighter built without the game asking for its files again (a Custom Room's training area right
+  after a match) keeps Outfit 1 (or DriveTech) until the next load; the log says so.
+- Slots Loader, Training pause menu: when the costume or colour changed, the fight shows for about half a second with
+  the old look after the pause menu closes, before the game's own reload fade (the game's timing).
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only.
+- Slots Loader, character select and Training pause menu popup: the costume options menu (R1 / C) and the Color
+  Mod's Drive colours (L1) use buttons the game may also use on those screens; this is not confirmed either way. If
+  the game's own guide there shows them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader, Training pause menu: after confirming options only, the battle restarts (as Restart Battle) a few
+  frames after the pause menu closes, so the fight shows briefly before the fade.
+- Slots Loader: the Training popup costume options have not been tested with P2 (the dummy) nor with a gamepad on the
+  Up / Down window.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+
 ## 1.18.2 (2026-10-22) — SF6 Mod Suite
 
 | Package | Version | |
