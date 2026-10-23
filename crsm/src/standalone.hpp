@@ -7,24 +7,20 @@
 //     * the owner ui is the DLL's (the five layers native, the core's pause-menu service present) and not claimed yet;
 //     * no CRSM Lua entry script (kLuaEntries) was found in reframework/autorun at the plugin's start, and no Lua ever
 //       called the DLL's bridge (ui_claim, frame_poll, owns): a CRSM Lua present asks for itself: one engine, never two;
-//     * at least kGraceFrames frame callbacks since the first one;
-//     * in training for kTrainingFrames frame callbacks in a row (leaving training starts the count again), so a delay
-//       that runs out outside training does nothing before the first training entry;
 //     * the pause menu and every option window closed: the UI's hooks start between two menu opens, never inside one.
+//   So without a CRSM Lua (every install of the native package: it ships no Lua) the claim comes at the first frame
+//   callback, at the title screen, like the Lua loader's claim at its own load: the Manager page and the hooks are in
+//   place before the first training (until 2.1.2 it waited kGraceFrames, then kTrainingFrames in training: 2 to 3 s of
+//   training without the Recording Manager's pages).
 //   "off": never (with no Lua the game's own Record / Replay pages stay, the layers have no screen). Anything else: off,
 //   with one journal line.
 //
-// Why these numbers (the loader claims at its own load, long before any training):
-//   * kGraceFrames = 600 (10 s at 60 fps): REFramework creates the Lua state and runs the autorun scripts within the
-//     first frames of the game; the title screen and the menus take longer than that before training can be reached.
-//   * kTrainingFrames = 120 (2 s): the training flag is stable (TrainingManager._tData is re-read every 60 frames) and the
-//     claim lands before the core's first install pass (training run 300 frames, menu closed: core/docs/PAUSE_MENU.md, frame model),
-//     so the Manager page appears at the same moment as with the loader's claim.
-//
-// A CRSM Lua entry script present that still never called the DLL when the claim would be due (v1.x, the SF6 Training
-// Suite's copy, the REFramework display switch, a loader that could not reach the core's Lua bridge) is a Lua engine that
-// does not drive the DLL: the DLL gives its hooked layers back for the session (Decision::Foreign), so only one engine
-// runs the game's hooks. Only in "auto"; "off" keeps the behaviour of 0.2.0 exactly.
+// A CRSM Lua entry script present (v1.x, the SF6 Training Suite's copy, the REFramework display switch) is given time to
+// call the DLL: kGraceFrames frame callbacks since the first one (600 = 10 s at 60 fps: REFramework runs the autorun scripts
+// within the first frames) and kTrainingFrames in a row in training (120 = 2 s; leaving training starts the count
+// again). One that still never called the DLL then is a Lua engine that does not drive it: the DLL gives its hooked
+// layers back for the session (Decision::Foreign), so only one engine runs the game's hooks. Only in "auto"; "off" keeps
+// the behaviour of 0.2.0 exactly.
 #pragma once
 
 #include <array>
@@ -85,7 +81,7 @@ enum class Decision {
     NotNative,    // the owner ui is not the DLL's (terminal for this session: owners are read once)
     Claimed,      // already handed over (terminal)
     LuaCalled,    // a CRSM Lua talks to the DLL: it is the loader's to claim (terminal)
-    Wait,         // no Lua: waiting for the grace, the training run or a closed menu
+    Wait,         // no Lua: waiting for a closed menu
     WaitLua,      // a CRSM Lua script is installed: waiting for it to call the DLL
     Claim,        // claim the UI now (terminal once done)
     Foreign,      // a CRSM Lua script is installed and never called the DLL: give the hooked layers back (terminal)
@@ -112,9 +108,11 @@ inline Decision decide(const Inputs& in, const Params& p = {}) {
     if (in.mode != Mode::Auto) return Decision::Off;
     if (!in.ui_owned) return Decision::NotNative;
     if (in.lua_called) return Decision::LuaCalled;
-    const bool due = in.frames >= p.grace_frames && in.training_run >= p.training_frames && !in.menu_up;
-    if (in.lua_files) return due ? Decision::Foreign : Decision::WaitLua;
-    return due ? Decision::Claim : Decision::Wait;
+    if (in.lua_files) {
+        const bool due = in.frames >= p.grace_frames && in.training_run >= p.training_frames && !in.menu_up;
+        return due ? Decision::Foreign : Decision::WaitLua;
+    }
+    return in.menu_up ? Decision::Wait : Decision::Claim;
 }
 
 // decide() with in.menu_up read only when it can change the answer: the menu matters only once the claim (or the foreign

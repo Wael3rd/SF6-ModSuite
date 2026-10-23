@@ -954,8 +954,13 @@ void tick(uint64_t frame, bool training, bool paused) {
     if (!training) { g_training_since = kNever; return; }
     if (g_training_since == kNever) g_training_since = frame;
     if (paused) return;                                  // rule 10: the menu data is changed with the menu closed
-    const bool due = g_force_pass ||
-                     ((int)(frame % kInstallEvery) == kInstallPhase && frame - g_training_since > (uint64_t)kInstallDelay);
+    // A page not installed yet (training just started, the game's strip not built yet) is tried every kInstallRetry frames
+    // during the first kRetryWindow frames of training; otherwise the pass checks every kInstallEvery.
+    bool waiting = false;
+    for (auto& [id, p] : g_pages) if (!p.removed && !p.installed) { waiting = true; break; }
+    const uint64_t ran = frame - g_training_since;
+    const bool due = g_force_pass || (ran >= (uint64_t)kInstallDelay &&
+                     (waiting && ran < (uint64_t)kRetryWindow ? ran % kInstallRetry == 0 : (int)(frame % kInstallEvery) == kInstallPhase));
     if (!due) return;
     g_force_pass = false;
     ++g_passes;

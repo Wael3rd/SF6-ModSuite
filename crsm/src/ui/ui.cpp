@@ -57,8 +57,8 @@ bool do_claim(bool by_dll) {
             g_claimed.store(true);
             if (by_dll) {
                 g_sa_frame.store(g_tick.load());
-                cmn::log_info("[CRSMNative] ui: standalone: no CRSM Lua script, the DLL takes the UI itself (%llu frames in training)",
-                              (unsigned long long)g_sa_run.load());
+                cmn::log_info("[CRSMNative] ui: standalone: no CRSM Lua script, the DLL takes the UI itself (frame %llu, %llu in training)",
+                              (unsigned long long)g_tick.load(), (unsigned long long)g_sa_run.load());
             } else {
                 cmn::log_info("[CRSMNative] ui: the Lua loader handed the UI over (the Lua UI modules are not loaded)");
             }

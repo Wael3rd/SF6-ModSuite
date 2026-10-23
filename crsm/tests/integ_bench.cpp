@@ -236,17 +236,19 @@ void test_standalone() {
     {
         standalone::Inputs in;
         in.ui_owned = true;
-        in.frames = G;
-        in.training_run = T;
-        check(standalone::decide(in) == Decision::Claim, "no Lua, grace and training run reached, menu closed: claim");
+        in.frames = 1;
+        check(standalone::decide(in) == Decision::Claim, "no Lua, menu closed: claim at once (no grace, no training run)");
         in.menu_up = true;
         check(standalone::decide(in) == Decision::Wait, "the same with the menu up: wait");
         in.menu_up = false;
+        in.lua_files = true;
+        in.frames = G;
         in.training_run = T - 1;
-        check(standalone::decide(in) == Decision::Wait, "one frame short of the training run: wait");
+        check(standalone::decide(in) == Decision::WaitLua, "a CRSM Lua installed, one frame short of the training run: wait for it");
         in.training_run = T;
         in.frames = G - 1;
-        check(standalone::decide(in) == Decision::Wait, "one frame short of the grace: wait");
+        check(standalone::decide(in) == Decision::WaitLua, "a CRSM Lua installed, one frame short of the grace: wait for it");
+        in.lua_files = false;
         in.frames = G;
         in.lua_called = true;
         check(standalone::decide(in) == Decision::LuaCalled, "a Lua called the DLL: never the DLL's claim");
@@ -314,47 +316,43 @@ void test_standalone() {
         check(mismatches == 0, "the same decision as decide() with the real menu, every combination", std::to_string(mismatches) + " of " + std::to_string(combos));
         check(needless == 0, "the menu read exactly when the closed-menu answer is claim / foreign", std::to_string(needless));
         check(reads_total > 0 && reads_total < combos, "some combinations read the menu, most do not", std::to_string(reads_total));
-        // Waiting in training before the deadline (the usual 2 s): no menu read on any frame.
+        // A CRSM Lua installed, waiting in training before the deadline (2 s): no menu read on any frame.
         standalone::Inputs w;
         w.ui_owned = true;
+        w.lua_files = true;
         w.frames = G;
         int reads = 0;
         for (uint64_t r = 0; r < T; ++r) {
             w.training_run = r;
-            if (standalone::decide_lazy(w, [&] { ++reads; return false; }) != Decision::Wait) { reads = -1000; break; }
+            if (standalone::decide_lazy(w, [&] { ++reads; return false; }) != Decision::WaitLua) { reads = -1000; break; }
         }
-        check(reads == 0, "the training run before the deadline: wait, no menu read", std::to_string(reads));
+        check(reads == 0, "a CRSM Lua installed, the training run before the deadline: wait, no menu read", std::to_string(reads));
     }
 
     begin("standalone: sessions frame by frame");
     {
-        // The usual start: title and menus (no training) far past the grace, then training.
+        // The usual start without a CRSM Lua: claimed at the first frame (title screen), long before any training.
         SimEnd e = simulate(cat({ outside(2000), training(400) }), Mode::Auto, false);
-        check(e.d == Decision::Claim && e.frame == 2000 + T, "grace over outside training: the claim waits for training, then T frames",
-              std::to_string(e.frame));
+        check(e.d == Decision::Claim && e.frame == 1, "no CRSM Lua: claimed at the first frame", std::to_string(e.frame));
         e = simulate(outside(100000), Mode::Auto, false);
-        check(e.d == Decision::Wait && e.frame == 0, "never in training: nothing, however long");
-        // Training reached before the grace (cannot happen in the game, the rule still holds): the grace decides.
-        e = simulate(cat({ outside(100), training(1000) }), Mode::Auto, false);
-        check(e.d == Decision::Claim && e.frame == G, "training before the grace ran out: claimed at the grace", std::to_string(e.frame));
-        // Leaving training before the delay starts the count again.
-        e = simulate(cat({ outside(G), training(T - 1), outside(30), training(T) }), Mode::Auto, false);
-        check(e.d == Decision::Claim && e.frame == G + (T - 1) + 30 + T, "training left before T frames: T frames again at the next entry",
-              std::to_string(e.frame));
-        // The pause menu up when the delay runs out: the claim waits for it to close (never inside a menu).
-        e = simulate(cat({ outside(G), training(50), training(200, true), training(10) }), Mode::Auto, false);
-        check(e.d == Decision::Claim && e.frame == G + 50 + 200 + 1, "menu up at the deadline: claimed on the first closed frame",
-              std::to_string(e.frame));
-        // A Lua loader calls at its load (frame 3): the DLL never claims.
+        check(e.d == Decision::Claim && e.frame == 1, "no CRSM Lua, never in training: claimed all the same");
+        // A menu up at the first frames (an option window): the claim waits for it to close (never inside a menu).
+        e = simulate(cat({ training(50, true), training(10) }), Mode::Auto, false);
+        check(e.d == Decision::Claim && e.frame == 51, "menu up: claimed on the first closed frame", std::to_string(e.frame));
+        // A CRSM Lua installed: its loader calls at its load (frame 3): the DLL never claims.
         std::vector<Frame> f = cat({ outside(G), training(1000) });
         f[2].lua_called = true;
-        e = simulate(f, Mode::Auto, false);
+        e = simulate(f, Mode::Auto, true);
         check(e.d == Decision::LuaCalled && e.frame == 3, "the loader called at its load: no standalone claim, ever");
         // A loader that calls late (a script reset in training) still wins if it comes before the deadline.
         f = cat({ outside(G), training(1000) });
         f[G + T - 2].lua_called = true;
-        e = simulate(f, Mode::Auto, false);
+        e = simulate(f, Mode::Auto, true);
         check(e.d == Decision::LuaCalled, "a late Lua call before the deadline: still the Lua's");
+        // A CRSM Lua installed: leaving training before the delay starts the count again.
+        e = simulate(cat({ outside(G), training(T - 1), outside(30), training(T) }), Mode::Auto, true);
+        check(e.d == Decision::Foreign && e.frame == G + (T - 1) + 30 + T, "CRSM Lua installed, training left before T frames: T frames again",
+              std::to_string(e.frame));
         // An installed CRSM Lua that never calls (v1.x, the Training Suite): no claim; foreign at the deadline.
         e = simulate(cat({ outside(2000), training(400) }), Mode::Auto, true);
         check(e.d == Decision::Foreign && e.frame == 2000 + T, "CRSM Lua installed, silent: foreign at the deadline, never a claim",
@@ -398,7 +396,7 @@ void test_settings_default() {
         bool all_native = j["owners"].size() == owners::kCount;
         for (const auto& [k, v] : j["owners"].items()) all_native = all_native && v == "native";
         check(all_native && j.size() == 2, "no CRSM Lua: owners (six, native) and standalone only", j.dump());
-        // a fresh install: the defaults hand the UI to the DLL, which claims it alone 2 s into training
+        // a fresh install: the defaults hand the UI to the DLL, which claims it alone at the first frame
         const SimEnd e = simulate(cat({ outside(standalone::kGraceFrames), training(standalone::kTrainingFrames + 10) }), Mode::Auto,
                                   false, r.owns[owners::kUi]);
         check(e.d == Decision::Claim, "no CRSM Lua: the standalone claim follows (the mod is not inert)", standalone::decision_name(e.d));

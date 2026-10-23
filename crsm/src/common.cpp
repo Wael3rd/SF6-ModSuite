@@ -28,7 +28,7 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "2.1.2";              // 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
+constexpr const char* kVersion = "2.1.3";              // 2.1.3: the UI claimed at the first frame without a CRSM Lua; 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
 constexpr const char* kClientId = "SF6_CRSMNative";
 // The game's working directory is the game folder (convention of the other native mods).
 constexpr const char* kDataDir = "reframework/data/SF6_CRSMNative_data";

@@ -39,8 +39,10 @@ constexpr int32_t kStripThree = 19;        // ItemType.REVERSAL_TAB: the 3-page 
 constexpr uint32_t kMaxCapacity = 64;      // the largest spin run in this menu (R9 says 16 elsewhere; ADR-0016 risks)
 constexpr uint32_t kMaxRows = 13;          // rows per page (R9: the game's tabs never exceed 13, pool of 20)
 constexpr int kInstallEvery = 60;          // the install pass: every 60 frames ...
-constexpr int kInstallPhase = 33;          // ... at this phase (the reference engine's tick % 60 == 33)
-constexpr int kInstallDelay = 300;         // ... once training has run 300 frames, menu closed (rule 10)
+constexpr int kInstallPhase = 33;          // ... at this phase (the reference engine's tick % 60 == 33), menu closed (rule 10);
+constexpr int kInstallDelay = 0;           // from the first training frame (the reference engine waited 300 frames)
+constexpr int kInstallRetry = 5;           // while a page waits (not installed), a pass every 5 frames instead ...
+constexpr int kRetryWindow = 600;          // ... during the first 600 frames of training (then every 60: a page that cannot go in)
 constexpr int kForceFrames = 2;            // UIPartsSpin.set_Num rewritten for 2 frames after Init (the flow's own set_Num)
 constexpr int kFitCooldown = 15;           // a font write at most every 15 calls (the game's focus state writes it too)
 constexpr int kRebuildDelay = 2;           // a page rebuilt 2 frames after a change of its spin's count (R4)

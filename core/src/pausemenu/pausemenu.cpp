@@ -1677,8 +1677,10 @@ void frame_inner(uint64_t f) {
     const int32_t flow = g_api->get_flow_id();
     const bool training_flow = flow == kTrainingFlow || flow == kHubTrainingFlow;
     if (f % 120 == 7) { step("frame: trace and bisect files"); trace_check(); bisect_check(); }
+    // the training flag: every frame until training runs (its first frame matters: the install pass starts there), then
+    // every 60 frames (a training left without a flow change)
     if (!training_flow) g_training = false;
-    else if (f - g_training_checked >= 60 || g_training_checked == 0) {
+    else if (!g_training || f - g_training_checked >= 60 || g_training_checked == 0) {
         step("frame: training check");
         MO* tm = training_manager();
         g_training = tm && field_obj(tm, "_tData");

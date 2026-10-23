@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.18.4 (2026-10-23) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.15.1 | unchanged |
+| SF6 Color Mod | 0.23.0 | unchanged |
+| SF6 Native Core | 0.9.1 | the training pause menu's added pages are in place from the first second of training |
+| SF6 Recording Manager | 2.1.3 | ready at the title screen instead of 2 to 3 s into training |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Native Core 0.9.0 and SF6 Recording Manager 2.1.2, then install
+Native Core 0.9.1 and Recording Manager 2.1.3. The Slots Loader and Color Mod zips are the files of 1.18.3: nothing to
+do if they are installed.
+
+### SF6 Native Core 0.9.1
+- **Pages added to the training pause menu appear at once.** The core waited until training had run 300 frames
+  (5 s), then tried once a second; it now installs them from the first training frame, trying every 5 frames while a
+  page is not in place yet (first 10 s of training), and still only while the pause menu is closed. Training is
+  detected on its first frame (it was looked at once a second).
+
+### SF6 Recording Manager 2.1.3
+- **Ready before the first training.** Without a CRSM Lua script installed (the native package ships none), the DLL
+  takes the training menu UI at the first frame, on the title screen. It waited 10 s after the start, then 2 s of
+  training. With an old CRSM Lua script still in `reframework/autorun`, the previous rule stays (one engine, never two).
+- Together with Native Core 0.9.1: the Recording Manager's pages (Manager, 30 Record / Replay slots, Reversal) are in
+  the pause menu within the first second of training, instead of 5 to 6 s.
+
+### Known issues
+- Slots Loader: replays show the outfit the other players saw (Outfit 1 or DriveTech), not your modded outfit:
+  a replay has no player the plugin can tell apart.
+- Slots Loader: the online alias was tested in Custom Rooms (against another platform, and with a character change
+  between matches), not yet in Ranked or the Battle Hub.
+- Slots Loader: a fighter built without the game asking for its files again (a Custom Room's training area right
+  after a match) keeps Outfit 1 (or DriveTech) until the next load; the log says so.
+- Slots Loader, Training pause menu: when the costume or colour changed, the fight shows for about half a second with
+  the old look after the pause menu closes, before the game's own reload fade (the game's timing).
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only.
+- Slots Loader, character select and Training pause menu popup: the costume options menu (R1 / C) and the Color
+  Mod's Drive colours (L1) use buttons the game may also use on those screens; this is not confirmed either way. If
+  the game's own guide there shows them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader, Training pause menu: after confirming options only, the battle restarts (as Restart Battle) a few
+  frames after the pause menu closes, so the fight shows briefly before the fade.
+- Slots Loader: the Training popup costume options have not been tested with P2 (the dummy) nor with a gamepad on the
+  Up / Down window.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+
 ## 1.18.3 (2026-10-23) — SF6 Mod Suite
 
 | Package | Version | |
