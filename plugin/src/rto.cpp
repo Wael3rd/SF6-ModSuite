@@ -1547,7 +1547,8 @@ void install_hooks() {
     if (!types()) { g_on = false; return; }
     hook_all(T.pb, "SetupAppearance", pre_setup_appearance, nullptr);
     g_color_hook = hook_all(T.pcc, "SetupColor", pre_color_setup, nullptr) > 0;   // VS screen models: found when built
-    crf_hooks();
+    // 20 counting hooks (per-frame ones too): only with the debug switch file at startup
+    if (GetFileAttributesA("reframework/data/SF6_CostumeSlots_data/rto_debug_on.txt") != INVALID_FILE_ATTRIBUTES) crf_hooks();
     menu::install();
     select::install_popup_hooks();
 }

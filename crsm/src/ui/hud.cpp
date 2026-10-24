@@ -195,7 +195,6 @@ bool post_seh() {
     __try { post_body(); } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     return true;
 }
-int pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 void post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (cmn::closing() || !ui::active()) return;
     if (!post_seh()) ui::fault("HUD labels post (SEH)");
@@ -204,7 +203,7 @@ void post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
 }  // namespace
 
 void specs(std::vector<mech::hooks::Spec>& out) {
-    mech::hooks::Spec s{ cmn::Feature::Ui, kLabelsType, kLabelsSig, pre, post,
+    mech::hooks::Spec s{ cmn::Feature::Ui, kLabelsType, kLabelsSig, nullptr, post,
                          "the REC / replay HUD label follows from the frame callback (route 1B)", false };
     s.installed = &ok_labels;
     out.push_back(s);

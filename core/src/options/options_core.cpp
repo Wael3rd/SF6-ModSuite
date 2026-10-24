@@ -469,8 +469,14 @@ void tick_b() {
     }
     // :959-988 composite window (mode spin, mirrored entries): not ported
     // :989-995 every entry, every 10 ticks (the deferred callbacks of :996-999 are the wrapper's)
+    // A value only changes in our own window, except the rows placed in a game section (edited in the game's own
+    // options): with the window closed only those are read.
     const auto all = g_groups;
-    for (auto& g : all) { const auto es = g->entries; for (auto& e : es) poll(e); }
+    for (auto& g : all) {
+        if (!g_window_open && g->place_tab < 0) continue;
+        const auto es = g->entries;
+        for (auto& e : es) poll(e);
+    }
     // increment 11: the rows placed in a game section are still there (the game may rebuild its lists), the rows of
     // removed / moved groups are gone. Nothing to do for a tree that never placed a group.
     if (g_any_placed && g_tick % kPlaceCheck == 0 && be.sync_placed) be.sync_placed(true);

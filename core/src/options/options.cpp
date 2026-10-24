@@ -13,6 +13,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -170,7 +171,12 @@ bool be_request_pause(bool on) {
 
 bool be_get_value(core::Obj unit, int32_t& out) {
     if (!unit) return false;
-    auto* get_val = ll::find_method_noargs(mo(unit)->get_type_definition(), "get_Value");
+    // the polled units share a few types: the method is looked up once per type, not once per read
+    static std::unordered_map<API::TypeDefinition*, API::Method*> s_get_value;
+    auto* td = mo(unit)->get_type_definition();
+    auto cached = s_get_value.find(td);
+    if (cached == s_get_value.end()) cached = s_get_value.emplace(td, ll::find_method_noargs(td, "get_Value")).first;
+    auto* get_val = cached->second;
     if (!get_val) return false;
     auto vr = get_val->invoke(mo(unit), std::vector<void*>{});
     if (vr.exception_thrown) return false;

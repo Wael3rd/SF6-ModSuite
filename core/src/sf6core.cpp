@@ -37,7 +37,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.1";
+static constexpr const char* CORE_VERSION = "0.9.2";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -556,7 +556,15 @@ static int32_t poll_flow_id_inner() {
     auto* sdk = s_sdk;
     if (!sdk) return -1;
 
-    auto* fm = sdk->functions->get_managed_singleton("app.bFlowManager");
+    // The singleton lives for the whole session: look it up by name only
+    // every 60 frames (or while it is missing), not every frame.
+    static void* s_fm = nullptr;
+    static uint32_t s_fm_age = 0;
+    if (!s_fm || ++s_fm_age >= 60) {
+        s_fm = sdk->functions->get_managed_singleton("app.bFlowManager");
+        s_fm_age = 0;
+    }
+    auto* fm = s_fm;
     if (!fm) return -1;
 
     if (resolve_flow_fields()) {
@@ -578,6 +586,7 @@ slow:
     // Fallback: re-resolve on next frame
     s_ffc.resolved = false;
     s_ffc.failed = false;
+    s_fm = nullptr;
 
     // Original slow path
     void* fw = read_field_ref(sdk, fm, "m_flow_work");
@@ -1590,7 +1599,7 @@ static bool on_pre_gui_draw_element(void* element, void* /*context*/) {
 
     // Resolve owner name via cache
     uintptr_t addr = (uintptr_t)element;
-    int slot = (int)(addr & (NAME_CACHE_BUCKETS - 1));
+    int slot = (int)((addr >> 4) & (NAME_CACHE_BUCKETS - 1));   // elements are 16-byte aligned: drop the always-zero bits
     auto& ce = s_name_cache[slot];
     const char* owner_name = nullptr;
 

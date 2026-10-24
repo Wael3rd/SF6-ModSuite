@@ -180,6 +180,7 @@ void pausemenu_frame() {
             calls.decide = c_decide; calls.spin_value = c_spin_value; calls.on_spin = c_on_spin;
             calls.page_shown = c_page_shown; calls.hints = c_hints; calls.any_hints = c_any_hints;
             // Pending while the code check runs on its thread, then one hook per frame (the frame never waits)
+            perf::Scope install_scope(perf::PmInstall);   // the add_hook frames (1-6 ms each) show up in perf_live.log
             switch (pausemenu::install(calls, g_self)) {
             case pausemenu::Install::Done: g_installed = true; break;
             case pausemenu::Install::Failed:

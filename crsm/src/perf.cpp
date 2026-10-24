@@ -19,6 +19,7 @@
 namespace perf {
 
 std::atomic<bool> g_on{false};
+std::atomic<bool> g_want_on{false};      // perf_on.txt exists (published by the background writer)
 std::atomic<uint32_t> g_gm[GmCount];
 std::atomic<uint32_t> g_core[CoreCount];
 
@@ -196,10 +197,8 @@ void end(int id, int64_t t0) {
 
 void frame() {
     ++g_frames;
-    if (g_frames % kCheckEvery == 1) {
-        const DWORD a = GetFileAttributesA(kOnFile);
-        set_on(a != INVALID_FILE_ATTRIBUTES);
-    }
+    if (g_frames == 1) cmn::bgwriter::watch_file(kOnFile, &g_want_on);   // polled by the writer thread, not here
+    set_on(g_want_on.load(std::memory_order_relaxed));
     if (!g_on.load(std::memory_order_relaxed)) return;
     const int64_t t = now();
     const double dt = g_last ? (double)(t - g_last) * g_ms_per_tick : 0;

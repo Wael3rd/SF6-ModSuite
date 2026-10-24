@@ -466,12 +466,11 @@ void update(Obj* agent) {
 
 } // namespace
 
-void install_hooks() {
-    const SF6CoreAPI* a = A();
-    if (!a || !C() || !SF6CORE_HAS(a, ui_clone_control) || !SF6CORE_HAS(a, ui_agents) || !SF6CORE_HAS(a, opt_window_open)) {
-        logf("fs name: the core has no ui_clone_control (0.8.2) or no core: the outfit name on Fighter Settings is off");
-        return;
-    }
+// The hook on the guide list's update runs every frame for every guide bar (battle too), so it is not put at startup:
+// the first Battle Settings opening installs it (tick). No unhook exists on plugin API 1.10: it stays after.
+bool g_ready = false;                             // the core and the method are there, the hook not installed yet
+void hook_now() {
+    g_ready = false;
     auto* td = api().tdb()->find_type("app.UIPartsInputGuideList");
     Method* m = td ? method_of(td, "OnLateUpdate", 0) : nullptr;
     if (!m || !m->get_function_raw() || !m->add_hook(pre_guide_late, post_guide_late, false)) {
@@ -482,10 +481,23 @@ void install_hooks() {
     logf("fs name: on (the copy is made in app.UIPartsInputGuideList.OnLateUpdate)");
 }
 
+void install_hooks() {
+    const SF6CoreAPI* a = A();
+    if (!a || !C() || !SF6CORE_HAS(a, ui_clone_control) || !SF6CORE_HAS(a, ui_agents) || !SF6CORE_HAS(a, opt_window_open)) {
+        logf("fs name: the core has no ui_clone_control (0.8.2) or no core: the outfit name on Fighter Settings is off");
+        return;
+    }
+    g_ready = true;
+}
+
 bool busy() { return g_on && (g_bs || g_shown); }
 
 void tick(uint32_t ev) {
-    if (!g_on) return;
+    if (!g_on) {
+        if (!g_ready || !(ev & EV_MENU_OPEN)) return;      // hooked the first time Battle Settings opens
+        hook_now();
+        if (!g_on) return;
+    }
     try {
         const int st = g_req_status.load(std::memory_order_acquire);
         if (st != g_status_log) {

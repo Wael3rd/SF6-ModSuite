@@ -2,6 +2,7 @@
 // Phase P0 of the port: the skeleton, nothing visible, no user data touched.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -85,6 +86,9 @@ namespace bgwriter {
 void start();                                        // call once from cmn::init()
 void write(const char* path, std::string content);   // truncate-write
 void append(const char* path, std::string content);  // append-write
+// Switch files: the writer thread looks at `path` about once a second (once it runs) and publishes whether it exists in
+// *flag, so the game thread reads an atomic instead of calling the file system. Register before or after start().
+void watch_file(const char* path, std::atomic<bool>* flag);
 }  // namespace bgwriter
 
 }  // namespace cmn

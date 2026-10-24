@@ -1,5 +1,5 @@
 // perf: what this DLL costs the game, live. Off unless reframework/data/perf_on.txt exists
-// (checked every 120 frames with GetFileAttributesA). When on, every entry point is timed with
+// (looked at every 120 frames, on a pool thread). When on, every entry point is timed with
 // QueryPerformanceCounter and reframework/data/sf6core/perf_live.log gets:
 //   - one line per second: frames, frame time (average / worst), what the DLL took per frame,
 //     its costliest parts;
@@ -29,6 +29,7 @@ enum Id : int {
     FlowCallbacks,
     OptionsFrame,
     PmFrame,            // training pause menu: state and install pass
+    PmInstall,          // training pause menu: engine install (code check, verdicts, one add_hook per frame)
     FrameCallbacks,
     CommitPhase,
     CommitWidgets,

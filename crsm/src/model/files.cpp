@@ -110,6 +110,7 @@ std::vector<std::string> Engine::glob_char(const std::string& char_name) const {
         std::string rel;
         try { rel = fs::relative(it->path(), root_, e2).string(); } catch (...) { continue; }
         if (e2) continue;
+        if (rel.size() < 4 || rel.compare(rel.size() - 4, 4, "json") != 0) continue;   // (the pattern ends with a literal "json": cheap pre-filter)
         if (std::regex_match(rel, re)) out.push_back(rel);
     }
     return out;

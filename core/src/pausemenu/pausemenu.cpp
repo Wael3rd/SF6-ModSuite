@@ -1665,18 +1665,35 @@ bool g_training = false;
 bool g_menu_up = false;
 
 bool pause_up() {
-    op("get_managed_singleton PauseManager");
-    MO* pm = API::get()->get_managed_singleton("app.PauseManager");
-    uint32_t b = kPauseNone;
+    // The manager lives for the whole session: looked up by name every 120 frames (or while missing), the field handle
+    // resolved once. Called every training frame.
+    static MO* s_pm = nullptr;
+    static uint32_t s_pm_age = 0;
+    static API::Field* s_bit = nullptr;
+    if (!s_pm || ++s_pm_age >= 120) {
+        op("get_managed_singleton PauseManager");
+        MO* pm = API::get()->get_managed_singleton("app.PauseManager");
+        if (pm != s_pm) s_bit = nullptr;
+        s_pm = pm;
+        s_pm_age = 0;
+    }
+    MO* pm = s_pm;
+    if (!pm) return false;
     op("_CurrentPauseTypeBit");
-    return pm && ll::read_field_u32(pm, "_CurrentPauseTypeBit", b) && b != kPauseNone && b != kPauseNone2;
+    if (!s_bit) s_bit = ll::find_field_walk(pm->get_type_definition(), "_CurrentPauseTypeBit");
+    if (!s_bit) return false;
+    void* raw = s_bit->get_data_raw(pm, false);
+    if (!raw) return false;
+    uint32_t b = 0;
+    std::memcpy(&b, raw, sizeof b);
+    return b != kPauseNone && b != kPauseNone2;
 }
 
 void frame_inner(uint64_t f) {
     step("frame: flow");
     const int32_t flow = g_api->get_flow_id();
     const bool training_flow = flow == kTrainingFlow || flow == kHubTrainingFlow;
-    if (f % 120 == 7) { step("frame: trace and bisect files"); trace_check(); bisect_check(); }
+    if (f % 600 == 7) { step("frame: trace and bisect files"); trace_check(); bisect_check(); }
     // the training flag: every frame until training runs (its first frame matters: the install pass starts there), then
     // every 60 frames (a training left without a flow change)
     if (!training_flow) g_training = false;

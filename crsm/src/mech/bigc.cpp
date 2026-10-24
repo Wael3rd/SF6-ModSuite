@@ -281,7 +281,7 @@ void check_version() {
 // fighter or the game's 8-array changes under it, or when the array in place is not the game's 8 (a leftover: adopted by
 // game_slots at the first use, a write into the game's data).
 namespace {
-constexpr int kPreDelay = 45, kPreSlots = 4;
+constexpr int kPreDelay = 45, kPreSlots = 2;
 struct Pre { bool on = false; Cache c; uint64_t version = 0; int next = 0; };
 Pre g_pre;
 uint64_t g_pre_events = UINT64_MAX;

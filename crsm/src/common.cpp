@@ -28,14 +28,14 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "2.2.0";              // 2.2.0: Arjun, packs carry the training setup, pack descriptions; 2.1.3: the UI claimed at the first frame without a CRSM Lua; 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
+constexpr const char* kVersion = "2.2.1";              // 2.2.1: lighter game-thread work (status, switch files, training entry); 2.2.0: Arjun, packs carry the training setup, pack descriptions; 2.1.3: the UI claimed at the first frame without a CRSM Lua; 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
 constexpr const char* kClientId = "SF6_CRSMNative";
 // The game's working directory is the game folder (convention of the other native mods).
 constexpr const char* kDataDir = "reframework/data/SF6_CRSMNative_data";
 constexpr const char* kOffFile = "reframework/data/_crsm_native_off.txt";
 constexpr size_t kJournalLines = 400;         // same depth and format as the Color Mod's journal
 constexpr uint64_t kJournalFlushEvery = 30;   // frames
-constexpr uint64_t kStatusEvery = 120;        // frames (~2 s): status.json rewritten when something in it changed
+constexpr uint64_t kStatusEvery = 600;        // frames (~10 s): status.json rewritten when something in it changed
 
 // What this build implements. A layer asked "native" in settings.json but not implemented stays with the Lua
 // (journaled), so a settings file ahead of the DLL never leaves a layer without an owner.
@@ -499,9 +499,24 @@ std::mutex g_mx;
 std::condition_variable g_cv;
 std::deque<Item> g_queue;
 std::atomic<bool> g_stop{false};
+struct Watch { std::string path; std::atomic<bool>* flag; };
+std::vector<Watch> g_watches;                 // under g_mx
+constexpr uint64_t kWatchEveryMs = 1000;
+
+void poll_watches() {
+    std::vector<Watch> w;
+    { std::lock_guard<std::mutex> lk(g_mx); w = g_watches; }
+    for (const Watch& x : w) {
+        const bool want = GetFileAttributesA(x.path.c_str()) != INVALID_FILE_ATTRIBUTES;
+        x.flag->store(want, std::memory_order_relaxed);
+    }
+}
 
 void worker() {
+    uint64_t last_poll = 0;
     while (!g_stop.load(std::memory_order_relaxed)) {
+        const uint64_t tk = GetTickCount64();
+        if (tk - last_poll >= kWatchEveryMs) { last_poll = tk; poll_watches(); }
         Item item;
         {
             std::unique_lock<std::mutex> lk(g_mx);
@@ -519,6 +534,11 @@ void worker() {
 }  // namespace
 
 void start() { std::thread(worker).detach(); }
+void watch_file(const char* path, std::atomic<bool>* flag) {
+    flag->store(GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES, std::memory_order_relaxed);   // once, at registration
+    std::lock_guard<std::mutex> lk(g_mx);
+    g_watches.push_back(Watch{path, flag});
+}
 void write(const char* path, std::string content) {
     std::lock_guard<std::mutex> lk(g_mx);
     g_queue.push_back(Item{path, std::move(content), false});

@@ -348,6 +348,8 @@ void report_summary() {
 }  // namespace
 
 bool requested() { return std::filesystem::exists(kFlagFile); }
+std::atomic<bool> g_want{false};                           // probes_on.txt exists now (background writer)
+bool g_watching = false;
 
 void install() {
     g_requested = requested();
@@ -358,8 +360,9 @@ void install() {
 }
 
 void on_frame(uint64_t frame) {
-    if (frame % 300 == 1) {                                     // the flag file can be created or deleted while the game runs
-        const bool now = requested();
+    if (!g_watching) { g_watching = true; cmn::bgwriter::watch_file(kFlagFile, &g_want); }
+    {                                                           // the flag file can be created or deleted while the game runs
+        const bool now = g_want.load(std::memory_order_relaxed);   // (polled by the background writer)
         if (now != g_on) { g_on = now; out("probes: frame probes %s (the hooks follow the file at start only)", now ? "on" : "off"); }
     }
     if (!g_on) return;

@@ -52,6 +52,8 @@ constexpr const char* kTabTypes[] = { "app.training.UIFlowTrainingMenu.Param", "
 constexpr int kMaxPresses = 8;
 
 std::atomic<bool> g_on{false};
+std::atomic<bool> g_want{false};      // dump_on.txt exists (published by the background writer)
+bool g_watching = false;
 // (1)
 std::atomic<int> g_borrow_stage{0};              // 0: to do, 1: done
 int g_row_stage = 0;                             // 0 none, 1 S1 written, 2 S2 written, 3 S3 written (done)
@@ -189,9 +191,9 @@ void spin_labels(int64_t row, size_t before, size_t after) {
 // Frame callback (game thread, ui::lock held): the switch, the spin's later dumps
 void frame(bool paused) {
     const uint64_t fr = cmn::frame();
-    if (fr % 120 == 37) {
-        std::error_code ec;
-        const bool want = std::filesystem::exists(kSwitch, ec);
+    if (!g_watching) { g_watching = true; cmn::bgwriter::watch_file(kSwitch, &g_want); }
+    {
+        const bool want = g_want.load(std::memory_order_relaxed);      // dump_on.txt, polled by the background writer
         if (want != g_on.load()) {
             g_on = want;
             if (want) {

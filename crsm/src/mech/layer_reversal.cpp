@@ -5,8 +5,11 @@
 // Hooks only when settings.json gives the layer to the DLL, after the R18 check. The picker and the page stay in the Lua.
 #include <cstdio>
 #include <ctime>
+#include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include <windows.h>
 
@@ -18,6 +21,7 @@
 #include "mech/hooks.hpp"
 #include "mech/mech.hpp"
 #include "model/files.hpp"
+#include "model/luajson.hpp"
 #include "model/lutil.hpp"
 #include "model/reversal.hpp"
 #include "model/setup.hpp"
@@ -31,6 +35,14 @@ namespace gm = game::gm;
 namespace rv = model::reversal;
 using gm::MO;
 using F = cmn::Feature;
+
+// The rows file read off the game thread (see prefetch_start).
+struct Prefetch {
+    std::string path;
+    struct Shared { std::atomic<bool> done{false}; json doc; };
+    std::shared_ptr<Shared> sh;
+};
+Prefetch g_pf;
 
 constexpr const char* kRdT = "app.training.TrainingData.TM_ReversalSetting.ReversalData";
 constexpr const char* kRtFields[3] = { "DownReversalDatas", "GuardReversalDatas", "DamageReversalDatas" };
@@ -182,6 +194,7 @@ void ext_save() {                                    // RSL:427-436
     std::string key = g_ext.char_name + '\n' + doc.dump();
     g_rows_dirty = false;
     if (key == g_saved_doc) { ++g_save_skips; return; }
+    g_pf = Prefetch{};
     if (files().write_doc(model::store::reversal_rows_path(g_ext.char_name), doc)) g_saved_doc = std::move(key);
     else g_saved_doc.clear();
     ++g_saves;
@@ -279,6 +292,18 @@ struct PreExt {
     MO* game[3]{};
 };
 PreExt g_pre;
+
+// The rows file read off the game thread: prebuild_tick starts the read while the delay runs, the build's first part takes
+// the result (json.load_file is a pure function of the path). Dropped whenever our own code writes the file.
+void prefetch_start(const std::string& rel) {
+    if (g_pf.sh && g_pf.path == rel) return;
+    g_pf.path = rel;
+    g_pf.sh = std::make_shared<Prefetch::Shared>();
+    std::thread([sh = g_pf.sh, p = files().abs(rel)] {
+        try { sh->doc = model::luajson::load_file(p); } catch (...) { sh->doc = json(); }
+        sh->done.store(true, std::memory_order_release);
+    }).detach();
+}
 uint64_t g_pre_events = UINT64_MAX;
 int g_pre_fid = INT32_MIN;
 std::optional<std::string> g_pre_char;
@@ -289,6 +314,7 @@ void pre_abort(const char* why) {
     if (g_pre.part > 0) cmn::journal("reversal: rows built ahead: given up (%s): the menu opening builds them", why);
     ++g_pre_aborts;
     g_pre = PreExt{};
+    g_pf = Prefetch{};
 }
 
 bool pre_rows(MO* big, int rt, int from, int to) {  // rows from..to-1 of category rt into our 30-array
@@ -315,7 +341,14 @@ void pre_part() {                                   // one part of the build (un
         }
         g_pre.fd_addr = (uintptr_t)fd;
         g_pre.char_name = *c;
-        g_pre.saved = files().load_doc(model::store::reversal_rows_path(*c));
+        const std::string rows_path = model::store::reversal_rows_path(*c);
+        if (g_pf.sh && g_pf.path == rows_path) {    // read in the background: wait for it a frame at a time
+            if (!g_pf.sh->done.load(std::memory_order_acquire)) return;
+            g_pre.saved = std::move(g_pf.sh->doc);
+            g_pf = Prefetch{};
+        } else {
+            g_pre.saved = files().load_doc(rows_path);
+        }
         if (!g_pre.saved.is_object()) g_pre.saved = json::object();
         g_pre.part = 1;
         return;
@@ -364,6 +397,7 @@ void prebuild_tick(bool training) {
         g_pre_fid = fid;
         g_pre_char = c;
         if (g_pre.part >= 0) pre_abort("a new event");
+        g_pf = Prefetch{};
         g_pre_wait = kPreDelay;
     }
     if (!training || g_ext.installed || g_hand_back_due) { if (g_pre.part >= 0) pre_abort("menu / training"); return; }
@@ -373,6 +407,7 @@ void prebuild_tick(bool training) {
         if (fid < 0 || !c) return;                  // (no dummy yet: the next event starts again)
         g_pre.part = 0;
     }
+    if (g_pre.part == 0 && c) prefetch_start(model::store::reversal_rows_path(*c));   // (the first part waits for it)
     PERF_SUB(pp, "Frame:reversal_build_ahead");
     pre_part();
 }
@@ -714,6 +749,7 @@ bool setup_write_now(int fid, const model::setup::Rows& rows, std::string* repor
     if (t.built) ext_save();
     else {
         g_saved_doc.clear();
+        g_pf = Prefetch{};
         files().write_doc(model::store::reversal_rows_path(t.char_name), model::store::rev_rows_to_file(extra));
     }
     quiet_reset();

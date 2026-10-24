@@ -1407,6 +1407,7 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
 struct Swapped { Obj* e; int fid, cos, col; };
 thread_local int tl_profile_depth = 0;
 std::vector<Swapped> g_swapped;         // under g_alias_mx
+std::atomic<int> g_swapped_n{ 0 };      // its size, written under g_alias_mx: the post hook skips the lock when nothing is swapped
 
 // The slots and colours the profile hooks took out of the save, put back (Battle Settings still open)
 void put_back_swapped() {
@@ -1417,6 +1418,7 @@ void put_back_swapped() {
                 set_i32(s.e, "MatchingFighterColor", s.col);
             }
     g_swapped.clear();
+    g_swapped_n.store(0, std::memory_order_relaxed);
 }
 
 int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
@@ -1429,6 +1431,7 @@ int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long lon
             if (!is_slot(fid, v)) continue;
             g_swapped.push_back({ e, fid, v, c });
             ++n;
+            g_swapped_n.store(static_cast<int>(g_swapped.size()), std::memory_order_relaxed);
             set_i32(e, "MatchingFighterCostume", save_cos_of(fid));
             const auto& fr = g_f[fid];
             if (fr.base_known && !fr.base_colors.count(c)) set_i32(e, "MatchingFighterColor", fr.base_min);
@@ -1442,6 +1445,7 @@ int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long lon
 }
 void post_profile(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     if (tl_profile_depth > 0 && --tl_profile_depth > 0) return;
+    if (!g_swapped_n.load(std::memory_order_relaxed)) return;     // nothing swapped (menu closed): no lock
     try { std::lock_guard lk(g_alias_mx); if (!g_swapped.empty()) put_back_swapped(); } catch (...) {}
 }
 

@@ -31,7 +31,7 @@ constexpr double kSlowOursMs  = 2.0;            // or the DLL alone took this lo
 
 const char* const kFixedNames[kCount] = {
     "OnLateUpdate", "DrawElement", "OptionsPump", "OptHooks", "GuidHook", "Api", "PmHooks",
-    "PollFlow", "UpdateBreakers", "FlowCallbacks", "OptionsFrame", "PmFrame", "FrameCallbacks",
+    "PollFlow", "UpdateBreakers", "FlowCallbacks", "OptionsFrame", "PmFrame", "PmInstall", "FrameCallbacks",
     "CommitPhase", "CommitWidgets", "CommitElemHides", "CommitZenHides",
     "Client0", "Client1", "Client2", "Client3",
     "Client4", "Client5", "Client6", "Client7",
@@ -122,6 +122,14 @@ std::string clock_text(bool ms) {
     return b;
 }
 
+std::atomic<bool> g_file_on{false};
+std::atomic<bool> g_look_busy{false};
+DWORD WINAPI look_for_file(LPVOID) {
+    g_file_on.store(GetFileAttributesA(kOnFile) != INVALID_FILE_ATTRIBUTES, std::memory_order_relaxed);
+    g_look_busy.store(false, std::memory_order_release);
+    return 0;
+}
+
 void write_line(const std::string& line) {
     bgw::append(line + "\n");
 }
@@ -176,8 +184,12 @@ Id client_id(const char* name) {
 void frame() {
     ++g_frames;
     if (g_frames % kCheckEvery == 1) {
-        const DWORD a = GetFileAttributesA(kOnFile);
-        set_on(a != INVALID_FILE_ATTRIBUTES);
+        // the disk look runs on a pool thread (a file-system call can stall the game thread); this frame applies the
+        // answer of the previous look, so toggling the file takes effect within ~2 s
+        set_on(g_file_on.load(std::memory_order_relaxed));
+        if (!g_look_busy.exchange(true, std::memory_order_acq_rel)) {
+            if (!QueueUserWorkItem(look_for_file, nullptr, WT_EXECUTEDEFAULT)) g_look_busy.store(false);
+        }
     }
     if (!g_on.load(std::memory_order_relaxed)) return;
     const int64_t t = now();

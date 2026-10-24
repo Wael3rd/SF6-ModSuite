@@ -1,14 +1,75 @@
 # Changelog
 
-## Unreleased
+## 1.19.1 (2026-10-24) — SF6 Mod Suite
 
-### SF6 Slots Loader
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.1 | lighter stage-variant redirection, fewer hooks in fights |
+| SF6 Color Mod | 0.23.0 | unchanged |
+| SF6 Native Core | 0.9.2 | less work on the game thread every frame |
+| SF6 Recording Manager | 2.2.1 | no more small hitches every 2 s; lighter training entry |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.0, SF6 Native Core 0.9.1 and SF6 Recording
+Manager 2.2.0, then install Slots Loader 1.16.1, Native Core 0.9.2 and Recording Manager 2.2.1. The Color Mod zip is
+the file of 1.19.0: nothing to do if it is installed. The costume pak is not rebuilt.
+
+This release cuts what the mods do on the game's main thread during fights: on a CPU-bound PC (the game's own frame
+work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a dropped frame.
+
+### SF6 Slots Loader 1.16.1
 - **Stage variants: lighter file redirection.** The loader's redirection of the game's file paths (needed once a stage
   variant is selected) now costs one bit test for a file it does not serve, writes nothing shared between threads,
-  and is taken out as soon as no variant is selected (it stayed until the game closed). On a CPU-bound laptop the
-  old one went with 45 fps in training while a variant was selected; the new one holds 60.
+  and is taken out as soon as no variant is selected (it stayed until the game closed).
 - Test switches in `reframework\data\SF6_StageSlots_Data\`: `perf_on.txt` logs the redirection's calls and cost every
   5 s in `SF6_StageSlots.log`; `hook_off.txt` keeps it out while the file exists.
+- The plugin no longer installs its 20 diagnostic hooks of the empty-preview investigation (some ran every frame);
+  `reframework\data\SF6_CostumeSlots_data\rto_debug_on.txt` at start brings them back.
+- The Fighter Settings outfit-name hook is installed the first time Battle Settings opens instead of at start, so it
+  no longer runs every frame in fights before that.
+- The fighter-profile hooks no longer take a lock on every call while Battle Settings is closed.
+
+### SF6 Native Core 0.9.2
+- The flow manager and the pause manager are cached instead of looked up by name every frame.
+- Option values are read from the game only where they can change: options placed in the game's own menus always,
+  the others while the option window is open; the `get_Value` method is cached.
+- The `perf_on.txt` switch is looked for on a worker thread (the game thread only reads a flag); the trace / bisect
+  switch files every 10 s instead of 2 s.
+- The profiler shows the pause-menu hook installation (`PmInstall`) at training entry.
+- Element-name cache slots spread over the whole table (ZenMode).
+
+### SF6 Recording Manager 2.2.1
+- The status file is rebuilt every 10 s instead of 2 s (each rebuild was a 0.4-1.15 ms hitch, in every mode).
+- The `perf_on.txt`, `probes_on.txt` and `dump_on.txt` switches are looked for on the background thread; the game
+  thread only reads a flag (each check was up to 0.5 ms).
+- Training entry: `_reversal_rows.json` is read and parsed on a background thread; the reversal arrays are built 2
+  entries per frame instead of 4; the character folder listing skips non-json names before the pattern match.
+- The HUD record hook no longer runs an empty pre-hook every frame.
+
+### Known issues
+- Slots Loader: replays show the outfit the other players saw (Outfit 1 or DriveTech), not your modded outfit:
+  a replay has no player the plugin can tell apart.
+- Slots Loader: the online alias was tested in Custom Rooms (against another platform, and with a character change
+  between matches), not yet in Ranked or the Battle Hub.
+- Slots Loader: a fighter built without the game asking for its files again (a Custom Room's training area right
+  after a match) keeps Outfit 1 (or DriveTech) until the next load; the log says so.
+- Slots Loader, Training pause menu: when the costume or colour changed, the fight shows for about half a second with
+  the old look after the pause menu closes, before the game's own reload fade (the game's timing).
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only.
+- Slots Loader, character select and Training pause menu popup: the costume options menu (R1 / C) and the Color
+  Mod's Drive colours (L1) use buttons the game may also use on those screens; this is not confirmed either way. If
+  the game's own guide there shows them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader, Training pause menu: after confirming options only, the battle restarts (as Restart Battle) a few
+  frames after the pause menu closes, so the fight shows briefly before the fade.
+- Slots Loader: the Training popup costume options have not been tested with P2 (the dummy) nor with a gamepad on the
+  Up / Down window.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+
 
 ## 1.19.0 (2026-10-24) — SF6 Mod Suite
 
