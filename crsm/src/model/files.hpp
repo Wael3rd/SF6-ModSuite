@@ -31,6 +31,7 @@
 
 #include "nlohmann/json.hpp"
 #include "pack.hpp"
+#include "setup.hpp"
 #include "vslots.hpp"
 
 namespace model::files {
@@ -44,6 +45,7 @@ constexpr int64_t kRecordBufferLen = 3600;      // UInt16 entries a game recordi
 // first `frames` buffer values when valid and frames > 0.
 struct LiveRead {
     bool valid = false;
+    bool active = false;                     // IsActive (the pack's `active` flag)
     int64_t frames = 0;
     json weight = 0;
     std::vector<uint16_t> values;
@@ -69,7 +71,21 @@ public:
     virtual bool write_values(int fid, int k0, const uint16_t* v, size_t n) = 0;   // buffer[0..n): false past its length
     virtual bool finish(int fid, int k0, int64_t needed) = 0;                  // IsValid true, Frame needed, IsActive false, Num needed
     virtual bool activate_valid(int fid) = 0;                                  // activate_on_load (MAIN:729-735)
+    // IsActive of one slot (a pack's `active` flag); not pure so that a game without it (older fakes) keeps compiling.
+    virtual bool set_active(int, int, bool) { return false; }
     // The two game calls of fill_record are on a RecordData the caller holds (not here).
+};
+
+// The pack's "training" block in the game (model::setup): read at an export or a backup, written at an import. The DLL's
+// adapter (mech/layer_files.cpp) reaches the reversal rows through the reversal layer (its map and rows 11-30).
+class SetupPort {
+public:
+    virtual ~SetupPort() = default;
+    // The dummy's setup now; false = not reachable (the pack then carries no block). A part the port cannot read is
+    // left out (nullopt).
+    virtual bool read(int fid, model::setup::Setup* out) = 0;
+    // The parts the setup holds replace the game's; `report` says what was written or skipped (for the journal).
+    virtual bool write(int fid, const model::setup::Setup& s, std::string* report) = 0;
 };
 
 class Clock {
@@ -107,9 +123,16 @@ class Engine {
 public:
     // root = the folder that holds SF6_RecordingSlotManager_data (the game's reframework/data in the DLL).
     Engine(std::filesystem::path root, LiveSlots* live, Clock* clock);
+    // The training-block port (nullptr = none: packs are written and imported without the block, as before).
+    void set_setup(SetupPort* setup) { setup_ = setup; }
 
-    // config.json's activate_on_load (MAIN:452-459), read once at the start as the Lua does at load.
+    // config.json's activate_on_load (MAIN:452-459) and import_training_setup, read once at the start as the Lua does at load.
     void load_settings();
+    bool import_setup() const { return import_setup_; }
+    // A fighter named after the game added it (Arjun, 34) kept its data in DATA/Unknown(<id>) until then: that folder
+    // is merged into DATA/<name> (renamed when <name> does not exist; otherwise every file <name> lacks is moved, and
+    // the old folder removed once empty). Returns one line per folder handled, for the log.
+    std::vector<std::string> migrate_unknown_folders();
 
     // ---- character (MAIN:202-241 hook, MAIN:755-775 ensure_files) ----
     int fighter() const { return fid_; }
@@ -166,6 +189,8 @@ public:
 
     // the last result string (status_msg), for the journal
     const std::string& status() const { return status_; }
+    // what the last import did with the pack's training block ("" = the pack had none or nothing was done)
+    const std::string& setup_report() const { return setup_report_; }
 
     // ---- paths (relative to root, '/' as the Lua writes them) ----
     std::filesystem::path abs(const std::string& rel) const;
@@ -184,7 +209,10 @@ private:
     void set_display_name(const std::string& filename, const std::string* display);
     std::string display_name(const std::string& file) const;
     void reset_selection();
-    std::optional<json> serialize_slots(int use_id, std::string* char_name, std::string* err, bool* crashed, bool save_site);
+    std::optional<json> serialize_slots(int use_id, std::string* char_name, std::string* err, bool* crashed, bool save_site,
+                                        std::array<bool, 8>* actives = nullptr);
+    void stamp_pack(json& pack, int use_id, const std::array<bool, 8>& live_active, bool backup);
+    void apply_flags_and_setup(int use_id, const json& data);
     void backup_live_slots(int use_id);
     std::string apply(int target_id, json data, const std::string& source_name, bool* crashed, std::string* ticker);
     std::string save_custom_file_text(std::string* ticker, bool* crashed);
@@ -210,10 +238,13 @@ private:
     std::map<std::string, std::string> names_;
     std::array<json, 8> slot_names_{ "", "", "", "", "", "", "", "" };
     bool activate_on_load_ = false;
+    bool import_setup_ = true;                      // config.json import_training_setup (absent = true)
+    SetupPort* setup_ = nullptr;
     bool quiet_ = false;                            // _rsm_quiet
     bool native_action_ = false;                    // _rsm_native_action
     model::pack::BackupGate backup_gate_;
     std::string status_ = "Ready.";
+    std::string setup_report_;
     uint64_t list_version_ = 1;
 
     model::vslots::VSlots vslots_;

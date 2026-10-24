@@ -11,7 +11,7 @@ const std::vector<Entry> kAll = {
     { 21, "Jamie" },   { 22, "Akuma" },
     { 25, "Sagat" },   { 26, "M. Bison" }, { 27, "Terry" },  { 28, "Mai" },
     { 29, "Elena" },   { 30, "Viper" },   { 31, "Alex" },    { 32, "Ingrid" },
-    { 33, "Yasmine" },
+    { 33, "Yasmine" },  { 34, "Arjun" },
 };
 }  // namespace
 

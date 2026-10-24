@@ -3,8 +3,8 @@
 // Sources: MAIN:551-564 (validate), 580-599 (split), 962-1004 (serialize), 1070-1134 (save names), 566-577 (backup),
 // 1159-1167 (export_as); RMT:2049-2051 (export of 9-30).
 //
-// A pack entry is a json object {id, weight, name?, timeline[], empty} (+ whatever else a file carries: kept). The
-// `active` flag of slots 9-30 is never in a pack (it lives in _virtual_slots.json).
+// A pack entry is a json object {id, weight, name?, timeline[], empty, active?} (+ whatever else a file carries: kept);
+// entry 1 may carry the "training" block. `active` and the block: model::setup, docs/PACK_FORMAT.md.
 #pragma once
 
 #include <cstdint>
@@ -25,6 +25,9 @@ constexpr int kSlotTotal = 30;         // 8 live + 22 virtual (RMT: SLOT_TOTAL)
 // `timeline` or `inputs`. `err` is the Lua message ("empty or invalid slot data", "invalid slot entry (bad id)",
 // "slot N has no timeline/inputs").
 bool validate(const json& data, std::string* err);
+
+// info.description of a pack (the entry whose id is 1, docs/PACK_FORMAT.md): "" when none
+std::string description(const json& data);
 
 // apply_data_to_character's split of a pack: entries with id <= 8 go to the live slots, the others to the virtual ones
 // (in file order). Call after validate(). An id that is not an integer is compared as a number (3.5 <= 8: live).

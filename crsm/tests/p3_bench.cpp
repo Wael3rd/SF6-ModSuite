@@ -27,7 +27,9 @@
 #include "model/luajson.hpp"
 #include "model/lutil.hpp"
 #include "model/record.hpp"
+#include "model/pack.hpp"
 #include "model/replay.hpp"
+#include "model/setup.hpp"
 #include "model/store.hpp"
 #include "model/timeline.hpp"
 #include "model/transfer.hpp"
@@ -100,6 +102,7 @@ public:
     int read(int, int k0, model::files::LiveRead* out) override {
         const FakeSlot& s = g_->slots[k0];
         out->valid = s.valid;
+        out->active = s.active;
         out->frames = s.frame;
         out->weight = s.weight;
         out->values.clear();
@@ -151,6 +154,7 @@ public:
         for (FakeSlot& s : g_->slots) if (s.valid) s.active = true;
         return true;
     }
+    bool set_active(int, int k0, bool on) override { g_->slots[k0].active = on; return true; }
 private:
     FakeGame* g_;
 };
@@ -229,6 +233,488 @@ void p3a_fix(const fs::path& work) {
     check(pack.is_array() && pack.size() == 30 && pack[1]["name"] == n2, "the pack holds the cut name", [&] { return pack.dump().substr(0, 200); });
     const json vs = lj::load_file(root / "SF6_RecordingSlotManager_data" / "Ryu" / "_virtual_slots.json");
     check(vs.is_object() && vs["17"]["name"].get<std::string>() == v, "_virtual_slots.json holds the cut name", nullptr);
+}
+
+// ---- P3a: the pack's `active` flags and training block (docs/PACK_FORMAT.md) -----------------------------------------------
+// The game's reversal rows and replay settings behind the port, as the DLL's GameSetup gives them (pack terms).
+class FakeSetup final : public model::files::SetupPort {
+public:
+    model::setup::Setup now;
+    int reads = 0, writes = 0;
+    bool read(int, model::setup::Setup* out) override { ++reads; *out = now; return now.playback || now.reversal || now.dummy; }
+    bool write(int, const model::setup::Setup& s, std::string* report) override {
+        ++writes;
+        if (s.playback) now.playback = s.playback;
+        if (s.dummy) {                                          // field by field: an absent field keeps the game's
+            if (!now.dummy) now.dummy = model::setup::Dummy{};
+            for (size_t i = 0; i < s.dummy->v.size(); ++i) if (s.dummy->v[i]) now.dummy->v[i] = s.dummy->v[i];
+        }
+        if (s.reversal) {                                       // the layer writes all 30 rows: the missing ones as default
+            model::setup::Rows r = *s.reversal;
+            for (auto& c : r) c.resize(model::setup::kRowsTotal);
+            now.reversal = r;
+        }
+        if (report) *report = "fake";
+        return true;
+    }
+};
+
+class FakeAlloc final : public model::files::AllocEnv {
+public:
+    explicit FakeAlloc(FakeGame* g) : g_(g) {}
+    bool start_recording(int slot) override {                   // the recording gives the slot its buffer
+        FakeSlot& s = g_->slots[slot];
+        s.buff.assign(3600, 0); s.has_buff = true; s.no_alloc = false;
+        return true;
+    }
+    void stop_phase1() override {}
+    void stop_phase2() override {}
+private:
+    FakeGame* g_;
+};
+
+model::setup::Rows rows_of(std::initializer_list<std::pair<int, model::store::RdRow>> down, int len = 30) {
+    model::setup::Rows r;
+    for (auto& c : r) c.resize((size_t)len);
+    for (const auto& [k, row] : down) r[0][(size_t)k] = row;
+    return r;
+}
+
+model::store::RdRow rec_row(int64_t slot0, bool active) {
+    model::store::RdRow r;
+    r.Type = model::setup::kRecording; r.SkillIndex = slot0; r.IsValid = true; r.IsActive = active;
+    return r;
+}
+
+bool same_row(const model::store::RdRow& a, const model::store::RdRow& b) {
+    return model::store::rd_to_json(a) == model::store::rd_to_json(b);
+}
+
+bool same_rows(const model::setup::Rows& a, const model::setup::Rows& b) {
+    for (size_t rt = 0; rt < 3; ++rt) {
+        const size_t n = std::max(a[rt].size(), b[rt].size());
+        for (size_t k = 0; k < n; ++k) {
+            const model::store::RdRow x = k < a[rt].size() ? a[rt][k] : model::store::RdRow{};
+            const model::store::RdRow y = k < b[rt].size() ? b[rt][k] : model::store::RdRow{};
+            if (!same_row(x, y)) return false;
+        }
+    }
+    return true;
+}
+
+void select_pack(model::files::Engine& e, const std::string& file) {   // by file name (Save As names the display "Drill")
+    for (size_t i = 2; i <= e.dropdown().size(); ++i) {
+        e.set_dropdown_index(json((int)i));
+        if (e.selected_file() == file) return;
+    }
+}
+
+void set_vactive(model::files::Engine& e, int n, bool on) {
+    model::vslots::VSlots::Fields f;
+    f.active = &on;
+    e.vslots().set_virtual(n, f);
+    e.vslots_save();
+}
+
+void p3a_setup_model() {
+    begin("P3a pack: training block model");
+    namespace st = model::setup;
+    st::Setup s;
+    s.playback = st::Playback{ 1, 2, 0 };
+    model::store::RdRow lvl;
+    lvl.Type = 3; lvl.SkillIndex = 1; lvl.Level = 3; lvl.Count = 2; lvl.Delay = 4; lvl.IsValid = true; lvl.IsFrame = true; lvl.Frame = 29;
+    s.reversal = rows_of({ { 0, rec_row(0, true) }, { 3, rec_row(14, false) }, { 12, lvl } });
+    const json b = st::to_json(s);
+    std::string why;
+    const auto back = st::from_json(b, &why);
+    check(back && back->playback && back->playback->PlayType == 1 && back->playback->LoopType == 2 && back->playback->InfoType == 0,
+          "round trip: playback", [&] { return b.dump(); });
+    check(back && back->reversal && same_rows(*back->reversal, *s.reversal), "round trip: 3 x 30 rows", [&] { return b.dump().substr(0, 300); });
+    check(b["version"] == 1 && b["reversal"]["down"].size() == 30 && b["reversal"]["down"][0]["SkillIndex"] == 0, "the block's shape",
+          [&] { return b.dump().substr(0, 200); });
+    json b2 = b; b2["version"] = 2;
+    check(!st::from_json(b2, &why) && !why.empty(), "a block of another version is ignored", [&] { return why; });
+    json b3 = b; b3.erase("version");
+    check(!st::from_json(b3, &why), "a block without a version is ignored", nullptr);
+    json b4 = json::object(); b4["version"] = 1; b4["reversal"] = json::object();
+    b4["reversal"]["guard"] = json::array({ model::store::rd_to_json(rec_row(2, true)) });
+    const auto s4 = st::from_json(b4, &why);
+    check(s4 && s4->reversal && (*s4->reversal)[1].size() == 10 && (*s4->reversal)[0].size() == 10 && same_row((*s4->reversal)[1][0], rec_row(2, true))
+          && !s4->playback, "short categories padded to 10 default rows, no playback part", nullptr);
+    json b5 = b4; b5["reversal"]["down"] = json::array();
+    for (int i = 0; i < 40; ++i) b5["reversal"]["down"].push_back(json::object({ { "Count", 1 } }));
+    const auto s5 = st::from_json(b5, &why);
+    check(s5 && (*s5->reversal)[0].size() == 30, "rows past 30 ignored", nullptr);
+
+    // pack terms <-> the game + map
+    st::GameRow g = st::to_game(rec_row(14, true));
+    check(g.virt == 15 && g.row.SkillIndex == st::kWork && g.row.Type == st::kRecording && g.row.IsActive, "virtual slot 15: SkillIndex 7 + map 15", nullptr);
+    g = st::to_game(rec_row(3, false));
+    check(g.virt == 0 && g.row.SkillIndex == 3, "live slot 4: as is, no map", nullptr);
+    g = st::to_game(rec_row(30, true));
+    check(st::is_default(g.row) && g.virt == 0, "a RECORDING row past slot 30: a default row", nullptr);
+    g = st::to_game(rec_row(-1, true));
+    check(st::is_default(g.row), "a RECORDING row without a slot: a default row", nullptr);
+    model::store::RdRow bad; bad.Type = 9; bad.IsValid = true;
+    check(st::is_default(st::to_game(bad).row), "an unknown Type: a default row", nullptr);
+    check(st::to_game(lvl).row.SkillIndex == 1 && st::to_game(lvl).virt == 0, "a move row: as is", nullptr);
+    check(st::from_game(rec_row(7, true), 15).SkillIndex == 14, "from the game: RECORDING / 7 mapped to 15 -> 14", nullptr);
+    check(st::from_game(rec_row(7, true), std::nullopt).SkillIndex == 7, "from the game: unmapped slot 8 stays 7", nullptr);
+    check(st::from_game(lvl, 15).SkillIndex == 1, "from the game: a stale map on a move row is ignored", nullptr);
+
+    st::Rows t = rows_of({ { 0, rec_row(0, true) } });
+    st::trim(t);
+    check(t[0].size() == 10 && t[2].size() == 10, "trim: rows 11-30 all default -> 10 rows", nullptr);
+    t = rows_of({ { 25, rec_row(0, true) } });
+    st::trim(t);
+    check(t[0].size() == 30 && t[1].size() == 30, "trim: a row 11-30 in use -> 30 rows", nullptr);
+    check(!st::rows_in_use(rows_of({})) && st::rows_in_use(rows_of({ { 4, rec_row(1, false) } })), "rows_in_use: a valid row", nullptr);
+
+    // the block on a pack: entry 1 only, old readers' rule unchanged
+    json pack = json::array();
+    for (int id = 1; id <= 30; ++id) {
+        json e = json::object(); e["id"] = id; e["empty"] = true; e["timeline"] = json::array(); e["weight"] = 1;
+        pack.push_back(e);
+    }
+    std::swap(pack[0], pack[4]);                                // entry 1 found by its id, not its place
+    check(st::stamp(pack, s), "stamp: entry 1 found", nullptr);
+    int holders = 0;
+    for (const json& e : pack) if (e.contains(st::kKey)) ++holders;
+    check(holders == 1 && pack[4].contains(st::kKey) && pack[4]["id"] == 1, "the block rides on entry 1 alone", nullptr);
+    std::string verr;
+    check(model::pack::validate(lj::decode(pack), &verr), "a pack with the block passes the old validate rule (2.1.x, Lua)", [&] { return verr; });
+    const auto sp = model::pack::split(pack);
+    check(sp.live.size() == 8 && sp.virt.size() == 22, "split: the block stays with the live entries", nullptr);
+    check(st::of_pack(sp.live, &why).has_value(), "the live part alone still carries the block (the ALLOC re-run)", [&] { return why; });
+    json noone = json::array({ pack[1] });
+    check(!st::stamp(noone, s) && !st::of_pack(noone, &why), "no entry 1: no block", nullptr);
+    std::array<bool, 30> on{};
+    on[0] = true; on[1] = true;
+    pack[1]["empty"] = false; pack[1]["timeline"] = json::array({ "3f : 5" });
+    st::stamp_active(pack, on);
+    check(pack[1]["active"] == true && pack[4]["active"] == false && pack[0]["active"] == false, "stamp_active: an empty slot is never active", nullptr);
+    check(st::active_of(pack[1]) == std::optional<bool>(true) && !st::active_of(json::object({ { "active", 1 } })), "active_of: booleans only", nullptr);
+}
+
+void p3a_setup_engine(const fs::path& work) {
+    begin("P3a pack: active flags and training block on the files engine");
+    const fs::path root = work / "p3a_setup";
+    const fs::path ken = root / "SF6_RecordingSlotManager_data" / "Ken";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(ken, ec);
+    FakeGame g; g.fid = 10; initial_slots(g, 0);
+    FakeLive live(&g);
+    FakeClock clock;
+    clock.when.tm_year = 126; clock.when.tm_mon = 9; clock.when.tm_mday = 23;
+    FakeSetup setup;
+    setup.now.playback = model::setup::Playback{ 0, 2, 2 };
+    setup.now.reversal = rows_of({ { 0, rec_row(0, true) }, { 1, rec_row(14, true) } });
+    model::files::Engine e(root, &live, &clock);
+    e.set_setup(&setup);
+    e.load_settings();
+    e.ensure(10);
+    e.vslot_put(15, entry_from(15, 30, 40, "V15"), false);
+    e.vslot_put(16, entry_from(16, 30, 50, ""), false);
+    set_vactive(e, 15, true);
+
+    // export
+    std::string tk;
+    const std::string res = e.export_as(json("Drill"), &tk);
+    check(res.rfind("Custom Saved", 0) == 0, "export written", [&] { return res; });
+    const json pack = lj::load_file(ken / "Ken_Drill.json");
+    std::string verr;
+    check(pack.is_array() && pack.size() == 30 && model::pack::validate(pack, &verr), "30 entries, valid for the old rule", [&] { return verr; });
+    bool flags_ok = pack.is_array() && pack.size() == 30;
+    for (int k0 = 0; flags_ok && k0 < 8; ++k0) flags_ok = pack[(size_t)k0]["active"] == json(g.slots[k0].active && g.slots[k0].valid);
+    check(flags_ok, "slots 1-8: active = IsActive of a recorded slot", [&] { return pack.dump().substr(0, 300); });
+    check(flags_ok && pack[14]["active"] == true && pack[15]["active"] == false && pack[20]["active"] == false, "slots 9-30: active from _virtual_slots.json", nullptr);
+    std::string why;
+    const auto blk = model::setup::of_pack(pack, &why);
+    check(blk && blk->playback && blk->playback->LoopType == 2 && blk->reversal && (*blk->reversal)[0].size() == 10 &&
+          same_rows(*blk->reversal, *setup.now.reversal), "entry 1 carries the playback and the 10 game rows (11-30 unused)", [&] { return why; });
+    check(flags_ok && !pack[1].contains(model::setup::kKey) && !pack[14].contains(model::setup::kKey), "no other entry carries the block", nullptr);
+    if (!flags_ok) return;
+
+    // an unused reversal setup is not exported
+    const model::setup::Setup keep = setup.now;
+    setup.now.reversal = rows_of({});
+    e.export_as(json("NoRev"), &tk);
+    const auto blk2 = model::setup::of_pack(lj::load_file(ken / "Ken_NoRev.json"), &why);
+    check(blk2 && blk2->playback && !blk2->reversal, "no valid reversal row: the block carries the playback only", nullptr);
+    setup.now = keep;
+
+    // import of the drill over another state
+    for (FakeSlot& sl : g.slots) sl.active = !sl.active;
+    set_vactive(e, 15, false);
+    set_vactive(e, 16, true);
+    setup.now.playback = model::setup::Playback{ 1, 0, 0 };
+    setup.now.reversal = rows_of({ { 5, rec_row(3, false) }, { 15, rec_row(20, true) } });
+    const model::setup::Setup before = setup.now;
+    std::array<bool, 8> act_before{};
+    for (int k0 = 0; k0 < 8; ++k0) act_before[(size_t)k0] = g.slots[k0].active && g.slots[k0].valid;
+    select_pack(e, "Ken_Drill.json");
+    check(e.selected_file() == "Ken_Drill.json", "Ken_Drill selected", [&] { return e.selected_file(); });
+    clock.t += 10;
+    const std::string ir = e.import_selected();
+    check(ir.rfind("Loaded:", 0) == 0, "import", [&] { return ir; });
+    flags_ok = true;
+    for (int k0 = 0; k0 < 8; ++k0) flags_ok &= g.slots[k0].active == pack[(size_t)k0]["active"].get<bool>();
+    check(flags_ok, "slots 1-8 active as the pack says", nullptr);
+    check(e.vslots().get(15) && (*e.vslots().get(15))["active"] == true && e.vslots().get(16) && (*e.vslots().get(16))["active"] == false,
+          "slots 9-30 active as the pack says (not the user's flags)", nullptr);
+    check(setup.writes == 1 && setup.now.playback->PlayType == 0 && setup.now.playback->LoopType == 2 && setup.now.playback->InfoType == 2 &&
+          same_rows(*setup.now.reversal, *keep.reversal), "the training block replaced the game's reversal rows and replay settings",
+          [&] { return e.setup_report(); });
+
+    // the backup holds what the import replaced
+    json backup;
+    for (const auto& f : fs::directory_iterator(ken / "Backups", ec)) backup = lj::load_file(f.path());
+    const auto bblk = model::setup::of_pack(backup, &why);
+    check(bblk && bblk->reversal && (*bblk->reversal)[0].size() == 30 && same_rows(*bblk->reversal, *before.reversal) &&
+          bblk->playback && bblk->playback->PlayType == 1, "the pre-import backup carries the replaced setup (30 rows: row 16 was in use)", [&] { return why; });
+    flags_ok = backup.is_array() && backup.size() == 8;
+    for (int k0 = 0; flags_ok && k0 < 8; ++k0) flags_ok = backup[(size_t)k0]["active"] == json(act_before[(size_t)k0]);
+    check(flags_ok, "the backup carries the replaced active flags", [&] { return backup.dump().substr(0, 200); });
+
+    // a pack without the flags and the block: today's behaviour
+    json old = pack;
+    for (json& x : old) { x.erase("active"); x.erase(model::setup::kKey); }
+    std::string derr;
+    lj::dump_file(ken / "Ken_Old.json", old, &derr);
+    e.invalidate();
+    e.ensure(10);
+    set_vactive(e, 16, true);
+    for (FakeSlot& sl : g.slots) sl.active = true;
+    const int w0 = setup.writes;
+    select_pack(e, "Ken_Old.json");
+    clock.t += 10;
+    const std::string olr = e.import_selected();
+    flags_ok = olr.rfind("Loaded:", 0) == 0;
+    for (int k0 = 0; k0 < 8; ++k0) flags_ok &= !g.slots[k0].active;
+    check(flags_ok, "an old pack: slots 1-8 written inactive, as before", [&] { return olr; });
+    check(setup.writes == w0 && e.setup_report().empty(), "an old pack: the training setup untouched", nullptr);
+    check((*e.vslots().get(16))["active"] == true && (*e.vslots().get(15))["active"] == true, "an old pack: slots 9-30 keep the user's flags", nullptr);
+
+    // activate_on_load gives way to the pack's flags; import_training_setup = false skips the block
+    lj::dump_file(root / model::store::config_path(), json::object({ { "activate_on_load", true }, { "import_training_setup", false } }), &derr);
+    model::files::Engine e2(root, &live, &clock);
+    e2.set_setup(&setup);
+    e2.load_settings();
+    e2.ensure(10);
+    select_pack(e2, "Ken_Drill.json");
+    clock.t += 10;
+    const std::string r2 = e2.import_selected();
+    flags_ok = r2.rfind("Loaded:", 0) == 0;
+    for (int k0 = 0; k0 < 8; ++k0) flags_ok &= g.slots[k0].active == pack[(size_t)k0]["active"].get<bool>();
+    check(flags_ok, "activate_on_load on: the pack's flags still win", [&] { return r2; });
+    check(setup.writes == w0 && e2.setup_report().find("import_training_setup") != std::string::npos,
+          "import_training_setup false: the block is skipped", [&] { return e2.setup_report(); });
+    fs::remove(root / model::store::config_path(), ec);
+
+    // the ALLOC fallback: the block is applied once, by the re-run that writes the slots
+    FakeGame g3; g3.fid = 10; initial_slots(g3, 0);
+    g3.slots[0].has_buff = false; g3.slots[0].buff.clear(); g3.slots[0].no_alloc = true;   // slot 1 (in the pack) has no memory
+    FakeLive live3(&g3);
+    FakeSetup setup3;
+    model::files::Engine e3(root, &live3, &clock);
+    e3.set_setup(&setup3);
+    e3.load_settings();
+    e3.ensure(10);
+    select_pack(e3, "Ken_Drill.json");
+    clock.t += 10;
+    const std::string r3 = e3.import_selected();
+    check(r3.rfind("Auto-Allocating", 0) == 0 && setup3.writes == 0, "ALLOC queued: nothing applied yet", [&] { return r3; });
+    FakeAlloc alloc(&g3);
+    for (int i = 0; i < 100 && e3.alloc_pending(); ++i) e3.alloc_tick(false, alloc);
+    check(!e3.alloc_pending() && e3.status().rfind("Loaded:", 0) == 0 && setup3.writes == 1 && g3.slots[0].active == pack[0]["active"].get<bool>(),
+          "WRITE_DATA: the slots, the flags and the block", [&] { return e3.status(); });
+}
+
+// ---- P3a: the dummy's settings in the training block, `info` kept by Save / Save As, the list read at each page entry ------
+int dummy_index(const char* name) {
+    for (int i = 0; i < model::setup::kDummyCount; ++i) if (std::string(model::setup::kDummyFields[i].name) == name) return i;
+    return -1;
+}
+
+model::setup::Dummy dummy_of(std::initializer_list<std::pair<const char*, int64_t>> kv) {
+    model::setup::Dummy d;
+    for (const auto& [k, v] : kv) d.v[(size_t)dummy_index(k)] = v;
+    return d;
+}
+
+bool same_dummy(const std::optional<model::setup::Dummy>& a, const model::setup::Dummy& b) { return a && a->v == b.v; }
+
+void p3a_dummy_model() {
+    begin("P3a pack: the dummy's settings (training.dummy) model");
+    namespace st = model::setup;
+    check(dummy_index("GuardType") >= 0 && dummy_index("GD_Type") >= 0 && dummy_index("IsGuardSwitching") >= 0, "field table", nullptr);
+    st::Setup s;
+    s.dummy = dummy_of({ { "DummyActionType", 1 }, { "GuardType", 2 }, { "IsGuardSwitching", 1 }, { "GuardCount", 29 },
+                         { "GD_Type", 1 }, { "QS_Type", 1 }, { "DR_Type", 2 }, { "DR_DelayFrame", 3 },
+                         { "DR_No_Weight", 1 }, { "DR_Guard_Weight", 0 }, { "DR_Getup_Weight", 2 }, { "NC_TYPE", 0 }, { "PC_TYPE", 1 } });
+    const json b = st::to_json(s);
+    std::string why;
+    const auto back = st::from_json(b, &why);
+    check(back && same_dummy(back->dummy, *s.dummy) && !back->reversal && !back->playback, "round trip: the fields given, nothing else",
+          [&] { return b.dump(); });
+    check(b["dummy"]["guard"]["IsGuardSwitching"] == true && b["dummy"]["defense"]["GD_Type"] == 1 && b["dummy"]["status"]["DummyActionType"] == 1 &&
+          b["dummy"]["counter"]["PC_TYPE"] == 1 && !b["dummy"]["status"].contains("JumpType"), "the shape: page objects, game names, a JSON boolean",
+          [&] { return b.dump(); });
+    check(!st::to_json(st::Setup{}).contains("dummy"), "no dummy part when nothing is carried", nullptr);
+
+    json bad = b;
+    bad["dummy"]["guard"]["GuardType"] = 9;                     // outside TM_GS_GUARD_TYPE
+    bad["dummy"]["guard"]["GuardWeight"] = 150;                 // a percentage
+    bad["dummy"]["guard"]["IsGuardSwitching"] = 1;              // not a boolean
+    bad["dummy"]["defense"].erase("DR_Getup_Weight");           // an incomplete weight group
+    bad["dummy"]["counter"]["NH_Weight"] = 0; bad["dummy"]["counter"]["NC_Weight"] = 0; bad["dummy"]["counter"]["PC_Weight"] = 0;
+    bad["dummy"]["status"] = "x";                               // a page that is not an object
+    auto bb = st::from_json(bad, &why);
+    check(bb && bb->dummy, "a block with bad values still read", [&] { return why; });
+    if (!bb || !bb->dummy) return;
+    const auto& v = bb->dummy->v;
+    check(bb && bb->dummy && !v[(size_t)dummy_index("GuardType")] && !v[(size_t)dummy_index("GuardWeight")] &&
+          !v[(size_t)dummy_index("IsGuardSwitching")] && v[(size_t)dummy_index("GuardCount")] == 29, "out of range / not a boolean: not taken",
+          nullptr);
+    check(bb && !v[(size_t)dummy_index("DR_No_Weight")] && !v[(size_t)dummy_index("DR_Guard_Weight")] && v[(size_t)dummy_index("DR_Type")] == 2,
+          "an incomplete weight group: none of it taken", nullptr);
+    check(bb && !v[(size_t)dummy_index("NH_Weight")] && !v[(size_t)dummy_index("PC_Weight")] && v[(size_t)dummy_index("PC_TYPE")] == 1,
+          "weights all zero: not taken", nullptr);
+    check(bb && !v[(size_t)dummy_index("DummyActionType")], "a page that is not an object: nothing from it", nullptr);
+    json none = json::object({ { "version", 1 }, { "dummy", json::object({ { "guard", json::object({ { "GuardType", -1 } }) } }) } });
+    const auto sn = st::from_json(none, &why);
+    check(sn && !sn->dummy, "nothing valid: no dummy part", nullptr);
+
+    // the block with a dummy part on a pack: the old rule still passes, the other parts unchanged
+    json pack = json::array();
+    for (int id = 1; id <= 30; ++id) pack.push_back(json::object({ { "id", id }, { "empty", true }, { "timeline", json::array() }, { "weight", 1 } }));
+    s.playback = st::Playback{ 1, 2, 0 };
+    st::stamp(pack, s);
+    std::string verr;
+    check(model::pack::validate(lj::decode(pack), &verr), "a pack with training.dummy passes the old validate rule", [&] { return verr; });
+    const auto op = st::of_pack(pack, &why);
+    check(op && op->playback && op->playback->LoopType == 2 && same_dummy(op->dummy, *s.dummy), "of_pack: playback and dummy", nullptr);
+}
+
+void p3a_dummy_info_engine(const fs::path& work) {
+    begin("P3a pack: dummy settings through export / import / backup; info kept by Save and Save As");
+    const fs::path root = work / "p3a_dummy";
+    const fs::path ken = root / "SF6_RecordingSlotManager_data" / "Ken";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(ken, ec);
+    FakeGame g; g.fid = 10; initial_slots(g, 0);
+    FakeLive live(&g);
+    FakeClock clock;
+    FakeSetup setup;
+    const model::setup::Dummy author = dummy_of({ { "DummyActionType", 0 }, { "GuardType", 3 }, { "GD_Type", 1 }, { "IsGuardSwitching", 1 },
+                                                  { "QS_Type", 1 }, { "NC_TYPE", 0 }, { "PC_TYPE", 0 } });
+    setup.now.playback = model::setup::Playback{ 0, 2, 2 };
+    setup.now.dummy = author;
+    model::files::Engine e(root, &live, &clock);
+    e.set_setup(&setup);
+    e.load_settings();
+    e.ensure(10);
+    std::string tk, why;
+    e.export_as(json("Drill"), &tk);
+    const json pack = lj::load_file(ken / "Ken_Drill.json");
+    const auto blk = model::setup::of_pack(pack, &why);
+    check(blk && same_dummy(blk->dummy, author) && blk->playback && !blk->reversal, "export: the dummy's settings on entry 1", [&] { return why; });
+
+    // the importer's own settings: the pack's fields replace them, the others stay
+    const model::setup::Dummy mine = dummy_of({ { "DummyActionType", 1 }, { "GuardType", 0 }, { "GD_Type", 0 }, { "IsGuardSwitching", 0 },
+                                                { "QS_Type", 0 }, { "NC_TYPE", 1 }, { "PC_TYPE", 1 }, { "DR_Type", 3 } });
+    setup.now.dummy = mine;
+    select_pack(e, "Ken_Drill.json");
+    clock.t += 10;
+    const std::string ir = e.import_selected();
+    model::setup::Dummy want = author;
+    want.v[(size_t)dummy_index("DR_Type")] = 3;
+    check(ir.rfind("Loaded:", 0) == 0 && same_dummy(setup.now.dummy, want), "import: the pack's fields written, the rest kept",
+          [&] { return ir + " / " + e.setup_report(); });
+    json backup;
+    for (const auto& f : fs::directory_iterator(ken / "Backups", ec)) backup = lj::load_file(f.path());
+    const auto bblk = model::setup::of_pack(backup, &why);
+    check(bblk && same_dummy(bblk->dummy, mine), "the pre-import backup carries the replaced dummy settings", [&] { return why; });
+
+    // import_training_setup = false: the dummy settings untouched too
+    std::string derr;
+    lj::dump_file(root / model::store::config_path(), json::object({ { "import_training_setup", false } }), &derr);
+    model::files::Engine e2(root, &live, &clock);
+    e2.set_setup(&setup);
+    e2.load_settings();
+    e2.ensure(10);
+    setup.now.dummy = mine;
+    select_pack(e2, "Ken_Drill.json");
+    clock.t += 10;
+    e2.import_selected();
+    check(same_dummy(setup.now.dummy, mine), "import_training_setup false: the dummy settings skipped", [&] { return e2.setup_report(); });
+    fs::remove(root / model::store::config_path(), ec);
+
+    // a downloaded pack with `info`: Save over it keeps it, Save As copies it, a pack without info gives none
+    json drill = pack;
+    const json info = json::object({ { "author", "Chris_F" }, { "description", "Throw him.\nHe breaks it." }, { "source", "drillcodes.com" } });
+    drill[0]["info"] = info;
+    lj::dump_file(ken / "Ken_Dl.json", drill, &derr);
+    e.invalidate();
+    e.ensure(10);
+    select_pack(e, "Ken_Dl.json");
+    clock.t += 10;
+    check(e.import_selected().rfind("Loaded:", 0) == 0, "the downloaded pack opened", nullptr);
+    const std::string sr = e.export_selected(&tk);
+    const json saved = lj::load_file(ken / "Ken_Dl.json");
+    check(sr.rfind("Custom Saved", 0) == 0 && saved.is_array() && saved[0]["info"] == info, "Save over the loaded pack keeps its info",
+          [&] { return sr + " " + saved.dump().substr(0, 200); });
+    e.export_as(json("Copy"), &tk);
+    const json copy = lj::load_file(ken / "Ken_Copy.json");
+    check(copy.is_array() && copy[0]["info"] == info && !copy[1].contains("info"), "Save As copies the loaded pack's info (entry 1 only)",
+          [&] { return copy.dump().substr(0, 200); });
+    e.export_as(json("Copy2"), &tk);                            // the loaded pack is now Ken_Copy: its info goes on
+    check(lj::load_file(ken / "Ken_Copy2.json")[0]["info"] == info, "a second Save As still carries it", nullptr);
+    select_pack(e, "Ken_Drill.json");
+    clock.t += 10;
+    e.import_selected();
+    e.export_as(json("Plain"), &tk);
+    check(!lj::load_file(ken / "Ken_Plain.json")[0].contains("info"), "a loaded pack without info: none written", nullptr);
+    model::files::Engine e3(root, &live, &clock);              // nothing loaded in this session
+    e3.set_setup(&setup);
+    e3.load_settings();
+    e3.ensure(10);
+    e3.export_as(json("Fresh"), &tk);
+    check(!lj::load_file(ken / "Ken_Fresh.json")[0].contains("info"), "nothing loaded: no info", nullptr);
+}
+
+void p3a_list_reglob(const fs::path& work) {
+    begin("P3a files: the loadout list read again at each Manager page entry (ensure)");
+    const fs::path root = work / "p3a_reglob";
+    const fs::path ken = root / "SF6_RecordingSlotManager_data" / "Ken";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(ken, ec);
+    FakeGame g; g.fid = 10; initial_slots(g, 0);
+    FakeLive live(&g);
+    FakeClock clock;
+    model::files::Engine e(root, &live, &clock);
+    std::string tk, derr;
+    e.ensure(10);
+    e.export_as(json("A"), &tk);
+    e.export_as(json("B"), &tk);
+    select_pack(e, "Ken_A.json");
+    const uint64_t v0 = e.list_version();
+    const size_t n0 = e.dropdown().size();
+    check(!e.ensure(10) && e.list_version() == v0, "nothing changed in the folder: no change, same list version", nullptr);
+    lj::dump_file(ken / "Ken_Hand.json", lj::load_file(ken / "Ken_B.json"), &derr);   // copied in by hand
+    check(e.ensure(10) && e.dropdown().size() == n0 + 1 && e.list_version() != v0, "a pack copied in by hand is listed at the next entry",
+          [&] { return std::to_string(e.dropdown().size()); });
+    check(e.selected_file() == "Ken_A.json", "the selection kept (its file is still there)", [&] { return e.selected_file(); });
+    bool listed = false;
+    for (size_t i = 2; i <= e.dropdown().size(); ++i) { e.set_dropdown_index(json((int)i)); if (e.selected_file() == "Ken_Hand.json") listed = true; }
+    check(listed, "the new pack can be selected", nullptr);
+    select_pack(e, "Ken_A.json");
+    fs::remove(ken / "Ken_A.json", ec);                          // removed by hand
+    check(e.ensure(10) && e.dropdown().size() == n0 && e.selected_file().empty(), "a pack removed by hand leaves the list and the selection",
+          [&] { return e.selected_file(); });
 }
 
 // ---- P3d on the real engines: the record and replay layers share slot 8 through the files engine ----------------------------
@@ -418,6 +904,44 @@ void p3d_record_end_slot8(const fs::path& work) {
 
 }  // namespace
 
+void p3a_unknown_folders(const fs::path& work) {
+    begin("P3a files: Unknown(<id>) folder merged into the fighter's name");
+    const fs::path root = work / "p3a_unknown";
+    const fs::path data = root / "SF6_RecordingSlotManager_data";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    auto put = [](const fs::path& p, const std::string& text) {
+        std::error_code e; fs::create_directories(p.parent_path(), e);
+        std::ofstream(p, std::ios::binary) << text;
+    };
+    auto read = [](const fs::path& p) { std::ifstream f(p, std::ios::binary); return std::string(std::istreambuf_iterator<char>(f), {}); };
+    FakeGame g; g.fid = 34; initial_slots(g, 0);
+    FakeLive live(&g);
+    FakeClock clock;
+    model::files::Engine e(root, &live, &clock);
+
+    // no named folder yet: renamed as a whole
+    put(data / "Unknown(34)" / "_virtual_slots.json", "old_vs");
+    put(data / "Unknown(34)" / "Backups" / "b.json", "bk");
+    auto r = e.migrate_unknown_folders();
+    check(r.size() == 1 && !fs::exists(data / "Unknown(34)") && read(data / "Arjun" / "_virtual_slots.json") == "old_vs"
+          && read(data / "Arjun" / "Backups" / "b.json") == "bk", "Unknown(34) renamed to Arjun", [&] { return r.empty() ? "" : r[0]; });
+
+    // both exist: missing files moved, a file Arjun already has stays in Unknown(34)
+    put(data / "Unknown(34)" / "_virtual_slots.json", "older_vs");
+    put(data / "Unknown(34)" / "Pack.json", "pack");
+    r = e.migrate_unknown_folders();
+    check(read(data / "Arjun" / "Pack.json") == "pack" && read(data / "Arjun" / "_virtual_slots.json") == "old_vs"
+          && read(data / "Unknown(34)" / "_virtual_slots.json") == "older_vs", "merge: missing files moved, existing ones kept",
+          [&] { return r.empty() ? "" : r[0]; });
+    fs::remove(data / "Unknown(34)" / "_virtual_slots.json", ec);
+    r = e.migrate_unknown_folders();
+    check(!fs::exists(data / "Unknown(34)"), "an empty Unknown(34) left after the merge is removed", nullptr);
+    check(e.migrate_unknown_folders().empty(), "nothing to do: no line", nullptr);
+    e.ensure(34);
+    check(e.char_name() && *e.char_name() == "Arjun", "fighter 34 is Arjun", nullptr);
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     fs::path work;
@@ -433,6 +957,12 @@ int main(int argc, char** argv) {
     fs::create_directories(work);
     std::printf("[P3a] files\n");
     p3a_fix(work);
+    p3a_unknown_folders(work);
+    p3a_setup_model();
+    p3a_setup_engine(work);
+    p3a_dummy_model();
+    p3a_dummy_info_engine(work);
+    p3a_list_reglob(work);
     p3::run_pure_tests();
     p3d_record_meta(work);
     p3d_record_end_slot8(work);

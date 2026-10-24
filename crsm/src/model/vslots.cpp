@@ -157,7 +157,9 @@ void VSlots::import_virtual(const json& list) {
         json c = e;
         c["id"] = *id;
         auto k = keep.find(key ? *key : -1);
-        if (k != keep.end()) c["active"] = k->second; else c.erase("active");
+        if (lj::index(e, "active").is_boolean()) {}      // a pack that carries the flag (docs/PACK_FORMAT.md): its own wins
+        else if (k != keep.end()) c["active"] = k->second;
+        else c.erase("active");
         if (key) slots_[*key] = std::move(c);
     }
 }

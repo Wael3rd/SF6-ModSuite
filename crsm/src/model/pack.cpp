@@ -105,4 +105,18 @@ bool BackupGate::allow(int fighter_id, double now_seconds) {
     return true;
 }
 
+std::string description(const json& data) {
+    if (!data.is_array()) return "";
+    for (const json& e : data) {
+        if (!e.is_object()) continue;
+        const auto id = e.find("id");
+        if (id == e.end() || !id->is_number() || id->get<double>() != 1.0) continue;
+        const auto info = e.find("info");
+        if (info == e.end() || !info->is_object()) return "";
+        const auto d = info->find("description");
+        return (d != info->end() && d->is_string()) ? d->get<std::string>() : std::string();
+    }
+    return "";
+}
+
 }  // namespace model::pack

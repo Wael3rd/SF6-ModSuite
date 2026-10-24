@@ -720,6 +720,32 @@ void test_fixes() {
             check(wire_line(lg[1]).find("|Second|1") != std::string::npos, "vote: cfn is the CFN read now");
             check(wire_line(lg[2]).find("|Second||") != std::string::npos, "share: cfn is the CFN read now, no player");
         }
+
+        // 8: a download writes the loadout's description and author on entry 1 (info, docs/PACK_FORMAT.md)
+        body = list_body; pg.fetch(1); pump();
+        check(pg.download_prompt(2, &msg), "info: prompt on Fresh");
+        const std::string drill = "Pick Ken and throw him. He will auto break it. Then, STOP THE SLOP";
+        body = json::object({ {"name", "Fresh"}, {"description", drill},
+                              {"file", json::array({ C({{"id", 2}, {"empty", true}}), C({{"id", 1}, {"empty", true}, {"info", C({{"url", "u"}})}}) })} }).dump();
+        pg.download_confirmed(); pump();
+        const json got = lj::load_file(root / "game/SF6_RecordingSlotManager_data/Ken/Fresh.json");
+        check(got.is_array() && got.size() == 2, "info: the pack written, its 2 entries");
+        if (got.is_array() && got.size() == 2) {
+            const json& in = got[1]["info"];
+            check(in.is_object() && in["description"] == drill && in["author"] == "Alice" && in["source"] == "community" && in["url"] == "u",
+                  "info: description, author, source on entry 1; its other keys kept");
+            check(!got[0].contains("info"), "info: only on entry 1");
+        }
+        // 9: Share sends the pack's own description, cut to the Worker's 1000 characters
+        lj::dump_file(root / "game/SF6_RecordingSlotManager_data/Ken/Drill.json",
+                      json::array({ C({{"id", 1}, {"empty", true}, {"info", C({{"description", std::string(1200, 'x')}})}}) }), nullptr);
+        stub.take_log();
+        body = R"({"ok":true})"; pg.share("Ken", "Drill.json", "Drill"); pump();
+        {
+            const auto sl = stub.take_log();
+            const json sb = sl.size() == 1 ? json::parse(sl[0].body, nullptr, false) : json();
+            check(sb.is_object() && sb.value("description", std::string()) == std::string(1000, 'x'), "share: the pack's description, 1000 characters");
+        }
         c.stop();
         stub.stop();
     }
@@ -874,6 +900,12 @@ void test_auth_pure() {
           item_verified(C({{"author_cfn", "Alpha"}, {"author_verified", true}})), "v4 item: author_cfn, verified");
     check(item_author(C({{"uploader_name", "Bob"}})) == "Bob" && !item_verified(C({{"uploader_name", "Bob"}})), "2.0.0 item: uploader_name, not verified");
     check(item_author(json::object()) == "?" && !item_verified(C({{"author_verified", "true"}})), "no author: ?; a string is not the flag");
+
+    const json p1 = json::array({ C({{"id", 1}, {"empty", true}, {"info", C({{"description", "Mine"}, {"source", "drillcodes.com"}})}}) });
+    const json w1 = with_info(p1, "", "Bob");
+    check(w1[0]["info"]["description"] == "Mine" && w1[0]["info"]["author"] == "Bob" && w1[0]["info"]["source"] == "community", "info: no description from the server keeps the pack's");
+    check(with_info(p1, "New", "?")[0]["info"]["description"] == "New" && !with_info(json::array({ C({{"id", 1}}) }), "", "?")[0]["info"].contains("author"), "info: the server's description wins; no author when unknown");
+    check(with_info(json::array({ C({{"id", 2}}) }), "D", "A") == json::array({ C({{"id", 2}}) }) && with_info(C({{"id", 1}}), "D", "A") == C({{"id", 1}}), "info: no entry 1 / not an array: unchanged");
 }
 
 void test_auth_flow() {

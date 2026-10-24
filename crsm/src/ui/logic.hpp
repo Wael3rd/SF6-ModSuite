@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "nlohmann/json.hpp"
+
 namespace ui::logic {
 
 // ---- the Record / Replay windows (RMT:648-653) ------------------------------------------------------------------------
@@ -72,6 +74,41 @@ constexpr float kFitMargin = 26.0f;            // RMT:855-856
 constexpr float kFitFill = 0.92f;              // RMT:857
 constexpr float kFitMinRoom = 60.0f;           // RMT:857
 constexpr float kFitMinScale = 0.5f;           // RMT:864
+
+// ---- texts measured in em of the game's UI font: the Community rows, the loadout descriptions ------------------------------
+// A Community row is an option entry of the core, built from its string: its rendered width cannot be read before it is
+// built, so the width is estimated from Arial-like advance widths (each ASCII character its own, 1 em for CJK, full-width
+// forms and "…", 0.6 em for any other character); the game's markup tags (<color ...>, </color>, <ICON ...>) count 0.
+double text_em(const std::string& s);
+// s when it fits max_em; otherwise its longest head (on a character boundary, trailing spaces dropped) + "…" that fits.
+std::string cut_em(const std::string& s, double max_em);
+// What one Community row holds, in em. Measured in game at 1920x1080 (24/10): the rows draw at 21.3 px per em of this
+// estimate (829 px for 38.9 em, 734 px for 34.4 em, 968 px for 45.1 em: the same ratio within 1 %); the row's box is
+// 800 px wide, 780 px usable: 36.5 em. reframework/data/SF6_CRSMNative_data/com_row_em.txt (a number, 15-80) replaces
+// it, read when the dialog opens.
+constexpr double kComRowEm = 36.5;
+constexpr double kComPxPerEm = 21.3;           // (the probe dump's ratio check)
+// The Manager page's help line (the training menu's bottom line): ~1700 px at ~20.5 px per em, kept under 78 em.
+constexpr double kHelpLineEm = 78.0;
+constexpr size_t kComNameMinChars = 12;        // a cut loadout name keeps at least this many characters (then "…")
+constexpr size_t kComAuthorMinChars = 8;
+// The Community row label fitted to budget_em. shown = the list item the label is built from (its uploader_name already
+// the author shown, with its verified mark), dv = its downloaded version, full = model::labels::community_label(shown, dv)
+// as built. Wider than the budget: the date goes first, then the loadout name is cut ("…", kComNameMinChars characters at
+// least; a trailing tag of the name such as " [TEST]" is never cut: the name is cut before it), then the author's name
+// (its mark kept, kComAuthorMinChars at least). The marks, the version, the slots, the score and the downloads always
+// stay. Still wider: the shortest label made.
+std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, const std::string& full, double budget_em);
+// A free text (a loadout's description) made safe for a game text, in at most max_lines lines of max_em: \r and other
+// control characters dropped, tabs as spaces, '<' / '>' as '[' / ']' (the game's markup), each paragraph (\n) wrapped at
+// word boundaries (a word wider than a line is split), empty lines dropped; past max_lines the last line kept ends with
+// "…". The first 4000 bytes are read.
+std::vector<std::string> desc_lines(const std::string& raw, double max_em, int max_lines);
+// The same text on ONE line: its paragraphs joined with " | ", wrapped at a word boundary with "…" past max_em.
+std::string desc_line(const std::string& raw, double max_em);
+// The Community dialog's description area (UIFlowOptionBGDialog.Param.GuideMessageText, the game's own description of
+// the focused unit, which CRSM's guide line replaces): `extra` lines first, then the guide line.
+std::string com_guide_text(const std::vector<std::string>& extra, const std::string& guide);
 
 // ---- the game's own wording, learnt on its rows ------------------------------------------------------------------------
 // name_fmt (RMT:880-883): the game's "Slot 1" with its first run of digits replaced by the number
@@ -178,7 +215,7 @@ public:
     virtual bool loading() = 0;
     virtual int row_count() = 0;                              // rows built, from row 1
     virtual std::string row_label(int row) = 0;               // 1-based
-    virtual std::string row_desc(int row) = 0;                // "F: Download  |  <uploader>  <created>"
+    virtual std::string row_desc(int row) = 0;                // "F: Download  |  <uploader>  <created>" (+ its description)
     virtual bool data_changed() = 0;                          // an answer arrived since the last build
     virtual void mark_built() = 0;
     virtual int64_t version() = 0;

@@ -141,6 +141,12 @@ json config_with_activate_on_load(const json& cfg, bool on) {
     return c;
 }
 
+bool config_import_setup(const json& cfg) {
+    if (!cfg.is_object()) return true;
+    const json v = lj::index(cfg, "import_training_setup");
+    return v.is_null() || lutil::truthy(v);
+}
+
 bool config_migration_done(const json& cfg) { return cfg.is_object() && lutil::truthy(lj::index(cfg, "migration_done")); }
 
 json config_with_migration(const json& cfg, int64_t count) {

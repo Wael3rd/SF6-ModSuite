@@ -19,6 +19,7 @@ src/            the plugin (C++20)
   owners.hpp    which layer the plugin runs (settings.json); standalone.hpp: when it takes the menu without a Lua script
 data/           SF6_CRSM_data/locale.json, the texts in 14 languages (shipped as reframework/data/SF6_CRSM_data/)
 package/        the package's README.txt, modinfo.ini, settings.json and the Community config template
+docs/           PACK_FORMAT.md: the loadout file (30 entries, `active` flags, the reversal / replay block on entry 1)
 tests/          offline benches, no game and no user data (run.ps1, run_community.ps1)
 build.bat       builds build\crsm\SF6_CRSMNative.dll (also called by the root build.bat)
 ```
@@ -59,7 +60,9 @@ it identifies the client, not you) and `x-client-version`.
 
 - **List**: the character, the sort, the page. **Download**: the loadout's id.
 - **Share**: the character, the loadout's name and description, your CFN name as read from the game, and the loadout
-  file (its slots: names, weights and recorded inputs). **Like**: the loadout's id, the value and your CFN name.
+  file (its slots: names, weights, recorded inputs and which are checked; the dummy's reversal rows when one is in use,
+  the dummy's settings, the replay settings and the loaded pack's description, [docs/PACK_FORMAT.md](docs/PACK_FORMAT.md)).
+  **Like**: the loadout's id, the value and your CFN name.
 - **Verification** (once, before the first share or like): a Steam Web API ticket that your running Steam client makes
   for `sf6-community`, your CFN name and the plugin's version. The server checks the ticket with Steam and answers a
   personal token, kept in `reframework/data/SF6_Community_data/identity.json` and sent as `Authorization: Bearer` with

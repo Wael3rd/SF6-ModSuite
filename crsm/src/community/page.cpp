@@ -9,6 +9,7 @@
 #include "model/labels.hpp"
 #include "model/luajson.hpp"
 #include "model/lutil.hpp"
+#include "model/pack.hpp"
 
 namespace community {
 namespace {
@@ -34,6 +35,20 @@ bool num_le(const json& a, const json& b) {
 }
 
 bool starts_with(const std::string& s, const char* p) { return s.rfind(p, 0) == 0; }
+
+// a description cut to the Worker's limit: 1000 characters as JavaScript counts them (UTF-16 units), on a character boundary
+std::string share_description(const std::string& s) {
+    size_t i = 0, units = 0;
+    while (i < s.size()) {
+        const unsigned char c = (unsigned char)s[i];
+        const size_t n = c < 0xC0 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        const size_t u = n == 4 ? 2 : 1;
+        if (units + u > 1000) break;
+        units += u;
+        i += std::min(n, s.size() - i);
+    }
+    return s.substr(0, i);
+}
 
 // the server's `error` as text, "" when absent / not truthy
 std::string error_text(const json& data) {
@@ -107,6 +122,22 @@ Msg list_verdict(bool ok, const json& data) {
     if (!err.empty()) return {"", "", "Community: " + err};
     if (!ok) return {"", "", "Community: failed"};
     return {"com_list_bad", "", "Community: the server sent no list"};
+}
+
+json with_info(json pack, const std::string& description, const std::string& author) {
+    if (!pack.is_array()) return pack;
+    for (json& e : pack) {
+        if (!e.is_object()) continue;
+        const auto id = e.find("id");
+        if (id == e.end() || !id->is_number() || id->get<double>() != 1.0) continue;
+        json info = e.contains("info") && e["info"].is_object() ? e["info"] : json::object();
+        if (!description.empty() || !info.contains("description") || !info["description"].is_string()) info["description"] = description;
+        if (!author.empty() && author != "?") info["author"] = author;
+        info["source"] = "community";
+        e["info"] = std::move(info);
+        break;                                                      // entry 1 is found by its id, the first one counts
+    }
+    return pack;
 }
 
 VoteEffect vote_effect(bool ok, const json& data, int sent) {
@@ -201,6 +232,7 @@ void Page::rebuild() {
             note("com_rebuild ERROR: an item of the list does not have the expected fields");
             return;
         }
+        if (env_.fit_label) label = env_.fit_label(shown, dv, label);   // (the item's own fields stay in r.item)
         Row r;
         r.id = lu::truthy(lj::index(item, "id")) ? lua_tostring(lj::index(item, "id")) : std::string();
         r.label = std::move(label);
@@ -303,7 +335,10 @@ void Page::download_confirmed() {
     client_.send(std::move(cmd), [this, r](bool ok, const json& data) {
         const Msg bad = download_verdict(ok, data);
         if (bad.en.empty()) {
-            const json file = lj::index(data, "file");
+            // the loadout's description (the download answer's, else the list item's) and author, on entry 1
+            json dsc = lj::index(data, "description");
+            if (!dsc.is_string() || dsc.get<std::string>().empty()) dsc = lj::index(r.item, "description");
+            const json file = with_info(lj::index(data, "file"), dsc.is_string() ? dsc.get<std::string>() : std::string(), item_author(r.item));
             const std::string ch = char_.empty() ? community_char() : char_;
             const json nm = lj::index(data, "name");
             const std::string fname = st::community_filename(lu::truthy(nm) ? lua_tostring(nm) : std::string("community"));
@@ -382,7 +417,7 @@ void Page::share(const std::string& char_name, const std::string& pack_file, con
     cmd["name"] = display;
     cmd["cfn"] = info.cfn;
     cmd["player"] = !info.name.empty() ? info.name : ("Player " + info.cfn);
-    cmd["description"] = "";
+    cmd["description"] = share_description(model::pack::description(data));   // the pack's own (info), "" when none
     cmd["file"] = lj::encode(data);
     client_.send(std::move(cmd), [this, display](bool ok, const json& resp) {
         const Msg m = share_verdict(ok, resp, display);

@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "model/setup.hpp"
 #include "nlohmann/json.hpp"
 #include "sf6core_api.h"
 
@@ -134,6 +135,12 @@ bool menu_open();                 // true = the 30-row arrays are in place (the 
 void menu_close();
 std::optional<int64_t> map_get(int64_t rt, int64_t row);
 bool needs_pause();               // under lock(): the 30-row arrays installed, or a hand-back waiting for the unpause
+// A pack's reversal rows (model::setup, pack terms: a virtual slot's row holds its own SkillIndex n - 1), for the files
+// layer's export / backup / import. Only with the layer native and `fid` the files layer's dummy; false + `why` otherwise.
+// setup_read: the 3 x 30 rows (the game's 0-9, CRSM's 10-29) with the map applied. setup_write: rows 0-9 into the game's
+// ReversalData, 10-29 into CRSM's rows (objects when built, _reversal_rows.json), the map rewritten for every row.
+bool setup_read(int fid, model::setup::Rows* out, std::string* why);
+bool setup_write(int fid, const model::setup::Rows& rows, std::string* report);
 }
 
 // ---- bridge helpers ---------------------------------------------------------------------------------------------------

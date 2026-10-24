@@ -42,8 +42,9 @@ public:
     // export_virtual: the 22 entries 9-30 of a pack. A slot with content is its entry with id = n, empty = false and no
     // `active`; any other is {id, empty = true, timeline = {}, weight, name = ""}.
     json export_virtual() const;
-    // import_virtual: the entries with id 9-30, with content, replace the slots; each keeps the `active` flag the slot
-    // had, the one in the file is dropped. Slots absent from `list` are emptied (an 8-slot pack empties 9-30).
+    // import_virtual: the entries with id 9-30, with content, replace the slots; a boolean `active` in the entry is kept
+    // (a pack that carries the flags), otherwise the slot keeps the flag it had (a non-boolean one in the file is dropped).
+    // Slots absent from `list` are emptied (an 8-slot pack empties 9-30).
     void import_virtual(const json& list);
     // set_virtual: name / active / weight of a slot, created empty ({id, empty = true, timeline = {}, weight = 1}) when missing.
     struct Fields { const std::string* name = nullptr; const bool* active = nullptr; const json* weight = nullptr; };

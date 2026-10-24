@@ -61,6 +61,8 @@ public:
         out->frames = frames;
         out->weight = weight;
         out->valid = valid;
+        out->active = false;
+        gm::get_bool(s, "IsActive", &out->active);
         out->values.clear();
         if (valid && frames > 0) {
             gm::MO* rd = gm::ref(s, "InputData");
@@ -128,9 +130,89 @@ public:
         }
         return true;
     }
+    bool set_active(int, int k0, bool on) override { return gm::set_bool(slot(k0), "IsActive", on); }
 private:
     gm::MO* slot(int k0) { return (slots_ && k0 >= 0 && k0 < 8) ? gm::array_get(slots_, k0) : nullptr; }
     gm::MO* slots_ = nullptr;
+};
+
+// A pack's training block (model::setup): the replay settings on TM_RecordSetting (TrainingManager._tData.RecordSetting,
+// the object MAIN's path A reaches too), the reversal rows through the reversal layer, the dummy's settings on the
+// DummyData of _tData.DummyStatus / GuardSetting / DefenseSystem / CounterSetting. Runs inside the import / export call,
+// under lock(), at the moment the Lua wrote the slots (the menu open). The dummy's fields are written as the game's own
+// pages leave them, a plain store into the menu's data with no setter and no Apply call: the training functions take the
+// menu's values when the menu closes, as after a change made on the page.
+class GameSetup final : public model::files::SetupPort {
+public:
+    bool read(int fid, model::setup::Setup* out) override {
+        if (gm::MO* rs = record_setting()) {
+            model::setup::Playback p;
+            int64_t v = 0;
+            if (gm::get_int(rs, "PlayType", &v)) p.PlayType = v;
+            if (gm::get_int(rs, "LoopType", &v)) p.LoopType = v;
+            if (gm::get_int(rs, "InfoType", &v)) p.InfoType = v;
+            if (p.PlayType || p.LoopType || p.InfoType) out->playback = p;
+        }
+        model::setup::Rows rows;
+        std::string why;
+        if (mech::reversal::setup_read(fid, &rows, &why)) out->reversal = std::move(rows);
+        else cmn::journal("files: pack: no reversal rows (%s)", why.c_str());
+        if (gm::MO* td = tdata()) {
+            model::setup::Dummy d;
+            for (int i = 0; i < model::setup::kDummyCount; ++i) {
+                gm::MO* o = dummy_data(td, model::setup::kDummyFields[i].object);
+                int64_t v = 0;
+                if (o && gm::get_int(o, model::setup::kDummyFields[i].name, &v)) d.v[(size_t)i] = v;
+            }
+            model::setup::sanitize(d);
+            if (d.any()) out->dummy = d;
+            else cmn::journal("files: pack: no dummy settings read");
+        }
+        return out->playback || out->reversal || out->dummy;
+    }
+    bool write(int fid, const model::setup::Setup& s, std::string* report) override {
+        std::string r;
+        bool ok = true;
+        if (s.playback) {
+            gm::MO* rs = record_setting();
+            int n = 0;
+            if (rs && s.playback->PlayType && gm::set_int(rs, "PlayType", *s.playback->PlayType)) ++n;
+            if (rs && s.playback->LoopType && gm::set_int(rs, "LoopType", *s.playback->LoopType)) ++n;
+            if (rs && s.playback->InfoType && gm::set_int(rs, "InfoType", *s.playback->InfoType)) ++n;
+            r += "replay settings: " + std::to_string(n) + " written";
+            if (!rs) { r += " (no RecordSetting)"; ok = false; }
+        }
+        if (s.reversal) {
+            std::string rr;
+            if (!mech::reversal::setup_write(fid, *s.reversal, &rr)) ok = false;
+            r += (r.empty() ? "" : "; ") + rr;
+        }
+        if (s.dummy) {
+            gm::MO* td = tdata();
+            int n = 0, failed = 0;
+            for (int i = 0; i < model::setup::kDummyCount; ++i) {
+                const auto& v = s.dummy->v[(size_t)i];
+                if (!v) continue;
+                const model::setup::DummyField& f = model::setup::kDummyFields[i];
+                gm::MO* o = td ? dummy_data(td, f.object) : nullptr;
+                const bool w = o && (f.is_bool ? gm::set_bool(o, f.name, *v != 0) : gm::set_int(o, f.name, *v));
+                if (w) ++n; else ++failed;
+            }
+            r += (r.empty() ? "" : "; ") + std::string("dummy settings: ") + std::to_string(n) + " written";
+            if (failed) { r += ", " + std::to_string(failed) + " not reachable"; ok = false; }
+        }
+        cmn::journal("files: pack training block: %s", r.c_str());
+        if (report) *report = r;
+        return ok;
+    }
+private:
+    static gm::MO* tdata() { return gm::ref(gm::singleton("app.training.TrainingManager"), "_tData"); }
+    static gm::MO* record_setting() { return gm::ref(tdata(), "RecordSetting"); }
+    // _tData.<object>.DummyData, checked live (the menu's own object, never cached)
+    static gm::MO* dummy_data(gm::MO* td, const char* object) {
+        gm::MO* o = gm::ref(gm::ref(td, object), "DummyData");
+        return (o && gm::is_managed(o)) ? o : nullptr;
+    }
 };
 
 class SteadyClock final : public model::files::Clock {
@@ -179,6 +261,7 @@ public:
 };
 
 GameLive g_live;
+GameSetup g_setup;
 SteadyClock g_clock;
 GameAlloc g_alloc;
 model::files::Engine g_engine(kRoot, &g_live, &g_clock);
@@ -453,6 +536,7 @@ void init() {
         { "files_doc_get", f_doc_get }, { "files_doc_put", f_doc_put },
     };
     for (const Reg& f : fns) cmn::bridge_fn(f.name, f.fn);
+    g_engine.set_setup(&g_setup);
     cmn::add_frame_fn(frame, "layer_files");
 }
 
@@ -460,6 +544,9 @@ void start() {
     if (!cmn::owns(F::Files)) return;
     std::lock_guard lk(mech::lock());
     try { g_engine.load_settings(); } catch (...) {}
+    try {
+        for (const std::string& m : g_engine.migrate_unknown_folders()) cmn::log_info("[CRSMNative] files: %s", m.c_str());
+    } catch (...) {}
     g_started = true;
     cmn::log_info("[CRSMNative] files: native (loadouts, slot names, virtual slots, reversal files); no hook");
 }

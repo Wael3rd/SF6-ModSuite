@@ -20,6 +20,7 @@
 #include "model/files.hpp"
 #include "model/lutil.hpp"
 #include "model/reversal.hpp"
+#include "model/setup.hpp"
 #include "model/store.hpp"
 #include "perf.hpp"
 
@@ -635,7 +636,105 @@ std::string status() {
     return b;
 }
 
+// ---- a pack's reversal rows (the files layer's training block) ---------------------------------------------------------------
+// The game's rows are written field by field into its own ReversalData objects (no setter: the setters need the page's
+// category in ReversalSetting.ReversalType, and their hooks would map the rows again); the map and rows 11-30 the way the
+// picker and the menu close leave them. Called from an import (the Manager page's decide or the Lua's bridge call, the
+// menu open: the moment the game's own reversal page writes these objects).
+struct RevTarget { MO* fd = nullptr; std::string char_name; bool built = false; };
+bool rev_target(int fid, RevTarget* t, std::string* why) {
+    auto fail = [&](const char* m) { if (why) *why = m; return false; };
+    if (!cmn::owns(F::Reversal)) return fail("the reversal layer is not native");
+    if (fid < 0 || fid != mech::files::fighter()) return fail("not the files layer's dummy");
+    t->fd = fighter_rev();
+    if (!t->fd) return fail("no reversal data for the dummy");
+    const auto c = files().char_name();
+    if (!c) return fail("no character");
+    t->char_name = *c;
+    t->built = g_ext.big[0] && g_ext.fd_addr == (uintptr_t)t->fd && g_ext.char_name == *c;
+    map_load();
+    if (!g_map_char || *g_map_char != *c) return fail("no reversal map for the character");
+    return true;
+}
+
+bool setup_read_now(int fid, model::setup::Rows* out, std::string* why) {
+    RevTarget t;
+    if (!rev_target(fid, &t, why)) return false;
+    model::store::RevRows saved;
+    if (!t.built) saved = model::store::rev_rows_from_file(files().load_doc(model::store::reversal_rows_path(t.char_name)));
+    model::setup::Rows rows;
+    for (int rt = 0; rt < 3; ++rt) {
+        MO* arr = gm::ref(t.fd, kRtFields[rt]);
+        if (!arr) { if (why) *why = "a reversal array is missing"; return false; }
+        std::vector<model::store::RdRow>& v = rows[(size_t)rt];
+        v.resize(rv::kRowsTotal);
+        for (int k = 0; k < rv::kRowsTotal; ++k) {
+            model::store::RdRow r;
+            if (k < rv::kRowsPage) {
+                MO* d = gm::array_get(arr, k);
+                if (!d) { if (why) *why = "a reversal row is missing"; return false; }
+                r = rd_row(d);
+            } else if (t.built) {
+                if (MO* d = gm::array_get(g_ext.big[rt], k)) r = rd_row(d);
+            } else r = saved[(size_t)rt][k];
+            v[(size_t)k] = model::setup::from_game(r, map_get_now(rt, k));
+        }
+    }
+    *out = std::move(rows);
+    return true;
+}
+
+bool setup_write_now(int fid, const model::setup::Rows& rows, std::string* report) {
+    RevTarget t;
+    if (!rev_target(fid, &t, report)) return false;
+    if (g_pre.part >= 0) pre_abort("a pack import");     // its saved rows file is about to change
+    quiet_reset();
+    model::store::RevRows extra;
+    int valid = 0, virt = 0, missing = 0;
+    bool map_changed = false;
+    for (int rt = 0; rt < 3; ++rt) {
+        MO* arr = gm::ref(t.fd, kRtFields[rt]);
+        const std::vector<model::store::RdRow>& src = rows[(size_t)rt];
+        for (int k = 0; k < rv::kRowsTotal; ++k) {
+            const model::setup::GameRow g = model::setup::to_game(k < (int)src.size() ? src[(size_t)k] : model::store::RdRow{});
+            if (k < rv::kRowsPage) {
+                MO* d = arr ? gm::array_get(arr, k) : nullptr;
+                if (!d) { ++missing; continue; }
+                rd_from_table(d, model::store::rd_to_json(g.row));
+            } else {
+                if (t.built) if (MO* d = gm::array_get(g_ext.big[rt], k)) rd_from_table(d, model::store::rd_to_json(g.row));
+                extra[(size_t)rt][k] = g.row;
+            }
+            if (g.row.IsValid) ++valid;
+            if (g.virt) { ++virt; g_map.set(rt, k, g.virt); map_changed = true; }
+            else if (g_map.get(rt, k)) { g_map.erase(rt, k); map_changed = true; }
+        }
+    }
+    if (map_changed) map_save();
+    if (t.built) ext_save();
+    else {
+        g_saved_doc.clear();
+        files().write_doc(model::store::reversal_rows_path(t.char_name), model::store::rev_rows_to_file(extra));
+    }
+    quiet_reset();
+    if (report) {
+        char b[160];
+        std::snprintf(b, sizeof(b), "reversal rows written (%d valid, %d on virtual slots, %d game rows missing)", valid, virt, missing);
+        *report = b;
+    }
+    return missing == 0;
+}
+
 }  // namespace
+
+bool setup_read(int fid, model::setup::Rows* out, std::string* why) {
+    std::lock_guard lk(mech::lock());
+    try { return setup_read_now(fid, out, why); } catch (...) { cmn::fault(F::Reversal, "setup_read"); if (why) *why = "fault"; return false; }
+}
+bool setup_write(int fid, const model::setup::Rows& rows, std::string* report) {
+    std::lock_guard lk(mech::lock());
+    try { return setup_write_now(fid, rows, report); } catch (...) { cmn::fault(F::Reversal, "setup_write"); if (report) *report = "reversal: fault"; return false; }
+}
 
 bool needs_pause() { return g_ext.installed || g_hand_back_due; }
 

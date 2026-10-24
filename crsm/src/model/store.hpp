@@ -61,6 +61,9 @@ void set_display_name(std::map<std::string, std::string>& names, const std::stri
 // ---- config.json -------------------------------------------------------------------------------------------------------------
 bool config_activate_on_load(const json& cfg, bool current);            // load_settings: the flag when present
 json config_with_activate_on_load(const json& cfg, bool on);            // save_settings: the file's other keys kept
+// import_training_setup: false = an import leaves the dummy's reversal rows and replay settings alone even when the pack
+// carries them (docs/PACK_FORMAT.md). Absent: true.
+bool config_import_setup(const json& cfg);
 bool config_migration_done(const json& cfg);
 json config_with_migration(const json& cfg, int64_t count);             // migration_done = true, migrated_count = count
 

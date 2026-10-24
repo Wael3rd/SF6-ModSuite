@@ -3,6 +3,8 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <filesystem>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -13,9 +15,14 @@
 #include "game/gm.hpp"
 #include "mech/mech.hpp"
 #include "model/files.hpp"
+#include "model/luajson.hpp"
+#include "model/pack.hpp"
+#include "model/store.hpp"
 #include "ui/dialogs.hpp"
 #include "ui/dump.hpp"
+#include "ui/gx.hpp"
 #include "ui/lang.hpp"
+#include "ui/logic.hpp"
 #include "ui/manager_logic.hpp"
 #include "ui/ui.hpp"
 #include "perf.hpp"
@@ -57,6 +64,11 @@ bool g_list_dirty = true;
 uint64_t g_native_action_until = 0;
 uint64_t g_lang_seen = 0;
 uint64_t g_list_seen = 0;                     // the files layer's list_version the spin last followed
+// the Loadout row's guide: the selected loadout's info.description (docs/PACK_FORMAT.md) in place of the row's own help
+std::string g_guide_key = "\x01";            // char/file#list_version of the last look ("\x01" = look again)
+std::string g_guide_shown;                    // the description guide given to the core, "" = the row's own guide
+struct PackDesc { std::filesystem::file_time_type t{}; uintmax_t size = 0; std::string desc; };
+std::map<std::string, PackDesc> g_pack_desc;  // by pack path: a pack is read again only when it changed
 
 bool live() { return cmn::owns(F::Ui) && !cmn::closing() && g_page.load() >= 0; }
 model::files::Engine& eng() { return mech::files::engine(); }
@@ -201,6 +213,79 @@ void retext() {
     }
     std::lock_guard lk(g_mx);
     g_hint_text = { tr("edit_name", {}), tr("delete_name", {}) };
+    g_guide_key = "\x01";                     // the Loadout row has its own guide again: the description is put back
+    g_guide_shown.clear();
+}
+
+// info.description of the pack at `path` ("" when none), read once per change of the file
+std::string pack_desc(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(path, ec);
+    if (ec) return "";
+    const uintmax_t size = std::filesystem::file_size(path, ec);
+    if (ec) return "";
+    const std::string key = path.string();
+    if (auto it = g_pack_desc.find(key); it != g_pack_desc.end() && it->second.t == t && it->second.size == size) return it->second.desc;
+    if (g_pack_desc.size() >= 64) g_pack_desc.clear();
+    PackDesc d{ t, size, model::pack::description(model::luajson::load_file(path)) };
+    g_pack_desc[key] = d;
+    return d.desc;
+}
+
+// The pause menu's help line text while it shows `shown` (the text the game took from the focused row's guide): found
+// under the menu's agent (ui11200) by its message, read-only walk, at most kHelpWalk elements. nullptr = not shown now.
+constexpr int kHelpWalk = 4000;
+gm::MO* find_help_text(gm::MO* e, const std::string& shown, int depth, int* left) {
+    for (gm::MO* c = e ? ui::gx::first_child(e) : nullptr; c && *left > 0; c = ui::gx::next(c)) {
+        --*left;
+        if (ui::gx::is_type(c, "via.gui.Text") && ui::gx::msg(c) == shown) return c;
+        if (depth < 16) if (gm::MO* t = find_help_text(c, shown, depth + 1, left)) return t;
+    }
+    return nullptr;
+}
+
+// The help line shown now, from `before` to `after`: the game takes a row's guide into its help text when the row gets the
+// focus only, so a guide changed while the Loadout row is focused (left / right) is written into the shown text too
+// (through the core's ui_set_text: compared first, R7). Only when the help shows exactly our previous guide (the Loadout
+// row focused): another row's help is never touched.
+void help_line_now(const std::string& before, const std::string& after) {
+    if (before == after || !perf::counted(g_api)->pm_page_shown(g_page.load())) return;
+    gm::MO* agent = ui::gx::pause_agent();
+    gm::MO* root = agent ? ui::gx::call_obj(agent, "get_ControlMain") : nullptr;
+    int left = kHelpWalk;
+    gm::MO* t = root ? find_help_text(root, before, 0, &left) : nullptr;
+    if (t) ui::gx::set_text(t, after);
+    if (t && ui::dump::on())                                     // the help line's place and size (dump_on.txt)
+        cmn::append_file("reframework/data/SF6_CRSMNative_data/dump.txt", "[Manager] help line: " + ui::gx::describe_text(t) + "\n");
+    cmn::journal("ui: manager help line %s", t ? "rewritten in place" : "not shown (the Loadout row not focused): at its next focus");
+}
+
+// The Loadout row's guide (its bottom help line): the selected loadout's description when it has one, its paragraphs on
+// one line (" | ") cut at kHelpLineEm with "…", else the row's own help. Given to the core when it changes (pm_set_texts:
+// the row's guide in place, as the language change does) and written into the help line shown now (help_line_now).
+void loadout_guide(uint64_t list_version) {
+    std::string ch, file;
+    std::filesystem::path path;
+    {
+        Lock lk(mech::lock());
+        const auto c = eng().char_name();
+        ch = c ? *c : std::string();
+        file = eng().selected_file();
+        if (!ch.empty() && !file.empty()) path = eng().abs(model::store::pack_path(ch, file));
+    }
+    const std::string key = ch + "/" + file + "#" + std::to_string(list_version);   // (a save, a download: a new version)
+    if (key == g_guide_key) return;
+    g_guide_key = key;
+    const std::string desc = path.empty() ? std::string() : pack_desc(path);
+    const std::string base = mgr::row_text(mgr::kLoadout, tr).guide;
+    const std::string guide = desc.empty() ? std::string() : ui::logic::desc_line(desc, ui::logic::kHelpLineEm);
+    if (guide == g_guide_shown) return;
+    const std::string before = g_guide_shown.empty() ? base : g_guide_shown;
+    const std::string after = guide.empty() ? base : guide;
+    g_guide_shown = guide;
+    perf::counted(g_api)->pm_set_texts(g_client, g_rows[mgr::kLoadout].load(), nullptr, after.c_str());
+    cmn::journal("ui: manager Loadout guide: %s", guide.empty() ? "its own help" : "the loadout's description");
+    try { help_line_now(before, after); } catch (...) { cmn::fault(F::Ui, "help line"); }
 }
 
 // The spin's labels and value from the files layer: labels given to the core only when they changed (the core refreshes a
@@ -453,7 +538,7 @@ void frame_body(uint64_t fr) {
     // asked, and once a second (was: every frame while the menu was up, 4.5 us a frame for the same labels)
     uint64_t lv = 0;
     { Lock lk(mech::lock()); lv = eng().list_version(); }
-    if (g_list_dirty || lv != g_list_seen || fr % 60 == 45) { g_list_seen = lv; sync(); }
+    if (g_list_dirty || lv != g_list_seen || fr % 60 == 45) { g_list_seen = lv; sync(); loadout_guide(lv); }
     if (g_rt_high && !up && fr % 30 == 7 && !mech::pause_now().up()) rt_safety();
 }
 

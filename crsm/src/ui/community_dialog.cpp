@@ -4,11 +4,16 @@
 // option window (opt_group / opt_entry / opt_navigate / opt_open_menu, the Color Mod's pattern for per-page texts: the
 // group removed and made again with the same key, then a rebuild in place), the raw keys A / E / T / R, the guide line
 // ("Like / Sort") on our dialog only, the prompt close detection, the Manager's "Share loadout".
+// Since 2.2 (Wael 24/10): every row label fits its row (lg::com_row_fit: the date, then the name, then the author cut),
+// and the dialog's description area (GuideMessageText: the game writes the focused unit's description there, CRSM's
+// "Like / Sort" line replaces it, so a unit's own description never shows) holds the focused loadout's full name when its
+// row cut it and its description, above the "Like / Sort" line.
 //
 // The one intended difference from the Lua (Wael's decision): after the list is refreshed (an answer arrived: open, sort,
 // after a download) the cursor stays on its row; the Lua sent it back to row 1 (com_focus_idx written as a global).
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <memory>
@@ -17,6 +22,7 @@
 #include "community/community.hpp"
 #include "community/page.hpp"
 #include "dialogs.hpp"
+#include "dump.hpp"
 #include "game/gm.hpp"
 #include "gx.hpp"
 #include "hookstack.hpp"
@@ -62,6 +68,13 @@ uint64_t g_window_deadline = 0;
 constexpr uint64_t kWindowWait = 120;            // frames for the core to open the window (it takes one)
 uint64_t g_builds = 0, g_navs = 0, g_closes = 0;
 bool ok_guide = false;
+constexpr const char* kRowEmFile = "reframework/data/SF6_CRSMNative_data/com_row_em.txt";
+constexpr const char* kDumpOut = "reframework/data/SF6_CRSMNative_data/dump.txt";
+constexpr int kDescLines = 2;                    // lines above "Like / Sort" in the description area
+std::vector<std::vector<std::string>> g_extras;  // per row shown (row i = [i - 1]): its lines above "Like / Sort"
+std::string g_guide_last;                        // the description area's text CRSM wrote last (journal only)
+std::atomic<double> g_row_em{lg::kComRowEm};     // what a row holds (com_row_em.txt replaces it at each open)
+int64_t g_probed = -1;                           // the dump's last probed build (dump_on.txt only)
 
 const SF6CoreAPI* api() { const SF6CoreAPI* a = gx::api(); return (a && SF6CORE_HAS(a, opt_status)) ? a : nullptr; }
 
@@ -94,6 +107,9 @@ community::Page& page() {
         env.identity = [] { return community::identity(banner_cfn()); };
         env.log = [](const std::string& s) { cmn::journal("ui: %s", s.c_str()); };
         env.tr = [](const std::string& key, const std::vector<std::string>& args) { return ui::lang::T(key, args); };   // locale.json rsm.com_*
+        env.fit_label = [](const nlohmann::json& shown, const nlohmann::json& dv, const std::string& label) {
+            return lg::com_row_fit(shown, dv, label, g_row_em.load());
+        };
         g_page = std::make_unique<community::Page>(community::client(), std::move(env));
         g_page->load_state();                    // com_state.json (the Lua read it at load, RMT:156)
     }
@@ -134,6 +150,22 @@ public:
         const std::string created = cr.is_string() ? cr.get<std::string>().substr(0, 10) : std::string();
         return "F: Download  |  " + uploader + "  " + created;
     }
+    // the lines of a row above "Like / Sort": its full name when the row cut it, then its description (kDescLines in all)
+    std::vector<std::string> row_extra(int row) {
+        std::vector<std::string> out;
+        const auto& r = page().rows()[(size_t)row - 1];
+        const double em = g_row_em.load();
+        const auto dn = model::luajson::index(r.item, "display_name");
+        const std::string name = dn.is_string() ? model::lutil::strip_json_ext(dn.get<std::string>()) : std::string();
+        if (!name.empty() && r.label.find(name) == std::string::npos) {
+            const auto l = lg::desc_lines(name, em, 1);
+            if (!l.empty()) out.push_back(l[0]);
+        }
+        const auto ds = model::luajson::index(r.item, "description");
+        if (ds.is_string())
+            for (const std::string& l : lg::desc_lines(ds.get<std::string>(), em, kDescLines - (int)out.size())) out.push_back(l);
+        return out;
+    }
     bool data_changed() override { return page().data_changed(); }
     void mark_built() override { page().mark_built(); }
     int64_t version() override { return page().version(); }
@@ -149,6 +181,9 @@ public:
         if (!a || !ensure_callbacks()) return;
         if (g_group >= 0) perf::counted(a)->opt_remove_group(gx::cl(), g_group);   // the same key gives the same TypeIds (the Color Mod's pattern)
         g_entries.clear();
+        g_extras.assign(labels.size(), {});
+        const int built = std::min((int)labels.size(), row_count());
+        for (int i = 1; i <= built; ++i) if (labels[(size_t)i - 1] != "Loading...") g_extras[(size_t)i - 1] = row_extra(i);
         g_group = perf::counted(a)->opt_group(gx::cl(), kKey, title.c_str(), kDesc);
         if (g_group < 0) { cmn::journal("ui: Community: opt_group failed"); return; }
         for (size_t i = 0; i < labels.size(); ++i) {
@@ -249,13 +284,31 @@ int guide_pre(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long 
     if (s && ui::active() && g_open.load()) s->param = static_cast<MO*>(argv[1]);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
+// The description area's text for row `row` (1-based; 0 = unknown: the guide line alone)
+std::string guide_text(int row) {
+    if (row < 1 || row > (int)g_extras.size()) return kGuide;
+    return lg::com_guide_text(g_extras[(size_t)row - 1], kGuide);
+}
+
+void write_guide(MO* param, int row) {
+    MO* gmt = gx::ref(param, "GuideMessageText");
+    if (!gmt) return;
+    const std::string t = guide_text(row);
+    gx::set_text(gmt, t);                        // (the core compares before it writes, R7)
+    if (t != g_guide_last) {
+        g_guide_last = t;
+        cmn::journal("ui: Community description area: row %d, %zu line(s) above Like / Sort", row,
+                     row >= 1 && row <= (int)g_extras.size() ? g_extras[(size_t)row - 1].size() : (size_t)0);
+    }
+}
+
 void guide_post_body(MO* param) {
     std::lock_guard lk(ui::lock());
     try {
         if (!g_dlg.is_open() || !g_param || param != g_param) return;   // CRSM's own dialog only (other mods' dialogs untouched)
         int32_t sel = -1;
         if (gx::call_i32(param, "get_SelectChildIndex", &sel) && sel >= 0) g_dlg.guide_focus(sel + 1);
-        if (MO* gmt = gx::ref(param, "GuideMessageText")) gx::set_text(gmt, kGuide);
+        write_guide(param, sel >= 0 ? sel + 1 : 0);
     } catch (...) { ui::fault("UpdateInputGuide post"); }
 }
 void guide_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
@@ -264,9 +317,53 @@ void guide_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     __try { guide_post_body(p); } __except (EXCEPTION_EXECUTE_HANDLER) { ui::fault("UpdateInputGuide post (SEH)"); }
 }
 
+// com_row_em.txt: what a row holds, in em (lg::text_em), when the estimate needs tuning in game; absent = kComRowEm
+void read_row_em() {
+    double em = lg::kComRowEm;
+    if (FILE* f = std::fopen(kRowEmFile, "rb")) {
+        double v = 0;
+        if (std::fscanf(f, "%lf", &v) == 1 && v >= 15.0 && v <= 80.0) em = v;
+        std::fclose(f);
+    }
+    if (em != g_row_em.load()) cmn::journal("ui: Community rows hold %.1f em", em);
+    g_row_em.store(em);
+}
+
+// The probe dump (dump_on.txt, OFF by default, read-only): once per build of our page, every text of each row (its
+// message, sizes, position: gx::describe_text) with the width the fit estimated, to tune kComRowEm against the game's.
+void walk_texts(MO* e, int depth, int* budget, const std::string& head) {
+    for (MO* c = e ? gx::first_child(e) : nullptr; c && *budget > 0; c = gx::next(c)) {
+        if (gx::is_type(c, "via.gui.Text")) {
+            --*budget;
+            char b[64];
+            std::snprintf(b, sizeof b, " est %.1f em: ", lg::text_em(gx::msg(c)));
+            cmn::append_file(kDumpOut, head + b + gx::describe_text(c) + "\n");
+        }
+        if (depth < 5) walk_texts(c, depth + 1, budget, head);
+    }
+}
+
+void probe_rows() {
+    const SF6CoreAPI* a = api();
+    if (!a || !g_param || !SF6CORE_HAS(a, opt_row_control) || g_probed == (int64_t)g_builds) return;
+    g_probed = (int64_t)g_builds;
+    int budget = 60;
+    for (size_t i = 0; i < g_entries.size(); ++i) {
+        MO* ctrl = static_cast<MO*>(perf::counted(a)->opt_row_control(g_entries[i], g_param));
+        if (!ctrl) continue;
+        char h[64];
+        std::snprintf(h, sizeof h, "[Community f%llu] row %zu", (unsigned long long)tick(), i + 1);
+        walk_texts(ctrl, 0, &budget, h);
+    }
+    if (MO* gmt = gx::ref(g_param, "GuideMessageText"))     // the description area: where it is, how big, its alignment
+        cmn::append_file(kDumpOut, "[Community] GuideMessageText: " + gx::describe_text(gmt) + "\n");
+    cmn::journal("probe dump: Community rows (build %llu, %.1f em a row) in dump.txt", (unsigned long long)g_builds, g_row_em.load());
+}
+
 // the Manager's "Download Loadouts" (RMT:420-429)
 void do_open() {
     if (g_dlg.is_open() || !community::on()) return;
+    read_row_em();
     g_dlg.open();
     g_open.store(true);
     cmn::journal("ui: Community dialog opened");
@@ -307,6 +404,12 @@ void frame() {                                   // _com.tick (RMT:317-395), eve
     if (!g_param && tick() > g_param_wait_until && g_param_wait_until) g_param_wait_until = 0;   // (the window flag only from now)
     if (const int row = g_pressed_row.exchange(0)) g_dlg.button(row);   // download (confirm box, then the request)
     g_dlg.tick(key_down(kKeyA), key_down(kKeyE), key_down(kKeyT), key_down(kKeyR));
+    // the description area follows the cursor also when the game's UpdateInputGuide does not run (a rebuild in place, the
+    // first frames of a page): every 5 frames, the core's compare-before-write leaves an unchanged text alone
+    if (g_param && tick() % 5 == 2) {
+        try { if (const int fr = g_port.focused_row()) write_guide(g_param, fr); } catch (...) { ui::fault("Community description area"); }
+    }
+    if (g_param && ui::dump::on()) { try { probe_rows(); } catch (...) { ui::fault("Community probe dump"); } }
 }
 
 void specs(std::vector<mech::hooks::Spec>& out) {

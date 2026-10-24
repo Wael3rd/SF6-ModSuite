@@ -56,6 +56,10 @@ struct VoteEffect {
     Msg err;
 };
 VoteEffect vote_effect(bool ok, const json& data, int sent);
+// A downloaded pack with the loadout's metadata (docs/PACK_FORMAT.md, key `info` of the entry whose id is 1):
+// { description, author, source = "community" }. An `info` already there keeps its other keys, and its description when
+// `description` is empty. A pack without an entry 1 (or not an array) is returned as it is.
+json with_info(json pack, const std::string& description, const std::string& author);
 
 class Page {
 public:
@@ -67,6 +71,9 @@ public:
         std::function<Identity()> identity;                 // CFN / player_id / anon_
         std::function<void(const std::string&)> log;        // rec_log
         std::function<std::string(const std::string& key, const std::vector<std::string>& args)> tr;   // locale "rsm.<key>"; returns the key when missing (unset = English)
+        // a row's label made to fit the screen (the display's measure): shown = the item the label was built from, dv =
+        // its downloaded version, label = as built. Unset = the label as built.
+        std::function<std::string(const json& shown, const json& dv, const std::string& label)> fit_label;
     };
     struct Row {
         std::string id;

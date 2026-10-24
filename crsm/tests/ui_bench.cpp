@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "model/labels.hpp"
+#include "model/pack.hpp"
 #include "ui/logic.hpp"
 
 namespace lg = ui::logic;
@@ -302,6 +303,84 @@ void test_fit() {
     acc += "\xE2\x82\xAC";
     l = model::labels::short_list({ acc });
     check(l[0].size() <= 66 && l[0].substr(l[0].size() - 3) == "\xE2\x80\xA6" && (unsigned char)l[0][l[0].size() - 4] != 0xC3, "cut on a character boundary (fix 7.4)");
+}
+
+// ---- the Community rows fitted to their width, the descriptions ------------------------------------------------------------
+using json = nlohmann::json;
+const std::string kEll = "\xE2\x80\xA6";
+
+json com_item(const std::string& name, const std::string& by, const std::string& date, int slots, int score, int dls) {
+    return json{ {"id", "x"}, {"display_name", name}, {"uploader_name", by}, {"created_at", date + " 16:07:06"}, {"updated_at", ""},
+                 {"version", 1}, {"slot_count", slots}, {"score", score}, {"downloads", dls} };
+}
+std::string com_full(const json& it, const json& dv = json()) { std::string l; model::labels::community_label(it, dv, &l); return l; }
+std::string com_fit(const json& it, const json& dv = json(), double em = lg::kComRowEm) { return lg::com_row_fit(it, dv, com_full(it, dv), em); }
+bool has(const std::string& s, const std::string& part) { return s.find(part) != std::string::npos; }
+
+void test_com_fit() {
+    group("community row fit");
+    check(lg::text_em("") == 0.0 && lg::text_em("<color 00FF00>DL</color> ") == lg::text_em("DL "), "markup tags draw nothing");
+    check(lg::text_em("i") < lg::text_em("m") && lg::text_em(kEll) == 1.0 && lg::text_em("\xE3\x83\xAA") == 1.0, "glyph widths: i < m, the ellipsis and CJK 1 em");
+    check(lg::text_em("a < b") > lg::text_em("a  b"), "a lone '<' is a character");
+    eq(lg::cut_em("short", 10), std::string("short"), "cut_em: what fits is kept");
+    const std::string c = lg::cut_em("Post-throw slop simulator", 8);
+    check(lg::text_em(c) <= 8.0 && c.size() > kEll.size() && c.substr(c.size() - kEll.size()) == kEll && c[c.size() - kEll.size() - 1] != ' ', "cut_em: fits, ends with the ellipsis, no space before it");
+
+    // Wael 24/10, seen in game: both overflowed their row on both sides
+    const json a = com_item("Post-throw slop simulator (updated) [TEST]", "Chris_F (drillcodes)", "2026-10-24", 4, 0, 0);
+    const json b = com_item("Throw Slop Simulator [TEST]", "Chris_F (drillcodes)", "2026-10-24", 4, 0, 0);
+    eq(com_full(a), std::string("Post-throw slop simulator (updated) [TEST] v1  by Chris_F (drillcodes)  2026-10-24  |  4 slots  +0  0DL"), "the label as built (community_label)");
+    check(lg::text_em(com_full(a)) > lg::kComRowEm && lg::text_em(com_full(b)) > lg::kComRowEm, "both are wider than a row");
+    const std::string fa = com_fit(a), fb = com_fit(b);
+    check(lg::text_em(fa) <= lg::kComRowEm && lg::text_em(fb) <= lg::kComRowEm, "both fit");
+    check(!has(fa, "2026-10-24") && !has(fb, "2026-10-24"), "the date goes first");
+    eq(fb, std::string("Throw Slop Simulator [TEST] v1  by Chris_F (drillcodes)  |  4 slots  +0  0DL"), "the short one: without the date it fits, its name whole");
+    check(lg::text_em(fb) * lg::kComPxPerEm <= 780.0, "...within the 780 px measured in game");
+    eq(com_fit(b, json(), 34.0), std::string("Throw Slop Simulator [TEST] v1  by Chris_F (drillcodes)  |  4 slots  +0  0DL"), "a little more room: without the date it fits, the name whole");
+    check(has(fa, "Post-throw slop") && has(fa, kEll + " [TEST] v1  by Chris_F (drillcodes)  |  4 slots  +0  0DL"), "the long one: its name cut with \"…\" before its [TEST] tag, version, author, slots, score, DL kept");
+    const json kc = com_item("Ken_Cheepz_Changed2", "Wael3rd_PC", "2026-10-12", 10, 0, 1);
+    eq(com_fit(kc), std::string("Ken_Cheepz_Changed2 v1  by Wael3rd_PC  2026-10-12  |  10 slots  +0  1DL"), "734 px in game (it fitted): kept whole, date included");
+    eq(com_fit(com_item("Ninja [x] tag", "Bob", "2026-10-12", 1, 0, 0)), com_full(com_item("Ninja [x] tag", "Bob", "2026-10-12", 1, 0, 0)), "a tag inside a name: nothing special");
+
+    const json ok = com_item("Ryu combos", "Wael", "2026-10-14", 12, 3, 5);
+    eq(com_fit(ok), com_full(ok), "a row that fits is left as it is (date kept)");
+    const json upd = com_item("Post-throw slop simulator (updated) [TEST]", "Chris_F (drillcodes)", "2026-10-24", 30, 12, 140);
+    const std::string fu = com_fit(upd, json(0));                // downloaded v0 < v1: UPD mark
+    check(fu.rfind("<color FFAA00>UPD</color> ", 0) == 0 && has(fu, "30 slots  +12  140DL") && lg::text_em(fu) <= lg::kComRowEm, "the UPD mark, slots, score, downloads stay");
+    json v = com_item("Throw Slop Simulator [TEST]", "A very long player name for sure <color 66DD66>[V]</color>", "2026-10-24", 4, 0, 0);
+    const std::string fv = com_fit(v, json(), 30.0);
+    check(has(fv, "<color 66DD66>[V]</color>") && has(fv, kEll + " <color 66DD66>[V]</color>") && lg::text_em(fv) <= 30.0, "a long author is cut last, its verified mark kept whole");
+    const std::string tight = com_fit(a, json(), 10.0);
+    check(has(tight, "Post-throw s") && has(tight, "|  4 slots  +0  0DL"), "no room at all: the name keeps its 12 characters, the counts stay");
+    json named_json = com_item("Ken_Test.json", "Bob", "2026-10-24", 4, 0, 0);
+    eq(com_fit(named_json), com_full(named_json), "the .json of a name is dropped as before");
+
+    group("descriptions");
+    const std::string drill = "Pick Ken and throw him. He will auto break it. Then, STOP THE SLOP";
+    auto d = lg::desc_lines(drill, lg::kComRowEm, 2);
+    check(d.size() == 1 && d[0] == drill, "a drill's description on one line");
+    d = lg::desc_lines("Line one\r\n\r\n  Line\ttwo <b>  \n\n", 40, 3);
+    check(d.size() == 2 && d[0] == "Line one" && d[1] == "Line two [b]", "\\r dropped, empty lines dropped, tabs as spaces, markup made plain");
+    d = lg::desc_lines(drill + " " + drill + " " + drill, 20, 2);
+    check(d.size() == 2 && lg::text_em(d[0]) <= 20 && lg::text_em(d[1]) <= 20 && d[1].substr(d[1].size() - kEll.size()) == kEll, "wrapped on words, the last kept line ends with \"…\"");
+    check(d[0].rfind("Pick Ken", 0) == 0 && d[0].back() != ' ', "wrapped at a space");
+    d = lg::desc_lines(std::string(200, 'W'), 10, 2);
+    check(d.size() == 2 && lg::text_em(d[0]) <= 10 && d[1].substr(d[1].size() - kEll.size()) == kEll, "a word wider than a line is split");
+    check(lg::desc_lines("", 30, 2).empty() && lg::desc_lines(" \n \n", 30, 2).empty() && lg::desc_lines("x", 30, 0).empty(), "nothing to show");
+
+    eq(lg::desc_line("Pick Ken and throw him.\n\nThen, STOP THE SLOP", 80), std::string("Pick Ken and throw him. | Then, STOP THE SLOP"), "one line: the paragraphs joined");
+    const std::string one = lg::desc_line(drill + "\n" + drill + "\n" + drill, 40);
+    check(lg::text_em(one) <= 40 && one.substr(one.size() - kEll.size()) == kEll && has(one, " | "), "one line: filled, then cut with \"…\"");
+    eq(lg::com_guide_text({ "Full name", "Desc" }, "G"), std::string("Full name\nDesc\nG"), "the description area: lines, then the guide line");
+    eq(lg::com_guide_text({}, "G"), std::string("G"), "no description: the guide line alone");
+
+    group("pack info");
+    json pack = json::array({ json{{"id", 2}, {"empty", true}}, json{{"id", 1}, {"empty", true}, {"info", json{{"description", "D"}, {"source", "drillcodes.com"}}}} });
+    eq(model::pack::description(pack), std::string("D"), "entry 1 found by its id");
+    pack[1]["info"] = json{{"source", "community"}};
+    eq(model::pack::description(pack), std::string(), "an info without description");
+    eq(model::pack::description(json::array({ json{{"id", 1}, {"empty", true}} })), std::string(), "no info");
+    eq(model::pack::description(json::object()), std::string(), "not a pack");
 }
 
 // ---- the text dialog -----------------------------------------------------------------------------------------------------
@@ -794,6 +873,7 @@ int main() {
     test_replay_cursor();
     test_reversal_cursor();
     test_fit();
+    test_com_fit();
     test_naming();
     test_community();
     test_tab_guard();

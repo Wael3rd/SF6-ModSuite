@@ -118,6 +118,41 @@ std::vector<std::string> Engine::glob_char(const std::string& char_name) const {
 void Engine::load_settings() {
     const json cfg = load_json(model::store::config_path());
     activate_on_load_ = model::store::config_activate_on_load(cfg, activate_on_load_);
+    import_setup_ = model::store::config_import_setup(cfg);
+}
+
+std::vector<std::string> Engine::migrate_unknown_folders() {
+    std::vector<std::string> out;
+    const fs::path data = root_ / fs::path(std::string(model::store::kDataFolder));
+    for (const auto& c : model::chars::all()) {
+        std::error_code ec;
+        const std::string old_name = "Unknown(" + std::to_string(c.id) + ")";
+        const fs::path from = data / fs::path(old_name), to = data / fs::path(std::string(c.name));
+        if (!fs::is_directory(from, ec)) continue;
+        if (!fs::exists(to, ec)) {
+            fs::rename(from, to, ec);
+            out.push_back(old_name + " -> " + c.name + (ec ? " FAILED: " + ec.message() : " (renamed)"));
+            continue;
+        }
+        int moved = 0, kept = 0;
+        std::vector<fs::path> files;
+        for (fs::recursive_directory_iterator it(from, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code e2;
+            if (it->is_regular_file(e2)) files.push_back(it->path());
+        }
+        for (const fs::path& f : files) {
+            std::error_code e2;
+            const fs::path dst = to / fs::relative(f, from, e2);
+            if (e2 || fs::exists(dst, e2)) { ++kept; continue; }
+            fs::create_directories(dst.parent_path(), e2);
+            fs::rename(f, dst, e2);
+            if (e2) ++kept; else ++moved;
+        }
+        if (kept == 0) fs::remove_all(from, ec);
+        out.push_back(old_name + " -> " + c.name + ": " + std::to_string(moved) + " file(s) moved, " +
+                      std::to_string(kept) + " left in " + old_name);
+    }
+    return out;
 }
 
 std::optional<std::string> Engine::char_name() const {
@@ -209,8 +244,17 @@ bool Engine::ensure(int id) {
         fid_ = id;
         reset_selection();
     }
-    const bool globbed = ensure_file_list();
-    return changed || globbed;
+    if (ensure_file_list()) return true;
+    // A fresh list is read again too: a pack copied into the folder by hand (or removed) shows at the next entry of the
+    // Manager page, the call's only regular caller (once per entry; the other calls follow an action or a stale list).
+    // The list and its version change only when the folder did; the selection is kept while its file is still there.
+    const std::vector<std::string> before = cached_file_list_;
+    const std::vector<std::string> shown(display_list_.begin() + (display_list_.empty() ? 0 : 1), display_list_.end());
+    refresh_file_list();
+    bool same = cached_file_list_ == before && shown.size() == cached_file_list_.size();
+    for (size_t i = 0; same && i < cached_file_list_.size(); ++i) same = display_name(cached_file_list_[i]) == shown[i];
+    if (!same) refresh_filtered_list();
+    return changed || !same;
 }
 
 void Engine::set_dropdown_index(const json& idx_in) {
@@ -238,7 +282,8 @@ std::string Engine::loaded_name() const {
 }
 
 // ---- the live slots --------------------------------------------------------------------------------------------------------
-std::optional<json> Engine::serialize_slots(int use_id, std::string* char_name, std::string* err, bool* crashed, bool save_site) {
+std::optional<json> Engine::serialize_slots(int use_id, std::string* char_name, std::string* err, bool* crashed, bool save_site,
+                                            std::array<bool, 8>* actives) {
     if (crashed) *crashed = false;
     const std::string a = live_->access(use_id);
     if (!a.empty()) { if (err) *err = a; return std::nullopt; }
@@ -252,6 +297,7 @@ std::optional<json> Engine::serialize_slots(int use_id, std::string* char_name, 
             if (crashed) *crashed = true;
             return std::nullopt;
         }
+        if (actives) (*actives)[(size_t)i] = r.active;
         json e = json::object();
         e["id"] = i + 1;
         e["weight"] = r.weight;
@@ -271,13 +317,59 @@ std::optional<json> Engine::serialize_slots(int use_id, std::string* char_name, 
     return data;
 }
 
+// The pack's `active` flags (live from the game, 9-30 from _virtual_slots.json) and the training block. An export carries
+// the reversal rows only when one of them is valid (an unused reversal setup would overwrite the importer's for nothing),
+// trimmed to the game's 10 rows when CRSM's 11-30 are all empty; a backup always carries them, so that importing it puts
+// back what an import replaced. The replay settings and the dummy's settings are always carried (each is a setting).
+void Engine::stamp_pack(json& pack, int use_id, const std::array<bool, 8>& live_active, bool backup) {
+    std::array<bool, model::setup::kSlotTotal> on{};
+    for (size_t i = 0; i < 8; ++i) on[i] = live_active[i];
+    if (!backup) {
+        model::vslots::VSlots& v = vslots();
+        for (int n = model::vslots::kFirst; n <= model::vslots::kLast; ++n) {
+            const json* e = v.get(n);
+            on[(size_t)n - 1] = e && model::setup::active_of(*e).value_or(false) && v.frames(n) > 0;
+        }
+    }
+    model::setup::stamp_active(pack, on);
+    if (!setup_) return;
+    model::setup::Setup st;
+    if (!setup_->read(use_id, &st)) return;
+    if (st.reversal) {
+        if (!backup && !model::setup::rows_in_use(*st.reversal)) st.reversal.reset();
+        else model::setup::trim(*st.reversal);
+    }
+    if (st.reversal || st.playback || st.dummy) model::setup::stamp(pack, st);
+}
+
 void Engine::backup_live_slots(int use_id) {
     if (!backup_gate_.allow(use_id, clock_->seconds())) return;
     std::string p2_name, err;
-    const auto data = serialize_slots(use_id, &p2_name, &err, nullptr, false);
+    std::array<bool, 8> act{};
+    auto data = serialize_slots(use_id, &p2_name, &err, nullptr, false, &act);
     if (!data) return;
+    stamp_pack(*data, use_id, act, true);
     const std::string folder = model::store::backups_folder(p2_name);
     write_json(folder + "/" + model::pack::backup_filename(p2_name, clock_->local_now()), *data);
+}
+
+// After the slots of a pack are written: its `active` flags over activate_on_load (an entry without one keeps what
+// activate_on_load gave it), then its training block (config.json import_training_setup = false skips the block).
+void Engine::apply_flags_and_setup(int use_id, const json& data) {
+    setup_report_.clear();
+    for (const json* s : ipairs(data)) {
+        const auto a = model::setup::active_of(*s);
+        if (!a) continue;
+        const int k0 = (int)lj::index(*s, "id").get<double>() - 1;
+        if (k0 < 0 || k0 > 7) continue;
+        live_->set_active(use_id, k0, *a && !lutil::truthy(lj::index(*s, "empty")));
+    }
+    std::string why;
+    const auto st = model::setup::of_pack(data, &why);
+    if (!st) return;
+    if (!import_setup_) { setup_report_ = "training block skipped (config.json import_training_setup = false)"; return; }
+    if (!setup_) { setup_report_ = "training block skipped (no game port)"; return; }
+    setup_->write(use_id, *st, &setup_report_);
 }
 
 // apply_data_to_character (MAIN:581-744). `crashed` = the Lua raised (the caller's pcall gives "Crash: " / "Error: ").
@@ -368,6 +460,7 @@ std::string Engine::apply(int target_id, json data, const std::string& source_na
         slot_names_[(size_t)k0] = lutil::truthy(nm) ? nm : json("");
     }
     if (activate_on_load_) live_->activate_valid(use_id);
+    if (source_name != "virtual slot") apply_flags_and_setup(use_id, data);   // a virtual slot's entry: slot 8 keeps its IsActive
     if (ticker && !quiet_ && !native_action_) *ticker = ticker_stem(source_name) + " File Loaded";   // MAIN:739-742
     return "Loaded: " + source_name;
 }
@@ -387,12 +480,23 @@ std::string Engine::save_custom_file_text(std::string* ticker, bool* crashed) {
     filepath = model::pack::save_filename(filepath, char_name);
     std::string err, p2;
     bool ser_crash = false;
-    const auto live = serialize_slots(fid_, &p2, &err, &ser_crash, true);
+    std::array<bool, 8> act{};
+    const auto live = serialize_slots(fid_, &p2, &err, &ser_crash, true, &act);
     if (!live) {
         if (ser_crash) { *crashed = true; return err; }
         return "Error: " + err;
     }
     json data = model::pack::assemble(*live, vslots().export_virtual());
+    stamp_pack(data, fid_, act, false);
+    // The loaded pack's `info` (its description, author, source) goes with what the game now holds, read before the
+    // write (Save over the loaded file replaces it): Save and Save As keep a downloaded drill's description.
+    if (!loaded_file_name_.empty()) {
+        const json src = load_json(model::store::pack_path(char_name, lutil::strip_json_ext(loaded_file_name_) + ".json"));
+        const json* e1 = model::setup::entry_one(src);          // entry_one finds objects only
+        json* d1 = model::setup::entry_one(data);
+        if (e1 && d1 && e1->contains(model::setup::kInfoKey) && (*e1)[model::setup::kInfoKey].is_object())
+            (*d1)[model::setup::kInfoKey] = (*e1)[model::setup::kInfoKey];
+    }
     write_json(model::store::pack_path(char_name, filepath), data);
     custom_file_input_ = filepath;
     loaded_file_name_ = lutil::strip_json_ext(filepath);
