@@ -25,7 +25,7 @@ void tick(uint32_t events);
 
 // ---- former variant slots (costumes.cpp, load_state) ----
 // A Battle Settings choice naming a costume number the registry no longer has: when the manifest lists
-// it as a former variant slot (the launch that turned RuntimeOptions on), the kept slot's number, and
+// it as a former variant slot (the launch that turned runtime options on (1.13)), the kept slot's number, and
 // that variant's options become the P1 choice of the mod. -1 otherwise. game: the kept outfit is a game
 // outfit (a retouch's former outfit: the retouch is an option of the game outfit it was made from).
 int migrate_former(int fighter, int costume_no, bool* game = nullptr);
@@ -37,7 +37,10 @@ bool nsfw_options();                  // the manifest has NSFW options (costumes
 const Manifest& manifest();
 Choices& choices();
 void save_choices();                  // written at once (small file)
-void choices_changed();               // the models re-apply (the preview now, fighters at their next build)
+// The models re-apply (the preview now, fighters at their next build). confirmed: the outfits (and side, 0 P1 / 1 P2)
+// whose options were just saved: their files are asked for now and kept until the fighters wear them (the next fighters
+// watch's end); none = the files kept stay as they are
+void choices_changed(const std::vector<std::pair<const Slot*, int>>& confirmed = {});
 // A fighters watch started now (10 s, as after a model build): the fighters (PlayerBehavior, _PlayerID 0 / 1) wear the
 // choices of their side again, without a rebuild (the Training popup confirmed with the same costume and colour: the
 // game rebuilds nothing). Nothing on the character select. hold_side 0 / 1: that fighter keeps what it wears (its
@@ -55,9 +58,13 @@ uint32_t fighter_built_at(int side);
 // PlayerBehavior.SetupAppearance calls so far (a model built), 0 when that event is ignored (called all the time)
 uint32_t model_builds();
 std::string fade_fields();            // the fade controller singleton's fields, for the log
-// The Training popup's options mode: the files of every option of these outfits asked for ahead and kept loaded (the
-// Battle Settings preview's rule); an empty list lets them go. How many files are kept.
-size_t popup_preload(const std::vector<const Slot*>& slots);
+// The Training popup's options mode: the files of this outfit's options asked for ahead and kept loaded, within a byte
+// budget, the group under the cursor first (the Battle Settings preview's rule); nullptr lets them go at once. How many
+// files are kept.
+size_t popup_preload(const Slot* slot);
+// The option group under the cursor of the options menu (Battle Settings preview) or the Training popup, for this
+// outfit: its batch of files asked for ahead is built again around that group when it changed. group < 0: unknown
+void focus_group(const Slot* slot, int group);
 // How many files a set of options needs that are not ready yet (asked for now); total: how many it needs
 int options_files_left(const Slot& s, const std::vector<std::string>& chosen, int* total);
 // The slot of a fighter's outfit (costume number) when it has option rows (the menus offer it), nullptr otherwise

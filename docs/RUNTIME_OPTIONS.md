@@ -1,9 +1,11 @@
 # Runtime costume options (design, in progress)
 
-Status: released in Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0) behind a setting off by default, **on by default
-since Slots Loader 1.13.1** (SF6 Mod Suite 1.17.1): lot A (the loader part) and lot B (the plugin: runtime swaps, the
-Battle Settings and character select menus, the `former` migration), tested in game. `RuntimeOptions=off` builds what
-the loader built before 1.13 (no manifest: the plugin's runtime-options code stays idle). Everything 1.13.0 changed, file by file: [SLOTS_LOADER_1.13_CHANGES.md](SLOTS_LOADER_1.13_CHANGES.md).
+Status: released in Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0) behind a setting off by default, on by default
+since Slots Loader 1.13.1 (SF6 Mod Suite 1.17.1), **always on since the `RuntimeOptions=` setting was removed**
+(after 1.15.1): lot A (the loader part) and lot B (the plugin: runtime swaps, the
+Battle Settings and character select menus, the `former` migration), tested in game. The sections below that describe
+`RuntimeOptions=off` or `variants` describe what 1.13.0 - 1.15.1 could be set to; those layouts can no longer be selected.
+Everything 1.13.0 changed, file by file: [SLOTS_LOADER_1.13_CHANGES.md](SLOTS_LOADER_1.13_CHANGES.md).
 
 ## Goal
 
@@ -43,17 +45,18 @@ On a fighter's model (Training) and on the Battle Settings preview, per model:
 
 `reframework\costume_mods\settings.ini`:
 
-| `RuntimeOptions=` | Outfits of a modular mod | Options stored + `costume_options.json` |
-|---|---|---|
-| `on` (default since 1.13.1: key or file missing, empty, any other value) | **one** (the mod's first combination) | yes |
-| `off` (or `0`, `false`, `no`; the default of 1.13.0) | one per combination, as before | no (the manifest is deleted) |
-| `variants` | one per combination, as before | yes |
+The `RuntimeOptions=` setting is **gone**: runtime options are always on. A modular mod is **one** outfit (the mod's
+first combination), every option is stored in the pak and listed in `costume_options.json`. A `RuntimeOptions=` line
+left in `settings.ini` (any value, `off` and `variants` included) is ignored, and the log says so once
+(`RuntimeOptions=<value> ignored: runtime options are always on`). The `RuntimeOptions` block of the template the loader
+wrote up to 1.15.1 (1.13.0's `off`, then `on`), left untouched, is taken out of the file at the next launch (any edit of
+those lines keeps the file as it is: the line is then only ignored). The pak fingerprint of a user who was on `on` is
+unchanged (the mode part of it, `;options=sf6-costume-options-1:one`, is the same), so no rebuild is forced. Someone who
+had written `off` or `variants` gets one rebuild.
 
-`on` is the target layout. `variants` is the fallback: the options are available in game while the old outfits stay.
-The default was `off` in 1.13.0 (opt-in) and is `on` since 1.13.1. `off` builds exactly what the loader built
-before (same pak bytes, same `outfits.json`, same registry). The `RuntimeOptions=off` block 1.13.0 wrote into the
-`settings.ini` it created (its template), left untouched, is replaced at the next launch by the current template's
-block (`on`); a user who wants `off` writes it again (any edit of those lines keeps the file as it is).
+History: the setting was `off` by default in 1.13.0 (opt-in), `on` by default from 1.13.1 (`off` builds what the loader
+built before 1.13; `variants` keeps those outfits and stores the options too). The loader code of `off` and `variants`
+is still in `loader_core.cpp`, unreachable (`g_rto_layout` is a constant).
 
 ## Data model
 
@@ -105,7 +108,7 @@ archive touching its costume folder; a complete option whose `AddonFor` names an
 the fork 1.9.8; add-ons whose `AddonFor` names nothing of their mod beside a single complete option, fork 1.9.9,
 with a WARN) are also one mod:
 
-- `RuntimeOptions=off`: as before, the outfit plus one outfit per add-on (and one with all of them when they replace
+- (before runtime options were always on) `RuntimeOptions=off`: the outfit plus one outfit per add-on (and one with all of them when they replace
   no same file; the outfit alone past three add-ons). "Leon Requiem On Luke C1": Leon as Luke, + More muscles,
   + Leon Hair, + Trimmed Hair (More muscles was an outfit of its own without the main files before the port).
 - `on`: **one outfit**, the outfit alone (its own id: its slot as before), every add-on an option, any number of them:
@@ -363,7 +366,7 @@ outfit's add-on placement, and no other mod's add-ons or retouches are placed on
 mod) stay runtime options of that outfit. Several mods in one sub-folder keep the grouped-outfit rule. A lone mod that is
 a pure add-on (no complete outfit) cannot be an outfit: it keeps the add-on rules, and the log says so. The log has one
 line per mod kept apart (`<mod>: alone in its sub-folder <name>: its own outfit (no merge)`), repeated in the merge audit.
-`RuntimeOptions=variants` and `off` are unchanged.
+`RuntimeOptions=variants` and `off` (no longer selectable) were unchanged.
 
 ### NSFW outfits: `costume_mods_nsfw` (20/10)
 
@@ -860,8 +863,8 @@ does, the fallback above is the next step.
   name, e.g. "DriveTech Wear"). Cut at 40 characters ("..."). The outfit: an `app.UIPartsMatchingFighterSetting`
   (`FighterId`, `GetCostumeId()`) in the screen's parts list or its flow's settings, else the fighter of the
   preview model built since the screen came up (`esfNNNv..`) and the outfit by the costume row's name ("Outfit II"
-  = the registry's name of a slot of ours). Works with `RuntimeOptions` off too (its own module; the preview's
-  fighter then only comes from the screen).
+  = the registry's name of a slot of ours). Worked with `RuntimeOptions` off too in 1.13 - 1.15 (its own module; the preview's
+  fighter then only came from the screen).
 - **Shown** while Fighter Settings is on screen and no option window is open; **hidden** under our options menu and
   the Color Mod's colour editor (their own guide bar and camera hints are there), off that screen, and when it would
   come within 48 px of the bar's own text (its entries change with the focused row).
@@ -1125,7 +1128,7 @@ it as an overlay per colour number on top of the chosen colour, from the stored 
 ## Phases
 
 - **A (done; setting off by default in 1.13.0, on since 1.13.1)**: options stored per slot, base copies, material rebinding,
-  `costume_options.json` (options, defaults, presets, former slots), `RuntimeOptions=off|on|variants`.
+  `costume_options.json` (options, defaults, presets, former slots), `RuntimeOptions=off|on|variants` (setting removed since: always on).
 - **B (built, to test in game)**: plugin runtime (load, preload, apply per model, rebuild moments), the
   texture-sharing check (offline: per model; the fallback is not built), choices file, Battle Settings menu,
   migration of `state.json`. Left for later: Fluffy unchecked options.

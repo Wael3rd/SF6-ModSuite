@@ -2,7 +2,8 @@
 
 This page lists everything the SF6 Slots Loader 1.13.0 (SF6 Mod Suite 1.17.0) adds or changes compared with 1.12.0
 (Mod Suite 1.16.3). Slots Loader 1.13.1 (SF6 Mod Suite 1.17.1) changes one thing: `RuntimeOptions` is `on` by default
-([section 4](#4-settings)). It is written for authors of tools that install mods for the loader or read its files, first of
+([section 4](#4-settings)). **Update after 1.15.1: the `RuntimeOptions=` setting is removed, runtime options are always on;
+a leftover line is ignored (logged once), and the `off` / `variants` layouts below can no longer be selected.** It is written for authors of tools that install mods for the loader or read its files, first of
 all **ZZtaii**, who maintains the Slotsloader Manager and the Slotsloader fork; several changes below are ports of his
 fork's fixes (MIT) and of his Manager's NSFW filter (with his permission).
 
@@ -38,7 +39,7 @@ Related pages: [RUNTIME_OPTIONS.md](RUNTIME_OPTIONS.md) (the design and every ru
 
 ## 1. Summary
 
-- **Runtime costume options** (`RuntimeOptions`; off by default in 1.13.0, **on by default since 1.13.1**): a modular mod, an outfit with add-ons, versions
+- **Runtime costume options** (`RuntimeOptions`; off by default in 1.13.0, on by default since 1.13.1, **always on since the setting was removed**): a modular mod, an outfit with add-ons, versions
   of one archive... become **one** outfit whose options are chosen in game, live, per player. New files:
   `costume_options.json` (loader), `costume_choices.json` (plugin). Option files are stored in the pak under
   `<slot folder>/rto/<option id>/`.
@@ -53,7 +54,7 @@ Related pages: [RUNTIME_OPTIONS.md](RUNTIME_OPTIONS.md) (the design and every ru
 - **Plugin**: Battle Settings and character select options menus, options worn on the select / VS / fight models,
   the outfit's name on Fighter Settings, three new exports for the SF6 Color Mod.
 
-With `RuntimeOptions=off` (the default of 1.13.0; since 1.13.1 it must be written), no `costume_mods_nsfw` content and
+With `RuntimeOptions=off` (1.13.0 - 1.15.1 only, no longer selectable), no `costume_mods_nsfw` content and
 no NSFW keyword hit, the loader builds the same outfits as 1.12.0, under the same numbers; the pak is rebuilt once
 because the loader id changed.
 
@@ -69,7 +70,7 @@ because the loader id changed.
 1.12.0 had a single `LOADER_BUILD_ID`; 1.13.0 splits it (see [section 8](#8-when-the-pak-is-rebuilt)). Treat the
 ids as opaque strings: compare them for equality only. 1.13.1 keeps both ids of 1.13.0: with the same setting it builds
 the same pak, and a 1.13.0 install that switches to `on` (the new default) is rebuilt anyway, `RuntimeOptions` being
-part of the fingerprint.
+part of the fingerprint. With the setting removed, the fingerprint part of an `on` install is unchanged.
 
 ## 3. Folders
 
@@ -103,9 +104,10 @@ Layout of each root, as before: `<root>/<Character>/<archive | folder mod | .pak
 INI lines `Key=value`; keys case-insensitive; lines starting with `;` ignored; surrounding quotes stripped; the first
 line of a key wins. The loader writes a commented template listing every key when the file is missing, **but only on
 a launch that looks for Fluffy** (the game folder holds a foreign patch pak or loose files); it never edits an
-existing file, so an older file gets no new keys. One exception since 1.13.1: the `RuntimeOptions` block of 1.13.0's
-template (its comment lines and `RuntimeOptions=off`), when left untouched, is replaced by the current template's
-block (`RuntimeOptions=on`); any edit of those lines keeps the file as it is. A Manager may add or change a key line and must keep the others.
+existing file, so an older file gets no new keys. One exception: the `RuntimeOptions` block of the template written up to
+1.15.1 (its comment lines and `RuntimeOptions=off` or `=on`), when left untouched, is taken out (the setting is gone and the
+current template has no such block); any edit of those lines keeps the file as it is, and a leftover `RuntimeOptions=` line is
+ignored and logged. A Manager may add or change a key line and must keep the others.
 
 | Key | Values (default first) | Effect | In the fingerprint |
 |---|---|---|---|
@@ -156,8 +158,8 @@ own name ("Aloha Ryu", "Ingrid - Fly In A Bucket - Drive Tech"), not the combina
 
 ### `costume_options.json` (new)
 
-The options manifest, written with the pak when `RuntimeOptions` is `on` or `variants` (deleted with `off`; a missing
-file with `on` / `variants` forces a rebuild). Read by the plugin; a Manager may read it but never writes it. Resource
+The options manifest, written with the pak (always, since runtime options are always on; a missing
+file forces a rebuild; 1.13.0 - 1.15.1 deleted it with `RuntimeOptions=off`). Read by the plugin; a Manager may read it but never writes it. Resource
 paths are as the game names resources: lowercase, without `natives/stm/` and without the version suffix.
 
 ```json
@@ -187,7 +189,7 @@ paths are as the game names resources: lowercase, without `natives/stm/` and wit
 }
 ```
 
-- `layout`: `one` (`RuntimeOptions=on`) or `variants`.
+- `layout`: `one` (always, since the setting was removed; `variants` was the layout of `RuntimeOptions=variants`).
 - `mods[]`: one per mod. `key` = `<fighter folder>/<root name, lowercase>`, or `<fighter folder>/nsfw/<name>` for a
   mod of `costume_mods_nsfw` (a mod NSFW by keywords keeps the plain key); `nsfw: true` on an NSFW mod. `groups[]`
   in layering order (the mod's main files first; a later group's file replaces an earlier one's at the same path).
@@ -343,7 +345,7 @@ names, the Manager's record (`manager/...`), the DLC paks, the base pak (`;base:
 | same fingerprint, same `;meta=`, the pak at its number | "Up to date": nothing is built; only `"pak"` of `outfits.json` / `costume_options.json` is synced |
 | same, the pak one number off (a stage pak came or went) | the pak is renamed, nothing else |
 | same fingerprint, **another or no `;meta=`** (a loader update that changes only the files beside the pak) | everything is built again, but the pak in place is **kept** when the build makes as many entries (no rewrite of several GB) |
-| anything else (a mod changed, `LOADER_PAK_ID` changed, `RuntimeOptions` switched...) | full build |
+| anything else (a mod changed, `LOADER_PAK_ID` changed, a `RuntimeOptions` setting switched, in versions that had it...) | full build |
 
 **Incremental build** (`IncrementalPak=on`, the default): a full build still runs every step (scan, slots, checks),
 but the data of every source listed in `pak_sources.tsv` whose key still matches (same file, same size and date) is
@@ -358,9 +360,10 @@ needs to delete the pak.
 
 ## 9. How mods become outfits and options
 
-With `RuntimeOptions=off` nothing below applies except the fork fixes ([section 11](#11-fixes-ported-from-the-slotsloader-fork)):
-outfits are made as in 1.12.0 (one per combination of a modular mod, one per add-on...). With `variants` the outfits
-are those of `off` and the options are stored too (rules A only). With `on`:
+(Before the setting was removed: with `RuntimeOptions=off` nothing below applied except the fork fixes
+([section 11](#11-fixes-ported-from-the-slotsloader-fork)): outfits were made as in 1.12.0 (one per combination of a
+modular mod, one per add-on...); with `variants` the outfits were those of `off` and the options were stored too.) The
+rules below are the ones that always apply:
 
 **One outfit per mod**
 
@@ -465,7 +468,7 @@ label the options):
 
 ## 12. Plugin runtime behaviour
 
-Only with a `costume_options.json` (`RuntimeOptions` `on` or `variants`); otherwise the runtime-options code stays
+Only with a `costume_options.json` (the loader always writes it now); without one the runtime-options code stays
 idle. The NSFW display and the outfit name on Fighter Settings work with any layout.
 
 - **Battle Settings** (Fighter Settings): while the Costume row of an outfit with options is focused, the guide bar

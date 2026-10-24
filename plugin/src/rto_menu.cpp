@@ -319,7 +319,7 @@ void commit(const char* why) {
     S.shown = S.chosen;
     sd.names.clear();
     save_choices();
-    choices_changed();
+    choices_changed({ { S.slot, S.side } });
     logf("rto: menu %s, %s: %s (%zu options)", S.side ? "P2" : "P1", S.slot->mod.c_str(), why, S.chosen.size());
 }
 
@@ -399,7 +399,7 @@ void SF6CORE_CALL cb_button(void*, int64_t entry, SF6CoreOptButtonResult* out) {
             S.chosen = chosen_of(manifest(), *S.slot, choices(), S.side);
             S.shown = S.chosen;
             save_choices();
-            choices_changed();
+            choices_changed({ { S.slot, S.side } });
             logf("rto: menu %s, %s: defaults restored", S.side ? "P2" : "P1", S.slot->mod.c_str());
             rebuild_later(a.page, a.pos);
         }
@@ -729,6 +729,14 @@ void tick(bool fs_visible) {
             const bool turn_prev = prev_down && !S.prev_was, turn_next = next_down && !S.next_was && !prev_down;
             S.prev_was = prev_down; S.next_was = next_down;
             if (turn_prev || turn_next) turn(turn_next);
+            // the option group under the cursor: the preview's files asked for ahead are built around it (rto::focus_group)
+            if (g_frame % 10 == 0) {
+                const int64_t fe = a->opt_focused_entry();
+                auto it = fe >= 0 ? S.acts.find(fe) : S.acts.end();
+                if (it != S.acts.end() && it->second.kind == Act::Option && it->second.row >= 0 &&
+                    it->second.row < static_cast<int>(S.rows.size()))
+                    focus_group(S.slot, S.rows[static_cast<size_t>(it->second.row)].group);
+            }
             if (S.rebuild_page >= 0) {
                 const int p = S.rebuild_page;
                 S.rebuild_page = -1;

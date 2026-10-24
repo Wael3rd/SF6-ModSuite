@@ -11,7 +11,7 @@
 #
 # Scenarios: none (nothing changed, the whole pak taken from the previous one), touch (an archive's date
 # changes: extracted again, read again), byte (a byte of a loose mod file changes, with its date), remove
-# (an archive taken out: the slots after it move), byte_on (byte with RuntimeOptions=on).
+# (an archive taken out: the slots after it move).
 # Needs about 3 x the pak's size free on the lab's disk. Exit code 0 when every scenario is identical.
 param(
     [Parameter(Mandatory)] [string]$Exe,
@@ -21,7 +21,7 @@ param(
     [string]$TouchFile = "",
     [string]$ByteFile = "",
     [string]$RemoveFile = "",
-    [string[]]$Scenarios = @("none", "touch", "byte", "remove", "byte_on")
+    [string[]]$Scenarios = @("none", "touch", "byte", "remove")
 )
 $ErrorActionPreference = "Stop"
 $manifest = Join-Path $PSScriptRoot "pak_manifest.py"
@@ -50,12 +50,12 @@ function Clear-Fingerprint {
 function Our-Pak {
     Get-ChildItem $Lab -Filter "re_chunk_000.pak.patch_*.pak" | Sort-Object Name | Select-Object -Last 1
 }
-function Build([string]$mode, [string]$incremental, [string]$tag) {
+function Build([string]$incremental, [string]$tag) {
     $free = (Get-PSDrive ($Lab.Substring(0, 1))).Free / 1GB
     if ($free -lt 30) { throw ("only {0:N1} GB free" -f $free) }
     Clear-Fingerprint
     $old = if (Test-Path $ini) { [IO.File]::ReadAllText($ini) } else { $null }
-    [IO.File]::WriteAllText($ini, "RuntimeOptions=$mode`r`nIncrementalPak=$incremental`r`n")
+    [IO.File]::WriteAllText($ini, "IncrementalPak=$incremental`r`n")
     Remove-Item $log -ErrorAction SilentlyContinue
     $sw = [Diagnostics.Stopwatch]::StartNew()
     & $Exe $Lab --base-pak $BasePak > (Join-Path $Work "out_$tag.txt")
@@ -87,14 +87,13 @@ $results = @()
 Save-State "start"
 try {
     foreach ($sc in $Scenarios) {
-        $mode = if ($sc -like "*_on") { "on" } else { "off" }
-        $kind = $sc -replace "_on$", ""
+        $kind = $sc
         if ($kind -eq "touch" -and -not $TouchFile) { continue }
         if ($kind -eq "byte" -and -not $ByteFile) { continue }
         if ($kind -eq "remove" -and -not $RemoveFile) { continue }
         Write-Output "== $sc"
         Restore-State "start"
-        $prev = Build $mode "off" "${sc}_prev"
+        $prev = Build "off" "${sc}_prev"
         Save-State "${sc}_prev"
         # the change
         switch ($kind) {
@@ -120,10 +119,10 @@ try {
                 $undo += { Move-Item $aside $RemoveFile }.GetNewClosure()
             }
         }
-        $inc = Build $mode "on" "${sc}_inc"
+        $inc = Build "on" "${sc}_inc"
         Save-State "${sc}_inc"
         Restore-State "${sc}_prev"
-        $full = Build $mode "off" "${sc}_full"
+        $full = Build "off" "${sc}_full"
         Save-State "${sc}_full"
         # undo the change before comparing (the next scenario starts from the lab as it was)
         for ($i = $undo.Count - 1; $i -ge 0; $i--) { & $undo[$i] }

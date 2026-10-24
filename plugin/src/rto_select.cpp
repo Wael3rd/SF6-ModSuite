@@ -763,7 +763,7 @@ struct Popup {
     std::map<std::string, Pending> pending;         // mod key -> the options changed this visit, saved on Confirm
     bool base = false;                              // the fighter / costume / colour it showed when it opened (read once)
     int32_t bf = -1, bc = -1, bn = -1;
-    std::vector<const Slot*> preloaded;             // the outfits whose option files are asked for ahead (rto::popup_preload)
+    const Slot* preloaded = nullptr;                // the outfit whose option files are asked for ahead (rto::popup_preload)
     int left = -1;                                  // the pending options' files not ready yet, last count (-1 unknown)
 };
 Popup g_pop;
@@ -809,7 +809,7 @@ void commit(Side& st) {
     st.shown = st.chosen;
     sd.names.clear();
     save_choices();
-    choices_changed();                              // the select model wears it on the next pass of rto.cpp
+    choices_changed({ { st.slot, st.opt } });       // the select model wears it on the next pass of rto.cpp
 }
 // The popup: kept for the Confirm (shown: the set its saved choices gave when first edited this visit, for keep_hidden)
 void pend(const Side& st) {
@@ -1241,9 +1241,9 @@ bool enter(int s, const char** why) {
     st = std::move(n);
     hook_side_set(s, st);                           // from now on the panel's input is ours
     pop_flag(s, true);
-    if (pop && std::find(g_pop.preloaded.begin(), g_pop.preloaded.end(), slot) == g_pop.preloaded.end()) {
-        g_pop.preloaded.push_back(slot);            // a pick then swaps whole at the Confirm (the preview's rule)
-        popup_preload(g_pop.preloaded);
+    if (pop && slot != g_pop.preloaded) {           // a pick then swaps whole at the Confirm (the preview's rule); this
+        g_pop.preloaded = slot;                     // outfit's only: the one visited before is let go
+        popup_preload(slot);
     }
     // the titles: their message link cut (kept), so the text written stays; a title already showing what we write
     // gets one write that differs first (the real write must differ, the DI mode's rule)
@@ -1458,8 +1458,10 @@ void side_tick(int s, bool net) {
 int popup_confirm(bool same) {
     int n = 0;
     std::string what;
+    std::vector<std::pair<const Slot*, int>> confirmed;
     for (auto& [mod, p] : g_pop.pending) {
         if (!p.slot || same_set(p.chosen, p.shown)) continue;
+        confirmed.push_back({ p.slot, p.opt });
         auto& sd = choices().mods[mod][static_cast<size_t>(p.opt)];
         const std::vector<std::string> saved = sd.changed ? sd.ids : p.slot->defaults;
         sd.changed = true;
@@ -1476,7 +1478,7 @@ int popup_confirm(bool same) {
     // logged (22/10: a colour restore walk or an early read made it say "changed" while only the options were)
     if (!n) return 0;
     save_choices();
-    choices_changed();
+    choices_changed(confirmed);
     const int ms = training_menu_state();
     fighters_refresh("the Training popup confirmed", ms > 0 ? g_pop.target - 1 : -1);
     if (ms > 0) {
@@ -1623,7 +1625,7 @@ void popup_end(const char* why) {
     for (auto& [mod, p] : g_pop.pending) if (p.slot && !same_set(p.chosen, p.shown)) ++n;
     if (n) logf("rto select: popup left without Confirm (%s): the pending options of %zu outfit(s) dropped", why, n);
     if (g_pop.up) publish(g_pop.target, false);
-    if (!g_pop.preloaded.empty()) popup_preload({});   // the confirmed ones stay loaded as the choices' (choices_changed)
+    if (g_pop.preloaded) popup_preload(nullptr);   // the confirmed ones stay loaded as the choices' (choices_changed)
     g_pop = Popup{};
     g_s[kPop] = follow(kPop, Side{});
 }
@@ -1759,7 +1761,12 @@ void popup_tick(bool announced) {
         const bool down = trigger_down(0);
         const bool press = down && !st.key_was;
         st.key_was = down;
-        if (st.on) { run(st, kPop, press, g_pop.target); return; }
+        if (st.on) {
+            if (st.slot && st.w.cur >= 0 && st.w.cur < static_cast<int>(st.rows.size()))
+                focus_group(st.slot, st.rows[static_cast<size_t>(st.w.cur)].group);   // its files asked for ahead first
+            run(st, kPop, press, g_pop.target);
+            return;
+        }
 
         // not on: the entry and the key
         int32_t f = -1;

@@ -123,9 +123,10 @@ Copy it into `reframework\plugins\` **with the game closed**. Headers: REFramewo
   `requestManagedFighterAssetLoad`); fighters built without such a request (a battle loaded through a select screen)
   are left as the game built them (log: `the slot's files were not asked for before the fighters were built`).
 
-## Runtime costume options (`rto*.cpp`, off unless the loader writes `costume_options.json`)
+## Runtime costume options (`rto*.cpp`, run when the loader wrote `costume_options.json`)
 
-With `RuntimeOptions=on` (the default since Slots Loader 1.13.1) or `variants` in `costume_mods\settings.ini`, the loader stores every option of a modular
+Runtime options are always on (the `RuntimeOptions=` setting is gone from `costume_mods\settings.ini`; a leftover line is
+ignored). The loader stores every option of a modular
 mod and lists them in `SF6_Costumes_Data\costume_options.json`. The plugin then shows, on the costume row of Battle
 Settings > character, the key that opens the outfit's options (F / A), applies the choices to the preview at once and
 to each fighter when its model is built (an outfit mounted for a fight, `PlayerBehavior.SetupAppearance`: a 10 s

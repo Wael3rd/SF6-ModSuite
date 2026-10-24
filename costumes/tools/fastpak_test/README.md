@@ -35,7 +35,7 @@ powershell -File incremental_test.ps1 -Exe build\costume_loader.exe -Lab <lab> -
 
 Scenarios: `none` (nothing changed: the whole pak comes from the previous one), `touch` (an archive's
 date changes: extracted again, its files read again), `byte` (one byte of a loose mod file changes, with
-its date), `remove` (an archive taken out: the slots after it move), `byte_on` (`byte` with
-RuntimeOptions=on). Every change is undone and the lab's data folder put back at the end; the lab's
+its date), `remove` (an archive taken out: the slots after it move). Runtime options are always on in these builds.
+Every change is undone and the lab's data folder put back at the end; the lab's
 pak is the last one built. Needs about three times the pak's size free on the lab's disk; three builds
 per scenario. Exit code 0 when every scenario is identical.

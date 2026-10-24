@@ -100,7 +100,7 @@ bool nsfw_hidden(int fid, int cos) {
 // ---- intents (Battle Settings choices), state.json ----
 struct Intent { int slot = 0; int color = -1; };       // slot 0: none
 std::map<int, Intent> g_intent;
-// A Battle Settings choice of a retouch's former outfit (RuntimeOptions=on): the retouch is an option of the game
+// A Battle Settings choice of a retouch's former outfit (runtime options): the retouch is an option of the game
 // outfit it was made from (rto.cpp chose it for P1); the save gets that game outfit once it can be reached. Until
 // then state.json keeps the former slot, so a session that ends before does it again.
 struct ToGame { int costume = 0, color = -1, from = 0; };
@@ -317,7 +317,7 @@ void load_state() {
         if (const Json* s = v.get("slot"); s && s->kind == Json::Number) in.slot = static_cast<int>(s->num);
         if (const Json* c = v.get("color"); c && c->kind == Json::Number) in.color = static_cast<int>(c->num);
         if (const Json* c = v.get("carrier"); c && c->kind == Json::Number) g_saved_carrier[fid] = static_cast<int>(c->num);
-        // A variant slot of a modular mod folded into one outfit with options (RuntimeOptions=on): the
+        // A variant slot of a modular mod folded into one outfit with options (runtime options): the
         // choice moves to the kept slot, the variant's options become the P1 choice (rto.cpp)
         // An outfit numbered again (it became NSFW, or stopped being NSFW): the choice follows it
         if (in.slot && !is_slot(fid, in.slot))

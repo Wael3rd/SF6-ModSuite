@@ -152,9 +152,8 @@ you confirm the popup). Add-ons, retouches and outfits with parts taken off beco
 they fit, the game's outfits included. Choices are kept in
 `reframework\data\SF6_CostumeSlots_data\costume_choices.json`.
 
-To turn them off, write `RuntimeOptions=off` in `reframework\costume_mods\settings.ini` (create the file if it is not
-there): a modular mod then gives one outfit per combination of its options, as before 1.13.0. `RuntimeOptions=variants`
-keeps the outfits of `off` and adds the options. Changing the setting rebuilds the costume pak once at the next launch.
+Runtime options are always on: the `RuntimeOptions=` setting of `reframework\costume_mods\settings.ini` is gone (a line
+left in the file is ignored and the log says so).
 Design and rules: [docs/RUNTIME_OPTIONS.md](docs/RUNTIME_OPTIONS.md).
 
 **For mod-manager and tool authors**: what the Slots Loader writes and reads (outfits, registry, options manifest,
@@ -182,7 +181,7 @@ Mods left in `costume_mods` are looked at too, by name (creators tag their mods,
   "4! NSFW style options") is an NSFW option of an outfit that stays shown: while NSFW outfits are hidden, it is not
   offered in the costume options menu and not worn; your choice of it is kept and comes back when they are shown. The
   outfit never wears one by default when its group can do without it (else the outfit itself is NSFW). With
-  `RuntimeOptions=off` or `variants`, an outfit made with an NSFW option is an NSFW outfit.
+  runtime options off (versions before this change only), an outfit made with an NSFW option is an NSFW outfit.
 - **The words** (Slotsloader Manager 1.0.8's NSFW filter, by ZZtaii): `nsfw, nude, naked, topless, bottomless, pubic,
   pubes, nipple, pasties, lewd, futa, see through, see thru, no panties, no underwear, erotic`. Case, spaces and dashes
   do not matter ("See-Through" = "seethrough"), but a word must appear as one run ("no panties" is not found in

@@ -1502,12 +1502,12 @@ static std::vector<LeftOut> g_left_out;
 // ============================================================================
 // Runtime costume options (docs/RUNTIME_OPTIONS.md)
 // ============================================================================
-// costume_mods\settings.ini, RuntimeOptions: "on" (the default since 1.13.1: key left out, file missing) makes
-// one outfit per modular mod (its first combination) and stores every option of the mod in the pak for the
-// in-game menu, listed in SF6_Costumes_Data\costume_options.json; "off" builds what the loader built before
-// 1.13 (the default of 1.13.0); "variants" keeps the outfits of "off" and stores the options as well.
+// Always on (the RuntimeOptions= setting of costume_mods\settings.ini is gone; a leftover line is ignored and logged):
+// one outfit per modular mod (its first combination) and every option of the mod stored in the pak for the
+// in-game menu, listed in SF6_Costumes_Data\costume_options.json. Off / Variants are what 1.13.0 - 1.18 could be
+// set to; nothing selects them any more: their branches below are unreachable, kept to keep this change local.
 enum class RtoLayout { Off, Variants, One };
-static RtoLayout g_rto_layout = RtoLayout::One;
+static const RtoLayout g_rto_layout = RtoLayout::One;
 static const char* RTO_FORMAT = "sf6-costume-options-1";
 static const char* RTO_FILE = "costume_options.json";
 
@@ -9338,13 +9338,6 @@ static const char* kSettingsTemplate =
     "; Left empty, the loader looks for it by itself (same places as Fluffy).\r\n"
     "SlotsloaderManager=\r\n"
     ";\r\n"
-    "; RuntimeOptions: costume options chosen in game. Changing it rebuilds the costume pak at the next launch.\r\n"
-    ";   on (default): a modular mod, or an outfit with its add-ons, is one outfit; its options are chosen in\r\n"
-    ";     game (Fighter Settings: F or a click on the Costume row; character select: R1 or C)\r\n"
-    ";   off: one outfit per combination of a modular mod's options, no options in game (as before 1.13)\r\n"
-    ";   variants: the outfits of \"off\", and every option stored for the in-game menus as well\r\n"
-    "RuntimeOptions=on\r\n"
-    ";\r\n"
     "; NsfwKeywords: a mod of costume_mods whose name has one of these words is NSFW, as if it were in\r\n"
     "; costume_mods_nsfw (shown in game only while \"Display NSFW Outfits\" is on); an option whose name has one\r\n"
     "; is an NSFW option. Left out: the default list (nsfw, nude, naked, topless, bottomless, pubic, pubes,\r\n"
@@ -9377,16 +9370,22 @@ static std::string read_setting(const std::string& path, const char* key, bool* 
     return {};
 }
 
-// Slots Loader 1.13.0 wrote "RuntimeOptions=off" (then the default) into every settings.ini it created. That
-// block, untouched, is replaced by the current one (on): a user who wants off writes it again. Any edit of
-// those lines (another value, another comment) leaves the file as it is.
-static void upgrade_settings_rto_block(const std::string& path) {
-    static const char* old_lines[] = {
-        "; RuntimeOptions: costume options chosen in game (in progress, see docs/RUNTIME_OPTIONS.md).",
-        ";   off: one outfit per combination of a modular mod's options, as before (default)",
-        ";   on: one outfit per modular mod, every option stored for the in-game menu",
-        ";   variants: the outfits of \"off\", every option stored as well",
-        "RuntimeOptions=off" };
+// The settings.ini Slots Loader created up to 1.18 held a RuntimeOptions block (1.13.0: "off", 1.13.1 - 1.18: "on").
+// The setting is gone: that block, untouched, is taken out so the file matches the current template. Any edit of
+// those lines (another value, another comment) leaves the file as it is; the line is then only ignored (and logged).
+static void remove_settings_rto_block(const std::string& path) {
+    static const char* blocks[][6] = {
+        { "; RuntimeOptions: costume options chosen in game (in progress, see docs/RUNTIME_OPTIONS.md).",
+          ";   off: one outfit per combination of a modular mod's options, as before (default)",
+          ";   on: one outfit per modular mod, every option stored for the in-game menu",
+          ";   variants: the outfits of \"off\", every option stored as well",
+          "RuntimeOptions=off", nullptr },
+        { "; RuntimeOptions: costume options chosen in game. Changing it rebuilds the costume pak at the next launch.",
+          ";   on (default): a modular mod, or an outfit with its add-ons, is one outfit; its options are chosen in",
+          ";     game (Fighter Settings: F or a click on the Costume row; character select: R1 or C)",
+          ";   off: one outfit per combination of a modular mod's options, no options in game (as before 1.13)",
+          ";   variants: the outfits of \"off\", and every option stored for the in-game menus as well",
+          "RuntimeOptions=on" } };
     std::string txt;
     if (FILE* f = fopen(path.c_str(), "rb")) {
         char buf[65536];
@@ -9396,24 +9395,23 @@ static void upgrade_settings_rto_block(const std::string& path) {
     }
     if (txt.empty()) return;
     for (const char* eol : { "\r\n", "\n" }) {
-        std::string old_block;
-        for (const char* l : old_lines) old_block += std::string(l) + eol;
-        const size_t at = txt.find(old_block);
-        if (at == std::string::npos) continue;
-        // the current template's RuntimeOptions block, from its comment line to its "RuntimeOptions=" line
-        const std::string tpl = kSettingsTemplate;
-        const size_t a = tpl.find("; RuntimeOptions:");
-        const size_t b = tpl.find("\r\n", tpl.find("RuntimeOptions=", a)) + 2;
-        std::string block = tpl.substr(a, b - a);
-        if (std::string(eol) == "\n")
-            for (size_t p; (p = block.find("\r\n")) != std::string::npos; ) block.erase(p, 1);
-        txt.replace(at, old_block.size(), block);
-        if (FILE* f = fopen(path.c_str(), "wb")) {
-            fwrite(txt.data(), 1, txt.size(), f);
-            fclose(f);
-            logf("  settings.ini: RuntimeOptions=off as Slots Loader 1.13.0 wrote it, now on (the default since 1.13.1)\n");
+        for (auto& blk : blocks) {
+            std::string old_block;
+            for (const char* l : blk) if (l) old_block += std::string(l) + eol;
+            // the block and the ";" separator line that follows it in the template
+            const std::string with_sep = old_block + ";" + eol;
+            size_t at = txt.find(with_sep);
+            size_t len = with_sep.size();
+            if (at == std::string::npos) { at = txt.find(old_block); len = old_block.size(); }
+            if (at == std::string::npos) continue;
+            txt.erase(at, len);
+            if (FILE* f = fopen(path.c_str(), "wb")) {
+                fwrite(txt.data(), 1, txt.size(), f);
+                fclose(f);
+                logf("  settings.ini: the RuntimeOptions block (setting gone, runtime options are always on) taken out\n");
+            }
+            return;
         }
-        return;
     }
 }
 
@@ -10654,15 +10652,13 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     const bool has_nsfw_mods = nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY);
     // Runtime costume options (docs/RUNTIME_OPTIONS.md)
     {
-        upgrade_settings_rto_block(costume_mods_dir + "\\settings.ini");   // 1.13.0's untouched "off" -> on
-        std::string v = str_lower(read_setting(costume_mods_dir + "\\settings.ini", "runtimeoptions"));
-        g_rto_layout = (v == "off" || v == "0" || v == "false" || v == "no") ? RtoLayout::Off
-                     : v == "variants" ? RtoLayout::Variants : RtoLayout::One;   // left out, empty, anything else: on
+        remove_settings_rto_block(costume_mods_dir + "\\settings.ini");   // the old template's block, untouched
+        bool rto_found = false;
+        const std::string rto_v = read_setting(costume_mods_dir + "\\settings.ini", "runtimeoptions", &rto_found);
+        if (rto_found) logf("  RuntimeOptions=%s ignored: runtime options are always on\n", rto_v.c_str());
         g_rto_slots.clear();
         g_rto_game.clear();
-        if (g_rto_layout == RtoLayout::Off) DeleteFileA((registry_dir + "\\" + RTO_FILE).c_str());
-        else logf("  runtime options: %s\n", g_rto_layout == RtoLayout::One ? "on (one outfit per modular mod)"
-                                                                          : "variants (options stored too)");
+        logf("  runtime options: on (one outfit per modular mod)\n");
     }
     // NSFW keywords (docs/RUNTIME_OPTIONS.md, NSFW outfits): ZZtaii's list, or NsfwKeywords= (a comma list replacing it;
     // given empty: detection off)

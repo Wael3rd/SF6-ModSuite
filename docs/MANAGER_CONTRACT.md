@@ -123,6 +123,11 @@ when no Replace-original mod is installed.
 
 ## RuntimeOptions and what the Manager sees
 
+**Change (after Slots Loader 1.15.1): the `RuntimeOptions=` setting is removed; the loader always behaves as `on`.** A
+`RuntimeOptions=` line in `settings.ini` is ignored (the loader logs it once), so a Manager must not write it and cannot
+select `off` or `variants`; `variants.json`'s `"runtime_options"` is always `"on"`. The table below describes the
+layouts as they were when the setting existed; only the `on` row applies now. Nothing else of the contract changes.
+
 `reframework/costume_mods/settings.ini`, `RuntimeOptions` (`docs/RUNTIME_OPTIONS.md`):
 
 | Layout | Outfits | Variants listed | A variant turned off |

@@ -201,7 +201,7 @@ int vs_model_side(const std::vector<std::string>& up, int* root);
 // A spin step on a row's value (1-based, `labels` values): wraps at both ends
 int step_value(int value, int labels, int dir);
 
-// ---- former variant slots (the launch that turned RuntimeOptions on) ----
+// ---- former variant slots (the launch that turned runtime options on (1.13)) ----
 // The kept slot of a fighter's former variant slot number, and that variant's options
 const Slot* former_of(const Manifest& m, int fighter, int costume_no, const Former** out);
 

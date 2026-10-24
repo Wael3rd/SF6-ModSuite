@@ -1,5 +1,72 @@
 # Changelog
 
+## 1.19.0 (2026-10-24) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.0 | runtime costume options use about 1.5 GB less memory; always on |
+| SF6 Color Mod | 0.23.0 | unchanged |
+| SF6 Native Core | 0.9.1 | unchanged |
+| SF6 Recording Manager | 2.2.0 | Arjun, packs carry the training setup, pack descriptions |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.15.1 and SF6 Recording Manager 2.1.3, then
+install Slots Loader 1.16.0 and Recording Manager 2.2.0. The Color Mod and Native Core zips are the files of 1.18.4:
+nothing to do if they are installed. The costume pak is not rebuilt for players on the default settings.
+
+### SF6 Slots Loader 1.16.0
+- **About 1.5 GB less memory with runtime costume options.** About 30 s after the start, the plugin loaded the files
+  of every option you had changed, for every character, and kept them for the whole session (4K textures of fighters
+  not even in the fight). On a 16 GB PC the game reached 13.7 GB and left 0.2 GB free: Windows paged the game out and
+  fights dropped to 40-45 fps. Measured on the same training fight: 13.8 GB before, 12.2 GB now, 2 GB free, 60 fps.
+  - Only the two fighters picked on the character select get their options loaded ahead; entering training without
+    a character select shows the original part for about a second before the option.
+  - After a confirm, only the confirmed outfit's files are kept, and they are given back once the fighters wear them.
+  - The Training popup and the Battle Settings preview load ahead at most 300 MB, the option group under the cursor
+    first, one outfit at a time (no longer adding up while you browse outfits), and give it all back when they close.
+  - `native_log.txt` gets `rto mem:` lines: the game's memory before and 5 s after each batch loaded ahead.
+- **Runtime costume options are always on.** The `RuntimeOptions=off|on|variants` setting of
+  `reframework\costume_mods\settings.ini` is removed: a modular mod or an outfit with add-ons is always one outfit with
+  its options chosen in game. A `RuntimeOptions=` line left in the file is ignored and the log says so once. The line and
+  its comment are no longer in the `settings.ini` template; an old template's block, if untouched, is taken out at the
+  next launch. Players who were on the default (`on`) get no rebuild; players who had written `off` or `variants`
+  get one rebuild and the one-outfit layout.
+
+### SF6 Recording Manager 2.2.0
+- **Arjun** (fighter 34): a `DATA/Unknown(34)` folder made before this version is merged into his named folder at start.
+- **Packs carry the training setup**: each slot's active flag, the playback settings, the reversal rows and the dummy
+  settings (docs in `crsm/docs/PACK_FORMAT.md`). Importing a pack applies them (the previous setup is backed up in
+  `pre_import`; switch `import_training_setup`), exporting writes them. Old packs and older readers are unchanged.
+- **Pack descriptions**: the description, author and source of a pack are written on a Community download, kept by
+  Save / Save As, sent by Share, and shown in the Community dialog and on the Manager's help line.
+- Community rows fit their width (date first, then name, then author are cut; a `[TAG]` is kept).
+- The Manager reads the character folder again each time its page opens.
+
+### Known issues
+- Slots Loader: replays show the outfit the other players saw (Outfit 1 or DriveTech), not your modded outfit:
+  a replay has no player the plugin can tell apart.
+- Slots Loader: the online alias was tested in Custom Rooms (against another platform, and with a character change
+  between matches), not yet in Ranked or the Battle Hub.
+- Slots Loader: a fighter built without the game asking for its files again (a Custom Room's training area right
+  after a match) keeps Outfit 1 (or DriveTech) until the next load; the log says so.
+- Slots Loader, Training pause menu: when the costume or colour changed, the fight shows for about half a second with
+  the old look after the pause menu closes, before the game's own reload fade (the game's timing).
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only.
+- Slots Loader, character select and Training pause menu popup: the costume options menu (R1 / C) and the Color
+  Mod's Drive colours (L1) use buttons the game may also use on those screens; this is not confirmed either way. If
+  the game's own guide there shows them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader, Training pause menu: after confirming options only, the battle restarts (as Restart Battle) a few
+  frames after the pause menu closes, so the fight shows briefly before the fade.
+- Slots Loader: the Training popup costume options have not been tested with P2 (the dummy) nor with a gamepad on the
+  Up / Down window.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+
+
 ## 1.18.4 (2026-10-23) — SF6 Mod Suite
 
 | Package | Version | |

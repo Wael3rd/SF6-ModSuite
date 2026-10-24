@@ -28,7 +28,13 @@
 #include "slots_ui.hpp"
 
 #include <algorithm>
+#include <climits>
+#include <cstdlib>
 #include <set>
+#include <unordered_map>
+
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")   // GetProcessMemoryInfo (the "rto mem:" log lines)
 
 namespace slots::rto {
 namespace {
@@ -60,10 +66,12 @@ uint32_t g_watch_next = 0;
 uint32_t g_watch_start = 0;
 bool g_model_noisy = false;         // SetupAppearance seen all the time: that event is ignored (no watch without end)
 std::atomic<uint32_t> g_model_calls{0};
-bool g_warm_done = false;
-std::set<std::string> g_warm;       // files of the choices made in the menu, kept loaded
-std::set<std::string> g_warm_prev;  // files of every option of the outfit the preview wears, kept while it wears it
-std::set<std::string> g_warm_pop;   // files of every option of the outfits the Training popup's options showed (this visit)
+std::set<std::string> g_warm;       // files of the options just confirmed, kept loaded until the fighters wear them
+std::set<std::string> g_warm_prev;  // files of the options of the outfit the preview wears (a byte budget), kept while it wears it
+std::set<std::string> g_warm_pop;   // the same for the outfit the Training popup's options show (this visit)
+const Slot* g_prev_batch = nullptr; // the outfits of those two batches (focus_group rebuilds a batch when the cursor moves)
+const Slot* g_pop_batch = nullptr;
+int g_focus = -1;                   // the option group under the menu's / popup's cursor, -1 unknown
 // The Training popup confirmed (options only): that fighter's swap (0 P1, 1 P2) is held, the fighter keeps what it
 // wears, until fighters_hold_end (the restart's black screen); -1 none. g_hold_id tells one hold from the next
 int g_hold_side = -1;
@@ -168,6 +176,101 @@ std::unordered_map<std::string, Res> g_res;
 
 uint32_t load_frames(const std::string& kind) { return kind == "texture" ? 60 : 30; }
 
+// ---- memory, for the log: the process's private bytes before a batch of files asked for ahead and 5 s later ----
+uint64_t private_mb() {
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    pmc.cb = sizeof(pmc);
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc))) return 0;
+    return static_cast<uint64_t>(pmc.PrivateUsage) >> 20;
+}
+struct MemNote { uint32_t at = 0; std::string what; uint64_t before = 0; };
+std::vector<MemNote> g_mem;         // the "5 s later" lines still to write (mem_tick)
+void mem_mark(const std::string& what) {
+    const uint64_t mb = private_mb();
+    logf("rto mem: %s: private %llu MB, %zu holders", what.c_str(), static_cast<unsigned long long>(mb), g_res.size());
+    if (g_mem.size() >= 8) g_mem.erase(g_mem.begin());
+    g_mem.push_back({ g_frame + 300, what, mb });
+}
+void mem_tick() {
+    for (auto it = g_mem.begin(); it != g_mem.end();) {
+        if (g_frame < it->at) { ++it; continue; }
+        const uint64_t mb = private_mb();
+        logf("rto mem: %s, 5 s later: private %llu MB (%+lld MB), %zu holders", it->what.c_str(), static_cast<unsigned long long>(mb),
+             static_cast<long long>(mb) - static_cast<long long>(it->before), g_res.size());
+        it = g_mem.erase(it);
+    }
+}
+
+// ---- file sizes (the byte budget of a batch): from the loader's pak_sources.tsv, by file name ----
+// A stored copy keeps its source's file name, or the same name with the slot's number ("esf030_001_00" ->
+// "esf030_006_00"): looked up by exact name, then by name with any costume number. A name several sources share takes
+// the largest. Not found: a size per kind (a 4K texture, a large mesh), so the budget errs on the safe side.
+const char* kSources = "reframework/data/SF6_Costumes_Data/pak_sources.tsv";
+std::unordered_map<std::string, uint64_t> g_size_exact, g_size_any;
+bool g_sizes_read = false;
+std::string size_key_exact(std::string name) {
+    auto s = name.find_last_of('/');
+    if (s != std::string::npos) name = name.substr(s + 1);
+    for (auto& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const auto d = name.find_last_of('.');                     // a source's version suffix (".tex.241101895")
+    if (d != std::string::npos && d + 1 < name.size() &&
+        std::all_of(name.begin() + static_cast<std::ptrdiff_t>(d + 1), name.end(), [](char c) { return c >= '0' && c <= '9'; }))
+        name.resize(d);
+    return name;
+}
+std::string size_key_any(std::string name) {                   // "esf030_006_00_body_albd.tex" -> "esf030_*_00_body_albd.tex"
+    for (size_t i = 0; i + 10 <= name.size(); ++i) {
+        if (name.compare(i, 3, "esf") != 0) continue;
+        auto dig = [&](size_t a, size_t n) { for (size_t k = a; k < a + n; ++k) if (name[k] < '0' || name[k] > '9') return false; return true; };
+        if (dig(i + 3, 3) && name[i + 6] == '_' && dig(i + 7, 3)) { name.replace(i + 7, 3, "*"); break; }
+    }
+    return name;
+}
+void read_sizes() {
+    g_sizes_read = true;
+    const std::string text = read_file(kSources, 64u << 20);
+    size_t pos = text.find('\n'), n = 0;                       // line 1: the header
+    while (pos != std::string::npos && pos + 1 < text.size()) {
+        const size_t b = pos + 1;
+        pos = text.find('\n', b);
+        const std::string line = text.substr(b, (pos == std::string::npos ? text.size() : pos) - b);
+        const std::string first = line.substr(0, line.find('\t'));     // kind|d|source path|size|time
+        size_t p1 = first.find('|'), p2 = p1 == std::string::npos ? p1 : first.find('|', p1 + 1);
+        size_t p3 = p2 == std::string::npos ? p2 : first.find('|', p2 + 1);
+        size_t p4 = p3 == std::string::npos ? p3 : first.find('|', p3 + 1);
+        if (p4 == std::string::npos) continue;
+        std::string src = first.substr(p2 + 1, p3 - p2 - 1);
+        std::replace(src.begin(), src.end(), '\\', '/');
+        const uint64_t sz = std::strtoull(first.c_str() + p3 + 1, nullptr, 10);
+        if (!sz) continue;
+        const std::string ke = size_key_exact(src), ka = size_key_any(ke);
+        auto& e = g_size_exact[ke]; e = std::max(e, sz);
+        auto& a = g_size_any[ka]; a = std::max(a, sz);
+        ++n;
+    }
+    logf("rto: %zu file sizes read from pak_sources.tsv (the byte budget of the files asked for ahead)%s", n,
+         n ? "" : ": none, a size per kind is used");
+}
+uint64_t file_bytes(const File& f) {
+    if (!g_sizes_read) read_sizes();
+    const std::string ke = size_key_exact(f.path);
+    if (auto it = g_size_exact.find(ke); it != g_size_exact.end()) return it->second;
+    if (auto it = g_size_any.find(size_key_any(ke)); it != g_size_any.end()) return it->second;
+    return f.kind == "texture" ? (22ull << 20) : f.kind == "mesh" ? (8ull << 20) : (64ull << 10);
+}
+
+// ---- refcount probe (read only): does create_resource hand its caller a reference? ----
+// The engine's resource keeps its count at +0x28 (REFramework's own fallback offset); read under SEH. Logged for the
+// first stored copies created this session (paths with "/rto/": never loaded by the game before we ask), and for the
+// first ones created again after their holder was given back. The count right after create_resource on a first
+// creation: 1 = the caller owns one (then the add_ref / create_holder / release idiom keeps one for ever), 0 = not.
+int32_t peek_count(const void* res) {
+    __try { return *reinterpret_cast<const volatile int32_t*>(reinterpret_cast<const uint8_t*>(res) + 0x28); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return INT32_MIN; }
+}
+std::set<std::string> g_created;    // stored copies created at least once this session
+int g_probe_first = 0, g_probe_again = 0;
+
 // resident: the model wears this file now (a way back), usable at once
 Res* res_get(const std::string& path, const std::string& kind, bool resident) {
     auto it = g_res.find(path);
@@ -183,10 +286,25 @@ Res* res_get(const std::string& path, const std::string& kind, bool resident) {
     auto* rm = api().resource_manager();
     auto* res = rm ? rm->create_resource(rt, path) : nullptr;
     if (res) {
+        const bool stored = !resident && path.find("/rto/") != std::string::npos;
+        const bool again = stored && g_created.count(path) != 0;
+        const bool probe = stored && (again ? g_probe_again < 3 : g_probe_first < 3);
+        int32_t c0 = 0, c1 = 0, c2 = 0, c3 = 0;
+        if (probe) c0 = peek_count(res);
         res->add_ref();
+        if (probe) c1 = peek_count(res);
         auto fn = api().sdk()->resource->create_holder;
         r.holder = fn ? reinterpret_cast<Obj*>(fn(reinterpret_cast<REFrameworkResourceHandle>(res), ht)) : nullptr;
+        if (probe) c2 = peek_count(res);
         res->release();
+        if (probe) {
+            c3 = peek_count(res);
+            ++(again ? g_probe_again : g_probe_first);
+            logf("rto: refcount probe (%s, %s): after create_resource %d, add_ref %d, create_holder %d, release %d (+0x28%s)",
+                 again ? "created again after its holder was given back" : "first creation", short_path(path).c_str(), c0, c1, c2, c3,
+                 c1 == c0 + 1 ? "" : ": add_ref did not count there, offset not the refcount");
+        }
+        if (stored) g_created.insert(path);
         if (r.holder) r.holder->add_ref();
     }
     if (!r.holder) { r.dead = true; logf("rto: %s %s cannot be created (not in the paks?)", kind.c_str(), short_path(path).c_str()); }
@@ -225,16 +343,22 @@ void backoff(const std::string& path) {
     r.ready_at = g_frame + (60u << std::min(r.fails, 4));
     if (r.fails >= 6) { r.dead = true; logf("rto: %s never ready, left out", short_path(path).c_str()); }
 }
-// Holders not wanted for 10 s are given back (a model that wears one keeps its own reference)
-void res_gc() {
+// Holders not wanted for `age` frames (10 s; 1 s when a batch is let go: the popup or Battle Settings closed, the cursor
+// moved to other options, the fighters wear the confirmed options) are given back (a model that wears one keeps its own
+// reference). One a model asks for (res_get on each of its passes) stays.
+constexpr uint32_t kGcAge = 600, kGcQuick = 60;
+void res_gc(uint32_t age = kGcAge, const char* why = "") {
     size_t n = 0;
     for (auto it = g_res.begin(); it != g_res.end();) {
-        if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && !g_warm_pop.count(it->first) && g_frame - it->second.used > 600) {
+        if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && !g_warm_pop.count(it->first) && g_frame - it->second.used > age) {
             if (it->second.holder) it->second.holder->release();
             it = g_res.erase(it); ++n;
         } else ++it;
     }
-    if (n) logf("rto: %zu holders given back, %zu kept", n, g_res.size());
+    if (n) {
+        logf("rto: %zu holders given back, %zu kept%s%s", n, g_res.size(), *why ? " - " : "", why);
+        mem_mark(std::to_string(n) + " holders given back");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -355,28 +479,89 @@ void walk(Model& md) {
     }
 }
 
-// The files of every option of the outfit the Battle Settings preview wears, asked for as soon as it is seen: a pick
+// The files of the options of the outfit the Battle Settings preview wears, asked for as soon as it is seen: a pick
 // made in the menu a second later then swaps at once, whole. Asked for only at the pick, a file of an option never
 // worn before (and the textures its material names) was not resident after its 30 frames (20/10, Ryu Aloha C2 on its
 // first pick: body put back, hair white; right on the next picks, its files asked for since). Kept while the preview
-// wears that outfit (res_gc), given back after.
-constexpr size_t kWarmPreview = 160;
-void warm_preview(const Slot* s) {
-    std::set<std::string> want;
-    if (s) {
-        auto add = [&](const File& f) {
-            if (f.path.empty() || f.path == f.target || want.size() >= kWarmPreview) return;
-            if (f.kind != "mesh" && f.kind != "material" && f.kind != "texture" && f.kind != "chain") return;
-            if (want.insert(f.path).second) res_get(f.path, f.kind, false);
-        };
-        for (auto& [id, fs] : s->files)
-            if (!hidden(g_m, *s, id)) for (auto& f : fs) add(f);
-        for (auto& f : s->base) add(f);
+// wears that outfit (res_gc), given back after. A budget of kBatchBytes (24/10: every option of every outfit seen cost
+// GBs on a 16 GB PC): the group under the menu's cursor first, then its neighbours (focus_group builds the batch again
+// when the cursor moves to another group); an option the cursor never got near is loaded at its pick (its part shows
+// what it wore for about a second). A default option's stored copy is never asked for: a model wearing the slot's
+// defaults loads the slot's own file (desired: the winner among the defaults = orig).
+constexpr size_t kBatchFiles = 160;
+constexpr uint64_t kBatchBytes = 300ull << 20;
+std::vector<const File*> batch_of(const Slot& s, int focus, uint64_t* bytes) {
+    std::vector<const File*> out;
+    uint64_t total = 0;
+    const Mod* mod = g_m.mod_of(s);
+    std::map<std::string, std::pair<int, std::string>> dwin;    // target -> the default option that wins it (rank, id)
+    if (mod)
+        for (auto& id : s.defaults) {
+            const int x = mod->find(id);
+            auto it = s.files.find(id);
+            if (x < 0 || it == s.files.end()) continue;
+            const int rank = mod->options[static_cast<size_t>(x)].rank;
+            for (auto& f : it->second) {
+                auto& w = dwin[f.target];
+                if (w.second.empty() || rank > w.first) w = { rank, id };
+            }
+        }
+    std::set<std::string> seen;
+    auto add = [&](const File& f, const std::string& id) {
+        if (out.size() >= kBatchFiles || f.path.empty() || f.path == f.target || !swappable(f.kind) || seen.count(f.path)) return;
+        if (!id.empty()) { auto w = dwin.find(f.target); if (w != dwin.end() && w->second.second == id) return; }
+        const uint64_t b = file_bytes(f);
+        if (total + b > kBatchBytes) return;
+        seen.insert(f.path);
+        out.push_back(&f);
+        total += b;
+    };
+    auto add_option = [&](const std::string& id) {
+        if (hidden(g_m, s, id)) return;
+        auto it = s.files.find(id);
+        if (it != s.files.end()) for (auto& f : it->second) add(f, id);
+    };
+    if (mod && !mod->groups.empty()) {
+        const int n = static_cast<int>(mod->groups.size());
+        const int c = focus >= 0 && focus < n ? focus : 0;
+        std::vector<int> order;
+        for (int g = 0; g < n; ++g) order.push_back(g);
+        std::stable_sort(order.begin(), order.end(), [&](int x, int y) { return std::abs(x - c) < std::abs(y - c); });
+        for (int g : order)
+            for (int x : mod->groups[static_cast<size_t>(g)].options)
+                if (x >= 0 && x < static_cast<int>(mod->options.size())) add_option(mod->options[static_cast<size_t>(x)].id);
     }
+    for (auto& [id, fs] : s.files) add_option(id);              // an option outside the groups (none expected)
+    for (auto& f : s.base) add(f, {});
+    if (bytes) *bytes = total;
+    return out;
+}
+// A batch asked for: its files created (the "rto mem:" lines around the new ones), the set returned; files of the
+// previous set no longer in it: given back at once (*dropped)
+std::set<std::string> ask_batch(const std::vector<const File*>& files, const std::set<std::string>& prev, const std::string& what,
+                                bool* dropped) {
+    std::set<std::string> want;
+    size_t fresh = 0;
+    for (const File* f : files) { want.insert(f->path); if (!g_res.count(f->path)) ++fresh; }
+    if (fresh) mem_mark(what + ": " + std::to_string(fresh) + " new files asked for ahead");
+    for (const File* f : files) res_get(f->path, f->kind, false);
+    *dropped = false;
+    for (auto& p : prev) if (!want.count(p)) { *dropped = true; break; }
+    return want;
+}
+void warm_preview(const Slot* s) {
+    if (s != g_prev_batch) g_focus = -1;
+    g_prev_batch = s;
+    uint64_t bytes = 0;
+    std::vector<const File*> files;
+    if (s) files = batch_of(*s, g_focus, &bytes);
+    bool dropped = false;
+    std::set<std::string> want = ask_batch(files, g_warm_prev, "preview", &dropped);
     if (want != g_warm_prev && !want.empty())
-        logf("rto: %zu files of %s/%s's options asked for ahead (the preview wears it)%s", want.size(), s->fighter_dir.c_str(),
-             s->folder.c_str(), want.size() >= kWarmPreview ? " (the first ones)" : "");
+        logf("rto: %zu files (%llu MB) of %s/%s's options asked for ahead (the preview wears it; group %d first)", want.size(),
+             static_cast<unsigned long long>(bytes >> 20), s->fighter_dir.c_str(), s->folder.c_str(), g_focus < 0 ? 1 : g_focus + 1);
     g_warm_prev = std::move(want);
+    if (dropped) res_gc(kGcQuick, "the preview's batch changed");
 }
 
 std::string target_of(const Slot& s, const std::string& p) {
@@ -928,7 +1113,15 @@ void watch_tick() {
     if (g_frame >= g_watch_until && g_hold_side < 0) {
         g_watch_until = 0;
         logf("rto: fighters watch done (%u model builds seen)", g_model_calls.exchange(0));
-        res_gc();
+        // the fighters wear the confirmed options now (each model keeps its own reference): ours go, unless a menu that
+        // may still show them is up (Battle Settings, the Training popup)
+        if (!g_bs && !menu::active() && !select::popup_busy()) {
+            if (!g_warm.empty()) logf("rto: the %zu files of the confirmed options no longer kept (the fighters wear them)", g_warm.size());
+            g_warm.clear();
+            res_gc(kGcQuick, "fighters watch done");
+        } else {
+            res_gc();
+        }
         return;
     }
     if (g_frame < g_watch_next) return;
@@ -1046,16 +1239,19 @@ int pre_color_setup(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long
 // models then swap at once
 void warm_vs() {
     size_t n = 0, fresh = 0;
+    std::vector<std::pair<std::string, std::string>> files;     // path, kind
     for (int i = 3; i <= 4; ++i) {
         const Model& md = g_models[i];
         if (!md.slot || md.side < 0) continue;
         for (auto& [t, w] : desired(g_m, *md.slot, chosen_of(g_m, *md.slot, g_c, md.side))) {
             if (w.orig || w.path.empty()) continue;
             if (!g_res.count(w.path)) ++fresh;
-            res_get(w.path, w.kind, false);
+            files.push_back({ w.path, w.kind });
             ++n;
         }
     }
+    if (fresh) mem_mark("VS screen: " + std::to_string(fresh) + " new files asked for ahead");
+    for (auto& f : files) res_get(f.first, f.second, false);
     if (n) logf("rto: %zu files of the select models' options kept for the VS screen (%zu not loaded yet)", n, fresh);
 }
 void vs_open(uint32_t frames, const char* why) {
@@ -1145,23 +1341,6 @@ bool fighter_settings_visible() {
     return cm && call_bool(cm, "get_ActualVisible");
 }
 
-// The files of the choices made in the menu, loaded once the game is up: a fight then shows them at once
-void warm() {
-    g_warm_done = true;
-    std::set<std::string> want;
-    for (auto& s : g_m.slots) {
-        auto it = g_c.mods.find(s.mod);
-        if (it == g_c.mods.end()) continue;
-        for (int side = 0; side < 2; ++side) {
-            if (!it->second[static_cast<size_t>(side)].changed) continue;
-            for (auto& [t, w] : desired(g_m, s, chosen_of(g_m, s, g_c, side)))
-                if (!w.orig && want.size() < 64 && want.insert(w.path).second) res_get(w.path, w.kind, false);
-        }
-    }
-    g_warm = want;
-    if (!want.empty()) logf("rto: %zu files of the chosen options loaded ahead", want.size());
-}
-
 int pre_setup_appearance(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     g_builds.fetch_add(1, std::memory_order_relaxed);
     if (!g_closing.load(std::memory_order_relaxed) && !g_model_noisy) { g_model_calls.fetch_add(1, std::memory_order_relaxed); post(EV_RTO_MODEL); }
@@ -1188,19 +1367,24 @@ int frame_now() { return static_cast<int>(g_frame); }
 void save_choices() {
     if (!write_file(kChoices, write_choices(g_c, g_m))) logf("rto: cannot write costume_choices.json");
 }
-void choices_changed() {
+void choices_changed(const std::vector<std::pair<const Slot*, int>>& confirmed) {
     ++g_ver;
     g_prev_next = 0;
-    // what the new choices need stays loaded for the fights
+    if (confirmed.empty()) return;
+    // what the options just confirmed need stays loaded (asked for now) until the fighters wear them (watch_tick); only
+    // these outfits' (24/10: every changed outfit of every fighter, kept all session, cost about a GB)
     std::set<std::string> want;
-    for (auto& s : g_m.slots) {
-        auto it = g_c.mods.find(s.mod);
-        if (it == g_c.mods.end()) continue;
-        for (int side = 0; side < 2; ++side)
-            if (it->second[static_cast<size_t>(side)].changed)
-                for (auto& [t, w] : desired(g_m, s, chosen_of(g_m, s, g_c, side))) if (!w.orig && want.size() < 64) want.insert(w.path);
+    std::vector<std::pair<std::string, std::string>> files;     // path, kind
+    for (auto& [s, side] : confirmed) {
+        if (!s || side < 0 || side > 1) continue;
+        for (auto& [t, w] : desired(g_m, *s, chosen_of(g_m, *s, g_c, side)))
+            if (!w.orig && !w.path.empty() && swappable(w.kind) && want.size() < 64 && want.insert(w.path).second) files.push_back({ w.path, w.kind });
     }
-    g_warm = want;
+    size_t fresh = 0;
+    for (auto& f : files) if (!g_res.count(f.first)) ++fresh;
+    if (fresh) mem_mark("confirmed options: " + std::to_string(fresh) + " new files asked for ahead");
+    for (auto& f : files) res_get(f.first, f.second, false);
+    g_warm = std::move(want);
 }
 void fighters_refresh(const char* why, int hold_side) {
     if (!on() || g_select) return;
@@ -1241,26 +1425,27 @@ std::string fade_fields() {
     if (f.size() > 600) f = f.substr(0, 600) + "...";
     return f;
 }
-size_t popup_preload(const std::vector<const Slot*>& slots) {
-    std::set<std::string> want;
-    for (const Slot* s : slots) {
-        if (!s) continue;
-        size_t n = 0;
-        auto add = [&](const File& f) {
-            if (f.path.empty() || f.path == f.target || n >= kWarmPreview || !swappable(f.kind)) return;
-            ++n;
-            if (want.insert(f.path).second) res_get(f.path, f.kind, false);
-        };
-        for (auto& [id, fs] : s->files)
-            if (!hidden(g_m, *s, id)) for (auto& f : fs) add(f);
-        for (auto& f : s->base) add(f);
-    }
+size_t popup_preload(const Slot* s) {
+    if (s != g_pop_batch) g_focus = -1;
+    g_pop_batch = s;
+    uint64_t bytes = 0;
+    std::vector<const File*> files;
+    if (s) files = batch_of(*s, g_focus, &bytes);
+    bool dropped = false;
+    std::set<std::string> want = ask_batch(files, g_warm_pop, "Training popup", &dropped);
     if (want != g_warm_pop) {
         if (want.empty()) logf("rto: the %zu files asked for by the Training popup's options no longer kept", g_warm_pop.size());
-        else logf("rto: %zu files of the Training popup's options asked for ahead", want.size());
+        else logf("rto: %zu files (%llu MB) of the Training popup's options asked for ahead (%s/%s, group %d first)", want.size(),
+                  static_cast<unsigned long long>(bytes >> 20), s->fighter_dir.c_str(), s->folder.c_str(), g_focus < 0 ? 1 : g_focus + 1);
     }
     g_warm_pop = std::move(want);
+    if (dropped) res_gc(kGcQuick, s ? "the Training popup's batch changed" : "the Training popup's options closed");
     return g_warm_pop.size();
+}
+void focus_group(const Slot* s, int group) {
+    if (!on() || !s || group < 0 || group == g_focus) return;
+    if (s == g_pop_batch) { g_focus = group; popup_preload(s); }
+    else if (s == g_prev_batch) { g_focus = group; warm_preview(s); }
 }
 int options_files_left(const Slot& s, const std::vector<std::string>& chosen, int* total) {
     return files_left(desired(g_m, s, chosen), total);
@@ -1370,7 +1555,7 @@ void install_hooks() {
 bool busy() {
     if (!on()) return false;
     if (g_bs || g_select || g_watch_until || g_vs_until || menu::busy() || select::popup_busy()) return true;
-    return !g_warm_done && g_frame < 60 * 120;
+    return !g_mem.empty();                              // a "5 s later" memory line to write
 }
 
 bool nsfw_options() { return on() && g_m.has_nsfw; }
@@ -1378,6 +1563,7 @@ bool nsfw_options() { return on() && g_m.has_nsfw; }
 void tick(uint32_t ev) {
     if (!on() || !T.ok) return;
     try {
+        if (!g_mem.empty()) mem_tick();
         // "Display NSFW Outfits" (costumes.cpp reads settings.json): NSFW options offered and worn, or not; the models
         // apply it at once (the preview now, fighters at their next build)
         if (g_m.has_nsfw && costumes::display_nsfw() != g_m.show_nsfw) {
@@ -1436,15 +1622,14 @@ void tick(uint32_t ev) {
                 g_crf = nullptr;
                 g_gone_at = 0;
                 g_prev_fighter = -1;
-                warm_preview(nullptr);
-                res_gc();
+                warm_preview(nullptr);                   // its batch given back at once (warm_preview's res_gc)
+                res_gc(kGcQuick, "Battle Settings closed");
             }
         }
         menu::tick(fs);
         if (g_bs || menu::active()) preview_tick();
         if (g_watch_until) watch_tick();
         if (g_vs_until) vs_tick();
-        if (!g_warm_done && g_frame > 60 * 30 && !g_watch_until && !g_bs) warm();
     } catch (...) {
         fault("tick");
     }
