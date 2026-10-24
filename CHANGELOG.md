@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Slots Loader
+- **Stage variants: lighter file redirection.** The loader's redirection of the game's file paths (needed once a stage
+  variant is selected) now costs one bit test for a file it does not serve, writes nothing shared between threads,
+  and is taken out as soon as no variant is selected (it stayed until the game closed). On a CPU-bound laptop the
+  old one went with 45 fps in training while a variant was selected; the new one holds 60.
+- Test switches in `reframework\data\SF6_StageSlots_Data\`: `perf_on.txt` logs the redirection's calls and cost every
+  5 s in `SF6_StageSlots.log`; `hook_off.txt` keeps it out while the file exists.
+
 ## 1.19.0 (2026-10-24) — SF6 Mod Suite
 
 | Package | Version | |

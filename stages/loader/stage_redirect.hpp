@@ -14,7 +14,13 @@
 //   { "selected": { "<stage id>": "<variant key>", ... } }
 // Nothing is hooked while no variant is selected, and never in the first seconds of the game
 // (other tools hook the same function at their first frame and scan for it before patching).
+// Once installed, the hook is disarmed (original bytes back) whenever the selection is empty
+// again and armed again when a variant is selected. The detour itself is one bit test for any
+// path it does not serve (the engine hashes paths on many threads, all fight long).
 // Optional debug.txt in the same folder: "trace=<text>" logs every hashed path holding <text>.
+// Optional perf_on.txt in the same folder: a "perf:" line every 5 s (calls per second, threads,
+// sampled cycles of the original and of the detour's own work); no cost while absent.
+// Optional hook_off.txt (test switch): the hook stays disarmed while it exists.
 // Log: SF6_StageSlots.log next to the game executable.
 
 // Starts the watcher thread. Returns at once; safe to call from DllMain. `variants` must stay
