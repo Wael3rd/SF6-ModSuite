@@ -32,6 +32,7 @@ std::optional<std::array<int64_t, 12>> dr_colors(const int fid[2], bool swap = f
 bool parts_merge(int fighter, const std::string& reply);
 
 void on_frame();                                // the DLL's frame callback (game thread)
+bool in_fight();                               // a fighter is loaded (checked every 30 frames; false until the feed runs)
 void set_side_hint(int side, int fighter);     // SF6_ColorSpinExtra.to_apply's fighter for that side (0 = none)
 void mark_di_dirty();                           // SF6_DIRecolor.mark_dirty: a menu changed a DI setting
 std::string status();

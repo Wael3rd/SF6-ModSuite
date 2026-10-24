@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <span>
 #include <unordered_map>
 
 #include "../common.hpp"
@@ -92,10 +93,35 @@ template <typename F> void each_item(MO* lst, F fn) {
 }
 
 uint32_t arr_len(MO* a) {
-    int32_t n = 0;
-    return (a && invoke_i32(a, g_arr_len, n, { ll::arg_i32(0) }) && n > 0) ? (uint32_t)n : 0u;
+    if (!a || !g_arr_len) return 0u;
+    void* slot[1] = { ll::arg_i32(0) };                  // stack slots: no vector allocation per call
+    auto r = g_arr_len->invoke(a, std::span<void*>{ slot });
+    return (!r.exception_thrown && (int32_t)r.dword > 0) ? (uint32_t)(int32_t)r.dword : 0u;
 }
-MO* arr_get(MO* a, uint32_t i) { return invoke_obj(a, g_arr_get, { ll::arg_i32((int32_t)i) }); }
+MO* arr_get(MO* a, uint32_t i) {
+    if (!a || !g_arr_get) return nullptr;
+    void* slot[1] = { ll::arg_i32((int32_t)i) };
+    auto r = g_arr_get->invoke(a, std::span<void*>{ slot });
+    return r.exception_thrown ? nullptr : reinterpret_cast<MO*>(r.ptr);
+}
+
+// ll::find_field_walk with a per-thread memo of (type, name) -> field (names are compared by content; a type's fields never
+// change, a miss is memoised too). The by-name walk of the type database was paid ~10 times per frame in battle_act.
+API::Field* field_of(API::TypeDefinition* td, const char* name) {
+    struct E { API::TypeDefinition* td; char name[32]; API::Field* f; };
+    thread_local E tab[48]; thread_local unsigned n = 0;
+    if (!td || !name) return nullptr;
+    for (unsigned i = 0; i < n; ++i) if (tab[i].td == td && std::strcmp(tab[i].name, name) == 0) return tab[i].f;
+    API::Field* f = ll::find_field_walk(td, name);
+    if (n < 48 && std::strlen(name) < sizeof(E::name)) { E& e = tab[n++]; e.td = td; std::memcpy(e.name, name, std::strlen(name) + 1); e.f = f; }
+    return f;
+}
+MO* obj_field(MO* o, const char* name) {                 // ll::read_field_object through the memo
+    if (!o) return nullptr;
+    auto* f = field_of(o->get_type_definition(), name);
+    void* raw = f ? f->get_data_raw(o, false) : nullptr;
+    return raw ? *reinterpret_cast<MO**>(raw) : nullptr;
+}
 
 bool is_transform(MO* comp) {
     auto* td = comp->get_type_definition();
@@ -122,7 +148,7 @@ struct Ref { void* p = nullptr; API::TypeDefinition* td = nullptr; bool vt = fal
 Ref ref_of(MO* o) { return Ref{ o, o ? o->get_type_definition() : nullptr, false }; }
 Ref fld(const Ref& r, const char* name) {
     if (!r.p || !r.td) return {};
-    auto* f = ll::find_field_walk(r.td, name);
+    auto* f = field_of(r.td, name);
     if (!f) return {};
     void* raw = r.vt ? static_cast<uint8_t*>(r.p) + f->get_offset_from_fieldptr() : f->get_data_raw(r.p, false);
     if (!raw) return {};
@@ -133,7 +159,7 @@ Ref fld(const Ref& r, const char* name) {
 }
 int i32_at(const Ref& r, const char* name) {           // an Int32 field of r
     if (!r.p || !r.td) return 0;
-    auto* f = ll::find_field_walk(r.td, name);
+    auto* f = field_of(r.td, name);
     if (!f) return 0;
     void* raw = r.vt ? static_cast<uint8_t*>(r.p) + f->get_offset_from_fieldptr() : f->get_data_raw(r.p, false);
     int32_t v = 0;
@@ -201,15 +227,15 @@ bool battle_act(int idx, int64_t& out) {
     if (!g_gbattle_player) return false;
     void* slot = g_gbattle_player->get_data_raw(nullptr, false);
     MO* sp = slot ? *reinterpret_cast<MO**>(slot) : nullptr;
-    MO* mc = sp ? ll::read_field_object(sp, "mcPlayer") : nullptr;
+    MO* mc = sp ? obj_field(sp, "mcPlayer") : nullptr;
     if (!mc || (uint32_t)idx >= arr_len(mc)) return false;
     MO* pl = arr_get(mc, (uint32_t)idx);
     const Ref part = fld(fld(ref_of(pl), "mpActParam"), "ActionPart");
     const Ref eng = fld(part, "_Engine");
     if (!eng.p || eng.vt) return false;
     MO* e = reinterpret_cast<MO*>(eng.p);
-    static API::Method* get_id = nullptr;
-    if (!get_id) get_id = ll::find_method_noargs(e->get_type_definition(), "get_ActionID");
+    static API::Method* get_id = nullptr; static API::TypeDefinition* get_id_td = nullptr;   // re-resolved when the engine type changes
+    if (e->get_type_definition() != get_id_td) { get_id_td = e->get_type_definition(); get_id = ll::find_method_noargs(get_id_td, "get_ActionID"); }
     int32_t v = 0;
     if (!invoke_i32(e, get_id, v)) return false;
     out = v;

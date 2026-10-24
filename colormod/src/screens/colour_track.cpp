@@ -13,6 +13,7 @@
 #include <map>
 #include <set>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "ll_common.hpp"
@@ -386,7 +387,8 @@ std::optional<bool> game_pad(int32_t player) {         // app.InputGuideManager.
         cmn::journal("guide: the game's guide mode %s", m_get ? "read from InputGuideManager.GetMode" : "not found (last device used instead)");
     }
     if (!m_get || player < 0 || player > 1 || !API::get()->get_managed_singleton("app.InputGuideManager")) return std::nullopt;
-    auto r = m_get->invoke(nullptr, std::vector<void*>{ ll::arg_i32(player) });
+    void* slot[1] = { ll::arg_i32(player) };                          // stack slots: no vector allocation per call
+    auto r = m_get->invoke(nullptr, std::span<void*>{ slot });
     if (r.exception_thrown) return std::nullopt;
     return pad_of_mode((int32_t)r.dword);
 }
@@ -1149,9 +1151,17 @@ void block_popup_agents() {                            // the popup must not see
 }
 
 // editor_tick: the device, the triggers (C / F / A / click, X per player, the Drive rows), the select screens' guide
+// In a fight with none of our screens up (no menu, Fighter Settings, popup, editor or options window): the menu-only work
+// (the guide mode read, the selection key) runs every 30 frames only; any screen flag brings back the every-frame cadence.
+bool idle_in_fight() {
+    return vfx::feed::in_fight() && (g_F % 30) != 0 && !fsm.visible && !tcs.visible && !g_menus[0].active && !g_menus[1].active
+        && !fsm.cs_guide && !edit.active && !window_open();
+}
 void editor_tick() {
     resolve_pad();
-    if (const auto gp = game_pad(0)) {                                 // the game's guide mode (player 1), every screen
+    if (idle_in_fight()) {
+        // nothing of ours is on screen: the guide mode is read again at the next 30th frame or as soon as a screen shows
+    } else if (const auto gp = game_pad(0)) {                                 // the game's guide mode (player 1), every screen
         if (fsm.pad != gp) cmn::journal("guide: glyphs %s (the game's guide mode)", *gp ? "pad" : "keyboard");
         fsm.pad = gp;
     } else if (fsm.visible || ed_active()) device_tick();
@@ -1336,6 +1346,7 @@ void decide_push() {
         engine::decide::push_ui(a1, l1, a2, l2, at);
         g_sent.set = true; g_sent.a1 = a1; g_sent.l1 = l1; g_sent.a2 = a2; g_sent.l2 = l2; g_sent.at = at;
     }
+    if (!g_sent.sels.empty() && idle_in_fight()) return;               // nobody picks anything in a fight with our screens down
     const json& p1 = g_state["p1"]; const json& p2 = g_state["p2"]; const json& fs = g_state["fs"];
     const json* sels[3] = { &p1, &p2, &fs };
     std::string key;

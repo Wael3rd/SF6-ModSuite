@@ -5,13 +5,13 @@
 | Package | Version | |
 |---|---|---|
 | SF6 Slots Loader | 1.16.1 | lighter stage-variant redirection, fewer hooks in fights |
-| SF6 Color Mod | 0.23.0 | unchanged |
+| SF6 Color Mod | 0.23.1 | fewer hook dispatches and allocations in fights |
 | SF6 Native Core | 0.9.2 | less work on the game thread every frame |
 | SF6 Recording Manager | 2.2.1 | no more small hitches every 2 s; lighter training entry |
 
-Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.0, SF6 Native Core 0.9.1 and SF6 Recording
-Manager 2.2.0, then install Slots Loader 1.16.1, Native Core 0.9.2 and Recording Manager 2.2.1. The Color Mod zip is
-the file of 1.19.0: nothing to do if it is installed. The costume pak is not rebuilt.
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.0, SF6 Color Mod 0.23.0, SF6 Native Core
+0.9.1 and SF6 Recording Manager 2.2.0, then install Slots Loader 1.16.1, Color Mod 0.23.1, Native Core 0.9.2 and
+Recording Manager 2.2.1. The costume pak is not rebuilt.
 
 This release cuts what the mods do on the game's main thread during fights: on a CPU-bound PC (the game's own frame
 work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a dropped frame.
@@ -36,6 +36,14 @@ work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a
   switch files every 10 s instead of 2 s.
 - The profiler shows the pause-menu hook installation (`PmInstall`) at training entry.
 - Element-name cache slots spread over the whole table (ZenMode).
+
+### SF6 Color Mod 0.23.1
+- `addMaterialEffect` is hooked once instead of twice when the Drive engine and the Drive body repaint target the
+  same method (one REFramework dispatch less per call, a few hundred to 1,700 calls a second in fights).
+- The Drive effect parameter list is read without a heap allocation per call; the battle action fields are
+  looked up once instead of by name every frame.
+- In a fight with none of the mod's screens open, the gamepad / keyboard guide mode and the selection key are
+  checked every 30 frames instead of every frame; any screen opening brings back every frame.
 
 ### SF6 Recording Manager 2.2.1
 - The status file is rebuilt every 10 s instead of 2 s (each rebuild was a 0.4-1.15 ms hitch, in every mode).

@@ -46,6 +46,8 @@ void perf_context(bool in_fight) {
 
 }  // namespace
 
+bool in_fight() { return g_in_fight; }
+
 void set_side_hint(int side, int fighter) {
     if (side != 1 && side != 2) return;
     std::lock_guard<std::mutex> lk(g_mx);

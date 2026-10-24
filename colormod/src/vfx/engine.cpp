@@ -38,6 +38,7 @@
 #include "../write_journal.hpp"
 #include "memguard.hpp"
 #include "engine.hpp"
+#include "body.hpp"
 #include "mech.hpp"
 #include "tick.hpp"
 
@@ -557,10 +558,12 @@ int pre_add_material(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
     const int64_t t0 = perf::begin();
     const int r = pre_add_material_seh(argc, argv);
     perf::end(perf::HookAddMaterial, t0);
+    vfx::body::on_add_material(argc, argv);      // the body hook rides on this one (same order as the two hooks had: engine, then body)
     return r;
 }
 void post_nop(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
+const void* g_add_hooked = nullptr;
 bool install_hooks() {
     auto* td = reapi().tdb()->find_type("app.vfx.VfxActorEffectManager");
     if (!td) { err("type app.vfx.VfxActorEffectManager introuvable"); return false; }
@@ -579,7 +582,7 @@ bool install_hooks() {
     }
     auto* add = td->find_method("addMaterialEffect");
     bool ok_add = false;
-    if (add && add->get_function_raw()) { ok_add = add->add_hook(pre_add_material, post_nop, false) != 0; if (ok_add) perf::journal_hooked("VfxActorEffectManager.addMaterialEffect (HookAddMaterial)", add); }
+    if (add && add->get_function_raw()) { ok_add = add->add_hook(pre_add_material, post_nop, false) != 0; if (ok_add) g_add_hooked = add; if (ok_add) perf::journal_hooked("VfxActorEffectManager.addMaterialEffect (HookAddMaterial)", add); }
     info("hooks: requestEffect x%d, addMaterialEffect %s", n, ok_add ? "ok" : "absent");
     return n > 0;
 }
@@ -1008,6 +1011,7 @@ bool install() {
 }
 
 bool ready() { return g_installed; }
+const void* add_hooked() { return g_add_hooked; }
 
 void relay(const std::string& text) {
     std::lock_guard<std::mutex> lk(g_io_mx);

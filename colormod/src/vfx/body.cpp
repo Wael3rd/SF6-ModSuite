@@ -8,6 +8,7 @@
 #include <cwchar>
 #include <map>
 #include <mutex>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include "../perf.hpp"
 #include "../perf_hook.hpp"
 #include "data.hpp"
+#include "engine.hpp"
 #include "mech.hpp"
 
 namespace vfx::body {
@@ -170,11 +172,13 @@ int pre_req_inner(void** argv) {
     auto it = g_list_m.find(td);
     if (it == g_list_m.end()) it = g_list_m.emplace(td, ListM{ ll::find_method_noargs(td, "get_Count"), ll::find_method_full(td, "get_Item(System.Int32)") }).first;
     if (!it->second.count || !it->second.item) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    auto rc = it->second.count->invoke(lst, std::vector<void*>{});
+    // span overloads over stack slots: same invoke call, no vector allocation per call
+    auto rc = it->second.count->invoke(lst, std::span<void*>{});
     if (rc.exception_thrown) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int32_t n = (int32_t)rc.dword;
     for (int32_t i = 0; i < n && i < 64; ++i) {
-        auto ri = it->second.item->invoke(lst, std::vector<void*>{ ll::arg_i32(i) });
+        void* slot[1] = { ll::arg_i32(i) };
+        auto ri = it->second.item->invoke(lst, std::span<void*>{ slot });
         if (!ri.exception_thrown && ri.ptr) on_param(side, m, reinterpret_cast<MO*>(ri.ptr), dbg);
     }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -215,8 +219,14 @@ int pre_req(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned lo
     return r;
 }
 void post_nop(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
+bool g_add_delegated = false;               // addMaterialEffect is dispatched by vfx::engine's hook (one REFramework dispatch)
 
 }  // namespace
+
+void on_add_material(int argc, void** argv) {
+    if (!g_add_delegated) return;
+    pre_add(argc, argv, nullptr, 0);
+}
 
 bool install(bool write) {
     auto* td = API::get()->tdb()->find_type("app.vfx.VfxActorEffectManager");
@@ -225,7 +235,8 @@ bool install(bool write) {
     for (auto* m : td->get_methods()) {
         if (!m->get_function_raw()) continue;
         const std::string name = m->get_name();
-        if (name == "addMaterialEffect" && n_add == 0) { if (m->add_hook(pre_add, post_nop, false)) { ++n_add; perf::journal_hooked("VfxActorEffectManager.addMaterialEffect (HookBodyAddMaterial)", m); } }   // the Lua's get_method: one
+        if (name == "addMaterialEffect" && n_add == 0 && vfx::engine::add_hooked() == static_cast<const void*>(m)) { g_add_delegated = true; ++n_add; cmn::journal("vfx body: addMaterialEffect rides on the engine hook (one dispatch)"); }
+        else if (name == "addMaterialEffect" && n_add == 0) { if (m->add_hook(pre_add, post_nop, false)) { ++n_add; perf::journal_hooked("VfxActorEffectManager.addMaterialEffect (HookBodyAddMaterial)", m); } }   // the Lua's get_method: one
         else if (name == "requestMaterialEffect") { if (m->add_hook(pre_req, post_nop, false)) { ++n_req; perf::journal_hooked("VfxActorEffectManager.requestMaterialEffect (HookBodyRequestMaterial)", m); } }
     }
     g_write = write;

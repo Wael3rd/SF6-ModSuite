@@ -14,6 +14,7 @@
 namespace vfx::body {
 
 bool install(bool write);                                // hooks; write = owner "vfx_body" native
+void on_add_material(int argc, void** argv);            // called by the engine's addMaterialEffect hook when it carries ours
 bool ready();                                            // hooks in place and not switched off by faults
 void set_dr(const int64_t c[4]);                         // parry / rush colour, P1 then P2 (-1 = none)
 void set_di(const int64_t c[8]);                         // impact c1 c2, reversal c1 c2, P1 then P2 (-1 = none)

@@ -8,6 +8,7 @@ namespace vfx::engine {
 
 bool install();                              // hooks + update callbacks; false = refused (MemWriter loaded, API missing)
 bool ready();                                // installed
+const void* add_hooked();                    // the addMaterialEffect method our hook is on (nullptr = none); vfx::body rides on it only for that same method
 void relay(const std::string& text);         // was _drivecolors.txt (re-read at the next Update / LateUpdate)
 void relay_native(const std::string& text);  // the same from vfx::tick (owner vfx): no manager reset on an empty relay
 void queue(const std::string& text);         // was _memwrite.txt (appended; applied at the next Update / LateUpdate)
