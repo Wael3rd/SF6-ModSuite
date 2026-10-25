@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Slots Loader
+- A hole in the row of patch paks (another tool removed `re_chunk_000.pak.patch_002.pak` and left 003 and above) no
+  longer hides every pak above it, the costume pak included: each missing number below a pak of another mod gets a
+  small marker-only pak, deleted again once no such pak sits above it. The log says `filled a hole in the patch pak
+  row: patch_002 (marker only)` (fork 1.10.1).
+- A patch pak the loader cannot read (locked by another program) counts as another mod's pak: the costume pak goes
+  above it and never takes, rewrites or deletes it (it used to be ignored, and the costume pak could end up below it)
+  (fork 1.10.1).
+- `variants.json` deleted while the costume pak is up to date (the Slotsloader Manager shows no variants) is written
+  again at the next launch: the mods are scanned again and the pak in place is kept. The log says `variants.json
+  missing: rebuilding` (fork 1.10.0).
+- Structural files built from the game: a version scene that is in the game but cannot be read now makes the loader
+  use its shipped copies (it was skipped, and the fighters it brings lost their slots); a fighter of the costume table
+  that is in no fighter scene gets no slot records and its mods are not installed, with a WARN (they got slots that
+  could not load); version scenes are looked for up to `ver_09_9900` (`ver_02_1900` before), by hundreds (fork 1.9.7).
+
 ## 1.19.1 (2026-10-24) — SF6 Mod Suite
 
 | Package | Version | |

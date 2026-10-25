@@ -999,17 +999,22 @@ static bool delete_with_retry(const std::string& path) {
 // rebuild the costumes); only its number is kept, since ours goes above it.
 // Ours is split in real paks and marker-only placeholders (see retire_pak): a placeholder is never
 // the pak that holds the costumes. A stage placeholder is not a stage pak (stage_pak_num ignores it).
+// A pak that cannot be read (locked by another program) is still in the row: it goes in `unreadable`,
+// counted as another mod's (ours goes above it, never takes or deletes it), as the stage loader and
+// SF6_SlotsClean count it. From ZZtaii's Slotsloader fork 1.10.1, MIT.
 static void classify_patch_paks(const std::string& pak_dir,
                                 std::vector<PakInfo>& our_paks,
                                 std::vector<PakInfo>& our_stubs,
                                 std::vector<PakInfo>& mod_paks,
-                                int& stage_pak_num) {
+                                int& stage_pak_num,
+                                std::vector<PakInfo>& unreadable) {
     stage_pak_num = 0;
     WIN32_FIND_DATAA fd;
     std::string pattern = pak_dir + "\\re_chunk_000.pak.patch_*.pak";
     HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;   // not a pak (the stage loader skips it too)
         std::string fn = fd.cFileName;
         // Extract number
         auto ps = fn.find("patch_");
@@ -1019,7 +1024,7 @@ static void classify_patch_paks(const std::string& pak_dir,
         // Ours (costume marker), the stage slots' or a mod's: common/pak.cpp, shared with SF6_SlotsClean
         uint32_t entries = 0;
         PatchPakKind kind = classify_patch_pak(full.c_str(), &entries);
-        if (kind == PatchPakKind::Unreadable) continue;
+        if (kind == PatchPakKind::Unreadable) { unreadable.push_back({num, full}); continue; }
         if (kind == PatchPakKind::Stage) { if (entries != 1) stage_pak_num = std::max(stage_pak_num, num); continue; }
         if (kind == PatchPakKind::Costume) (entries == 1 ? our_stubs : our_paks).push_back({num, full});
         else mod_paks.push_back({num, full});
@@ -1071,6 +1076,40 @@ static void drop_stale_stubs(const std::vector<PakInfo>& stubs, int top_foreign)
     for (auto& st : stubs) {
         if (st.num <= top_foreign) continue;
         if (delete_with_retry(st.path)) logf("  removed placeholder: %s\n", st.path.c_str());
+    }
+}
+
+// The game stops reading the row at its first missing number: a hole another tool left (a pak removed
+// in the middle of the row) hides every pak above it, ours included. Each missing number below a pak
+// that stays (top_foreign) gets our marker-only placeholder, which both loaders keep while a pak of
+// another mod sits above it and delete once none does (drop_stale_stubs, the stage loader's run). A
+// hole with only our paks above it is left: ours go to top_foreign + 1 and the rest above is removed.
+// The placeholder is renamed from <pak>.tmp, never written over a pak that took the number meanwhile.
+// From ZZtaii's Slotsloader fork 1.10.1, MIT.
+static void fill_patch_row_holes(const std::string& pak_dir, int top_foreign) {
+    if (top_foreign <= 1) return;
+    std::set<int> present;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((pak_dir + "\\re_chunk_000.pak.patch_*.pak").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::string fn = fd.cFileName;
+        auto ps = fn.find("patch_");
+        if (ps != std::string::npos) present.insert(atoi(fn.c_str() + ps + 6));
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    for (int n = 1; n < top_foreign; n++) {
+        if (present.count(n)) continue;
+        char name[64];
+        snprintf(name, sizeof name, "\\re_chunk_000.pak.patch_%03d.pak", n);
+        const std::string path = pak_dir + name, tmp = path + ".tmp";
+        if (write_marker_pak(tmp.c_str(), PatchPakKind::Costume) && MoveFileExA(tmp.c_str(), path.c_str(), 0)) {
+            logf("  filled a hole in the patch pak row: patch_%03d (marker only)\n", n);
+        } else {
+            DeleteFileA(tmp.c_str());
+            logf("  WARN: cannot fill the hole in the patch pak row at patch_%03d: the paks above it may not load\n", n);
+        }
     }
 }
 
@@ -2304,10 +2343,15 @@ static std::vector<SlotInfo> assign_slots(
                 }
             }
             auto* sr = meta.find(mc.fighter, si.new_costume_no);
-            if (sr) {
-                si.record_id = sr->record_id;
-                si.manage_id = sr->manage_id;
+            if (!sr) {
+                // No slot record (a fighter in no fighter scene of the game, or one the shipped tables do not know):
+                // the slot would have neither a table record nor a scene folder. From ZZtaii's Slotsloader fork 1.9.7, MIT.
+                printf("  WARN: %s has no reserved slot record for costume %d, %s not installed\n",
+                       mc.fighter_dir.c_str(), si.new_costume_no, mod_label(mod_id).c_str());
+                continue;
             }
+            si.record_id = sr->record_id;
+            si.manage_id = sr->manage_id;
             used_run[mc.fighter].insert(si.new_costume_no);
             slots.push_back(si);
             new_reg.push_back({si.mod_id, si.fighter_dir, si.original_folder,
@@ -10360,7 +10404,7 @@ static void save_pak_sources(const std::string& file, const std::string& header,
 // made before the update, hid Arjun and C. Viper's Outfit 4). Same output as make_static_structural.py
 // (checked byte for byte by costumes/tools/structural_test). The shipped copies stay as the fallback.
 
-static const char* VER_SCENE_FMT = "natives/stm/product/flow/version_update/ver_02_%04d/esf.scn.20";
+static const char* VER_SCENE_FMT = "natives/stm/product/flow/version_update/ver_%02d_%04d/esf.scn.20";
 static const uint32_t SLOT_RECORD_ID_BASE = 5000;
 static const uint32_t SLOT_SORT_NO_BASE = 101;
 static const int SLOTS_PER_FIGHTER = 100;   // costume_slot_index() blocks
@@ -10413,13 +10457,17 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
     st.files.push_back({ ESF_ROOT, std::move(root) });
 
     // Version scenes: a fighter goes in the first one that has its folders (a later one can add an outfit
-    // to an older fighter: ver_02_0500 has C. Viper's Outfit 4, she stays in ver_02_0300)
+    // to an older fighter: ver_02_0500 has C. Viper's Outfit 4, she stays in ver_02_0300). Probed in game
+    // version order, ver_02_0300 to ver_09_9900 by hundreds (the seasons' scenes: 0300, 0400, 0500): 797
+    // lookups, at a build only. A scene there that cannot be read fails the whole build (the shipped
+    // copies are used): left out, its fighters would get no slot. From ZZtaii's Slotsloader fork 1.9.7, MIT.
     std::set<std::string> in_scene(root_dirs.begin(), root_dirs.end());
-    for (int num = 300; num < 2000; num += 100) {
+    for (int ver = 20300; ver <= 99900; ver += 100) {   // ver_MM_mmmm = MM * 10000 + mmmm
         char p[128];
-        snprintf(p, sizeof p, VER_SCENE_FMT, num);
+        snprintf(p, sizeof p, VER_SCENE_FMT, ver / 10000, ver % 10000);
+        if (!base_pak.find(pak_path_hash(std::string_view(p)))) continue;
         std::vector<uint8_t> scn;
-        if (!load(p, scn)) continue;
+        if (!load(p, scn)) return fail(std::string(p) + ": cannot be read");
         std::vector<std::string> dirs;
         for (auto& [dir, costumes] : scene_costume_folders(scn)) {
             if (seen.count(dir)) continue;
@@ -10433,7 +10481,7 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
         st.files.push_back({ p, std::move(scn) });
     }
     for (int f : fighters)
-        if (!in_scene.count(dir_of(f))) logf("  WARN: fighter %d is in the costume table but in no fighter scene: its slots cannot load\n", f);
+        if (!in_scene.count(dir_of(f))) logf("  WARN: fighter %d is in the costume table but in no fighter scene: no slots for it\n", f);
 
     // Costume table: 100 records per fighter, ids and sort numbers by fighter block (costume_slot_index)
     std::vector<std::vector<uint8_t>> guids(SLOTS_PER_FIGHTER);
@@ -10446,6 +10494,7 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
     }
     std::vector<CostumeSlotRecord> add;
     for (int f : fighters) {
+        if (!in_scene.count(dir_of(f))) continue;   // no folder to load its slots from: no record either (fork 1.9.7)
         const int idx = costume_slot_index(f);
         for (int so = 0; so < SLOTS_PER_FIGHTER; so++) {
             const uint32_t id = SLOT_RECORD_ID_BASE + (uint32_t)(idx * SLOTS_PER_FIGHTER + so);
@@ -10633,15 +10682,20 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // 3. Classify patch paks
     logf("Scanning patch paks...\n");
-    std::vector<PakInfo> our_paks, our_stubs, mod_paks;
+    std::vector<PakInfo> our_paks, our_stubs, mod_paks, unreadable_paks;
     int stage_pak_num = 0;
-    classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num);
+    classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num, unreadable_paks);
     drop_temp_paks(pak_dir);
     int top_foreign = stage_pak_num;   // our pak goes above these
     for (auto& pi : mod_paks) top_foreign = std::max(top_foreign, pi.num);
+    for (auto& pi : unreadable_paks) top_foreign = std::max(top_foreign, pi.num);
     drop_stale_stubs(our_stubs, top_foreign);
     if (stage_pak_num)
         logf("  patch_%03d: stage slots pak, not a costume mod (the costume pak goes above it)\n", stage_pak_num);
+    for (auto& pi : unreadable_paks)
+        logf("  patch_%03d: cannot be read (in use by another program?), kept as another mod's pak (the costume pak goes above it)\n",
+             pi.num);
+    fill_patch_row_holes(pak_dir, top_foreign);
 
     // 3a. Check if costume_mods folder exists (quick existence check)
     std::string costume_mods_dir = game_dir + "\\reframework\\costume_mods";
@@ -10785,17 +10839,23 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         const size_t mt = reg_check.fingerprint.rfind(";meta=");
         const bool meta_same = mt != std::string::npos && reg_check.fingerprint.compare(mt, std::string::npos, meta_tag) == 0;
         if (mt != std::string::npos) reg_check.fingerprint.erase(mt);
-        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && !meta_same) {
+        // variants.json (read by the Slotsloader Manager) is written by a build only: missing, the same mods are
+        // built again like for another meta id, the pak in place kept. From ZZtaii's Slotsloader fork 1.10.0, MIT.
+        const bool variants_missing = GetFileAttributesA(variants_path.c_str()) == INVALID_FILE_ATTRIBUTES;
+        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && meta_same && variants_missing)
+            logf("  variants.json missing: rebuilding\n");
+        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && (!meta_same || variants_missing)) {
             uint32_t target_entries = 0;
             if (our_paks.size() == 1 && _stricmp(our_paks[0].path.c_str(), target_path.c_str()) == 0
                 && classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
                 keep_pak = true;
                 keep_entries = target_entries;
-                logf("  same mods, same pak (%s), files beside it from another loader version: they are written again\n",
-                     LOADER_PAK_ID);
+                if (!meta_same)
+                    logf("  same mods, same pak (%s), files beside it from another loader version: they are written again\n",
+                         LOADER_PAK_ID);
             }
         }
-        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && meta_same) {
+        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && meta_same && !variants_missing) {
             // Check our pak exists (the real one: a marker-only placeholder holds no costume)
             uint32_t target_entries = 0;
             if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {

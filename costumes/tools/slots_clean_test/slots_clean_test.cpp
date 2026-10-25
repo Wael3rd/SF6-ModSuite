@@ -298,6 +298,13 @@ static void expect_row(const char* step, const char* want) {
     if (got != want) { printf("    expected: %s\n", want); check(false, step); }
 }
 
+// The last run's output (costume_loader.exe prints its log) has `text`, or has not
+static void expect_said(const char* which, const char* text, bool want = true) {
+    const bool got = has(slurp(g_work + "\\row_" + which + ".txt"), text);
+    if (got != want) printf("    %s output %s \"%s\"\n", which, want ? "lacks" : "has", text);
+    check(got == want, text);
+}
+
 static int run_row_test(const char* build, const char* work, const char* game, const char* mod_archive) {
     g_build = build; g_work = work; g_base_pak = std::string(game) + "\\re_chunk_000.pak";
     g_row_game = g_work + "\\row\\game";
@@ -328,6 +335,9 @@ static int run_row_test(const char* build, const char* work, const char* game, c
     foreign(3);
     run_loader("costume");  expect_row("foreign 003 added, loader run", "1M 2c 3M 4C");
     run_loader("costume");  expect_row("loader run again (up to date)", "1M 2c 3M 4C");
+    expect_said("costume", "Up to date (fingerprint match");   // nothing filled, nothing rebuilt
+    expect_said("costume", "filled a hole", false);
+    expect_said("costume", "variants.json missing", false);
     foreign(5);
     run_loader("costume");  expect_row("foreign 005 added, loader run", "1M 2c 3M 4c 5M 6C");
     drop(5); drop(3);
@@ -371,6 +381,76 @@ static int run_row_test(const char* build, const char* work, const char* game, c
     drop(4);
     run_loader("stage"); run_loader("costume");
     expect_row("foreign 004 removed", "1M 2S 3C");
+
+    printf("[12] a pak removed in the middle of the row by another tool: the hole gets a placeholder\n");
+    foreign(4); foreign(5);
+    run_loader("stage"); run_loader("costume");
+    expect_row("foreign 004 and 005 added", "1M 2s 3c 4M 5M 6S 7C");
+    drop(4);
+    run_loader("stage"); run_loader("costume");
+    expect_row("foreign 004 removed: hole filled", "1M 2s 3c 4c 5M 6S 7C");
+    expect_said("costume", "filled a hole in the patch pak row: patch_004 (marker only)");
+    run_loader("stage"); run_loader("costume");
+    expect_row("both run again: nothing changes", "1M 2s 3c 4c 5M 6S 7C");
+    expect_said("costume", "Up to date (fingerprint match");
+    expect_said("costume", "filled a hole", false);
+    drop(5);
+    run_loader("stage"); run_loader("costume");
+    expect_row("foreign 005 removed: placeholders go", "1M 2S 3C");
+    drop(2);   // only ours above the hole: not filled, the costume pak moves down
+    run_loader("costume");  expect_row("stage pak removed, costume run", "1M 2C");
+    expect_said("costume", "filled a hole", false);
+    run_loader("stage"); run_loader("costume");
+    expect_row("stage then costume", "1M 2S 3C");
+
+    printf("[13] a pak that cannot be read (locked) counts as another mod's\n");
+    foreign(4);
+    HANDLE lock = CreateFileA((g_row_game + "\\" + pak_name(4)).c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    check(lock != INVALID_HANDLE_VALUE, "pak 004 locked");
+    run_loader("costume");  expect_row("locked 004 above ours, costume run", "1M 2S 3c 4M 5C");
+    expect_said("costume", "patch_004: cannot be read");
+    CloseHandle(lock);
+    check(classify_patch_pak((g_row_game + "\\" + pak_name(4)).c_str()) == PatchPakKind::Mod, "locked pak left as it was");
+    run_loader("costume");  expect_row("unlocked, costume run", "1M 2S 3c 4M 5C");
+    drop(4);
+    run_loader("stage"); run_loader("costume");
+    expect_row("foreign 004 removed", "1M 2S 3C");
+
+    printf("[14] variants.json deleted while the pak is up to date\n");
+    const std::string variants = g_row_game + "\\reframework\\data\\SF6_Costumes_Data\\variants.json";
+    const std::string pak_before = slurp(g_row_game + "\\" + pak_name(3));
+    DeleteFileA(variants.c_str());
+    run_loader("costume");  expect_row("costume run", "1M 2S 3C");
+    expect_said("costume", "variants.json missing: rebuilding");
+    expect_said("costume", "the pak this build makes");   // kept, not written again
+    check(exists(variants), "variants.json written again");
+    check(!pak_before.empty() && slurp(g_row_game + "\\" + pak_name(3)) == pak_before, "costume pak unchanged");
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+
+    printf("[15] structural files from the game: version scenes past ver_02, one that cannot be read, a fighter in none\n");
+    const std::string dlc = g_row_game + "\\dlc\\test.pak";
+    {
+        make_dirs(dlc);
+        PakWriter w;   // an empty entry: found in the paks, read as nothing
+        w.add_uncompressed(pak_path_hash(std::string_view("natives/stm/product/flow/version_update/ver_03_0100/esf.scn.20")), {});
+        w.write(dlc.c_str());
+    }
+    run_loader("costume");  expect_row("costume run", "1M 2S 3C");
+    expect_said("costume", "structural files taken from the shipped copies (natives/stm/product/flow/version_update/ver_03_0100/esf.scn.20: cannot be read)");
+    DeleteFileA(dlc.c_str());
+    const std::string registry = g_row_game + "\\reframework\\data\\SF6_Costumes_Data\\registry.json";
+    const std::string off = g_work + "\\turned_off.txt";
+    put(off, "natives/stm/product/flow/version_update/ver_02_0500/esf.scn.20\n");
+    SetEnvironmentVariableA("SF6_COSTUME_TEST_TURNED_OFF", off.c_str());
+    DeleteFileA(registry.c_str());   // same mods: forces a build
+    run_loader("costume");  expect_row("ver_02_0500 turned off, costume run", "1M 2S 3C");
+    expect_said("costume", "fighter 34 is in the costume table but in no fighter scene: no slots for it");
+    expect_said("costume", "structural files built from the game");
+    SetEnvironmentVariableA("SF6_COSTUME_TEST_TURNED_OFF", nullptr);
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("back to normal, costume run", "1M 2S 3C");
+    expect_said("costume", "structural files built from the game");
+    expect_said("costume", "no fighter scene", false);
 
     printf("\n%d checks, %d failed\n", g_checks, g_fail);
     printf(g_fail ? "FAIL\n" : "PASS\n");
