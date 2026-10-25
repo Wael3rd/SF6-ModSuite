@@ -20,8 +20,8 @@ game's UI directly.
 
 ## Timer resolution
 
-At start the Core asks Windows for a 1 ms timer (`timeBeginPeriod(1)`), which the game normally does itself; without it
-some sessions ran at 45 fps instead of 60. An empty `reframework/data/sf6core/timer_off.txt` turns this off.
+At start the Core asks Windows for a 1 ms timer (`timeBeginPeriod(1)`), as the game normally does itself. An empty
+`reframework/data/sf6core/timer_off.txt` turns this off.
 
 ## For mod authors
 

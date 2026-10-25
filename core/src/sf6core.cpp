@@ -2688,9 +2688,9 @@ void reframework_plugin_required_version(REFrameworkPluginVersion* v) {
     v->game_name = nullptr;
 }
 
-// The game's 60 fps limiter sleeps in timer ticks: without a 1 ms request (the game makes it itself in
-// most sessions) the tick is 15.6 ms and the game runs at 45 fps. Once per process; no timeEndPeriod,
-// Windows releases the request at process exit.
+// The 1 ms timer the game normally asks for itself (sessions stuck at 45 fps lacked the game's request,
+// but this request alone does not bring 60 back). Once per process; no timeEndPeriod, Windows releases
+// the request at process exit.
 static void request_timer_resolution() {
     static std::atomic<bool> s_done{false};
     if (s_done.exchange(true)) return;

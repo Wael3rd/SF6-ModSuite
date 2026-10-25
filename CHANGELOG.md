@@ -6,7 +6,7 @@
 |---|---|---|
 | SF6 Slots Loader | 1.16.1 | lighter stage-variant redirection, fewer hooks in fights |
 | SF6 Color Mod | 0.23.1 | fewer hook dispatches and allocations in fights |
-| SF6 Native Core | 0.9.3 | no more sessions stuck at 45 fps; less work on the game thread every frame |
+| SF6 Native Core | 0.9.3 | asks Windows for a 1 ms timer at start; less work on the game thread every frame |
 | SF6 Recording Manager | 2.2.1 | no more small hitches every 2 s; lighter training entry |
 
 Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.0, SF6 Color Mod 0.23.0, SF6 Native Core
@@ -32,10 +32,8 @@ work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a
 - The fighter-profile hooks no longer take a lock on every call while Battle Settings is closed.
 
 ### SF6 Native Core 0.9.3 (October 25)
-- **No more sessions stuck at 45 fps.** In some sessions the game never asked Windows for its 1 ms timer, so its
-  60 fps limiter waited in 15.6 ms steps and the whole session ran at 45 fps, menus included. The Core now asks for it
-  at start (what the game normally does itself; asking twice changes nothing). An empty
-  `reframework\data\sf6core\timer_off.txt` turns this off; `sf6core.log` says which.
+- The Core asks Windows for a 1 ms timer at start, as the game normally does itself (asking twice changes nothing).
+  An empty `reframework\data\sf6core\timer_off.txt` turns this off; `sf6core.log` says which.
 - Includes everything of 0.9.2 below.
 
 ### SF6 Native Core 0.9.2
@@ -87,6 +85,9 @@ work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a
 - Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
   run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
   Fluffy's list names one of its paks.
+- Some game sessions run at 45 fps instead of 60 from the start, menus included; closing and restarting the game
+  brings 60 back. Seen so far only with the Color Mod installed; under investigation (Native Core 0.9.3's 1 ms timer
+  does not fix it).
 
 
 ## 1.19.0 (2026-10-24) — SF6 Mod Suite
