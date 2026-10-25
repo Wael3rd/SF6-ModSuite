@@ -20,6 +20,8 @@
 #include "slots_ui.hpp"
 #include "rto.hpp"
 #include "ownership.hpp"
+#include "manager_marker.hpp"
+#include "../../common/manager_mode.hpp"
 #include "carrier.hpp"
 #include "perf.hpp"
 #include "wjournal.hpp"
@@ -58,6 +60,31 @@ bool is_slot(int fid, int cos) {
 
 // Whether the outfit each slot is made from is the player's, as the game answered (ownership.hpp)
 ownership::Book g_book;
+
+// Manager mode (common/manager_mode.hpp): the Slotsloader Manager installed this loader. The same answer as the
+// loader's, from the same list (manager_installs.json) and this plugin's size on disk.
+bool installed_by_manager() {
+    const std::string dir = std::string(manager_mode::kRecordDir) + "\\";
+    Json j;
+    if (!json_parse(read_file((dir + manager_mode::kRecordFile).c_str()), j) || j.kind != Json::Object) return false;
+    std::vector<manager_mode::ListedFile> files;
+    if (const Json* mods = j.get("mods"); mods && mods->kind == Json::Array)
+        for (auto& m : mods->arr) {
+            const Json* en = m.get("enabled");
+            const bool on = !(en && en->kind == Json::Bool && !en->b);
+            if (const Json* fs = m.get("files"); fs && fs->kind == Json::Array)
+                for (auto& f : fs->arr) {
+                    const Json* p = f.get("path");
+                    const Json* sz = f.get("size");
+                    files.push_back({ on, p ? p->as_str() : std::string(), sz && sz->kind == Json::Number && sz->num >= 0 ? (long long)sz->num : -1 });
+                }
+        }
+    const Json* fmt = j.get("format");
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    const long long size = GetFileAttributesExA("reframework\\plugins\\SF6_CostumeSlotsNative.dll", GetFileExInfoStandard, &fa)
+        ? (long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow) : -1;
+    return manager_mode::installed_by_manager(fmt ? fmt->as_str() : std::string(), files, size);
+}
 
 // NSFW outfits (the registry's "nsfw" slots): shown only while settings.json's "display_nsfw" is true (off by
 // default, also when the file is missing). Read at start and again, when the file changed, at every screen that
@@ -1556,6 +1583,13 @@ void init() {
     read_nsfw_setting("start");
     load_state();
     for (int fid : g_fighters) g_f[fid];
+    // Manager mode: the ownership rules of the Manager's Slotsloader, read once (they stay until the game is closed)
+    if (installed_by_manager()) {
+        const bool check = !marker::opt_out_present(L"reframework\\data\\SF6_CostumeSlots_data");
+        g_book.set_manager_rules(check);
+        logf("costumes: Manager mode (installed by the Slotsloader Manager): Outfit 1 and DriveTech slots always shown%s",
+             check ? "" : ", ownership filter inactive");
+    }
 }
 
 void install_hooks() {

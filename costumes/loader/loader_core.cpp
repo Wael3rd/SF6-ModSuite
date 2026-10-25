@@ -13,6 +13,9 @@
 #include "loader_core.hpp"
 #include "archive.hpp"
 #include "nsfw_keywords.hpp"
+#include "manager_mode.hpp"
+#include "swap_repairs.hpp"
+#include <climits>
 
 #include <cstdio>
 #include <cstdlib>
@@ -137,7 +140,7 @@ static const char* LOADER_META_ID = "2026-10-20-fastpak";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
 // scan, variant_choices.json honoured at launch, new outfits numbered after the highest one in use.
-static const int MANAGER_CONTRACT = 1;
+static const int MANAGER_CONTRACT = 2;   // 2: Manager mode (common/manager_mode.hpp)
 
 // ============================================================================
 // Utility
@@ -739,6 +742,50 @@ static std::vector<uint8_t> g_cmd_reference;
 static std::unordered_set<std::string> g_tex_repaired_files, g_tex_bad_files;
 static std::unordered_set<std::string> g_layout_upgraded_files;
 
+// Character-swap repairs (swap_repairs.hpp, from ZZtaii's Slotsloader fork 1.10.4, MIT): only in Manager mode,
+// while the Manager's setting is on (an empty swap_repairs.txt in SF6_Costumes_Data). Off, every mod file is
+// read exactly as without them. Donors come from the official base / DLC reader only, never from generated or mod
+// patch paks or loose files.
+static PakReader* g_swap_official = nullptr;
+static std::unordered_map<std::string, std::vector<uint8_t>> g_swap_donors;
+static std::unordered_set<std::string> g_swap_reported;
+static bool g_swap_repairs = false;
+static std::string swap_sha256(const std::vector<uint8_t>& data) {
+    BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_HASH_HANDLE hash = nullptr;
+    uint8_t digest[32]; std::string out;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) return out;
+    if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) >= 0) {
+        if (data.size() <= ULONG_MAX && BCryptHashData(hash, (PUCHAR)data.data(), (ULONG)data.size(), 0) >= 0
+            && BCryptFinishHash(hash, digest, sizeof digest, 0) >= 0) {
+            const char* hex = "0123456789abcdef";
+            for (uint8_t b : digest) { out += hex[b >> 4]; out += hex[b & 15]; }
+        }
+        BCryptDestroyHash(hash);
+    }
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return out;
+}
+static std::vector<uint8_t> swap_official(const std::string& path) {
+    auto found = g_swap_donors.find(path);
+    if (found != g_swap_donors.end()) return found->second;
+    std::vector<uint8_t> data;
+    if (g_swap_official) {
+        try { if (auto* e = g_swap_official->find(pak_path_hash(std::string_view(path)))) data = g_swap_official->read(*e); }
+        catch (const std::exception&) { data.clear(); }
+    }
+    g_swap_donors[path] = data;
+    return data;
+}
+static size_t repair_mod_swap(std::vector<uint8_t>& data, const std::string& path, const std::string& source, bool* known_user = nullptr) {
+    if (known_user) *known_user = false;
+    if (!g_swap_repairs || path.empty()) return 0;
+    SwapRepairResult result = repair_swap_file(data, path, swap_official, swap_sha256);
+    if (known_user) *known_user = str_ends_with(path, ".user.2") && (result.state == SwapRepairState::Repaired || result.reason == "documented swap USER already current");
+    if (result.state != SwapRepairState::Unchanged && g_swap_reported.insert(source + "\n" + result.reason).second)
+        printf("      %sswap repair: %s (%s)\n", result.state == SwapRepairState::Refused ? "WARN " : "", result.reason.c_str(), source.c_str());
+    return result.state == SwapRepairState::Repaired ? result.changes : 0;
+}
+
 static const char* type_label(uint32_t t) {
     switch (t) {
         case 0x9E32F1F4: return "app.CostumeMaterialData.MaterialData";
@@ -748,6 +795,7 @@ static const char* type_label(uint32_t t) {
 }
 
 static void load_current_crcs(PakReader& base_pak) {
+    g_swap_official = &base_pak; g_swap_donors.clear(); g_swap_reported.clear();
     g_current_crc.clear(); g_crc_upgraded_files.clear(); g_crc_stale_files.clear();
     g_cmd_reference.clear(); g_layout_upgraded_files.clear();
     g_tex_repaired_files.clear(); g_tex_bad_files.clear();
@@ -813,6 +861,7 @@ struct ModFileRef {
     PakReader* pak = nullptr;
     uint64_t hash = 0;
     std::string disk_path;  // non-empty -> disk source
+    std::string pak_path;   // the file's game path ("natives/stm/..."), for the swap repairs; may be empty
 
     bool is_disk() const { return !disk_path.empty(); }
 
@@ -823,8 +872,9 @@ struct ModFileRef {
     }
 
     // Read decompressed data (from pak or disk). User files come back with current type signatures.
-    std::vector<uint8_t> read_data() const {
+    std::vector<uint8_t> read_data(bool* known_swap_user = nullptr) const {
         auto d = disk_path.empty() ? pak->read(*pak->find(hash)) : read_file_long(disk_path);
+        repair_mod_swap(d, pak_path, source(), known_swap_user);
         upgrade_mod_user(d, source());
         return d;
     }
@@ -840,9 +890,12 @@ struct ModFileRef {
             return;
         }
         auto* e = pak->find(hash);
-        if (e->decompressed_size <= (1 << 20) || (e->attributes & 0xFF) == 0) {
+        if (e->decompressed_size <= (1 << 20) || (e->attributes & 0xFF) == 0
+            || (g_swap_repairs && (str_ends_with(pak_path, ".scn.20") || str_ends_with(pak_path, ".user.2")))) {
             auto d = pak->read(*e);
-            if (upgrade_mod_user(d, source()) > 0) {
+            size_t fixed = repair_mod_swap(d, pak_path, source());
+            fixed += upgrade_mod_user(d, source());
+            if (fixed > 0) {
                 out = std::move(d); attrib = 0; dsize = (int64_t)out.size();
                 return;
             }
@@ -1163,7 +1216,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
         auto it = inv.hash_to_paths.find(h);
         if (it != inv.hash_to_paths.end()) {
             for (auto& path : it->second)
-                known[path] = {&mod_pak, h};
+                known[path] = {&mod_pak, h, {}, path};
         } else {
             unknown_set.insert(h);
         }
@@ -1186,7 +1239,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
                     uint64_t oh = pak_path_hash(std::string_view(old_path));
                     if (unknown_set.count(oh)) {
                         // Found! Register under the CURRENT-suffix path
-                        known[vp] = {&mod_pak, oh};
+                        known[vp] = {&mod_pak, oh, {}, vp};
                         upgraded_tex[oh] = vp; // remember for renaming
                         unknown_set.erase(oh);
                         upgraded++;
@@ -1201,11 +1254,17 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
     int from_scene = 0;
     for (auto& [path, mf] : std::unordered_map<std::string,ModFileRef>(known)) {
         if (!is_costume_scene(str_lower(path))) continue;
-        for (auto& r : scene_model_refs(mf.read_data())) {
+        const auto scene_data = mf.read_data();
+        auto refs = scene_model_refs(scene_data);
+        if (g_swap_repairs) {   // the scene's USER files too, so their swap repair runs before private-slot relocation
+            const auto users = scene_model_refs(scene_data, true);
+            refs.insert(refs.end(), users.begin(), users.end());
+        }
+        for (auto& r : refs) {
             std::string pp = scene_ref_pak_path(r.text, inv.suffixes);
             uint64_t h = pp.empty() ? 0 : pak_path_hash(std::string_view(pp));
             if (h && unknown_set.count(h)) {
-                known[pp] = {&mod_pak, h};
+                known[pp] = {&mod_pak, h, {}, pp};
                 unknown_set.erase(h);
                 from_scene++;
             }
@@ -1226,7 +1285,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
             std::string pak_p = "natives/stm/" + lp + "." + tex_ver;
             uint64_t th = pak_path_hash(std::string_view(pak_p));
             if (unknown_set.count(th)) {
-                known[pak_p] = {&mod_pak, th};
+                known[pak_p] = {&mod_pak, th, {}, pak_p};
                 unknown_set.erase(th);
                 discovered++;
             }
@@ -1235,7 +1294,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
                 std::string old_pak_p = "natives/stm/" + lp + "." + OLD_TEX_SUFFIXES[oi];
                 uint64_t oh = pak_path_hash(std::string_view(old_pak_p));
                 if (unknown_set.count(oh)) {
-                    known[pak_p] = {&mod_pak, oh};
+                    known[pak_p] = {&mod_pak, oh, {}, pak_p};
                     upgraded_tex[oh] = pak_p;
                     unknown_set.erase(oh);
                     discovered++;
@@ -1256,7 +1315,7 @@ static void scan_mod_pak(PakReader& mod_pak, const VanillaIndex& inv,
         std::string sp = std::string(STREAM_PFX) + path.substr(bp);
         uint64_t sh = pak_path_hash(std::string_view(sp));
         if (unknown_set.count(sh)) {
-            known[sp] = {&mod_pak, sh};
+            known[sp] = {&mod_pak, sh, {}, sp};
             unknown_set.erase(sh);
             streaming_resolved++;
         }
@@ -1505,9 +1564,13 @@ static std::vector<LeftOut> g_left_out;
 // Always on (the RuntimeOptions= setting of costume_mods\settings.ini is gone; a leftover line is ignored and logged):
 // one outfit per modular mod (its first combination) and every option of the mod stored in the pak for the
 // in-game menu, listed in SF6_Costumes_Data\costume_options.json. Off / Variants are what 1.13.0 - 1.18 could be
-// set to; nothing selects them any more: their branches below are unreachable, kept to keep this change local.
+// set to; nothing selects them any more except Manager mode, which takes Off.
+// Manager mode (common/manager_mode.hpp, docs/MANAGER_CONTRACT.md): the Slotsloader Manager installed this
+// loader, which then makes its outfits as the Manager's own Slotsloader fork did: Off (one outfit per
+// variant), slots from costume_mods only, no NSFW keywords, swap repairs on the Manager's setting.
 enum class RtoLayout { Off, Variants, One };
-static const RtoLayout g_rto_layout = RtoLayout::One;
+static bool g_manager_mode = false;
+static RtoLayout g_rto_layout = RtoLayout::One;
 static const char* RTO_FORMAT = "sf6-costume-options-1";
 static const char* RTO_FILE = "costume_options.json";
 
@@ -3419,6 +3482,16 @@ static void add_slot_files(PakWriter& writer,
                 : base_pak.find(pak_path_hash(std::string_view("natives/stm/" + mp_rel + "." + user_ver)));
             if (me) {
                 auto mdata = base_pak.read(*me);
+                // The documented C. Viper C1 -> C2 swap has its own model-parts USER. Use it
+                // only when the audited recipe accepted it; arbitrary custom files keep the
+                // previous behavior. This happens before private-slot path relocation.
+                const std::string recipe_path = "natives/stm/product/charparam/esf/esf030/battle_ud/esf030v01_model_parts.user.2";
+                if (g_swap_repairs && fd == "esf030" && old_f == "002" && from_own_mod(recipe_path)) {
+                    const auto& mf = amf.at(recipe_path);
+                    bool known = false;
+                    auto repaired = mf.read_data(&known);
+                    if (known) mdata = std::move(repaired);
+                }
                 std::vector<uint8_t> vd(mdata.begin(), mdata.end());
                 // Meshes and materials this slot relocated, as "<part>/<file>.mesh|.mdf2"
                 auto part_keys = [&](const std::string& folder,
@@ -5696,19 +5769,20 @@ static std::unordered_map<std::string, ModFileRef> scan_folder_mod(
     for (auto& item : pak_items) {
         if (item.pak_path.find("/product/model/esf/") != std::string::npos
             || item.pak_path.find("/streaming/product/model/esf/") != std::string::npos) {
-            ModFileRef mf; mf.disk_path = item.full_path;
+            ModFileRef mf; mf.disk_path = item.full_path; mf.pak_path = item.pak_path;
             result[item.pak_path] = mf;
         } else {
             auto sl = item.pak_path.rfind('/');
             std::string fn = (sl != std::string::npos) ? item.pak_path.substr(sl+1) : item.pak_path;
             // Files named after a costume folder, and costume scenes (follow_mod_scene)
-            bool matched = is_costume_scene(item.pak_path);
+            bool matched = is_costume_scene(item.pak_path)
+                || (g_swap_repairs && item.pak_path == "natives/stm/product/charparam/esf/esf030/battle_ud/esf030v01_model_parts.user.2");
             for (auto& pfx : costume_prefixes) {
                 if (fn.find(pfx) != std::string::npos) { matched = true; break; }
             }
             if (!matched && is_model_root_file(item.pak_path)) matched = true;
             if (matched) {
-                ModFileRef mf; mf.disk_path = item.full_path;
+                ModFileRef mf; mf.disk_path = item.full_path; mf.pak_path = item.pak_path;
                 result[item.pak_path] = mf;
                 extra_count++;
             } else {
@@ -9868,6 +9942,29 @@ static void find_manager(const std::string& game_dir, const std::string& costume
     else logf("    WARN: not read: %s\n", why.c_str());   // changed between the two reads
 }
 
+// Manager mode (common/manager_mode.hpp, docs/MANAGER_CONTRACT.md): the Slotsloader Manager installed this
+// loader. Read once per launch, before anything else of the scan depends on it.
+static bool detect_manager_mode(const std::string& game_dir, const std::string& registry_dir) {
+    const std::string list = registry_dir + "\\" + manager_mode::kRecordFile;
+    if (GetFileAttributesA(list.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    JsonValue root;
+    const std::string txt = read_text_file(list);
+    if (txt.empty() || !json_parse_text(txt, root) || root.kind != JsonValue::Obj) return false;
+    std::vector<manager_mode::ListedFile> files;
+    for (auto& m : root.arr("mods")) {
+        if (m.kind != JsonValue::Obj) continue;
+        const JsonValue* en = m.get("enabled");
+        const bool on = !(en && en->kind == JsonValue::Bool && !en->b);
+        for (auto& f : m.arr("files")) {
+            const JsonValue* sz = f.get("size");
+            files.push_back({ on, f.str("path"), sz && sz->kind == JsonValue::Num && sz->n >= 0 ? (long long)sz->n : -1 });
+        }
+    }
+    std::string plugin = game_dir + "\\" + manager_mode::kPluginPath;
+    for (auto& c : plugin) if (c == '/') c = '\\';
+    return manager_mode::installed_by_manager(root.str("format"), files, file_size_of(plugin));
+}
+
 // The Manager's claimed loose files as the scan names them -> the mod's name
 static const std::map<std::string, std::string>& manager_claimed(const VanillaIndex& inv) {
     static std::map<std::string, std::string> out;
@@ -10054,7 +10151,7 @@ static void scan_costume_mods(
     // loose file loader is on (or someone copied them there). The game reads them over every pak:
     // the outfit they replace keeps them. What is left once the mods read from their archives are
     // taken out gets a slot too.
-    if (has_loose_files(game_dir)) {
+    if (!g_manager_mode && has_loose_files(game_dir)) {   // Manager mode: outfits come from costume_mods only
         printf("\n  folder: natives (loose files in the game folder, as Fluffy Mod Manager installs them)\n");
         process_units({ ModUnit{ game_dir, "", "natives (Fluffy Mod Manager)", true } }, "natives (Fluffy Mod Manager)", o);
     }
@@ -10650,6 +10747,15 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     const std::string nsfw_mods_dir = game_dir + "\\reframework\\costume_mods_nsfw";
     const DWORD nsfw_attr = GetFileAttributesA(nsfw_mods_dir.c_str());
     const bool has_nsfw_mods = nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY);
+    // Manager mode (common/manager_mode.hpp): the Slotsloader Manager installed this loader
+    g_manager_mode = detect_manager_mode(game_dir, registry_dir);
+    if (g_manager_mode)
+        logf("  Manager mode: installed by the Slotsloader Manager (manager_installs.json): outfits as the Manager's "
+             "Slotsloader made them (costume_mods only, one outfit per variant)\n");
+    // Character-swap repairs: the Manager's setting (an empty swap_repairs.txt), read in Manager mode only
+    g_swap_repairs = g_manager_mode
+        && GetFileAttributesA((registry_dir + "\\swap_repairs.txt").c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (g_swap_repairs) logf("  swap repairs: on (swap_repairs.txt)\n");
     // Runtime costume options (docs/RUNTIME_OPTIONS.md)
     {
         remove_settings_rto_block(costume_mods_dir + "\\settings.ini");   // the old template's block, untouched
@@ -10658,12 +10764,16 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         if (rto_found) logf("  RuntimeOptions=%s ignored: runtime options are always on\n", rto_v.c_str());
         g_rto_slots.clear();
         g_rto_game.clear();
-        logf("  runtime options: on (one outfit per modular mod)\n");
+        g_rto_layout = g_manager_mode ? RtoLayout::Off : RtoLayout::One;
+        logf(g_manager_mode ? "  runtime options: off (Manager mode: one outfit per variant)\n"
+                            : "  runtime options: on (one outfit per modular mod)\n");
     }
     // NSFW keywords (docs/RUNTIME_OPTIONS.md, NSFW outfits): ZZtaii's list, or NsfwKeywords= (a comma list replacing it;
-    // given empty: detection off)
+    // given empty: detection off). Manager mode: off (the Manager's Slotsloader hid nothing)
     bool nsfw_kw_set = false;
-    {
+    if (g_manager_mode) {
+        g_nsfw_keywords.clear();
+    } else {
         const std::string v = read_setting(costume_mods_dir + "\\settings.ini", "nsfwkeywords", &nsfw_kw_set);
         g_nsfw_keywords = nsfw_kw_set ? nsfw::parse_keywords(v) : nsfw::default_keywords();
         if (nsfw_kw_set) logf("  NSFW keywords (NsfwKeywords): %s\n", g_nsfw_keywords.empty() ? "none, detection off" : v.c_str());
@@ -10673,7 +10783,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     g_fluffy = FluffyState{};
     g_manager = ManagerState{};
     if (has_loose || !mod_paks.empty()) {
-        find_fluffy(game_dir, costume_mods_dir, registry_dir);
+        if (!g_manager_mode) find_fluffy(game_dir, costume_mods_dir, registry_dir);   // Manager mode: no slot from Fluffy
         find_manager(game_dir, costume_mods_dir, registry_dir);   // the Slotsloader Manager's Replace-original installs
     }
 
@@ -10759,6 +10869,8 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
         new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
     new_fp += variant_choices_fingerprint();   // empty while every variant is on
+    if (g_manager_mode) new_fp += ";manager_mode";   // a change of mode rebuilds (normal mode: unchanged)
+    if (g_swap_repairs) new_fp += "|swap_repairs";    // turning them on or off rebuilds
     if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)
         std::string k;
         for (auto& w : g_nsfw_keywords) k += (k.empty() ? "" : ",") + nsfw::compact(w);
@@ -10909,6 +11021,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         printf("    resolved: %zu paths, unattributed: %zu\n", known.size(), unknown.size());
         if (const ManagerPak* mp = manager_pak_of(pi.path)) {
             printf("    %s: installed by the Slotsloader Manager (Replace original): no outfit\n", mp->mod.c_str());
+            game_patch_readers.push_back({pi.num, reader.get()});   // the game still loads it
+            mod_pak_readers.push_back(std::move(reader));
+            continue;
+        }
+        if (g_manager_mode) {   // Manager mode: outfits come from costume_mods only
+            printf("    Manager mode: a game pak, no outfit\n");
             game_patch_readers.push_back({pi.num, reader.get()});   // the game still loads it
             mod_pak_readers.push_back(std::move(reader));
             continue;

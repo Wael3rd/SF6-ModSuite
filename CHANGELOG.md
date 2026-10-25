@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — SF6 Slots Loader: Manager mode (Slotsloader Manager contract 2)
+
+### SF6 Slots Loader
+- **Manager mode** ([docs/MANAGER_CONTRACT.md](docs/MANAGER_CONTRACT.md), contract 2): when ZZtaii's Slotsloader
+  Manager installed the loader (its `manager_installs.json` lists the plugin at its size on disk), the loader and the
+  plugin behave as the Manager's own Slotsloader fork did: outfits from `costume_mods` only, one outfit per variant,
+  no NSFW keywords, character-swap repairs on the Manager's setting (ported from fork 1.10.4, MIT), Outfit 1 and
+  DriveTech slots always shown, the Manager's owned-outfit opt-out. Installed any other way, nothing changes.
+- `SlotsloaderContract=2` in `modinfo.ini` and `variants.json`.
+
 ## 1.19.1 (2026-10-24) — SF6 Mod Suite
 
 | Package | Version | |

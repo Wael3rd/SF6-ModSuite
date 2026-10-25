@@ -10,11 +10,11 @@ the Replace-original record follows the Manager's own `replace-state.json` (ZZta
 
 | Where | Field | Value |
 |---|---|---|
-| `modinfo.ini` of `SF6_SlotsLoader_v*.zip` (the component that ships `reframework/plugins/SF6_CostumeSlotsNative.dll`) | `SlotsloaderContract=` | `1` |
-| `modinfo.ini` of `SF6_ModSuite_AllInOne_v*.zip` (it ships the same plugin; `make_bundle.py` copies the Slots Loader's value) | `SlotsloaderContract=` | `1` |
-| `reframework/data/SF6_Costumes_Data/variants.json` (written by the loader) | `"contract"` | `1` |
+| `modinfo.ini` of `SF6_SlotsLoader_v*.zip` (the component that ships `reframework/plugins/SF6_CostumeSlotsNative.dll`) | `SlotsloaderContract=` | `2` |
+| `modinfo.ini` of `SF6_ModSuite_AllInOne_v*.zip` (it ships the same plugin; `make_bundle.py` copies the Slots Loader's value) | `SlotsloaderContract=` | `2` |
+| `reframework/data/SF6_Costumes_Data/variants.json` (written by the loader) | `"contract"` | `2` |
 
-Both come from `MANAGER_CONTRACT` in `loader_core.cpp` (the packaging script reads it there). The number goes up
+All three come from `MANAGER_CONTRACT` in `loader_core.cpp` (the packaging scripts read it there). The number goes up
 only when the loader changes something the Manager relies on; a loader with contract `N` keeps every promise of
 contract `N - 1` unless this page says otherwise.
 
@@ -40,12 +40,32 @@ contract `N - 1` unless this page says otherwise.
 4. Unchanged files the Manager already reads: `outfits.json` (`source`, `name`, `label`, `left_out`, `pak`) and
    `registry.json`'s `"fingerprint"` (emptied by the Manager to force a rebuild).
 
-### Not in contract 1
+### Contract 2 promises
 
-- **Character-swap repairs** (fork 1.10.4, `swap_repairs.txt`): not ported. The file is ignored; outfits are built
-  as without it. Porting it means the fork's swap-repair module (`patch.cpp`, about 200 lines with verified file
-  fingerprints) and changes in the pak read paths of every mod file, the scene USER files and one Mai model-parts
-  case: not small and not isolated, left for its own task.
+Everything of contract 1, and:
+
+5. **Manager mode** (`common/manager_mode.hpp`): when the Slotsloader Manager installed this loader, the loader and the
+   plugin behave as the Manager's own Slotsloader fork 1.10.4 did. The loader knows it from
+   `reframework/data/SF6_Costumes_Data/manager_installs.json` (written by the Manager since 1.0.9): an enabled mod of
+   that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk. Installed any
+   other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the plugin is not listed at its size and
+   nothing of this applies. In Manager mode:
+   - outfits come from `reframework/costume_mods` only: no Fluffy Mod Manager discovery, no loose `natives` files and
+     no other patch paks as outfits (they are still read as the game's files);
+   - one outfit per variant of a modular mod (`variants.json`'s `"runtime_options"` is `"off"`), each switched by
+     `variant_choices.json`; no in-game costume options;
+   - no NSFW detection by keywords;
+   - character-swap repairs (ported from fork 1.10.4, MIT, `costumes/loader/swap_repairs.cpp`) while the Manager's
+     setting is on: an empty `swap_repairs.txt` in `SF6_Costumes_Data`; turning it on or off rebuilds the pak;
+   - plugin: slots made from Outfit 1 or DriveTech are always shown, and the owned-outfit check is off while the
+     Manager's opt-out marker is in `reframework/data/SF6_CostumeSlots_data` (`plugin/src/manager_marker.hpp`).
+   A change of mode rebuilds the costume pak once.
+
+What the Manager must keep doing for Manager mode: write `manager_installs.json` (with the loader's own files and
+sizes), `swap_repairs.txt` and its opt-out marker where it does now.
+
+### Not in contract 2
+
 - `variants.json` is not rewritten on a launch that rebuilds nothing (same as the fork).
 
 ## Replace original installs
@@ -154,21 +174,23 @@ the Manager names sources below `costume_mods` only. Without that folder nothing
 
 ## What the Manager needs to change
 
-The Manager 1.0.7 refuses our package before reading anything else: `LoaderCostumePak.IsUpstreamBuild` (used by
-`ReplacePlanner.Prepare`) treats a package whose plugin component says `author=Wael` without a fork mark
-(`name` starting with "Slotsloader", `ZZtaii` in `author`, `-custom` in `version`) as upstream and adds an error.
-To accept a loader that implements the contract, check the number first, for example:
+Accept this loader's package instead of refusing it as upstream (`LoaderCostumePak.IsUpstreamBuild`, used by
+`ReplacePlanner.Prepare`) when its plugin component's `modinfo.ini` says `SlotsloaderContract=` 2 or more:
 
 ```csharp
 // The loader says which Manager contract it implements (modinfo.ini SlotsloaderContract=N).
-internal const int KnownContract = 1;
+internal const int KnownContract = 2;
 internal static bool HonoursContract(ModComponent c)
 {
     string v; int n;
-    return c != null && c.Metadata.TryGetValue("SlotsloaderContract", out v) && Int32.TryParse(v, out n) && n >= KnownContract;
+    return c != null && c.Metadata != null && c.Metadata.TryGetValue("SlotsloaderContract", out v)
+        && Int32.TryParse((v ?? "").Trim(), out n) && n >= KnownContract;
 }
 // ReplacePlanner.Prepare: refuse only when !HonoursContract(plugin.Component) && IsUpstreamBuild(...)
 ```
+
+Then, to give every Manager user this loader, the Manager's "Install Slotsloader" fetches this loader's release zip
+(its pin) instead of the fork's.
 
 At run time, `variants.json`'s `"contract"` tells which contract the installed loader honours (a missing field = a
 loader before the contract). `VariantChoices.ReadReport` can keep ignoring it.

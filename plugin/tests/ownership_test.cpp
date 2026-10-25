@@ -1,6 +1,7 @@
 // Unit test of plugin/src/ownership.hpp: which slots the player sees from the game's answers.
 // Build and run: build_ownership_test.bat (prints "all ok" and exits 0 when every check passes).
 #include "../src/ownership.hpp"
+#include "../../common/manager_mode.hpp"
 
 #include <cstdio>
 
@@ -89,6 +90,44 @@ int main() {
         check(outfit1_colour(12, 2, o1) == 2, "back to Outfit 1: a colour Outfit 1 lacks -> the save's");
         check(outfit1_colour(-1, 15, {1, 2}) == 1, "back to Outfit 1: neither -> Outfit 1's first colour");
         check(outfit1_colour(3, 0, {}) == -1, "back to Outfit 1: colours not known -> left as is");
+    }
+
+    // Manager mode (the Slotsloader Manager installed the loader): its fork's rules
+    {
+        Book b;
+        b.set_manager_rules(true);
+        const std::vector<uint32_t> base_only = {0, 4};   // Outfit 1 and DriveTech only
+        b.answer(RYU, O1, base_only);
+        b.answer(RYU, O3, base_only);
+        check(b.shown(RYU, O1) && !b.open(RYU, O1), "Manager mode: Outfit 1 slot always shown, never asked");
+        check(b.answer(RYU, DT, {}) == State::Unknown && b.shown(RYU, DT) && !b.open(RYU, DT),
+              "Manager mode: DriveTech slot always shown, never asked");
+        check(!b.shown(RYU, O3), "Manager mode: an outfit not owned is still hidden");
+    }
+    {
+        Book b;
+        b.set_manager_rules(false);   // the Manager's opt-out marker
+        b.answer(RYU, O3, {0, 4});
+        check(b.shown(RYU, O3) && !b.open(RYU, O3), "Manager mode, opt-out: every slot shown, nothing asked");
+    }
+    {
+        Book b;   // normal mode: unchanged (DriveTech asked like any outfit)
+        b.answer(RYU, DT, {0, 1});
+        check(!b.shown(RYU, DT), "normal mode: DriveTech not listed -> hidden, as before");
+    }
+    {
+        using manager_mode::installed_by_manager;
+        const std::string F = "sf6-manager-installs-1";
+        const std::vector<manager_mode::ListedFile> list = {
+            {true, "natives/stm/product/model/esf/esf001/001/x.mesh", 10},
+            {true, "reframework\\Plugins\\SF6_CostumeSlotsNative.dll", 4096}};
+        check(installed_by_manager(F, list, 4096), "Manager mode: plugin listed, same size");
+        check(!installed_by_manager(F, list, 4097), "not Manager mode: plugin replaced since (other size)");
+        check(!installed_by_manager(F, list, -1), "not Manager mode: no plugin on disk");
+        check(!installed_by_manager("other", list, 4096), "not Manager mode: unknown list format");
+        check(!installed_by_manager(F, {{false, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096}}, 4096),
+              "not Manager mode: the loader's entry disabled in the Manager");
+        check(!installed_by_manager(F, {{true, "natives/x", 4096}}, 4096), "not Manager mode: plugin not listed");
     }
 
     check(outfit_label(0) == "Outfit 1", "label of costume 0");

@@ -8,6 +8,11 @@
 // bought (in-game currency, shop), or given by a DLC the game counts as valid
 // (app.DlcManager.IsValidDlcItem): whatever makes the game say yes counts, an unlock-all script
 // that hooks the DLC checks included.
+//
+// Manager mode (common/manager_mode.hpp: the Slotsloader Manager installed this loader) follows the rules of
+// the Manager's own Slotsloader fork instead: slots made from Outfit 1 or DriveTech are always shown and never
+// asked about, and the check is off altogether while the Manager's opt-out marker is present
+// (manager_marker.hpp). Outside Manager mode none of this exists: set_manager_rules is never called.
 #pragma once
 
 #include <algorithm>
@@ -21,8 +26,16 @@ namespace slots::ownership {
 
 enum class State : uint8_t { Unknown, NotOwned, Owned };
 
+constexpr int kOutfit1   = 0;   // costume 0, every fighter's default outfit
+constexpr int kDriveTech = 4;   // costume id 4 (DriveTech, C5)
+
 class Book {
 public:
+    // Manager mode only (see the top): Outfit 1 and DriveTech always shown; check false: every slot shown,
+    // nothing asked (the Manager's opt-out marker)
+    void set_manager_rules(bool check) { manager_ = true; check_ = check; }
+    bool check() const { return check_; }
+
     // The game listed `listed` for `fighter`; returns the state of `outfit` after that answer.
     // A list without Outfit 1 (costume 0, every fighter's default outfit) is no answer: the
     // inventory is not loaded yet, and the state stays as it was. With may_deny false (before the
@@ -31,6 +44,7 @@ public:
     // hooks with them, and the game would answer with what the player really owns: a slot shown
     // never disappears before the game is closed.
     State answer(int fighter, int outfit, const std::vector<uint32_t>& listed, bool may_deny = true) {
+        if (!check_ || exempt(outfit)) return state(fighter, outfit);
         State& s = m_[{fighter, outfit}];
         if (outfit < 0 || !has(listed, 0)) return s;
         if (has(listed, static_cast<uint32_t>(outfit))) s = State::Owned;
@@ -46,15 +60,18 @@ public:
     // Hidden only when the game said the outfit is not the player's. No answer yet, an outfit not
     // known (-1) or no check possible leave the slot shown, as before this check existed.
     bool shown(int fighter, int outfit) const {
-        return outfit < 0 || state(fighter, outfit) != State::NotOwned;
+        return !check_ || outfit < 0 || exempt(outfit) || state(fighter, outfit) != State::NotOwned;
     }
 
     // Still worth asking the game about (not owned yet)
     bool open(int fighter, int outfit) const {
-        return outfit >= 0 && state(fighter, outfit) != State::Owned;
+        return check_ && outfit >= 0 && !exempt(outfit) && state(fighter, outfit) != State::Owned;
     }
 
 private:
+    // Manager mode: Outfit 1 and DriveTech are never asked about
+    bool exempt(int outfit) const { return manager_ && (outfit == kOutfit1 || outfit == kDriveTech); }
+    bool manager_ = false, check_ = true;
     static bool has(const std::vector<uint32_t>& v, uint32_t x) {
         return std::find(v.begin(), v.end(), x) != v.end();
     }

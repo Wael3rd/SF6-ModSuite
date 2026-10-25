@@ -66,13 +66,13 @@ rem Shared objects, compiled once and linked into each target
 rem ---------------------------------------------------------------------------------------------
 for %%d in (core stage proxy proxy_costumes tools) do if not exist %O%\%%d mkdir %O%\%%d
 echo === common + costume loader ===
-cl %CF% /c /Fo%O%\core\ %C%\third_party\zstddeclib.c %C%\third_party\miniz.c %C%\pak.cpp %C%\archive.cpp %C%\fighter_names.cpp %CO%\patch.cpp %CO%\structural_scene.cpp %CO%\structural_msg.cpp %CO%\vanilla_inventory.cpp %CO%\loader_core.cpp
+cl %CF% /c /Fo%O%\core\ %C%\third_party\zstddeclib.c %C%\third_party\miniz.c %C%\pak.cpp %C%\archive.cpp %C%\fighter_names.cpp %CO%\patch.cpp %CO%\swap_repairs.cpp %CO%\structural_scene.cpp %CO%\structural_msg.cpp %CO%\vanilla_inventory.cpp %CO%\loader_core.cpp
 if errorlevel 1 goto :failed
 echo === stage slots ===
 cl %CF% /c /Fo%O%\stage\ %ST%\stage_log.cpp %ST%\stage_loader.cpp %ST%\preview_tex.cpp %ST%\stage_redirect.cpp
 if errorlevel 1 goto :failed
 set PAK=%O%\core\zstddeclib.obj %O%\core\miniz.obj %O%\core\pak.obj
-set CORE=%PAK% %O%\core\archive.obj %O%\core\fighter_names.obj %O%\core\patch.obj %O%\core\structural_scene.obj %O%\core\structural_msg.obj %O%\core\vanilla_inventory.obj %O%\core\loader_core.obj
+set CORE=%PAK% %O%\core\archive.obj %O%\core\fighter_names.obj %O%\core\patch.obj %O%\core\swap_repairs.obj %O%\core\structural_scene.obj %O%\core\structural_msg.obj %O%\core\vanilla_inventory.obj %O%\core\loader_core.obj
 
 echo === amd_ags_x64.dll (costume slots + stage slots) ===
 cl %CF% /c /Fo%O%\proxy\ proxy\slots_proxy.cpp
