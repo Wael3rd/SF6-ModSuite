@@ -6,12 +6,15 @@
 |---|---|---|
 | SF6 Slots Loader | 1.16.1 | lighter stage-variant redirection, fewer hooks in fights |
 | SF6 Color Mod | 0.23.1 | fewer hook dispatches and allocations in fights |
-| SF6 Native Core | 0.9.2 | less work on the game thread every frame |
+| SF6 Native Core | 0.9.3 | no more sessions stuck at 45 fps; less work on the game thread every frame |
 | SF6 Recording Manager | 2.2.1 | no more small hitches every 2 s; lighter training entry |
 
 Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.0, SF6 Color Mod 0.23.0, SF6 Native Core
-0.9.1 and SF6 Recording Manager 2.2.0, then install Slots Loader 1.16.1, Color Mod 0.23.1, Native Core 0.9.2 and
+0.9.1 and SF6 Recording Manager 2.2.0, then install Slots Loader 1.16.1, Color Mod 0.23.1, Native Core 0.9.3 and
 Recording Manager 2.2.1. The costume pak is not rebuilt.
+
+Native Core 0.9.3 replaced 0.9.2 in this release on October 25 (the all-in-one zip too): if you installed Native Core
+0.9.2, disable or remove it and install 0.9.3.
 
 This release cuts what the mods do on the game's main thread during fights: on a CPU-bound PC (the game's own frame
 work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a dropped frame.
@@ -27,6 +30,13 @@ work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a
 - The Fighter Settings outfit-name hook is installed the first time Battle Settings opens instead of at start, so it
   no longer runs every frame in fights before that.
 - The fighter-profile hooks no longer take a lock on every call while Battle Settings is closed.
+
+### SF6 Native Core 0.9.3 (October 25)
+- **No more sessions stuck at 45 fps.** In some sessions the game never asked Windows for its 1 ms timer, so its
+  60 fps limiter waited in 15.6 ms steps and the whole session ran at 45 fps, menus included. The Core now asks for it
+  at start (what the game normally does itself; asking twice changes nothing). An empty
+  `reframework\data\sf6core\timer_off.txt` turns this off; `sf6core.log` says which.
+- Includes everything of 0.9.2 below.
 
 ### SF6 Native Core 0.9.2
 - The flow manager and the pause manager are cached instead of looked up by name every frame.
