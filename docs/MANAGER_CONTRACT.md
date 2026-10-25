@@ -11,6 +11,7 @@ the Replace-original record follows the Manager's own `replace-state.json` (ZZta
 | Where | Field | Value |
 |---|---|---|
 | `modinfo.ini` of `SF6_SlotsLoader_v*.zip` (the component that ships `reframework/plugins/SF6_CostumeSlotsNative.dll`) | `SlotsloaderContract=` | `1` |
+| `modinfo.ini` of `SF6_ModSuite_AllInOne_v*.zip` (it ships the same plugin; `make_bundle.py` copies the Slots Loader's value) | `SlotsloaderContract=` | `1` |
 | `reframework/data/SF6_Costumes_Data/variants.json` (written by the loader) | `"contract"` | `1` |
 
 Both come from `MANAGER_CONTRACT` in `loader_core.cpp` (the packaging script reads it there). The number goes up

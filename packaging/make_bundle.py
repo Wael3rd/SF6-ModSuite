@@ -1,7 +1,8 @@
 """Build the all-in-one Fluffy package of a release from its separate packages:
 
-  SF6_ModSuite_AllInOne_v<version>.zip   every file of every package zip found in the release folder, one modinfo.ini,
-                                         one README.txt (this package's notice, then each package's README)
+  SF6_ModSuite_AllInOne_v<version>.zip   every file of every package zip found in the release folder, one modinfo.ini
+                                         (carrying the Slots Loader's SlotsloaderContract), one README.txt (this
+                                         package's notice, then each package's README)
 
 Run it after make_suite_packages.py, once every package of the release is in the folder. Two packages shipping the
 same path with different contents stop the build.
@@ -49,12 +50,14 @@ def main():
                    if n.lower().endswith(".zip") and not n.startswith(BUNDLE_PREFIX))
     if not names:
         sys.exit("no package zip in " + a.release)
-    files, owner, dirs, packages, readmes = {}, {}, {}, [], []
+    files, owner, dirs, packages, readmes, contracts = {}, {}, {}, [], [], {}
     for n in names:
         with zipfile.ZipFile(os.path.join(a.release, n)) as z:
             info = modinfo_of(z)
             label = "%s %s" % (info.get("name", n), info.get("version", "?"))
             packages.append(label)
+            if "slotsloadercontract" in info:                # the Slots Loader's, read by the Slotsloader Manager
+                contracts.setdefault(info["slotsloadercontract"], n)
             if "README.txt" in z.namelist():
                 readmes.append(z.read("README.txt").decode("utf-8").replace(CRLF, "\n").rstrip("\n"))
             for zi in z.infolist():
@@ -70,6 +73,9 @@ def main():
                 files[e] = data
                 owner.setdefault(e, n)
 
+    if len(contracts) > 1:
+        sys.exit("packages declare different SlotsloaderContract values: " +
+                 ", ".join("%s (%s)" % c for c in sorted(contracts.items())))
     readme = "\n".join(NOTICE) % (a.version, "\n".join("  - " + p for p in packages))
     readme = (readme + "\n" + ("\n\n" + "-" * 78 + "\n\n").join(readmes) + "\n").replace("\n", CRLF)
     modinfo = CRLF.join([
@@ -79,8 +85,7 @@ def main():
         % ", ".join(packages),
         "author=Wael",
         "NameAsBundle=SF6 Mod Suite",
-        "",
-    ])
+    ] + ["SlotsloaderContract=%s" % c for c in contracts] + [""])
     out = os.path.join(a.release, "%sv%s.zip" % (BUNDLE_PREFIX, a.version))
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("modinfo.ini", modinfo)
