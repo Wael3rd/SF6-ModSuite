@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### SF6 Native Core 0.9.4
+- **Fix: game sessions stuck at 45 fps.** In those sessions Windows 11 ignored the game's request for a 1 ms timer
+  (and 0.9.3's, made at start too) with the game in the foreground, so the game's 60 fps limiter slept on the 15.6 ms
+  default tick. The Core now checks every second, on a background thread, that a 1 ms sleep in the game takes about
+  1 ms, and when it takes 15.6 ms asks Windows for the 1 ms timer again: a session that starts at 45 fps is back at
+  60 within a second. `sf6core.log` says what it measured at start and each time it asked again. An empty
+  `reframework\data\sf6core\timer_off.txt` still turns this off.
+
 ### SF6 Slots Loader
 - A hole in the row of patch paks (another tool removed `re_chunk_000.pak.patch_002.pak` and left 003 and above) no
   longer hides every pak above it, the costume pak included: each missing number below a pak of another mod gets a

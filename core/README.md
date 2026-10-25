@@ -20,8 +20,21 @@ game's UI directly.
 
 ## Timer resolution
 
-At start the Core asks Windows for a 1 ms timer (`timeBeginPeriod(1)`), as the game normally does itself. An empty
-`reframework/data/sf6core/timer_off.txt` turns this off.
+The game's 60 fps limiter needs a 1 ms Windows timer, which the game asks for itself. Windows 11 can ignore a
+process's timer requests, and in some sessions it ignored the game's (and any other request made at start) with the
+game in the foreground: the limiter then slept on the 15.6 ms default tick and the whole session ran at 45-48 fps. A
+request Windows ignored stays ignored; a new one made later is honoured. During the game's first minute the timer
+requests of the game, Media Foundation (the movies) and the audio made it ignored again several times.
+
+At start the Core asks for 1 ms (`timeBeginPeriod(1)`, and Windows' opt-out `PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION`
+in `ControlMask`, `StateMask` 0, which alone did not stop those sessions). Then a background thread measures every
+second how long `Sleep(1)` takes in the game (the shortest of three in a row after a first one, which ends on a timer
+tick: about 1-2 ms when the 1 ms timer is honoured, 15.6 ms when not); only when it is not honoured, it makes the
+kernel request again (`NtSetTimerResolution` released, then set). The global timer
+(`NtQueryTimerResolution`) does not tell: another program holding 1 ms sets it without the game getting it.
+`sf6core.log` gives the first measurement (`timer: Sleep(1) takes 1.9 ms at start (...)`) and each new request (`timer:
+Windows was ignoring the game's 1 ms timer (...): asked again, now 1.1 ms`, the first 20). An empty
+`reframework/data/sf6core/timer_off.txt` turns all of this off.
 
 ## For mod authors
 
