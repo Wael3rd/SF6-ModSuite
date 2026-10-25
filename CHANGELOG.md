@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.19.2 (2026-10-25) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | four fixes from ZZtaii's fork: holes in the patch pak row, locked paks, `variants.json`, structural files |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | fix: no more game sessions stuck at 45 fps |
+| SF6 Recording Manager | 2.2.1 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.1 and SF6 Native Core 0.9.3 (or 0.9.2), then
+install Slots Loader 1.16.2 and Native Core 0.9.4. Color Mod 0.23.1 and Recording Manager 2.2.1 are the same files as
+in 1.19.1: keep them. With the all-in-one package, replace 1.19.1 with 1.19.2. The costume pak is not rebuilt.
 
 ### SF6 Native Core 0.9.4
 - **Fix: game sessions stuck at 45 fps.** In those sessions Windows 11 ignored the game's request for a 1 ms timer
@@ -10,7 +21,8 @@
   60 within a second. `sf6core.log` says what it measured at start and each time it asked again. An empty
   `reframework\data\sf6core\timer_off.txt` still turns this off.
 
-### SF6 Slots Loader
+### SF6 Slots Loader 1.16.2
+Four fixes taken from ZZtaii's Slotsloader fork (MIT):
 - A hole in the row of patch paks (another tool removed `re_chunk_000.pak.patch_002.pak` and left 003 and above) no
   longer hides every pak above it, the costume pak included: each missing number below a pak of another mod gets a
   small marker-only pak, deleted again once no such pak sits above it. The log says `filled a hole in the patch pak
@@ -25,6 +37,34 @@
   use its shipped copies (it was skipped, and the fighters it brings lost their slots); a fighter of the costume table
   that is in no fighter scene gets no slot records and its mods are not installed, with a WARN (they got slots that
   could not load); version scenes are looked for up to `ver_09_9900` (`ver_02_1900` before), by hundreds (fork 1.9.7).
+
+### Known issues
+- Slots Loader: replays show the outfit the other players saw (Outfit 1 or DriveTech), not your modded outfit:
+  a replay has no player the plugin can tell apart.
+- Slots Loader: the online alias was tested in Custom Rooms (against another platform, and with a character change
+  between matches), not yet in Ranked or the Battle Hub.
+- Slots Loader: a fighter built without the game asking for its files again (a Custom Room's training area right
+  after a match) keeps Outfit 1 (or DriveTech) until the next load; the log says so.
+- Slots Loader, Training pause menu: when the costume or colour changed, the fight shows for about half a second with
+  the old look after the pause menu closes, before the game's own reload fade (the game's timing).
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only.
+- Slots Loader, character select and Training pause menu popup: the costume options menu (R1 / C) and the Color
+  Mod's Drive colours (L1) use buttons the game may also use on those screens; this is not confirmed either way. If
+  the game's own guide there shows them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader, Training pause menu: after confirming options only, the battle restarts (as Restart Battle) a few
+  frames after the pause menu closes, so the fight shows briefly before the fade.
+- Slots Loader: the Training popup costume options have not been tested with P2 (the dummy) nor with a gamepad on the
+  Up / Down window.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+- Slots Loader 1.16.2: the four fixes from the fork were checked by the automated tests (the loaders on a test game
+  folder), not yet in game.
+
 
 ## 1.19.1 (2026-10-24) — SF6 Mod Suite
 
