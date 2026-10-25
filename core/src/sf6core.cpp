@@ -18,6 +18,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include "sf6core_internal.h"
+#include <timeapi.h>   // timeBeginPeriod (winmm)
 
 #pragma warning(push, 0)
 #include <reframework/API.hpp>
@@ -37,7 +38,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.2";
+static constexpr const char* CORE_VERSION = "0.9.3";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2687,6 +2688,30 @@ void reframework_plugin_required_version(REFrameworkPluginVersion* v) {
     v->game_name = nullptr;
 }
 
+// The game's 60 fps limiter sleeps in timer ticks: without a 1 ms request (the game makes it itself in
+// most sessions) the tick is 15.6 ms and the game runs at 45 fps. Once per process; no timeEndPeriod,
+// Windows releases the request at process exit.
+static void request_timer_resolution() {
+    static std::atomic<bool> s_done{false};
+    if (s_done.exchange(true)) return;
+
+    char root[MAX_PATH];
+    resolve_game_root(root, sizeof(root));
+    char path[MAX_PATH];
+    snprintf(path, sizeof(path), "%s\\reframework\\data\\sf6core\\timer_off.txt", root);
+    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {
+        core_log(SF6CORE_LOG_INFO, nullptr, "timer: not requested (timer_off.txt present)");
+        return;
+    }
+    MMRESULT rc = timeBeginPeriod(1);
+    if (rc == TIMERR_NOERROR)
+        core_log(SF6CORE_LOG_INFO, nullptr,
+                 "timer: 1 ms resolution requested (the game's 60 fps limiter needs it; "
+                 "reframework/data/sf6core/timer_off.txt turns this off)");
+    else
+        core_log(SF6CORE_LOG_WARN, nullptr, "timer: timeBeginPeriod(1) failed (%u)", (unsigned)rc);
+}
+
 extern "C" __declspec(dllexport)
 bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param) {
     if (!param || !param->functions || !param->sdk) return false;
@@ -2710,6 +2735,7 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     core_log(SF6CORE_LOG_INFO, nullptr,
              "initializing (version=%s, ABI=%d)", CORE_VERSION,
              SF6CORE_ABI_VERSION);
+    request_timer_resolution();
 
     // Replay pending registrations and flip to "initialized" in the SAME
     // critical section: a registration racing with init either lands in

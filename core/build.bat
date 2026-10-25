@@ -67,7 +67,7 @@ cl %CFLAGS% /DSF6CORE_EXPORTS /I third_party\lua /Fe:..\build\core\sf6core_nativ
     src\options\options_service.cpp src\options\options.cpp src\options\options_core.cpp ^
     src\options\guid_text.cpp src\options\guid_table.cpp src\selection.cpp ^
     src\pausemenu\pm_service.cpp src\pausemenu\pausemenu.cpp src\pausemenu\pm_core.cpp ^
-    /link /DLL ..\build\core\lua.lib rpcrt4.lib
+    /link /DLL ..\build\core\lua.lib rpcrt4.lib winmm.lib
 if errorlevel 1 (
     echo ERROR: sf6core_native.dll build failed
     set ERRORS=1

@@ -18,6 +18,11 @@ game's UI directly.
 - A small **Lua bridge** (`SF6Core` in REFramework's Lua state) for scripts and diagnostics.
 - A log: `reframework/data/sf6core/sf6core.log` (one previous log kept as `sf6core.old.log` past 8 MB).
 
+## Timer resolution
+
+At start the Core asks Windows for a 1 ms timer (`timeBeginPeriod(1)`), which the game normally does itself; without it
+some sessions ran at 45 fps instead of 60. An empty `reframework/data/sf6core/timer_off.txt` turns this off.
+
 ## For mod authors
 
 The C ABI is `include/sf6core/sf6core_api.h` (pure C, append-only): get it with `sf6core_get_api(SF6CORE_ABI_VERSION)`,
