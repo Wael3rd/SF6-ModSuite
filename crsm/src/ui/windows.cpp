@@ -68,6 +68,7 @@ constexpr size_t kNameMax = 64;                 // NAME_MAX (RMT:1378)
 constexpr int kKeyT = 0x54, kKeyG = 0x47, kKeyR = 0x52;     // RMT:1380-1381
 constexpr uint32_t kPadXFallback = 64;          // via.hid.GamePadButton.RLeft (RMT:1383)
 constexpr uint32_t kPadYFallback = 16;          // RUp, read from the live enum (RMT:1382, 1384-1387)
+constexpr uint32_t kPadL1Fallback = 256, kPadR1Fallback = 1024;   // LTrigTop / RTrigTop (the Community dialog's pages), same
 
 // ---- state (under ui::lock) ---------------------------------------------------------------------------------------------
 struct Phys { MO* page = nullptr; MO* rows[8]{}; bool have = false; };
@@ -100,6 +101,7 @@ bool g_states_read = false, g_states_logged = false;
 // keys
 lg::KeyEdge g_t, g_del;
 uint32_t g_pad_y = kPadYFallback, g_pad_x = kPadXFallback;
+uint32_t g_pad_l1 = kPadL1Fallback, g_pad_r1 = kPadR1Fallback;
 bool g_pad_read = false;
 // the pads (pad_mask)
 constexpr uint64_t kPadListEvery = 30;
@@ -834,6 +836,9 @@ uint32_t pad_mask() {
         g_pad_read = true;
         if (gx::TD* pb = gm::type("via.hid.GamePadButton")) {
             if (reframework::API::Field* f = pb->find_field("RUp")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_y = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("RLeft")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_x = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("LTrigTop")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_l1 = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("RTrigTop")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_r1 = (uint32_t)v; }
         }
     }
     if (!g_pads_held || tick() >= g_pads_next) {
@@ -1268,6 +1273,10 @@ void style_text(MO* t, MO* ref) {                // RMT:2193-2197
 std::string slot_display_name(int n) { return display_name(n); }
 std::optional<std::string> live_frames_text(int n) { return live_frames(n); }
 std::string virtual_frames_text(int n) { return virtual_text(n); }
+PadHeld pad_held() {
+    const uint32_t mask = pad_mask();
+    return PadHeld{ (mask & g_pad_l1) != 0, (mask & g_pad_r1) != 0, (mask & g_pad_y) != 0, (mask & g_pad_x) != 0 };
+}
 
 void specs(std::vector<mech::hooks::Spec>& out) {
     const char* P = "app.training.UIFlowTrainingMenu.Param";

@@ -464,7 +464,7 @@ struct FakePort final : lg::ComPort {
     void answer(std::vector<std::string> list) { loading_ = false; items = std::move(list); page = 1; rebuild(); }
 
     void page_open() override { ++opens; sort = 1; page = 1; ++fetches; loading_ = true; }
-    std::string title() override { return "S" + std::to_string(sort) + " p" + std::to_string(page) + "/" + std::to_string(pages()); }
+    std::string title(bool pad) override { return std::string(pad ? "P" : "S") + std::to_string(sort) + " p" + std::to_string(page) + "/" + std::to_string(pages()); }
     bool loading() override { return loading_; }
     int row_count() override { return (int)rows_.size(); }
     std::string row_label(int row) override { return rows_[(size_t)row - 1]; }
@@ -600,6 +600,30 @@ void test_community() {
     d.tick(false, false, false, false);
     d.tick(false, true, false, false);
     check(p.page == 2, "reopen: E works");
+    // the pad's glyphs: a change of device rebuilds the title in place on the cursor's row, and only then
+    p.answer(make_items(20, "D"));
+    d.tick(false, false, false, false);
+    check(p.shown_title.rfind("S", 0) == 0, "keyboard: the title keeps its keys");
+    p.focus = 4;
+    const size_t n4 = p.navigations.size();
+    d.tick(false, false, false, false, true);
+    check(p.shown_title.rfind("P", 0) == 0 && p.navigations.size() == n4 + 1 && p.navigations.back() == 3, "pad: the title's glyphs follow, cursor kept on row 4");
+    d.tick(false, false, false, false, true);
+    check(p.navigations.size() == n4 + 1, "pad: no rewrite while the device stays");
+    d.tick(false, false, false, false, false);
+    check(p.shown_title.rfind("S", 0) == 0 && p.navigations.size() == n4 + 2, "back to the keyboard: the keys again");
+    // opened on a pad: the first render has the pad's glyphs, so the first tick rebuilds nothing (in game that rebuild
+    // replaced the dialog the open had just shown, and 2.2.2's first build lost it, stuck on "Loading...")
+    d.closed();
+    d.open(true);
+    check(p.shown_title.rfind("P", 0) == 0, "opened on a pad: the pad's glyphs from the first render");
+    const size_t n5 = p.navigations.size();
+    d.tick(false, false, false, false, true);
+    check(p.navigations.size() == n5, "opened on a pad: no rebuild at the first tick");
+    eq(model::labels::community_title("New", "Ken", 2, 5), std::string("New  Ken Loadouts\n<ICON KeyA>   Page 2/5   <ICON KeyE>"), "title, keyboard glyphs");
+    eq(model::labels::community_title("New", "Ken", 2, 5, true), std::string("New  Ken Loadouts\n<ICON BtnL1>   Page 2/5   <ICON BtnR1>"), "title, pad glyphs");
+    eq(model::labels::community_guide(false), std::string("<ICON KeyT> Like   <ICON KeyR> Sort"), "guide line, keyboard glyphs");
+    eq(model::labels::community_guide(true), std::string("<ICON BtnU> Like   <ICON BtnL> Sort"), "guide line, pad glyphs (Y / X)");
 }
 
 // ---- the pause menu's tab under CRSM's dialogs (L1+R1 / A+E) ------------------------------------------------------------

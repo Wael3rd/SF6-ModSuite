@@ -2,7 +2,8 @@
 // RecordingManagerTab.lua (RMT) 149-431 and 1564-1586 in C++. The page's state and actions are community::Page (P2: list,
 // sort, pages, votes, downloads, com_state.json, tickers); the dialog's rules are ui::logic::ComDialog (pure); here: the
 // option window (opt_group / opt_entry / opt_navigate / opt_open_menu, the Color Mod's pattern for per-page texts: the
-// group removed and made again with the same key, then a rebuild in place), the raw keys A / E / T / R, the guide line
+// group removed and made again with the same key, then a rebuild in place), the raw keys A / E / T / R (a pad's L1 / R1 / Y / X
+// for A / E / T / R since 2.2.2, its glyphs when the game's guide shows a pad's), the guide line
 // ("Like / Sort") on our dialog only, the prompt close detection, the Manager's "Share loadout".
 // Since 2.2 (Wael 24/10): every row label fits its row (lg::com_row_fit: the date, then the name, then the author cut),
 // and the dialog's description area (GuideMessageText: the game writes the focused unit's description there, CRSM's
@@ -17,6 +18,7 @@
 #include <atomic>
 #include <cstdio>
 #include <memory>
+#include <optional>
 
 #include "common.hpp"
 #include "community/community.hpp"
@@ -32,6 +34,7 @@
 #include "manager_page.hpp"
 #include "mech/mech.hpp"
 #include "model/files.hpp"
+#include "model/labels.hpp"
 #include "model/luajson.hpp"
 #include "model/lutil.hpp"
 #include "community/protocol.hpp"
@@ -50,10 +53,10 @@ using gx::MO;
 
 constexpr const char* kKey = "Community";       // _com.KEY (RMT:151)
 constexpr const char* kDesc = "Community loadouts.";   // the group's description (RMT:297)
-constexpr const char* kGuide = "<ICON KeyT> Like   <ICON KeyR> Sort";   // RMT:1579
 constexpr int kKeyA = 0x41, kKeyE = 0x45, kKeyT = 0x54, kKeyR = 0x52;   // RMT:329-332
 constexpr uint64_t kSetupWait = 60;              // frames a rebuilt dialog may take to show its page
 
+bool g_pad_glyphs = false;                       // the game's guide shows a pad's glyphs (guide_pad), read on the frame
 std::unique_ptr<community::Page> g_page;
 std::atomic<bool> g_open_request{false}, g_share_request{false};   // the Manager's buttons (any thread): run on the frame
 std::atomic<int> g_pressed_row{0};               // a row's F (the core's callback): run on the frame, as NO's button queue did
@@ -138,7 +141,7 @@ bool ensure_callbacks() {
 class Port final : public lg::ComPort {
 public:
     void page_open() override { page().open(); }
-    std::string title() override { return page().title(); }
+    std::string title(bool pad) override { return page().title(pad); }
     bool loading() override { return page().loading(); }
     int row_count() override { return (int)page().rows().size(); }
     std::string row_label(int row) override { return page().rows()[(size_t)row - 1].label; }
@@ -205,6 +208,15 @@ public:
         g_param_wait_until = tick() + kSetupWait;
         g_window_seen = false;                   // (NO set its window flag in its own tick, before RMT's: the same here)
         g_window_deadline = tick() + kWindowWait;
+        // show() made the group again: its page has no unit until a build, and the core opens the window on the units
+        // built when its open delay ends (the Color Mod's and the Slots Loader's open: opt_rebuild + opt_ensure_built
+        // first). Without it the dialog only came with the list answer's rebuild, and an answer slower than ~300 ms
+        // found the empty window already closed by the core ("Download Loadouts" did nothing). Never under another
+        // client's open window.
+        if (!perf::counted(a)->opt_window_open()) {
+            perf::counted(a)->opt_rebuild(gx::cl());
+            perf::counted(a)->opt_ensure_built(gx::cl());
+        }
         perf::counted(a)->opt_open_menu(gx::cl(), kKey, -1);
     }
     void navigate(int focus0) override {         // NO.navigate(KEY, rebuild, focus, now) (RMT:327, 344, 349, 357, 388)
@@ -276,6 +288,24 @@ void SF6CORE_CALL cb_closed(void*) {
 
 bool key_down(int vk) { return cmn::key_down(vk); }   // reframework:is_key_down: the game window's keys only
 
+// The glyph set of the game's own guide, as the Color Mod reads it: app.InputGuideManager.GetMode(player 0), static
+// (1 GamePad, 2 KeyboardAndMouse, 0 nothing to follow = nullopt: the keyboard's glyphs stay)
+std::optional<bool> guide_pad() {
+    static reframework::API::Method* m_get = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        if (gx::TD* td = gm::type("app.InputGuideManager")) m_get = gm::method(td, "GetMode(System.Int32)");
+        cmn::journal("ui: Community glyphs: the game's guide mode %s", m_get ? "read from InputGuideManager.GetMode" : "not found (keyboard glyphs)");
+    }
+    if (!m_get || !gm::singleton("app.InputGuideManager")) return std::nullopt;
+    reframework::InvokeRet r{};
+    if (!gm::call(nullptr, m_get, { gm::arg_i32(0) }, &r)) return std::nullopt;
+    if (r.dword == 1) return true;
+    if (r.dword == 2) return false;
+    return std::nullopt;
+}
+
 // -- UIFlowOptionBGDialog.Param.UpdateInputGuide post: the controls in the description area, our dialog only (RMT:1564-1586)
 struct GuideCall { MO* param = nullptr; };
 thread_local HookStack<GuideCall> s_guide;
@@ -286,8 +316,9 @@ int guide_pre(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long 
 }
 // The description area's text for row `row` (1-based; 0 = unknown: the guide line alone)
 std::string guide_text(int row) {
-    if (row < 1 || row > (int)g_extras.size()) return kGuide;
-    return lg::com_guide_text(g_extras[(size_t)row - 1], kGuide);
+    const std::string guide = model::labels::community_guide(g_pad_glyphs);
+    if (row < 1 || row > (int)g_extras.size()) return guide;
+    return lg::com_guide_text(g_extras[(size_t)row - 1], guide);
 }
 
 void write_guide(MO* param, int row) {
@@ -364,7 +395,8 @@ void probe_rows() {
 void do_open() {
     if (g_dlg.is_open() || !community::on()) return;
     read_row_em();
-    g_dlg.open();
+    g_pad_glyphs = guide_pad().value_or(false);
+    g_dlg.open(g_pad_glyphs);
     g_open.store(true);
     cmn::journal("ui: Community dialog opened");
 }
@@ -400,10 +432,21 @@ void frame() {                                   // _com.tick (RMT:317-395), eve
         else if (tick() > g_window_deadline) closed_now("the window never opened");
         return;                                  // (not open yet: the core opens it at its next frame)
     }
-    if (g_param && !handle_alive(g_param)) { closed_now("dialog ended"); return; }
+    if (g_param && !handle_alive(g_param)) {
+        // a rebuild sent while the open (or an earlier rebuild) was still settling ends the dialog whose page we just
+        // saw, and the new one brings its own param: not a close (2.2.2's first build lost the dialog there, stuck on
+        // "Loading..."). A real close also lowers the window flag (the "no window" close above).
+        if (!g_param_wait_until || tick() > g_param_wait_until) { closed_now("dialog ended"); return; }
+        g_param = nullptr;
+        cmn::journal("ui: Community dialog replaced by our rebuild, waiting for its page");
+    }
     if (!g_param && tick() > g_param_wait_until && g_param_wait_until) g_param_wait_until = 0;   // (the window flag only from now)
     if (const int row = g_pressed_row.exchange(0)) g_dlg.button(row);   // download (confirm box, then the request)
-    g_dlg.tick(key_down(kKeyA), key_down(kKeyE), key_down(kKeyT), key_down(kKeyR));
+    // the glyph set follows the game's guide (read every 5 frames: a pad / keyboard switch rewrites the title at once, the
+    // guide line with the next refresh below; an unknown mode keeps the keyboard's)
+    if (tick() % 5 == 0) g_pad_glyphs = guide_pad().value_or(false);
+    const windows::PadHeld pad = windows::pad_held();   // a pad's L1 / R1 / Y / X do what A / E / T / R do
+    g_dlg.tick(key_down(kKeyA) || pad.l1, key_down(kKeyE) || pad.r1, key_down(kKeyT) || pad.y, key_down(kKeyR) || pad.x, g_pad_glyphs);
     // the description area follows the cursor also when the game's UpdateInputGuide does not run (a rebuild in place, the
     // first frames of a page): every 5 frames, the core's compare-before-write leaves an unchanged text alone
     if (g_param && tick() % 5 == 2) {

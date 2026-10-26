@@ -113,7 +113,7 @@ public:
     void share(const std::string& char_name, const std::string& pack_file, const std::string& display);
 
     // ---- what the screen reads
-    std::string title() const;
+    std::string title(bool pad = false) const;
     const std::vector<Row>& rows() const { return rows_; }
     bool loading() const { return loading_; }
     int page_no() const { return page_; }

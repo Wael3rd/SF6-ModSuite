@@ -427,7 +427,7 @@ void ComDialog::render() {
         else labels_[i - 1] = i <= n ? p_.row_label(i) : "--";
         descs[i - 1] = i <= n ? p_.row_desc(i) : "";
     }
-    p_.show(p_.title(), labels_, descs);
+    p_.show(p_.title(pad_), labels_, descs);
     shown_version_ = p_.version();
 }
 
@@ -438,9 +438,10 @@ int ComDialog::current_row() {
     return f;
 }
 
-void ComDialog::open() {
+void ComDialog::open(bool pad) {
     p_.page_open();                                             // char, sync, sort New, page 1, fetch (RMT:421-426)
     open_ = true;
+    pad_ = pad;                                                 // the first render already right: no restart at the first tick
     a_.reset(); e_.reset(); t_.reset(); r_.reset();
     guide_focus_ = 0;
     render();
@@ -452,8 +453,15 @@ void ComDialog::closed() {
     a_.reset(); e_.reset(); t_.reset(); r_.reset();
 }
 
-void ComDialog::tick(bool key_a, bool key_e, bool key_t, bool key_r) {
+void ComDialog::tick(bool key_a, bool key_e, bool key_t, bool key_r, bool pad) {
     if (!open_) return;
+    if (pad != pad_) {                                          // the player changed device: the title's glyphs follow
+        pad_ = pad;
+        const int row = current_row();
+        render();
+        last_focus_ = row - 1;
+        p_.navigate(last_focus_);
+    }
     // the answer arrived after the dialog was built: rebuilt in place. The Lua meant to keep the cursor row there
     // (com_focus_idx) but wrote it as a global: the row was always 1. Fixed: the cursor stays on its row.
     if (p_.data_changed()) {

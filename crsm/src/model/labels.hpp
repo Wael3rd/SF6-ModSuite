@@ -23,7 +23,10 @@ using json = nlohmann::json;
 bool community_label(const json& item, const json& downloaded_version, std::string* label);
 
 // com_title: "<sort>  <char> Loadouts\n<ICON KeyA>   Page <p>/<n>   <ICON KeyE>"
-std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages);
+// `pad`: the pad's glyphs (<ICON BtnL1> / <ICON BtnR1>) instead of the keyboard's, since 2.2.2
+std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages, bool pad = false);
+// the dialog's guide line: "<ICON KeyT> Like   <ICON KeyR> Sort", or the pad's Y / X (<ICON BtnU> / <ICON BtnL>)
+std::string community_guide(bool pad);
 // math.max(1, math.ceil(total / rows))
 int64_t community_pages(int64_t total, int64_t rows);
 

@@ -79,8 +79,13 @@ bool community_label(const json& item, const json& downloaded_version, std::stri
     return true;
 }
 
-std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages) {
-    return sort_label + "  " + char_name + " Loadouts\n<ICON KeyA>   Page " + std::to_string(page) + "/" + std::to_string(total_pages) + "   <ICON KeyE>";
+std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages, bool pad) {
+    return sort_label + "  " + char_name + " Loadouts\n" + (pad ? "<ICON BtnL1>" : "<ICON KeyA>") + "   Page " + std::to_string(page) + "/" +
+           std::to_string(total_pages) + "   " + (pad ? "<ICON BtnR1>" : "<ICON KeyE>");
+}
+
+std::string community_guide(bool pad) {
+    return pad ? "<ICON BtnU> Like   <ICON BtnL> Sort" : "<ICON KeyT> Like   <ICON KeyR> Sort";   // RMT:1579
 }
 
 int64_t community_pages(int64_t total, int64_t rows) {

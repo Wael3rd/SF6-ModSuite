@@ -243,9 +243,9 @@ void Page::rebuild() {
     note("com_rebuild: page=" + std::to_string(page_) + " all=" + std::to_string(lj::len(all_items_)) + " rows=" + std::to_string(rows_.size()));
 }
 
-std::string Page::title() const {
+std::string Page::title(bool pad) const {
     return model::labels::community_title(kSortNames[(sort_idx_ - 1) % 3], char_.empty() ? "?" : char_, page_,
-                                          model::labels::community_pages(total_, kRows));
+                                          model::labels::community_pages(total_, kRows), pad);
 }
 
 void Page::fetch(int page_after) {

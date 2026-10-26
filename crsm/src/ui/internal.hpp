@@ -41,6 +41,8 @@ void style_text(MO* t, MO* ref);               // RecordingManagerTab.style_text
 std::string slot_display_name(int n);          // RSM name of 1-8 / virtual name of 9-30
 std::optional<std::string> live_frames_text(int n);   // "59F" / the empty word of live slot n (nullopt = no slot data)
 std::string virtual_frames_text(int n);        // "78F" / the empty word of virtual slot n
+struct PadHeld { bool l1 = false, r1 = false, y = false, x = false; };   // Y = RUp (Triangle), X = RLeft (Square)
+PadHeld pad_held();                            // L1 / R1 / Y / X held on a connected pad now (the name keys' pad read; under ui::lock)
 }  // namespace windows
 
 // ---- reversal pages and picker (reversal_ui.cpp) ------------------------------------------------------------------------

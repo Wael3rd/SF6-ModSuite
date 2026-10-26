@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### SF6 Recording Manager 2.2.2
+- Fix: in the Community dialog (Download Loadouts), a pad does what the keyboard does: L1 / R1 turn the pages (A / E),
+  Y likes (T), X changes the sort (R), and the dialog shows the pad's buttons instead of the keys while you play on a pad.
+- Fix: "Download Loadouts" sometimes did nothing, mostly on the first try after a while: the window opened empty and
+  closed before the server's list arrived. It now opens at once and shows "Loading..." until the list is there.
+
 ## 1.19.2 (2026-10-25) — SF6 Mod Suite
 
 | Package | Version | |

@@ -211,7 +211,7 @@ public:
     virtual ~ComPort() = default;
     // the page
     virtual void page_open() = 0;                             // Page::open (char, disk sync, sort New, page 1, fetch)
-    virtual std::string title() = 0;
+    virtual std::string title(bool pad) = 0;                  // pad: the pad's glyphs (the game's guide mode)
     virtual bool loading() = 0;
     virtual int row_count() = 0;                              // rows built, from row 1
     virtual std::string row_label(int row) = 0;               // 1-based
@@ -238,10 +238,11 @@ public:
     static constexpr int kRows = 7;                           // _com.ROWS
     explicit ComDialog(ComPort& port) : p_(port) {}
 
-    void open();                                              // the Manager's "Download Loadouts"
+    void open(bool pad = false);                              // the Manager's "Download Loadouts" (pad: the glyphs to start with)
     void closed();                                            // the window or the dialog ended (Esc / B)
-    // once per frame while the dialog is up: the raw keys A, E, T, R
-    void tick(bool key_a, bool key_e, bool key_t, bool key_r);
+    // once per frame while the dialog is up: the raw keys A, E, T, R (a pad's L1, R1, Y, X too) and the glyph set the game's
+    // guide shows (pad: true); a change of it rebuilds the page in place, the cursor staying on its row
+    void tick(bool key_a, bool key_e, bool key_t, bool key_r, bool pad = false);
     void button(int row);                                     // F / click on a row (1-based)
     void guide_focus(int row) { if (row >= 1) guide_focus_ = row; }   // the row the guide refresh saw focused
     bool is_open() const { return open_; }
@@ -256,6 +257,7 @@ private:
 
     ComPort& p_;
     bool open_ = false;
+    bool pad_ = false;                                        // the glyphs of the last render
     KeyEdge a_, e_, t_, r_;
     int64_t shown_version_ = -1;
     int vote_row_ = 0;                                        // the row of the last T: the vote's answer comes back there
