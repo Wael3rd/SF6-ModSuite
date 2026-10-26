@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.19.3 (2026-10-26) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | unchanged |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.2 | the pad works in Download Loadouts, with its buttons shown; Download Loadouts opens every time |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Recording Manager 2.2.1, then install 2.2.2. Slots Loader
+1.16.2, Color Mod 0.23.1 and Native Core 0.9.4 are the same files as in 1.19.2: keep them. With the all-in-one package,
+replace 1.19.2 with 1.19.3. The costume pak is not rebuilt.
 
 ### SF6 Recording Manager 2.2.2
 - Fix: in the Community dialog (Download Loadouts), a pad does what the keyboard does: L1 / R1 turn the pages (A / E),
