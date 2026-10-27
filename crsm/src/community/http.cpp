@@ -289,11 +289,21 @@ Worker::Done Worker::run_job(const Job& j) {
     token_state_.store(bearer.empty() ? 0 : 1);
     const bool write = tickets_ && auth::needs_token(d.cmd);
     bool fresh = false;
+    // 2.2.3: the first list of the session links the Steam account the game runs with (testers see test loadouts, a
+    // changed Steam account replaces the old one's token); one try per session, the list goes out whatever its result
+    if (tickets_ && d.cmd == "list" && !linked_session_) {
+        linked_session_ = true;
+        std::string code;
+        const std::string t = acquire(cfg, tpath, cmd, &code);
+        if (!t.empty()) bearer = t;
+        else logf(std::string("http: list: no new token (") + code + "), sent with " + (bearer.empty() ? "none" : "the stored one"));
+    }
     if (write && bearer.empty()) {
         std::string code;
         bearer = acquire(cfg, tpath, cmd, &code);
         if (bearer.empty()) { logf("http: " + d.cmd + ": not sent (" + code + ")"); return finish(auth::refused_reply(code)); }
         fresh = true;
+        linked_session_ = true;
     }
 
     HttpResult hr = perform(rq, cfg, bearer);
@@ -344,7 +354,7 @@ std::string Worker::acquire(const Config& cfg, const std::string& tpath, const j
     const int64_t t0 = now_ms();
     TicketSource::Ticket t = tickets_->get(kTicketWaitMs);
     if (!t.ok || t.bytes.empty()) {
-        logf("auth: no Steam ticket (" + (t.why.empty() ? std::string("?") : t.why) + "): the write is not sent");
+        logf("auth: no Steam ticket (" + (t.why.empty() ? std::string("?") : t.why) + ")");
         if (t.handle) tickets_->release(t.handle);
         return "";
     }

@@ -6,6 +6,8 @@
 //     -> a GetAuthTicketForWebApi("sf6-community") ticket (TicketSource: the game thread asks Steam, ~0.1-1 s)
 //     -> POST /auth/steam/ticket { ticket = hex, cfn = the banner CFN when it is one, client_version } -> { token }
 //     -> identity.json { token, api_base, cfn, method, linked_at, client_version }, then CancelAuthTicket
+//   2.2.3: the first list of a session too (one try; it goes out anyway): the token follows the Steam account running
+//     the game, and a player who never wrote is known to the Worker (testers see test loadouts)
 //   every request: x-client-version; Authorization: Bearer <token> when identity.json holds one for this api_base
 //   401 invalid_token on a write: identity.json deleted, a new ticket, the write sent again once
 //   no ticket, or the ticket refused: the write never goes out; its answer is { error = <text>, error_code = <code> }

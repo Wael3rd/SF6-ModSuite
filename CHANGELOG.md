@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.19.4 (2026-10-27) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | unchanged |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.3 | the Community knows your Steam account from the first list, not only after a like or a share |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Recording Manager 2.2.2, then install 2.2.3. Slots Loader
+1.16.2, Color Mod 0.23.1 and Native Core 0.9.4 are the same files as in 1.19.3: keep them. With the all-in-one package,
+replace 1.19.3 with 1.19.4. The costume pak is not rebuilt.
+
+### SF6 Recording Manager 2.2.3
+- The first Community list of a game session (Download Loadouts) asks Steam for your verified identity, as a like or a
+  share already did. A player who never liked nor shared is now known to the Community, and the identity follows the
+  Steam account the game runs with (it used to stay the one of the first like or share on that PC, even after a change
+  of Steam account). If Steam cannot answer, the list still opens, as before.
+
 ## 1.19.3 (2026-10-26) — SF6 Mod Suite
 
 | Package | Version | |

@@ -16,6 +16,8 @@
 // (set_tickets: a Steam ticket from the game thread, then POST /auth/steam/ticket), a 401 invalid_token gets a new one once,
 // and a write that can get none is answered at once without reaching the network (auth::refused_reply). Without a ticket
 // source (the tests of the older sections) writes go out without a token, as in 2.0.0.
+// 2.2.3: the first list of a session also gets a new token (the Steam account running the game; one try, the list goes
+// out with the stored token or none when it fails).
 #pragma once
 
 #include <atomic>
@@ -97,6 +99,7 @@ private:
     TicketSource* tickets_ = nullptr;
     std::atomic<bool> authenticating_{false};
     std::atomic<int> token_state_{-1};
+    bool linked_session_ = false;      // Worker thread only: a token was asked this session (2.2.3: first list)
     CancelToken* token_ = nullptr;     // the request in flight, guarded by token_mx_
     std::mutex token_mx_;
 };

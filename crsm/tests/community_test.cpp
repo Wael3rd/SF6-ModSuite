@@ -949,11 +949,16 @@ void test_auth_flow() {
     auto list = [&] { return ask(c, C({{"cmd", "list"}, {"char", "Ken"}, {"sort", "recent"}, {"page", "1"}, {"voter_cfn", "Alpha"}}), 3000, 5); };
     auto bearer_of = [](const StubReq& r) { auto a = r.h.find("authorization"); return a == r.h.end() ? std::string() : a->second; };
 
+    tickets.fail = true;                         // the session's first list asks a ticket (2.2.3): none here
     Answer a = list();
     auto lg = stub.take_log();
-    check(a.ok && lg.size() == 1 && bearer_of(lg[0]).empty() && tickets.gets == 0, "a read without a token: sent as is, no ticket asked");
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]).empty() && tickets.gets == 1, "first list, no Steam ticket: the list goes out without a token");
     check(!lg.empty() && lg[0].h["x-client-version"] == "2.1.0" && lg[0].target.find("voter_cfn") == std::string::npos, "x-client-version, no voter_cfn");
     check(c.worker().token_state() == 0, "token state: none");
+    a = list();
+    lg = stub.take_log();
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]).empty() && tickets.gets == 1, "a read without a token: sent as is, no second try in the session");
+    tickets.fail = false;
 
     a = vote("Alpha");
     lg = stub.take_log();
@@ -977,7 +982,7 @@ void test_auth_flow() {
     a = vote("Alpha");
     Answer b = list();
     lg = stub.take_log();
-    check(a.ok && b.ok && lg.size() == 2 && bearer_of(lg[0]) == "Bearer " + kTok1 && bearer_of(lg[1]) == "Bearer " + kTok1 && tickets.gets == 1,
+    check(a.ok && b.ok && lg.size() == 2 && bearer_of(lg[0]) == "Bearer " + kTok1 && bearer_of(lg[1]) == "Bearer " + kTok1 && tickets.gets == 2,
           "the token is reused: no new ticket; reads carry it too (my_vote)");
 
     { std::lock_guard<std::mutex> lk(sm); valid.clear(); next_token = kTok2; }
@@ -1043,6 +1048,48 @@ void test_auth_flow() {
     a = vote("Alpha");
     tickets.delay_ms = 0;
     check(a.done && a.ok && a.data["action"] == "voted", "a slow Steam ticket (3.5 s) does not time the write out");
+    c.stop();
+    stub.stop();
+}
+
+// 2.2.3: the first list of a session links the Steam account running the game (a tester who never wrote, a changed account)
+void test_auth_session_link() {
+    section("auth: the first list of a session links the Steam account");
+    Stub stub;
+    stub.handler = [](const StubReq& r) {
+        StubResp s;
+        if (r.target == "/auth/steam/ticket") { s.body = C({{"ok", true}, {"token", kTok3}, {"verified", true}, {"cfn", "Beta"}}).dump(); return s; }
+        if (r.target.rfind("/api/list", 0) == 0) { s.body = R"({"items":[],"total":0})"; return s; }
+        s.body = R"({"ok":true,"action":"voted","new_value":1,"score":1})";
+        return s;
+    };
+    check(stub.start(), "link stub starts");
+    const fs::path dir = g_work / "auth_link";
+    fs::remove_all(dir);
+    const fs::path cfgp = dir / "config.json", tp = dir / "identity.json";
+    write_cfg(cfgp, stub.base(), "K");
+    std::string err;
+    auth::save_token(slash(tp), auth::Token{ kTok2, stub.base(), "Alpha", "ticket", "x", "2.1.0" }, &err);   // another account's
+    FakeTickets tickets;
+    tickets.bytes = { 0x14, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef };
+    Client c;
+    c.configure(slash(cfgp));
+    c.worker().set_tickets(&tickets);
+    c.start();
+    auto list = [&] { return ask(c, C({{"cmd", "list"}, {"char", "Ken"}, {"sort", "recent"}, {"page", "1"}}), 3000, 5); };
+    auto bearer_of = [](const StubReq& r) { auto a = r.h.find("authorization"); return a == r.h.end() ? std::string() : a->second; };
+
+    Answer a = list();
+    auto lg = stub.take_log();
+    check(a.ok && lg.size() == 2 && lg[0].target == "/auth/steam/ticket" && bearer_of(lg[0]).empty() &&
+          lg[1].target.rfind("/api/list", 0) == 0 && bearer_of(lg[1]) == "Bearer " + kTok3, "first list: a ticket, then the list with the new token");
+    check(auth::load_token(slash(tp), stub.base()) == kTok3 && tickets.released_count() == 1, "...identity.json holds the new account's token, ticket released");
+    a = list();
+    lg = stub.take_log();
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]) == "Bearer " + kTok3 && tickets.gets == 1, "second list: no new ticket");
+    a = ask(c, C({{"cmd", "vote"}, {"id", "L1"}, {"cfn", "Beta"}, {"value", 1}}), 3000, 5);
+    lg = stub.take_log();
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]) == "Bearer " + kTok3 && tickets.gets == 1, "a write after it reuses the token");
     c.stop();
     stub.stop();
 }
@@ -1296,6 +1343,7 @@ int main(int argc, char** argv) {
     test_fixes();
     test_auth_pure();
     test_auth_flow();
+    test_auth_session_link();
     test_auth_page();
     test_steam_engine();
 
