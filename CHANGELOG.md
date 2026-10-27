@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.19.5 (2026-10-27) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | unchanged |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.4 | loadout descriptions shown in full: the Manager's help line follows the selection, the Community dialog shows them large; Like / Sort on the dialog's button row |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Recording Manager 2.2.3, then install 2.2.4. Slots Loader
+1.16.2, Color Mod 0.23.1 and Native Core 0.9.4 are the same files as in 1.19.4: keep them. With the all-in-one package,
+replace 1.19.4 with 1.19.5. The costume pak is not rebuilt.
+
+### SF6 Recording Manager 2.2.4
+- Fix: in the Manager, the help line under the Loadout row showed the description of the previous loadout (one step
+  behind left / right). It now shows the description of the loadout on screen at once (or the row's own help when the
+  loadout has none).
+- Community dialog (Download Loadouts): the focused loadout's description is shown large in the free space under the
+  list, on up to five lines, wrapped to the dialog's width; a longer one turns its pages every 6 seconds ("(1/2)").
+  It used to be cut to two small lines, glued to the key hints.
+- Community dialog: "Like" and "Sort" are now on the dialog's own button row, after "Back", placed like the game's
+  buttons in every language (and translated in the 14 languages of the mod).
+
 ## 1.19.4 (2026-10-27) — SF6 Mod Suite
 
 | Package | Version | |

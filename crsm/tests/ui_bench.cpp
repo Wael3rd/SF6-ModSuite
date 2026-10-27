@@ -371,8 +371,32 @@ void test_com_fit() {
     eq(lg::desc_line("Pick Ken and throw him.\n\nThen, STOP THE SLOP", 80), std::string("Pick Ken and throw him. | Then, STOP THE SLOP"), "one line: the paragraphs joined");
     const std::string one = lg::desc_line(drill + "\n" + drill + "\n" + drill, 40);
     check(lg::text_em(one) <= 40 && one.substr(one.size() - kEll.size()) == kEll && has(one, " | "), "one line: filled, then cut with \"…\"");
-    eq(lg::com_guide_text({ "Full name", "Desc" }, "G"), std::string("Full name\nDesc\nG"), "the description area: lines, then the guide line");
+    eq(lg::com_guide_text({ "Full name", "Desc" }, "G"), std::string("Full name\nDesc\n\nG"), "the description area: lines, a blank line, the guide line");
     eq(lg::com_guide_text({}, "G"), std::string("G"), "no description: the guide line alone");
+    eq(lg::com_guide_text({ "" }, "G"), std::string("G"), "only empty lines: the guide line alone");
+    const std::vector<std::string> six{ "a", "b", "c", "d", "e", "f" };
+    check(lg::com_desc_page(six, 8, 0) == six && lg::com_desc_page(six, 6, 3) == six, "one page: the lines as they are, no page mark");
+    check(lg::com_desc_page(six, 4, 0) == std::vector<std::string>{ "a", "b", "c", "d  (1/2)" }, "page 1 of 2 marked on its last line");
+    check(lg::com_desc_page(six, 4, 1) == std::vector<std::string>{ "e", "f  (2/2)" } && lg::com_desc_page(six, 4, 2) == lg::com_desc_page(six, 4, 0), "the last page, then the first again");
+    check(lg::com_desc_page({}, 4, 5).empty() && lg::com_desc_page(six, 0, 1) == std::vector<std::string>{ "b  (2/6)" }, "no line: no page; 0 a page counts as 1");
+    // the drill the 27/10 report showed (drillcodes: paragraphs, then the credit line): whole in one page now
+    const std::string credit = "Drill by Chris_F, from drillcodes.com (made with Training Mode Drill Share by higorae), shared here with permission.";
+    const auto dl = lg::desc_lines("Pick Ken and throw him. He will auto break it.\nThen, STOP THE SLOP\n" + credit, lg::kComDescEm, lg::kComDescMaxLines);
+    check(dl.size() <= (size_t)lg::kComDescLines && dl.size() >= 3 && dl[1] == "Then, STOP THE SLOP" && dl.back().find("\xE2\x80\xA6") == std::string::npos,
+          "the drill's description and credit line fit one page, nothing cut");
+    for (const std::string& l : dl) check(lg::text_em(l) <= lg::kComDescEm, "each line within the area's width");
+    float y = 0;
+    check(lg::keep_bottom_y(8, 300, 70, 150, &y) && y == 300, "ControlPoint LeftBottom: the bottom edge is the point, it stays");
+    check(lg::keep_bottom_y(0, 230, 70, 150, &y) && y == 150, "ControlPoint LeftTop: moved up by the growth");
+    check(lg::keep_bottom_y(5, 265, 70, 150, &y) && y == 225, "ControlPoint CenterCenter: moved up by half the growth");
+    check(!lg::keep_bottom_y(12, 0, 70, 150, &y) && !lg::keep_bottom_y(3, 0, 70, 150, &y) && !lg::keep_bottom_y(-1, 0, 70, 150, &y), "an unknown ControlPoint: refused");
+    check(lg::guide_w_fits("<ICON KeyF> Confirm", 110.281, 23) && lg::guide_w_fits("<ICON KeyEsc><ICON MouseR> Back", 110.727, 23),
+          "the game's two guide items as dumped (27/10) fit the estimate");
+    check(!lg::guide_w_fits("<ICON KeyEsc><ICON MouseR> Back", 500, 23) && !lg::guide_w_fits("<ICON KeyF> Confirm", 20, 23) && !lg::guide_w_fits("", 100, 23),
+          "an item not fitted yet (a default width) does not");
+    const auto long_d = lg::desc_lines(std::string(1000, 'x') + " " + drill + " " + drill, lg::kComDescEm, lg::kComDescMaxLines);
+    check(long_d.size() > (size_t)lg::kComDescLines && long_d.size() <= (size_t)lg::kComDescMaxLines && long_d.back().find("\xE2\x80\xA6") == std::string::npos,
+          "a 1000-character description: several pages, nothing cut");
 
     group("pack info");
     json pack = json::array({ json{{"id", 2}, {"empty", true}}, json{{"id", 1}, {"empty", true}, {"info", json{{"description", "D"}, {"source", "drillcodes.com"}}}} });

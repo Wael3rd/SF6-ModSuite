@@ -360,10 +360,39 @@ std::string desc_line(const std::string& raw, double max_em) {
     return one.empty() ? std::string() : one[0];
 }
 
+std::vector<std::string> com_desc_page(const std::vector<std::string>& lines, int per_page, uint64_t page) {
+    if (lines.empty()) return {};
+    const size_t per = (size_t)std::max(1, per_page);
+    const size_t pages = (lines.size() + per - 1) / per;
+    const size_t p = (size_t)(page % pages);
+    std::vector<std::string> out(lines.begin() + (ptrdiff_t)(p * per), lines.begin() + (ptrdiff_t)std::min(lines.size(), (p + 1) * per));
+    if (pages > 1) out.back() += "  (" + std::to_string(p + 1) + "/" + std::to_string(pages) + ")";
+    return out;
+}
+
+bool keep_bottom_y(int32_t control_point, float y_old, float h_old, float h_new, float* y_new) {
+    const int32_t v = control_point >> 2;
+    if (control_point < 0 || v > 2 || (control_point & 3) > 2) return false;
+    const float below = 1.0f - 0.5f * (float)v;             // the share of the box under its ControlPoint
+    if (y_new) *y_new = y_old + below * (h_old - h_new);
+    return true;
+}
+
+double guide_text_w(const std::string& msg, double font_w) {
+    size_t icons = 0;
+    for (size_t p = msg.find("<ICON"); p != std::string::npos; p = msg.find("<ICON", p + 5)) ++icons;
+    return (text_em(msg) + kGuideIconEm * (double)icons) * font_w;
+}
+
+bool guide_w_fits(const std::string& msg, double region_w, double font_w) {
+    const double est = guide_text_w(msg, font_w);
+    return est > 0 && region_w >= 0.6 * est && region_w <= 1.6 * est;
+}
+
 std::string com_guide_text(const std::vector<std::string>& extra, const std::string& guide) {
     std::string s;
     for (const std::string& l : extra) if (!l.empty()) s += l + "\n";
-    return s + guide;
+    return s.empty() ? guide : s + "\n" + guide;
 }
 
 // ---- wording -----------------------------------------------------------------------------------------------------------

@@ -107,7 +107,34 @@ std::vector<std::string> desc_lines(const std::string& raw, double max_em, int m
 // The same text on ONE line: its paragraphs joined with " | ", wrapped at a word boundary with "…" past max_em.
 std::string desc_line(const std::string& raw, double max_em);
 // The Community dialog's description area (UIFlowOptionBGDialog.Param.GuideMessageText, the game's own description of
-// the focused unit, which CRSM's guide line replaces): `extra` lines first, then the guide line.
+// the focused unit, which CRSM's guide line replaces). Seen in game at 1920x1080 (27/10): its font draws ~14.4 px per em
+// of text_em (a 20 em line 289 px) from the rows' left edge, ~23 px a line, bottom-aligned just above "F Confirm", in a
+// box of ~3 lines: more lines and the game shrinks the font to fit (6 lines came out ~8 px). ~160 px free between the
+// list's last row and the bottom of that box. So CRSM grows the box upward to kComDescAreaH (its bottom kept), its font
+// kComDescScale larger (~18 px per em, a bit under the rows' 21.3), the description wrapped at kComDescEm (~720 px of the
+// rows' 780) and shown kComDescLines lines at a time (5 x ~29 px), the hints moved to the dialog's own guide row.
+// reframework/data/SF6_CRSMNative_data/com_desc_lines.txt (a number, 1-8) replaces kComDescLines, read when the dialog opens.
+constexpr double kComDescEm = 40.0;
+constexpr int kComDescLines = 5;
+constexpr int kComDescLinesSmall = 2;          // the box as the game made it (its geometry unreadable): 2 + the guide line
+constexpr float kComDescScale = 1.25f;
+constexpr float kComDescAreaH = 150.0f;        // px at 1080p (GUI units)
+constexpr int kComDescMaxLines = 40;           // all the lines a description may make (past them: "…")
+constexpr uint64_t kComDescPageFrames = 360;   // a longer description shows its pages in turn, 6 s each
+// Page `page` (counted from 0, wrapping) of `lines` cut in pages of per_page lines; when there are several pages, the
+// page's last line ends with "  (n/N)".
+std::vector<std::string> com_desc_page(const std::vector<std::string>& lines, int per_page, uint64_t page);
+// A text box of height h_old whose ControlPoint (via.gui.ControlPoint, SF6's values: vertical part = value >> 2, 0 top,
+// 1 centre, 2 bottom) sits at y_old, made h_new high with its bottom edge kept (the GUI's y grows downward): the new y of
+// its ControlPoint in *y_new. false for a ControlPoint not of that set.
+bool keep_bottom_y(int32_t control_point, float y_old, float h_old, float h_new, float* y_new);
+// The width the game fits a guide row item to (its RegionSize.x; dump 27/10 at font 23: "<ICON KeyF> Confirm" 110.3,
+// "<ICON KeyEsc><ICON MouseR> Back" 110.7): text_em of its words (tags count 0) + kGuideIconEm a glyph, times the font
+// width. guide_w_fits: a width within 0.6..1.6 of that (an item the game made but has not fitted yet is not).
+constexpr double kGuideIconEm = 1.2;
+double guide_text_w(const std::string& msg, double font_w);
+bool guide_w_fits(const std::string& msg, double region_w, double font_w);
+// The area's text: `extra` lines (a page), a blank line, then the guide line; no extra: the guide line alone.
 std::string com_guide_text(const std::vector<std::string>& extra, const std::string& guide);
 
 // ---- the game's own wording, learnt on its rows ------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 #include "ui/manager_page.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -66,9 +67,17 @@ uint64_t g_lang_seen = 0;
 uint64_t g_list_seen = 0;                     // the files layer's list_version the spin last followed
 // the Loadout row's guide: the selected loadout's info.description (docs/PACK_FORMAT.md) in place of the row's own help
 std::string g_guide_key = "\x01";            // char/file#list_version of the last look ("\x01" = look again)
-std::string g_guide_shown;                    // the description guide given to the core, "" = the row's own guide
 struct PackDesc { std::filesystem::file_time_type t{}; uintmax_t size = 0; std::string desc; };
 std::map<std::string, PackDesc> g_pack_desc;  // by pack path: a pack is read again only when it changed
+// The game reads the focused row's guide into its help line at a focus and when the spin moves, in its own handling of the
+// press, and not again while the row keeps the focus: a guide given from the frame callback came one move late (27/10:
+// the help line always showed the previous loadout's). So the guides of the spin's neighbours are made ahead on the frame
+// (g_spin_guide) and cb_on_spin (inside the game's Function for the press) gives the new one to the core at the move.
+std::mutex g_guide_mx;                        // leaf lock, held across pm_set_texts only (the core calls no callback under it)
+std::string g_guide_given;                    // under g_guide_mx: the Loadout row's guide as the core has it now
+std::map<int32_t, std::string> g_spin_guide;  // under g_mx: spin option -> its guide, the options near the selected one
+constexpr int32_t kGuideNear = 2;             // options made ahead on each side (a held key moves one option a press)
+std::atomic<uint64_t> g_guide_at_spin{0};
 
 bool live() { return cmn::owns(F::Ui) && !cmn::closing() && g_page.load() >= 0; }
 model::files::Engine& eng() { return mech::files::engine(); }
@@ -209,12 +218,15 @@ void retext() {
     perf::counted(g_api)->pm_set_texts(g_client, page, mgr::page_title(tr).c_str(), nullptr);
     for (int i = 0; i < mgr::kRowCount; ++i) {
         const mgr::RowText t = mgr::row_text((mgr::Row)i, tr);
+        if (i != mgr::kLoadout) { perf::counted(g_api)->pm_set_texts(g_client, g_rows[i].load(), t.title.c_str(), t.guide.c_str()); continue; }
+        std::lock_guard gl(g_guide_mx);
+        g_guide_given = t.guide;
         perf::counted(g_api)->pm_set_texts(g_client, g_rows[i].load(), t.title.c_str(), t.guide.c_str());
     }
     std::lock_guard lk(g_mx);
     g_hint_text = { tr("edit_name", {}), tr("delete_name", {}) };
     g_guide_key = "\x01";                     // the Loadout row has its own guide again: the description is put back
-    g_guide_shown.clear();
+    g_spin_guide.clear();
 }
 
 // info.description of the pack at `path` ("" when none), read once per change of the file
@@ -244,10 +256,11 @@ gm::MO* find_help_text(gm::MO* e, const std::string& shown, int depth, int* left
     return nullptr;
 }
 
-// The help line shown now, from `before` to `after`: the game takes a row's guide into its help text when the row gets the
-// focus only, so a guide changed while the Loadout row is focused (left / right) is written into the shown text too
-// (through the core's ui_set_text: compared first, R7). Only when the help shows exactly our previous guide (the Loadout
-// row focused): another row's help is never touched.
+// The help line shown now, from `before` to `after`, for a guide changed without a spin move (a save, a rename, a
+// download while the Loadout row keeps the focus): written into the shown text (through the core's ui_set_text: compared
+// first, R7) when a text under the menu's agent shows exactly our previous guide; another row's help is never touched.
+// (27/10: never found there; the help line at the bottom of the screen may belong to another agent. The guide is right
+// from the row's next focus or spin move either way.)
 void help_line_now(const std::string& before, const std::string& after) {
     if (before == after || !perf::counted(g_api)->pm_page_shown(g_page.load())) return;
     gm::MO* agent = ui::gx::pause_agent();
@@ -257,34 +270,64 @@ void help_line_now(const std::string& before, const std::string& after) {
     if (t) ui::gx::set_text(t, after);
     if (t && ui::dump::on())                                     // the help line's place and size (dump_on.txt)
         cmn::append_file("reframework/data/SF6_CRSMNative_data/dump.txt", "[Manager] help line: " + ui::gx::describe_text(t) + "\n");
-    cmn::journal("ui: manager help line %s", t ? "rewritten in place" : "not shown (the Loadout row not focused): at its next focus");
+    cmn::journal("ui: manager help line %s", t ? "rewritten in place" : "not found under the menu's agent: right at the row's next focus or move");
 }
 
-// The Loadout row's guide (its bottom help line): the selected loadout's description when it has one, its paragraphs on
-// one line (" | ") cut at kHelpLineEm with "…", else the row's own help. Given to the core when it changes (pm_set_texts:
-// the row's guide in place, as the language change does) and written into the help line shown now (help_line_now).
+// The guide of the loadout at `path` ("" = no file): its description's paragraphs on one line (" | ") cut at kHelpLineEm
+// with "…", else the row's own help `base`
+std::string guide_for(const std::filesystem::path& path, const std::string& base) {
+    const std::string desc = path.empty() ? std::string() : pack_desc(path);
+    return desc.empty() ? base : ui::logic::desc_line(desc, ui::logic::kHelpLineEm);
+}
+
+// The Loadout row's guide to the core (pm_set_texts: the row's guide in place, as the language change does) when it is not
+// the one the core has. Any thread: the frame callback and cb_on_spin (the menu's job thread; pm_* allowed there).
+bool give_guide(const std::string& guide, std::string* before) {
+    std::lock_guard lk(g_guide_mx);
+    if (guide == g_guide_given) return false;
+    if (before) *before = g_guide_given;
+    g_guide_given = guide;
+    perf::counted(g_api)->pm_set_texts(g_client, g_rows[mgr::kLoadout].load(), nullptr, guide.c_str());
+    return true;
+}
+
+// The Loadout row's guide (its bottom help line): the selected loadout's description when it has one, else the row's own
+// help (guide_for). Made when the selection or the list changed, with the guides of the kGuideNear options on each side
+// of the selected one for cb_on_spin (the spin wraps around: so do they). Given to the core when it changes: normally
+// already done by cb_on_spin at the move; otherwise here, and written into the help line shown now (help_line_now).
 void loadout_guide(uint64_t list_version) {
+    if (g_queue.selects() != 0) return;       // a move not applied yet (its guide given at the move): looked at next frame
     std::string ch, file;
     std::filesystem::path path;
+    std::vector<std::pair<int32_t, std::filesystem::path>> near;
     {
         Lock lk(mech::lock());
         const auto c = eng().char_name();
         ch = c ? *c : std::string();
         file = eng().selected_file();
         if (!ch.empty() && !file.empty()) path = eng().abs(model::store::pack_path(ch, file));
+        const std::vector<std::string>& files = eng().files();
+        const int32_t n = (int32_t)std::clamp<size_t>(eng().dropdown().size(), 1, mgr::kSpinCapacity);   // the spin's options
+        const int32_t cur = mgr::spin_value(eng().dropdown_index(), (size_t)n);
+        for (int32_t d = -kGuideNear; d <= kGuideNear; ++d) {
+            const int32_t j = ((cur + d) % n + n) % n;       // option j = dropdown entry j + 1 = files()[j - 1] (0: no file)
+            if (d == 0 || j == cur) continue;
+            std::filesystem::path p;
+            if (!ch.empty() && j >= 1 && (size_t)j <= files.size()) p = eng().abs(model::store::pack_path(ch, files[(size_t)j - 1]));
+            near.emplace_back(j, std::move(p));
+        }
     }
-    const std::string key = ch + "/" + file + "#" + std::to_string(list_version);   // (a save, a download: a new version)
+    const std::string key = ch + "/" + file + "#" + std::to_string(list_version);   // (a move, a save, a download: a new version)
     if (key == g_guide_key) return;
     g_guide_key = key;
-    const std::string desc = path.empty() ? std::string() : pack_desc(path);
     const std::string base = mgr::row_text(mgr::kLoadout, tr).guide;
-    const std::string guide = desc.empty() ? std::string() : ui::logic::desc_line(desc, ui::logic::kHelpLineEm);
-    if (guide == g_guide_shown) return;
-    const std::string before = g_guide_shown.empty() ? base : g_guide_shown;
-    const std::string after = guide.empty() ? base : guide;
-    g_guide_shown = guide;
-    perf::counted(g_api)->pm_set_texts(g_client, g_rows[mgr::kLoadout].load(), nullptr, after.c_str());
-    cmn::journal("ui: manager Loadout guide: %s", guide.empty() ? "its own help" : "the loadout's description");
+    const std::string after = guide_for(path, base);
+    std::map<int32_t, std::string> ahead;
+    for (const auto& [j, p] : near) ahead[j] = guide_for(p, base);
+    { std::lock_guard lk(g_mx); g_spin_guide = std::move(ahead); }
+    std::string before;
+    if (!give_guide(after, &before)) return;
+    cmn::journal("ui: manager Loadout guide (frame): %s", after == base ? "its own help" : "the loadout's description");
     try { help_line_now(before, after); } catch (...) { cmn::fault(F::Ui, "help line"); }
 }
 
@@ -349,12 +392,21 @@ int32_t SF6CORE_CALL cb_spin_value(void*, int64_t) {
 void SF6CORE_CALL cb_on_spin(void*, int64_t row, int32_t index) {
     try {
         if (!live() || row != g_rows[mgr::kLoadout].load()) return;
-        std::lock_guard lk(g_mx);
-        const int idx1 = mgr::dropdown_of_spin(index, g_labels.size());
-        g_sel = idx1 - 1;
-        ++g_sel_seq;
-        g_queue.push(Action{ Act::Select, idx1 });                  // set_dropdown_index(i + 1) on the frame callback
-        g_spins.fetch_add(1);
+        std::string guide;
+        bool ahead = false;
+        {
+            std::lock_guard lk(g_mx);
+            const int idx1 = mgr::dropdown_of_spin(index, g_labels.size());
+            g_sel = idx1 - 1;
+            ++g_sel_seq;
+            g_queue.push(Action{ Act::Select, idx1 });              // set_dropdown_index(i + 1) on the frame callback
+            g_spins.fetch_add(1);
+            if (const auto it = g_spin_guide.find(index); it != g_spin_guide.end()) { guide = it->second; ahead = true; }
+        }
+        // the new option's guide to the core now, before the game reads it into the help line (g_guide_mx: no lock of ours
+        // held but it; the core holds none while a callback runs)
+        if (ahead && give_guide(guide, nullptr) && g_guide_at_spin.fetch_add(1) < 3)
+            cmn::journal("ui: manager Loadout guide given at the spin move (option %d)", (int)index);   // (the first 3 only)
     } catch (...) { cmn::fault(F::Ui, "on_spin"); }
 }
 
@@ -577,12 +629,12 @@ std::string status() {
         mem = g_mem.page() == mgr::PageMemory::Page::None ? "the game's memory" : mgr::page_name(g_mem.page());
         labels = g_labels.size();
     }
-    char b[320];
+    char b[384];
     std::snprintf(b, sizeof(b), "native, page %lld (8 rows), %zu loadout labels, reopen on %s, %s, %llu decides, %llu spins, %llu actions, "
-                  "%llu hints, %llu RecordType writes, queue %zu",
+                  "%llu hints, %llu RecordType writes, %llu guides at a move, queue %zu",
                   (long long)g_page.load(), labels, mem, ui::lang::status().c_str(), (unsigned long long)g_decides.load(),
                   (unsigned long long)g_spins.load(), (unsigned long long)g_actions.load(), (unsigned long long)g_hints.load(),
-                  (unsigned long long)g_rt_writes.load(), g_queue.size());
+                  (unsigned long long)g_rt_writes.load(), (unsigned long long)g_guide_at_spin.load(), g_queue.size());
     return b;
 }
 
@@ -625,6 +677,7 @@ bool build_page() {
             return false;
         }
         g_rows[i].store(row);
+        if (i == mgr::kLoadout) { std::lock_guard gl(g_guide_mx); g_guide_given = t.guide; }
     }
     const char* first[] = { mgr::kNoFile };
     perf::counted(g_api)->pm_set_options(g_client, g_rows[mgr::kLoadout].load(), first, 1);

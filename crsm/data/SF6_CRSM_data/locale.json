@@ -56,7 +56,9 @@
     "rsm.com_not_owner": "Only its author can delete this loadout",
     "rsm.com_rate_limited": "Too many requests: try again later",
     "rsm.com_verified": "Steam-verified",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Like",
+    "rsm.com_sort": "Sort"
   },
   "fr": {
     "toggle.off": "Non",
@@ -114,7 +116,9 @@
     "rsm.com_not_owner": "Seul son auteur peut supprimer ce loadout",
     "rsm.com_rate_limited": "Trop de requêtes, réessaie plus tard",
     "rsm.com_verified": "Vérifié par Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "J'aime",
+    "rsm.com_sort": "Trier"
   },
   "ja": {
     "toggle.off": "オフ",
@@ -172,7 +176,9 @@
     "rsm.com_not_owner": "このロードアウトを削除できるのは作成者だけです",
     "rsm.com_rate_limited": "リクエストが多すぎます。後でもう一度お試しください",
     "rsm.com_verified": "Steam認証済み",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "いいね",
+    "rsm.com_sort": "並べ替え"
   },
   "zh-Hans": {
     "toggle.off": "关",
@@ -230,7 +236,9 @@
     "rsm.com_not_owner": "只有作者可以删除此配置",
     "rsm.com_rate_limited": "请求过多，请稍后再试",
     "rsm.com_verified": "Steam 已验证",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "点赞",
+    "rsm.com_sort": "排序"
   },
   "it": {
     "toggle.off": "Off",
@@ -288,7 +296,9 @@
     "rsm.com_not_owner": "Solo il suo autore può eliminare questo loadout",
     "rsm.com_rate_limited": "Troppe richieste, riprova più tardi",
     "rsm.com_verified": "Verificato da Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Mi piace",
+    "rsm.com_sort": "Ordina"
   },
   "de": {
     "toggle.off": "Aus",
@@ -346,7 +356,9 @@
     "rsm.com_not_owner": "Nur der Autor kann dieses Loadout löschen",
     "rsm.com_rate_limited": "Zu viele Anfragen, später erneut versuchen",
     "rsm.com_verified": "Von Steam verifiziert",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Gefällt mir",
+    "rsm.com_sort": "Sortieren"
   },
   "es": {
     "toggle.off": "Off",
@@ -404,7 +416,9 @@
     "rsm.com_not_owner": "Solo su autor puede eliminar este loadout",
     "rsm.com_rate_limited": "Demasiadas solicitudes, vuelve a intentarlo más tarde",
     "rsm.com_verified": "Verificado por Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Me gusta",
+    "rsm.com_sort": "Ordenar"
   },
   "es-419": {
     "toggle.off": "Off",
@@ -462,7 +476,9 @@
     "rsm.com_not_owner": "Solo su autor puede eliminar este loadout",
     "rsm.com_rate_limited": "Demasiadas solicitudes, intenta de nuevo más tarde",
     "rsm.com_verified": "Verificado por Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Me gusta",
+    "rsm.com_sort": "Ordenar"
   },
   "ru": {
     "toggle.off": "Выкл",
@@ -520,7 +536,9 @@
     "rsm.com_not_owner": "Удалить этот набор может только его автор",
     "rsm.com_rate_limited": "Слишком много запросов, попробуйте позже",
     "rsm.com_verified": "Подтверждено Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Нравится",
+    "rsm.com_sort": "Сортировка"
   },
   "pl": {
     "toggle.off": "Wył.",
@@ -578,7 +596,9 @@
     "rsm.com_not_owner": "Tylko autor może usunąć ten zestaw",
     "rsm.com_rate_limited": "Zbyt wiele żądań, spróbuj później",
     "rsm.com_verified": "Zweryfikowano przez Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Lubię to",
+    "rsm.com_sort": "Sortuj"
   },
   "pt": {
     "toggle.off": "Desligado",
@@ -636,7 +656,9 @@
     "rsm.com_not_owner": "Só o autor pode excluir este loadout",
     "rsm.com_rate_limited": "Pedidos demais, tente mais tarde",
     "rsm.com_verified": "Verificado pela Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "Curtir",
+    "rsm.com_sort": "Ordenar"
   },
   "ko": {
     "toggle.off": "꺼짐",
@@ -694,7 +716,9 @@
     "rsm.com_not_owner": "이 로드아웃은 작성자만 삭제할 수 있습니다",
     "rsm.com_rate_limited": "요청이 너무 많습니다. 나중에 다시 시도하세요",
     "rsm.com_verified": "Steam 인증됨",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "좋아요",
+    "rsm.com_sort": "정렬"
   },
   "zh-Hant": {
     "toggle.off": "關",
@@ -752,7 +776,9 @@
     "rsm.com_not_owner": "只有作者可以刪除此配置",
     "rsm.com_rate_limited": "請求過多，請稍後再試",
     "rsm.com_verified": "Steam 已驗證",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "按讚",
+    "rsm.com_sort": "排序"
   },
   "ar": {
     "toggle.off": "إيقاف",
@@ -810,6 +836,8 @@
     "rsm.com_not_owner": "لا يستطيع حذف هذا الإعداد إلا صاحبه",
     "rsm.com_rate_limited": "طلبات كثيرة جدا، حاول لاحقا",
     "rsm.com_verified": "موثّق عبر Steam",
-    "rsm.com_verified_mark": "[V]"
+    "rsm.com_verified_mark": "[V]",
+    "rsm.com_like": "إعجاب",
+    "rsm.com_sort": "ترتيب"
   }
 }
