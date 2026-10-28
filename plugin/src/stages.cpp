@@ -65,6 +65,7 @@ constexpr uint32_t kLoadFrames = 60;      // a texture handed to the GUI while i
 uint32_t g_preview_wait = 0;              // a preview is loading: frame when the last one is ready
 
 void strip_open();                        // stage strip (below): look at the cells again for a while
+Obj* find_child(Obj* ctrl, const char* name, int depth);
 void strip_restore();                     // the game's images back on the cells, references released
 
 // ---------------------------------------------------------------------------------------------
@@ -355,6 +356,7 @@ void screen_hidden() {
 }
 
 void screen_work(bool input) {
+    perf::Scope ps(perf::StgScreen);
     Obj* param = g_scr.param;
     if (!alive(param)) { param = find_stage_param(); g_scr.param = param; if (!param) return; }
     uint32_t stage = 0;
@@ -393,6 +395,7 @@ Obj* find_child(Obj* ctrl, const char* name, int depth) {
 
 // false while something is left to show (control not found yet, image loading)
 bool vs_work() {
+    perf::Scope ps(perf::StgVs);
     uint32_t stage = g_scr.decided;
     int idx = stage != UINT32_MAX ? selected_index(stage) : 0;
     if (idx == 0) return true;
@@ -483,6 +486,30 @@ uint32_t stage_of_image(Obj* holder, bool& ours, std::string& code) {
     return it != g_ess_stage.end() ? it->second : UINT32_MAX;
 }
 
+// A control found earlier by find_child(root, name, 0), used again while it still is what that search would find: alive,
+// still named so, still under root within find_child's depth (its parents climbed). Each find_child of the strip walks
+// the screen's GUI tree with three game calls per control (28/10: 3-4 ms on the frame the strip was first looked at,
+// at every visit of the stage select); the same controls live from one visit to the next.
+bool still_under(Obj* c, Obj* root, const char* name) {
+    if (!c || !root || !alive(c) || str(call_obj(c, "get_Name")) != name) return false;
+    Obj* p = c;
+    for (int up = 0; up < 10 && p; ++up) {
+        p = call_obj(p, "get_Parent");
+        if (p == root) return true;
+    }
+    return false;
+}
+struct Found { Obj* root = nullptr; Obj* c = nullptr; };
+std::map<std::string, Found> g_found;                  // name -> the last hit of find_child under a root (strip, list)
+std::map<Obj*, Obj*> g_cell_mat;                       // a cell -> its e_mat_thumb
+Obj* find_child_kept(Obj* root, const char* name) {
+    auto it = g_found.find(name);
+    if (it != g_found.end() && it->second.root == root && still_under(it->second.c, root, name)) return it->second.c;
+    Obj* c = find_child(root, name, 0);
+    g_found[name] = { root, c };
+    return c;
+}
+
 void strip_collect(Obj* ctrl, int depth, std::vector<Cell>& out) {
     if (!ctrl || depth > 10) return;
     for (Obj* c = call_obj(ctrl, "get_Child"); c; c = call_obj(c, "get_Next")) {
@@ -490,7 +517,9 @@ void strip_collect(Obj* ctrl, int depth, std::vector<Cell>& out) {
         if (n.compare(0, strlen(kCellPrefix), kCellPrefix) == 0 || n.compare(0, 4, "item") == 0) {
             Cell x;
             x.ctrl = c; x.name = n;
-            x.mat = find_child(c, "e_mat_thumb", 0);
+            auto k = g_cell_mat.find(c);
+            if (k != g_cell_mat.end() && still_under(k->second, c, "e_mat_thumb")) x.mat = k->second;
+            else { x.mat = find_child(c, "e_mat_thumb", 0); g_cell_mat[c] = x.mat; }
             if (x.mat) out.push_back(std::move(x));
         } else strip_collect(c, depth + 1, out);
     }
@@ -498,14 +527,19 @@ void strip_collect(Obj* ctrl, int depth, std::vector<Cell>& out) {
 
 // The strip's cells; what was learnt of those still there is kept
 bool strip_scan() {
+    perf::Scope ps(perf::StgStripScan);
     g_strip.scanned = true;
     g_strip.scanned_at = g_frame;
     Obj* cm = alive(g_scr.agent) ? call_obj(g_scr.agent, "get_ControlMain") : nullptr;
-    Obj* root = cm ? find_child(cm, "c_stage", 0) : nullptr;
     // the list sits next to c_stage under the screen's main control (seen in game 16/10): its cells are item1..itemN
-    Obj* list = cm ? find_child(cm, "p_ScrollList_0_h_loop", 0) : nullptr;
+    Obj* list = cm ? find_child_kept(cm, "p_ScrollList_0_h_loop") : nullptr;
     std::vector<Cell> found;
     if (list) strip_collect(list, 0, found);
+    for (auto it = g_cell_mat.begin(); it != g_cell_mat.end();) {    // the cells of this list only
+        bool here = false;
+        for (auto& f : found) if (f.ctrl == it->first) { here = true; break; }
+        it = here ? std::next(it) : g_cell_mat.erase(it);
+    }
     for (auto& f : found)
         for (auto& o : g_strip.cells)
             if (o.ctrl == f.ctrl && o.mat == f.mat) { f.vanilla = o.vanilla; o.vanilla = nullptr; f.stage = o.stage; f.shown = o.shown; break; }
@@ -513,6 +547,7 @@ bool strip_scan() {
     g_strip.cells = std::move(found);
     if (g_strip.cells.empty() && !g_strip.warned) {
         g_strip.warned = true;
+        Obj* root = cm ? find_child(cm, "c_stage", 0) : nullptr;   // for this line only
         logf("stages: stage strip not found (c_stage %s, p_ScrollList_0_h_loop %s): its cells keep the game's images",
              root ? "ok" : "-", list ? "ok" : "-");
     }
@@ -521,6 +556,7 @@ bool strip_scan() {
 
 // false while something is left to do (strip not built yet, a preview loading)
 bool strip_work() {
+    perf::Scope ps(perf::StgStrip);
     if (!slots::ui::has_mat_tex()) {
         if (!g_strip_off) { g_strip_off = true; logf("stages: the core has no ui_set_material_texture (core 0.8.1+): the stage strip shows the game's images"); }
         return true;
@@ -692,6 +728,7 @@ void tick(uint32_t ev) {
     // 3 s (every 5 frames)
     if ((ev & (EV_STAGE_SHOW | EV_STAGE_HIDE)) || ((ev & EV_STAGE_DIRTY) && !g_scr.active)) g_scr.check_until = g_frame + 180;
     if (g_scr.check_until && (g_frame % 5 == 0 || (ev & (EV_STAGE_SHOW | EV_STAGE_HIDE)))) {
+        perf::Scope ps(perf::StgCheck);
         if (g_frame >= g_scr.check_until) g_scr.check_until = 0;
         // the agent kept from an earlier visit can outlive its screen (Result -> Change Stage makes a
         // new one): when it is not on screen, the current one is looked for

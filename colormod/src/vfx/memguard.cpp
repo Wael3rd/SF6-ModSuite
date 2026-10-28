@@ -8,6 +8,7 @@
 #include <mutex>
 
 #include "../common.hpp"
+#include "../perf.hpp"
 
 namespace vfx::memguard {
 namespace {
@@ -23,10 +24,14 @@ ULONGLONG g_born = 0;
 uint64_t g_queries = 0;
 
 // one VirtualQuery: the state of a's page and its region [base, end) (end = 0: no region to keep)
+thread_local bool tl_background = false;                // PageQuery meters the game's threads only
 int query_raw(uint64_t a, uint64_t& base, uint64_t& end) {
     MEMORY_BASIC_INFORMATION mbi{};
     base = end = 0;
-    if (VirtualQuery((LPCVOID)a, &mbi, sizeof mbi) != sizeof mbi) return 0;
+    const int64_t t0 = tl_background ? 0 : perf::begin();
+    const SIZE_T got = VirtualQuery((LPCVOID)a, &mbi, sizeof mbi);
+    perf::end(perf::PageQuery, t0);
+    if (got != sizeof mbi) return 0;
     int st = 0;
     if (mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD) && mbi.Protect != PAGE_NOACCESS) {
         st = 1;
@@ -50,6 +55,8 @@ int query(uint64_t a) {                       // lock held
 }
 
 }  // namespace
+
+void mark_background_thread() { tl_background = true; }
 
 int state(uint64_t a) {
     std::lock_guard<std::mutex> lk(g_mx);
@@ -94,6 +101,28 @@ int Local::state(uint64_t a) {
     uint64_t base, end;
     const int st = query_raw(a, base, end);
     if (end) {
+        if (regions_.size() >= kMaxRegions) regions_.clear();
+        regions_[base] = Region{ end, st };
+    }
+    return st;
+}
+
+bool Held::has(uint64_t a) const {
+    auto it = regions_.upper_bound(a);
+    if (it == regions_.begin()) return false;
+    --it;
+    return a < it->second.end;
+}
+
+int Held::state(uint64_t a) {
+    auto it = regions_.upper_bound(a);
+    if (it != regions_.begin()) {
+        --it;
+        if (a < it->second.end) return it->second.st;
+    }
+    uint64_t base, end;
+    const int st = query_raw(a, base, end);
+    if (end && ((st & 1) || keep_unreadable_)) {
         if (regions_.size() >= kMaxRegions) regions_.clear();
         regions_[base] = Region{ end, st };
     }

@@ -531,7 +531,7 @@ void test_community() {
     lg::ComDialog d(p);
     // a previous session's rows stay visible until the answer (as v1.6)
     d.open();
-    check(d.is_open() && p.opens == 1 && p.menus == 1, "Download Loadouts opens the dialog and fetches");
+    check(d.is_open() && p.opens == 1 && p.menus == 1, "Download Drills opens the dialog and fetches");
     bool all_loading = p.shown_labels.size() == 7;
     for (const auto& s : p.shown_labels) all_loading = all_loading && s == "Loading...";
     check(all_loading, "no rows yet, loading: every row reads Loading... (RMT:300-303)");
@@ -644,8 +644,8 @@ void test_community() {
     const size_t n5 = p.navigations.size();
     d.tick(false, false, false, false, true);
     check(p.navigations.size() == n5, "opened on a pad: no rebuild at the first tick");
-    eq(model::labels::community_title("New", "Ken", 2, 5), std::string("New  Ken Loadouts\n<ICON KeyA>   Page 2/5   <ICON KeyE>"), "title, keyboard glyphs");
-    eq(model::labels::community_title("New", "Ken", 2, 5, true), std::string("New  Ken Loadouts\n<ICON BtnL1>   Page 2/5   <ICON BtnR1>"), "title, pad glyphs");
+    eq(model::labels::community_title("New", "Ken", 2, 5), std::string("New  Ken Drills\n<ICON KeyA>   Page 2/5   <ICON KeyE>"), "title, keyboard glyphs");
+    eq(model::labels::community_title("New", "Ken", 2, 5, true), std::string("New  Ken Drills\n<ICON BtnL1>   Page 2/5   <ICON BtnR1>"), "title, pad glyphs");
     eq(model::labels::community_guide(false), std::string("<ICON KeyT> Like   <ICON KeyR> Sort"), "guide line, keyboard glyphs");
     eq(model::labels::community_guide(true), std::string("<ICON BtnU> Like   <ICON BtnL> Sort"), "guide line, pad glyphs (Y / X)");
 }
@@ -655,7 +655,7 @@ void test_community() {
 // and InitTabItem, whose pre-hooks call the guard), the game's own L1 / R1 when no dialog is up, the frame callback.
 struct TabSim {
     lg::TabGuard g;
-    lg::TabSpot data{ 3, 4 };                    // Recording tab, the Manager's "Download Loadouts" row
+    lg::TabSpot data{ 3, 4 };                    // Recording tab, the Manager's "Download Drills" row
     lg::TabSpot built{ 3, 4 };                   // what the last rebuild read (the page shown)
     bool modal = false;
     int fixes = 0;

@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.19.6 (2026-10-28) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.3 | fix: a Color Mod colour worn in the match too; part options (Ken's hair) right when Training opens from the main menu; less work in the game's frame |
+| SF6 Color Mod | 0.23.2 | less work in the game's frame (fight start, Drive effects, colour saves) |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.5 | "loadouts" are now called "drills"; fix: downloaded Test drills are recognised |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.2, SF6 Color Mod 0.23.1 and SF6 Recording
+Manager 2.2.4, then install Slots Loader 1.16.3, Color Mod 0.23.2 and Recording Manager 2.2.5. Native Core 0.9.4 is the
+same file as in 1.19.5: keep it. With the all-in-one package, replace 1.19.5 with 1.19.6. The costume pak is not rebuilt.
+
+### SF6 Slots Loader 1.16.3
+- Fix: with an outfit slot and a Color Mod colour (MC / RW), the select and VS screens showed the colour but the match
+  (Custom Room) showed the outfit's normal colour. The fighter's other costume record no longer clears the selection the
+  Color Mod reads while one of them still wears the slot.
+- Fix: runtime costume options made of parts (mesh, material and physics together, such as Ken's SFV hair) came up
+  detached, or showed the base part for a few seconds, when Training was opened with the main menu's shortcut. The
+  option files are now asked for when the game asks for the fighters' files, and the part is put on the frame the
+  model appears.
+- Less work on the game thread every frame: log lines are written by a background thread; the runtime options search
+  the scene only shortly after a change, look only at the models that can wear an option, spread the rest over several
+  frames and stop searching once the Training fighters are built; the settings file is read again only when it
+  changed; the stage strip reuses its controls between visits.
+
+### SF6 Color Mod 0.23.2
+- Less work on the game thread, the same colours: the Drive effect search is spread over several frames with one shared
+  budget per frame (fight start, effect providers), the game's effect tables are read in one copy, the memory checks of
+  the colour writes run on a background thread, and the journal, `_spots.json` and the select screen's `state.json` are
+  written by a background thread (each cost 2 to 6 ms in one frame).
+
+### SF6 Recording Manager 2.2.5
+- "Loadouts" are now called "drills" everywhere in the mod (Manager rows and help lines, the Community dialog, messages,
+  the 14 languages), as on the Community site.
+- Fix: a Test drill downloaded from the Community was not marked as downloaded (no DL mark, a second download allowed,
+  Like refused).
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
 ## 1.19.5 (2026-10-27) — SF6 Mod Suite
 
 | Package | Version | |

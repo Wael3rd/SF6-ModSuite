@@ -11,6 +11,7 @@
 
 namespace vfx::memguard {
 
+void mark_background_thread();               // this thread is ours (verdicts, scan walk): its queries are not metered
 int state(uint64_t a);                       // bit 0 readable, bit 1 writable (committed, no guard / no-access page)
 bool readable(uint64_t a, size_t n);         // every page of [a, a + n)
 uint64_t queries();                          // VirtualQuery calls so far (status)
@@ -25,6 +26,21 @@ private:
     std::map<uint64_t, Region> regions_;
     unsigned long long born_ = 0;
     uint64_t n_ = 0;
+};
+
+// The same page check for one pass spread over several frames (engine refresh_pages): the answers are kept until
+// clear(), whatever the frame, so a region is asked once per pass and not again at each frame of it. The caller
+// dates its result with the time of the clear() (every answer it holds is younger). Game thread, not shared.
+class Held {
+public:
+    explicit Held(bool keep_unreadable = true) : keep_unreadable_(keep_unreadable) {}
+    int state(uint64_t a);
+    bool has(uint64_t a) const;                // the answer for a is held (state(a) costs no VirtualQuery)
+    void clear() { regions_.clear(); }
+private:
+    struct Region { uint64_t end; int st; };
+    std::map<uint64_t, Region> regions_;
+    bool keep_unreadable_;                     // false: an unreadable region is asked again at each call
 };
 
 }  // namespace vfx::memguard

@@ -91,8 +91,16 @@ void on_late_update() {
             stages::tick(ev);
             perf::end(perf::StagesTick, pt);
         }
-        rto::tick(ev);                      // runtime costume options (after the costume work of the frame)
-        fsname::tick(ev);                   // the outfit's name on Fighter Settings
+        {
+            int64_t pt = perf::begin();
+            rto::tick(ev);                  // runtime costume options (after the costume work of the frame)
+            perf::end(perf::RtoTick, pt);
+        }
+        {
+            int64_t pt = perf::begin();
+            fsname::tick(ev);               // the outfit's name on Fighter Settings
+            perf::end(perf::FsNameTick, pt);
+        }
         nsfwopt::tick();                    // the Options row follows settings.json
         g_costumes_busy = costumes::busy();
         g_stages_busy = stages::busy();

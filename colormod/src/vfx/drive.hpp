@@ -28,6 +28,7 @@ bool scan_result(const std::string& body, uint64_t seq, std::vector<Spot>& found
 // _spots.json (the Lua's format; a 6th element carries our written values) and _spots_sig.txt
 std::vector<Spot> load_spots_file(const std::string& path, size_t& total);
 bool save_spots_file(const std::string& path, const std::vector<Spot>& spots);
+std::string spots_json(const std::vector<Spot>& spots);   // what save_spots_file writes
 
 // relay text (write_handoff). Colours per side 1..2: parry, rush, special (c1, c2; nullopt = keep the game's).
 struct ColorPair { std::optional<uint32_t> c1, c2; };

@@ -30,11 +30,13 @@ constexpr double kSlowFrameMs = 20.0;
 constexpr double kSlowFactor  = 1.5;
 constexpr double kSlowOursMs  = 2.0;
 
-const char* const kNames[kCount] = {
+const char* const kNames[] = {
     "OnLateUpdate",
     "HkCosHolderCtor", "HkCosMenuCreatedObject", "HkCosMenuShowedObject", "HkCosMenuHidObject", "HkCosMenuOnEnd", "HkCosFlowStart", "HkCosFlowOnDestroy", "HkCosUI10501Start", "HkCosUI10501End", "HkCosTitleOnDestroy", "HkStgShown_GotObject", "HkStgShown_BeforeShowObject", "HkStgShown_ShowedObject", "HkStgHidden_BeforeHideObject", "HkStgHidden_OnEnd", "HkStgDirty_SelectionChangedWithArgs_List", "HkStgDirty_SetPreview", "HkStgDirty_ChangePreview", "HkAgentInputUp", "HkAgentInputDown", "HkVsActivate", "HkVsSetDispInfo", "HkVsSetTexture",
     "CostumesTick", "StagesTick", "StateWrite",
+    "RtoTick", "RtoWatch", "RtoVs", "RtoVsScan", "RtoSelect", "RtoPreview", "RtoWalk", "RtoPass", "RtoWant", "RtoBind", "RtoPopup", "RtoKeys", "RtoGuide", "RtoMem", "StgScreen", "StgStrip", "StgStripScan", "StgCheck", "StgVs", "FsNameTick",
 };
+static_assert(sizeof(kNames) / sizeof(kNames[0]) == kCount, "one name per perf::Id");
 
 // ---- background file writer ----
 namespace bgw {
@@ -44,6 +46,7 @@ std::condition_variable g_cv;
 std::deque<Item> g_queue;
 std::atomic<bool> g_started{false};
 std::atomic<bool> g_stop{false};
+std::atomic<uint64_t> g_pushed{0}, g_done{0};   // items queued / written (bg_flush)
 
 void worker() {
     std::map<std::string, FILE*> files;
@@ -63,6 +66,7 @@ void worker() {
             f = fopen(item.path.c_str(), "ab");
         }
         if (f) { fwrite(item.content.data(), 1, item.content.size(), f); fflush(f); }
+        g_done.fetch_add(1, std::memory_order_release);
     }
     for (auto& [p, f] : files) if (f) fclose(f);
 }
@@ -76,6 +80,7 @@ void append(const std::string& path, const std::string& text) {
     ensure_started();
     std::lock_guard<std::mutex> lk(g_mx);
     g_queue.push_back(Item{path, text});
+    g_pushed.fetch_add(1, std::memory_order_relaxed);
     g_cv.notify_one();
 }
 }  // namespace bgw
@@ -216,6 +221,14 @@ void frame() {
 
 void bg_write(const char* path, const std::string& text) {
     bgw::append(path, text);
+}
+
+void bg_flush(unsigned timeout_ms) {
+    if (!bgw::g_started.load(std::memory_order_acquire)) return;
+    uint64_t target;
+    { std::lock_guard<std::mutex> lk(bgw::g_mx); target = bgw::g_pushed.load(std::memory_order_relaxed); }
+    const ULONGLONG until = GetTickCount64() + timeout_ms;
+    while (bgw::g_done.load(std::memory_order_acquire) < target && GetTickCount64() < until) Sleep(1);
 }
 
 }  // namespace perf

@@ -1081,9 +1081,10 @@ std::map<int, int> g_mlive;             // fighter -> slot of the last managed r
 // then back on the slot's character with the network holding Outfit 1: no request of the carrier, and the fighters
 // were built with the slot's override on files released two matches before: connection error)
 bool g_mbatch_open = false;
-// The FighterDescs the plugin gave a slot as their override
-struct Dressed { int fid, slot, color; };
+// The FighterDescs the plugin gave a slot as their override (seq: the order they were dressed in)
+struct Dressed { int fid, slot, color; uint32_t seq; };
 std::map<Obj*, Dressed> g_dressed;
+uint32_t g_dress_seq = 0;
 Obj* g_reload_desc = nullptr;           // the description of a reload (SetupReloadBattleAsset), until fighters are built
 Obj* g_reload_map = nullptr;            // the flow map that set that reload up
 thread_local bool g_in_request = false; // the plugin's own request, seen by its hooks: let through
@@ -1099,6 +1100,16 @@ int arg_int(void* a) { return static_cast<int32_t>(static_cast<uint32_t>(reinter
 struct DescFighter { Obj* fd; int fid, cos, color; bool ours; int team, pad, member, ctrl; };
 struct DescInfo { std::vector<DescFighter> f; int mode = 0, self = -1; bool picked = false, net = false, room = false; };
 bool g_room_load = false;              // the last load was a Custom Room's training area
+// The fighters' files asked for (requests of the game, any fighter; a reload set up) and what the last fighters were
+// built from (setupFighterAsset's description): rto's VS screen search reads them (training_built)
+std::atomic<uint32_t> g_fighter_requests{ 0 };
+std::atomic<int> g_built_mode{ -1 };    // app.EGameMode of the last fighters' description, -1 unknown
+std::atomic<bool> g_built_net{ false };
+std::atomic<uint32_t> g_built_requests{ 0 };   // g_fighter_requests when they were built
+// The last load the hooks saw (numbers only, read on the game thread by load_fighters): the flow map of a request of
+// the fighters' files, or the description the fighters are built from (setupFighterAsset; cleared by the next request)
+std::atomic<Obj*> g_load_map{ nullptr };
+std::atomic<Obj*> g_load_desc{ nullptr };
 bool read_desc(Obj* desc, DescInfo& d, bool at_load) {
     if (!desc || !alive(desc)) return false;
     uint8_t mode = 0;
@@ -1178,14 +1189,30 @@ bool dress(const DescFighter& f, int slot) {
     auto r = call(m_fd_set_ow, f.fd, { arg_i32(slot), arg_i32(col) });
     if (wjournal::on()) wjournal::log("ALIAS_SET fd=%p F%d v%d c%d ok=%d", (void*)f.fd, f.fid, slot, col, r.exception_thrown ? 0 : 1);
     if (r.exception_thrown) { logf("[F%d] alias: the game refused the override", f.fid); return false; }
-    g_dressed[f.fd] = { f.fid, slot, col };
+    g_dressed[f.fd] = { f.fid, slot, col, ++g_dress_seq };
     ui::set_effective(f.fid, carrier_of(f.fid), slot, col);
     logf("[F%d] alias: the player's fighter wears slot v%02d colour %d over %s", f.fid, slot, col, carrier_name(f.fid).c_str());
     return true;
 }
 
-// The override the plugin set, removed (the description is the game's again)
-void undress(Obj* fd, const char* why) {
+// What `fid` wears for the core after an override was taken off. The core keeps one effective selection per fighter and
+// carrier, shared by all its FighterDescs: a FighterDesc still dressed for that fighter (and alive) keeps it (the last dressed);
+// cleared only when none is left. A Custom Room match: its description is dressed when its files are asked for, then the
+// training area's is undressed when the match's fighters are built: clearing there left the match's fighter without its
+// slot for the Color Mod (the game colour worn instead of a custom one, 27/10).
+void declare_effective(int fid) {
+    const Dressed* still = nullptr;
+    for (auto& [o, d] : g_dressed)
+        if (d.fid == fid && (!still || d.seq > still->seq) && alive(o)) still = &d;
+    if (!still) { ui::set_effective(fid, carrier_of(fid), -1, -1); return; }
+    ui::set_effective(fid, carrier_of(fid), still->slot, still->color);
+    logf("[F%d] alias: another FighterDesc of the player's still wears slot v%02d colour %d: still declared to the core",
+         fid, still->slot, still->color);
+}
+
+// The override the plugin set, removed (the description is the game's again). `declare` false: the caller removes
+// several and calls declare_effective once after.
+void undress(Obj* fd, const char* why, bool declare = true) {
     auto it = g_dressed.find(fd);
     if (it == g_dressed.end()) return;
     const Dressed w = it->second;
@@ -1194,8 +1221,8 @@ void undress(Obj* fd, const char* why) {
         auto r = call(m_fd_reset_ow, fd);
         if (wjournal::on()) wjournal::log("ALIAS_RESET fd=%p F%d v%d ok=%d (%s)", (void*)fd, w.fid, w.slot, r.exception_thrown ? 0 : 1, why);
     }
-    ui::set_effective(w.fid, carrier_of(w.fid), -1, -1);
     logf("[F%d] alias: slot v%02d taken off the player's fighter (%s)", w.fid, w.slot, why);
+    if (declare) declare_effective(w.fid);
 }
 
 // ---- hooks: the fighters' files asked for and unloaded, the fighters built (BattleFlowMap) ----
@@ -1278,16 +1305,23 @@ void on_carrier_unload(Obj* map, int fid, int cos) {
         g_in_request = false;
         if (wjournal::on()) wjournal::log("ALIAS_UNLOAD F%d v%d ok=%d", fid, e.slot, r.exception_thrown ? 0 : 1);
         logf("[F%d] alias: slot v%02d's files unloaded with the last of %s's", fid, e.slot, ownership::outfit_label(cos).c_str());
-        if (!slot_held(fid, e.slot))
+        if (!slot_held(fid, e.slot)) {
+            bool any = false;
             for (auto d = g_dressed.begin(); d != g_dressed.end();) {
                 auto cur = d++;
-                if (cur->second.fid == fid && cur->second.slot == e.slot) undress(cur->first, "its files unloaded");
+                if (cur->second.fid == fid && cur->second.slot == e.slot) { undress(cur->first, "its files unloaded", false); any = true; }
             }
+            if (any) declare_effective(fid);
+        }
     }
 }
 
 int pre_asset_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    g_fighter_requests.fetch_add(1, std::memory_order_relaxed);
+    g_load_map.store(reinterpret_cast<Obj*>(argv[1]), std::memory_order_relaxed);
+    g_load_desc.store(nullptr, std::memory_order_relaxed);
+    post(EV_FIGHTER_LOAD);
     const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
     auto it = g_f.find(fid);
     if (it != g_f.end() && it->second.carrier >= 0 && cos == it->second.carrier)
@@ -1338,6 +1372,10 @@ void on_carrier_managed(Obj* map, int fid, int cls, int n) {
 
 int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || g_in_request || argc < 6) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    g_fighter_requests.fetch_add(1, std::memory_order_relaxed);
+    g_load_map.store(reinterpret_cast<Obj*>(argv[1]), std::memory_order_relaxed);
+    g_load_desc.store(nullptr, std::memory_order_relaxed);
+    post(EV_FIGHTER_LOAD);
     const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
     try {
         std::lock_guard lk(g_alias_mx);
@@ -1360,6 +1398,7 @@ int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
 // A reload of the fighters (a character or costume changed in the battle): its description, read by the loads it asks for
 int pre_reload_setup(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    g_fighter_requests.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard lk(g_alias_mx);
     g_reload_map = reinterpret_cast<Obj*>(argv[1]);
     g_reload_desc = reinterpret_cast<Obj*>(argv[2]);
@@ -1371,11 +1410,17 @@ int pre_reload_setup(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
 // fighter); every other override of the plugin's is taken off
 int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || argc < 3) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    g_load_desc.store(reinterpret_cast<Obj*>(argv[2]), std::memory_order_relaxed);
+    post(EV_FIGHTER_LOAD);
     std::lock_guard lk(g_alias_mx);
     try {
         DescInfo d;
         std::set<Obj*> keep;
-        if (read_desc(reinterpret_cast<Obj*>(argv[2]), d, false))
+        const bool read = read_desc(reinterpret_cast<Obj*>(argv[2]), d, false);
+        g_built_mode.store(read ? d.mode : -1, std::memory_order_relaxed);
+        g_built_net.store(read && d.net, std::memory_order_relaxed);
+        g_built_requests.store(g_fighter_requests.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        if (read)
             for (auto& f : d.f) {
                 const int slot = wanted_slot(f.fid);
                 if (!wears_slot(d, f, slot)) continue;
@@ -1386,10 +1431,12 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
                 }
                 if (dress(f, slot)) keep.insert(f.fd);
             }
+        std::set<int> gone;
         for (auto it = g_dressed.begin(); it != g_dressed.end();) {
             auto cur = it++;
-            if (!keep.count(cur->first)) undress(cur->first, "not the player's slot in these fighters");
+            if (!keep.count(cur->first)) { gone.insert(cur->second.fid); undress(cur->first, "not the player's slot in these fighters", false); }
         }
+        for (int fid : gone) declare_effective(fid);
     } catch (...) {}
     g_reload_desc = nullptr;
     g_reload_map = nullptr;
@@ -1680,6 +1727,35 @@ void tick(uint32_t ev) {
 
 bool online() { return online_now(); }
 bool select_active() { return select_screen_active(); }
+bool training_built() {
+    return g_built_mode.load(std::memory_order_relaxed) == 2 && !g_built_net.load(std::memory_order_relaxed)
+           && g_built_requests.load(std::memory_order_relaxed) == g_fighter_requests.load(std::memory_order_relaxed);
+}
+// The description of the last load (the hooks keep numbers only): the one the fighters are built from, else the one a
+// request of their files reads (request_desc's choice, without dropping anything: the hooks own that)
+bool load_fighters(std::vector<LoadFighter>& out, const char** why) {
+    std::lock_guard lk(g_alias_mx);
+    Obj* desc = g_load_desc.load(std::memory_order_relaxed);
+    if (why) *why = "fighters built from their description";
+    if (!alive(desc)) {
+        if (why) *why = "fighters' files asked for";
+        Obj* map = g_load_map.load(std::memory_order_relaxed);
+        if (g_reload_desc && map == g_reload_map && alive(g_reload_desc)) desc = g_reload_desc;
+        else {
+            desc = alive(map) ? get_obj(map, "m_desc") : nullptr;
+            if (!alive(desc)) desc = battle_desc();
+        }
+    }
+    DescInfo d;
+    if (!read_desc(desc, d, false)) return false;
+    for (auto& f : d.f) {
+        auto dr = g_dressed.find(f.fd);                       // the alias: the slot worn over the carrier
+        const int cos = dr != g_dressed.end() ? dr->second.slot : f.cos;
+        const int side = d.net ? 0 : f.team;
+        if (cos >= 0 && (side == 0 || side == 1)) out.push_back({ f.fid, cos, side });
+    }
+    return !out.empty();
+}
 int battle_mode() {
     auto* desc = battle_desc();
     auto* rule = desc ? get_obj(desc, "Rule") : nullptr;

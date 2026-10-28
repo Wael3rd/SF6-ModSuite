@@ -26,6 +26,7 @@
 // (fighters_hold_end), then made in one pass with the files asked for ahead while the popup was up (g_warm_pop).
 #include "rto.hpp"
 #include "slots_ui.hpp"
+#include "perf.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -64,11 +65,22 @@ bool g_fs_was = false;              // Fighter Settings visible on the last fram
 uint32_t g_watch_until = 0;         // fighters watched after an event, until this frame
 uint32_t g_watch_next = 0;
 uint32_t g_watch_start = 0;
+// The fighters' search inside a watch (findComponents(PlayerBehavior) every 10 frames, 1-2 ms in a fight's scene): for
+// kScanFrames after each event that starts or extends the watch, then only while a fighter is still being set up or
+// swapped (g_watch_busy); the next event searches again. The watch itself (its 600 frames, its logs, what its end gives
+// back) is unchanged. Wael 28/10: 2 s instead of 10.
+constexpr uint32_t kScanFrames = 120;
+uint32_t g_scan_until = 0;
+bool g_watch_busy = false;            // the last search saw a fighter not set up, not walked or not settled yet
 bool g_model_noisy = false;         // SetupAppearance seen all the time: that event is ignored (no watch without end)
 std::atomic<uint32_t> g_model_calls{0};
 std::set<std::string> g_warm;       // files of the options just confirmed, kept loaded until the fighters wear them
 std::set<std::string> g_warm_prev;  // files of the options of the outfit the preview wears (a byte budget), kept while it wears it
 std::set<std::string> g_warm_pop;   // the same for the outfit the Training popup's options show (this visit)
+// The files of the options the fighters of a load will wear, asked for when the game asks for their files (warm_load):
+// kept until the fighters watch that follows is done (or a minute without one)
+std::set<std::string> g_warm_load;
+uint32_t g_warm_load_at = 0;        // the frame files were last added to it
 const Slot* g_prev_batch = nullptr; // the outfits of those two batches (focus_group rebuilds a batch when the cursor moves)
 const Slot* g_pop_batch = nullptr;
 int g_focus = -1;                   // the option group under the menu's / popup's cursor, -1 unknown
@@ -86,7 +98,7 @@ struct Types {
     Method *get_comp = nullptr, *go_tr = nullptr, *go_name = nullptr, *tr_child = nullptr, *tr_next = nullptr, *tr_go = nullptr;
     Method *get_mesh = nullptr, *get_mat = nullptr, *set_mesh = nullptr, *set_mat = nullptr, *mesh_ready = nullptr,
            *mat_ready = nullptr, *mat_num = nullptr, *tex_num = nullptr, *get_tex = nullptr, *set_tex = nullptr;
-    Method *ch_get = nullptr, *ch_set = nullptr, *ch_restart = nullptr, *ch_enable = nullptr, *ch_enabled = nullptr;
+    Method *ch_get = nullptr, *ch_set = nullptr, *ch_restart = nullptr, *ch_enable = nullptr, *ch_enabled = nullptr, *ch_setuped = nullptr;
     Method *set_color = nullptr;
     Method *crf_obj = nullptr, *crf_setup = nullptr, *pb_go = nullptr, *pb_applied = nullptr;
     Method *pcc_go = nullptr, *tr_parent = nullptr;
@@ -140,6 +152,30 @@ bool types() {
         && T.get_mat && T.set_mesh && T.set_mat && T.mesh_ready && T.mat_ready && T.mat_num && T.tex_num && T.get_tex
         && T.set_tex && T.ch_get && T.ch_set && T.ch_restart && T.set_color && T.crf_obj && T.pb_go;
     if (!T.ok) logf("rto: a game method is missing, runtime options off");
+    T.ch_setuped = method_of(T.chain, "get_Setuped", 0);       // read only, the part units' log line (not required)
+    // For the log, once: what a chain (and its resource holder) offers to set it up again after its asset changed
+    // (28/10: a part unit swapped on a chain already set up stays detached; ch_restart may not be enough). Names only
+    // (parameter count), nothing called: every method that is not a getter / setter, and the getters / setters whose
+    // name speaks of setting up, loading or state.
+    std::string cand;
+    for (TD* td : { T.chain, tdb->find_type("via.motion.ChainResourceHolder") }) {
+        if (!td) continue;
+        std::set<std::string> seen;
+        for (auto* m : td->get_methods()) {
+            if (!m || !m->get_name() || m->get_name()[0] == '<') continue;
+            const std::string n = m->get_name();
+            std::string low = n;
+            for (auto& ch : low) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+            bool keep = low.rfind("get_", 0) != 0 && low.rfind("set_", 0) != 0;
+            for (const char* w : { "ready", "valid", "load", "state", "setup", "build", "reset", "restart", "init", "clear",
+                                   "asset", "enable", "apply", "refresh", "bind", "resource" })
+                if (low.find(w) != std::string::npos) keep = true;
+            const std::string item = n + "/" + std::to_string(m->get_num_params());
+            if (keep && seen.insert(item).second && cand.size() < 2000)
+                cand += (cand.empty() ? "" : " ") + std::string(td->get_name()) + "." + item;
+        }
+    }
+    logf("rto: chain set-up methods (read only): %s", cand.empty() ? "none" : cand.c_str());
     return T.ok;
 }
 
@@ -350,7 +386,8 @@ constexpr uint32_t kGcAge = 600, kGcQuick = 60;
 void res_gc(uint32_t age = kGcAge, const char* why = "") {
     size_t n = 0;
     for (auto it = g_res.begin(); it != g_res.end();) {
-        if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && !g_warm_pop.count(it->first) && g_frame - it->second.used > age) {
+        if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && !g_warm_pop.count(it->first) && !g_warm_load.count(it->first)
+            && g_frame - it->second.used > age) {
             if (it->second.holder) it->second.holder->release();
             it = g_res.erase(it); ++n;
         } else ++it;
@@ -365,7 +402,12 @@ void res_gc(uint32_t age = kGcAge, const char* why = "") {
 // Models
 // ---------------------------------------------------------------------------------------------
 struct TexBind { uint32_t mi = 0, ti = 0; std::string target; };
-struct MeshComp { Obj* c = nullptr; Obj* gobj = nullptr; std::string go, mat_key, exp_mesh, exp_mat; std::vector<TexBind> binds; };
+struct MeshComp {
+    Obj* c = nullptr; Obj* gobj = nullptr; std::string go, mat_key, exp_mesh, exp_mat; std::vector<TexBind> binds;
+    // a search of its material's bindings spread over frames (scan_bindings): the material, the next material index,
+    // what was found so far, the choices it was made with
+    std::string scan_key; uint32_t scan_mi = 0; std::vector<TexBind> scan_binds; uint32_t scan_ver = 0; int scan_side = -1;
+};
 struct ChainComp { Obj* c = nullptr; Obj* gobj = nullptr; std::string go, target; };
 // A part unit being swapped (mesh and/or material + the chain of the same GameObject, docs/RUNTIME_OPTIONS.md,
 // Part units): 1 = chain stopped on frame `at`, swap on a later frame; 2 = swapped on `at`, checked and the chain
@@ -377,6 +419,10 @@ struct UnitSwap {
     uint32_t at = 0;
     bool stopped = false;                        // the chain was enabled and this module stopped it
     std::string go, pm, wm, pt, wt, pc, wc;      // what it wore, what it gets (mesh, material, chain); "" = unchanged
+    // For the log (unit_done): the chain's Setuped at its stop (before it), right after the swap (after its restart), and
+    // when it runs again (after set_Enabled); -1 unknown. age: frames since the model was found (Model.since)
+    int su_stop = -1, su_swap = -1, en_stop = -1;
+    uint32_t age = 0;
 };
 struct Verify { Obj* c = nullptr; bool mesh = true; std::string path, prev; };
 struct Model {
@@ -431,32 +477,47 @@ Obj* comp_of(Obj* go, Obj* type) { return call_obj(T.get_comp, go, { arg_obj(typ
 
 void visit(Model& md, Obj* go) {
     if (!go) return;
-    std::string name = str(call_obj(T.go_name, go));
-    if (Obj* m = comp_of(go, T.t_mesh)) { MeshComp mc; mc.c = m; mc.gobj = go; mc.go = name; md.meshes.push_back(mc); }
-    if (Obj* c = comp_of(go, T.t_chain)) { ChainComp cc; cc.c = c; cc.gobj = go; cc.go = name; md.chains.push_back(cc); }
+    Obj* m = comp_of(go, T.t_mesh);
+    Obj* c = comp_of(go, T.t_chain);
+    if (m || c) {                                    // its name only when a part keeps it
+        const std::string name = str(call_obj(T.go_name, go));
+        if (m) { MeshComp mc; mc.c = m; mc.gobj = go; mc.go = name; md.meshes.push_back(mc); }
+        if (c) { ChainComp cc; cc.c = c; cc.gobj = go; cc.go = name; md.chains.push_back(cc); }
+    }
     if (Obj* p = comp_of(go, T.t_pcc)) md.colors.push_back(p);
+}
+
+// Every GameObject of a model: its root, then the GameObjects under it, depth first (12 levels, 400 at most)
+template <class F> struct EachGo {
+    F& f;
+    int n = 0;
+    void run(Obj* t, int depth) {
+        while (t && n < 400) {
+            ++n;
+            f(call_obj(T.tr_go, t));
+            if (depth < 12) run(call_obj(T.tr_child, t), depth + 1);
+            t = call_obj(T.tr_next, t);
+        }
+    }
+};
+template <class F> void each_go(Obj* root, F f) {
+    f(root);
+    EachGo<F> rec{ f };
+    Obj* tr = call_obj(T.go_tr, root);
+    if (tr) rec.run(call_obj(T.tr_child, tr), 1);
 }
 
 void warm_preview(const Slot* s);
 
+void no_options_line(Model& md, size_t meshes, const std::string& first) {
+    tell_once(md, "has no outfit with options: " + std::to_string(meshes) + " meshes, first " + (first.empty() ? std::string("none") : short_path(first)));
+}
+
 void walk(Model& md) {
+    perf::Scope ps(perf::RtoWalk);
     md.meshes.clear(); md.chains.clear(); md.colors.clear(); md.verify.clear();
     md.walked = true; md.chains_mapped = false; md.settled = false;
-    visit(md, md.root);
-    int n = 0;
-    struct Rec {
-        Model& md; int& n;
-        void run(Obj* t, int depth) {
-            while (t && n < 400) {
-                ++n;
-                visit(md, call_obj(T.tr_go, t));
-                if (depth < 12) run(call_obj(T.tr_child, t), depth + 1);
-                t = call_obj(T.tr_next, t);
-            }
-        }
-    } rec{ md, n };
-    Obj* tr = call_obj(T.go_tr, md.root);
-    if (tr) rec.run(call_obj(T.tr_child, tr), 1);
+    each_go(md.root, [&md](Obj* go) { visit(md, go); });
     // one of our slots before a game outfit with options (a slot may keep a part in its outfit's game folder)
     std::vector<std::string> paths;
     for (auto& mc : md.meshes) {
@@ -468,7 +529,7 @@ void walk(Model& md) {
     else {
         std::string first;
         for (auto& mc : md.meshes) { first = holder_path(call_obj(T.get_mesh, mc.c)); if (!first.empty()) break; }
-        tell_once(md, "has no outfit with options: " + std::to_string(md.meshes.size()) + " meshes, first " + (first.empty() ? std::string("none") : short_path(first)));
+        no_options_line(md, md.meshes.size(), first);
     }
     if (found != md.slot) {
         md.slot = found;
@@ -477,6 +538,33 @@ void walk(Model& md) {
                         found->label.c_str(), md.meshes.size(), md.chains.size());
         if (&md == &g_models[0]) warm_preview(found);
     }
+}
+
+// A model walked already that wears no outfit of ours, looked at again (its parts may still be set up): walk() decides
+// that from its meshes' files alone, and with no outfit of ours its other finds (chains, colour controllers, part
+// names) are never used. So only the meshes are looked for here, the same GameObjects in the same order; the whole
+// walk follows when their files name one of ours (24/10: the whole walk of a fighter in a game outfit, every 60 frames
+// of a fight's intro, cost up to 2 ms a time).
+void rewalk(Model& md) {
+    {
+        perf::Scope ps(perf::RtoWalk);
+        std::vector<std::string> paths;
+        size_t meshes = 0;
+        each_go(md.root, [&](Obj* go) {
+            Obj* m = go ? comp_of(go, T.t_mesh) : nullptr;
+            if (!m) return;
+            ++meshes;
+            paths.push_back(holder_path(call_obj(T.get_mesh, m)));
+            paths.push_back(holder_path(call_obj(T.get_mat, m)));
+        });
+        if (!g_m.slot_of_paths(paths)) {
+            std::string first;
+            for (size_t k = 0; k < paths.size(); k += 2) if (!paths[k].empty()) { first = paths[k]; break; }
+            no_options_line(md, meshes, first);
+            return;
+        }
+    }
+    walk(md);
 }
 
 // The files of the options of the outfit the Battle Settings preview wears, asked for as soon as it is seen: a pick
@@ -585,13 +673,20 @@ void map_chains(Model& md, const std::map<std::string, Want>& want) {
     const Slot& s = *md.slot;
     std::set<std::string> seen;
     for (auto& cc : md.chains) seen.insert(target_of(s, holder_path(call_obj(T.ch_get, cc.c))));
+    std::vector<std::string> mts;                     // each mesh's target, read once (nothing is written meanwhile)
+    bool mts_read = false;
     for (auto& [t, w] : want) {
         if (w.kind != "chain" || seen.count(t)) continue;
         auto e = t.rfind("_chain.chain");
         if (e == std::string::npos || e < 3 || t[e - 3] != '_') continue;
         const std::string part = t.substr(e - 3, 3);                      // "_01"
-        for (auto& mc : md.meshes) {
-            const std::string mt = target_of(s, holder_path(call_obj(T.get_mesh, mc.c)));
+        if (!mts_read) {
+            mts_read = true;
+            for (auto& mc : md.meshes) mts.push_back(target_of(s, holder_path(call_obj(T.get_mesh, mc.c))));
+        }
+        for (size_t k = 0; k < md.meshes.size(); ++k) {
+            auto& mc = md.meshes[k];
+            const std::string& mt = mts[k];
             if (mt.size() < 9 || mt.compare(mt.size() - 8, 8, part + ".mesh") != 0) continue;
             for (auto& cc : md.chains) {
                 if (cc.go != mc.go || !cc.target.empty()) continue;
@@ -641,17 +736,73 @@ void put_unit(Obj* mesh, Obj* chain, Res* m, Res* t, Res* c) {
     if (t) call(T.set_mat, mesh, { arg_obj(t->holder) });
     if (c) call(T.ch_restart, chain);
 }
+// A chain's Setuped (read only, the log), -1 unknown
+int setuped(Obj* chain) { return T.ch_setuped && alive_as(chain, T.chain) ? (ret_bool(T.ch_setuped, chain) ? 1 : 0) : -1; }
 void unit_done(Model& md, UnitSwap& u, const char* why) {
     if (u.stopped && T.ch_enable && alive_as(u.chain, T.chain)) { call(T.ch_enable, u.chain, { arg_bool(true) }); wrote(md, u.go + " chain started again"); }
-    logf("rto: %s %s chain %s (%s)", md.name, u.go.c_str(), u.stopped ? "started again" : "left as the game had it", why);
+    const int en = T.ch_enabled && alive_as(u.chain, T.chain) ? (ret_bool(T.ch_enabled, u.chain) ? 1 : 0) : -1;
+    logf("rto: %s %s chain %s (%s; model found %u frames before the stop; Setuped stop/swap/run %d/%d/%d, Enabled stop/run %d/%d)",
+         md.name, u.go.c_str(), u.stopped ? "started again" : "left as the game had it", why, u.age, u.su_stop, u.su_swap,
+         setuped(u.chain), u.en_stop, en);
+}
+
+// The bindings search of a fighter's part (pass, step 3) has a share of each frame: kBindBudgetMs of searching (one
+// material a frame at least), the rest on the next frames. Training entry, 28/10: Mai's nine parts cost about 0.5 ms of
+// bindings, all in one frame before. Only the fighters (built inside a load; the VS screen, the preview and the select
+// keep their whole search in one frame), and never in the frames after a held swap is released (fighters_hold_end:
+// the restart's black screen).
+constexpr double kBindBudgetMs = 0.25;
+uint32_t g_bind_frame = 0;            // the frame g_bind_used counts
+int64_t g_bind_used = 0;              // QueryPerformanceCounter ticks of bindings search in that frame
+bool g_bind_any = false;              // a material was looked at in that frame
+int64_t g_bind_budget = 0;            // kBindBudgetMs in ticks
+uint32_t g_unsliced_until = 0;        // a held swap released: whole searches until this frame
+int64_t qpc_now() { LARGE_INTEGER c; QueryPerformanceCounter(&c); return c.QuadPart; }
+// The material `pt` of a part: which texture of which of its materials names a target of the outfit's texture options.
+// True when done (mc.mat_key / mc.binds set as one search would leave them); false when it goes on next frame. A search
+// begun with other choices (g_ver, side) starts again: its result is that of one search with the last choices.
+bool scan_bindings(const Model& md, MeshComp& mc, const std::string& pt, uint32_t nm, const std::map<std::string, Want>& want,
+                   const Slot& s) {
+    perf::Scope ps(perf::RtoBind);
+    const bool slice = (&md == &g_models[1] || &md == &g_models[2]) && g_frame >= g_unsliced_until;
+    if (mc.scan_key != pt || mc.scan_ver != g_ver || mc.scan_side != md.side) {
+        mc.scan_key = pt; mc.scan_mi = 0; mc.scan_binds.clear(); mc.scan_ver = g_ver; mc.scan_side = md.side;
+    }
+    if (g_bind_frame != g_frame) { g_bind_frame = g_frame; g_bind_used = 0; g_bind_any = false; }
+    if (!g_bind_budget) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_bind_budget = static_cast<int64_t>(static_cast<double>(f.QuadPart) * kBindBudgetMs / 1000.0); }
+    const int64_t t0 = qpc_now();
+    for (uint32_t i = mc.scan_mi; i < nm && i < 64; ++i) {
+        if (slice && g_bind_any && g_bind_used + (qpc_now() - t0) >= g_bind_budget) {
+            mc.scan_mi = i;
+            g_bind_used += qpc_now() - t0;
+            return false;
+        }
+        g_bind_any = true;
+        const uint32_t tn = ret_u32(T.tex_num, mc.c, { arg_i32(static_cast<int32_t>(i)) });
+        for (uint32_t j = 0; j < tn && j < 64; ++j) {
+            const std::string p = holder_path(call_obj(T.get_tex, mc.c, { arg_i32(static_cast<int32_t>(i)), arg_i32(static_cast<int32_t>(j)) }));
+            const std::string t = target_of(s, p);
+            auto it = want.find(t);
+            if (it != want.end() && it->second.kind == "texture") mc.scan_binds.push_back({ i, j, t });
+        }
+    }
+    g_bind_used += qpc_now() - t0;
+    mc.mat_key = pt;
+    mc.binds = std::move(mc.scan_binds);
+    mc.scan_binds.clear();
+    mc.scan_key.clear();
+    return true;
 }
 
 void pass(Model& md) {
+    perf::Scope ps(perf::RtoPass);
     const Slot& s = *md.slot;
+    const int64_t pw = perf::begin();
     const auto chosen = chosen_of(g_m, s, g_c, md.side);
     const auto want = desired(g_m, s, chosen);
+    perf::end(perf::RtoWant, pw);
     for (auto& [t, w] : want) if (!w.orig) if (auto it = g_res.find(w.path); it != g_res.end()) it->second.used = g_frame;
-    bool pending = false, colour = false;
+    bool pending = false, colour = false, sliced = false;
     const char* side_name = md.side == 1 ? "P2" : "P1";
 
     // The Training popup confirmed (options only): this fighter keeps what it wears until the restart's black screen
@@ -769,6 +920,8 @@ void pass(Model& md) {
             if (!u) {
                 UnitSwap n;
                 n.mesh = mc.c; n.chain = cc->c; n.go = mc.go; n.at = g_frame;
+                n.age = g_frame - md.since; n.su_stop = setuped(cc->c);
+                n.en_stop = T.ch_enabled ? (ret_bool(T.ch_enabled, cc->c) ? 1 : 0) : -1;
                 n.stopped = !T.ch_enabled || ret_bool(T.ch_enabled, cc->c);
                 if (n.stopped) { call(T.ch_enable, cc->c, { arg_bool(false) }); wrote(md, mc.go + " chain stopped"); }
                 md.units.push_back(n);
@@ -780,6 +933,7 @@ void pass(Model& md) {
             u->pm = need_m ? pm : ""; u->wm = need_m ? wm : ""; u->pt = need_t ? pt : ""; u->wt = need_t ? wt : "";
             u->pc = pc; u->wc = wc;
             put_unit(mc.c, cc->c, rm, rt, rc);
+            u->su_swap = setuped(cc->c);
             if (!drawable(mc.c, need_m, need_t)) {
                 put_unit(mc.c, cc->c, back_m, back_t, back_c);
                 if (need_m) backoff(wm);
@@ -838,19 +992,9 @@ void pass(Model& md) {
             const uint32_t nm = ret_u32(T.mat_num, mc.c);
             if (!nm) continue;
             const std::string pt = holder_path(call_obj(T.get_mat, mc.c));
-            if (pt != mc.mat_key) {                    // the bindings of a material that names an option's target
-                mc.mat_key = pt;
-                mc.binds.clear();
-                for (uint32_t i = 0; i < nm && i < 64; ++i) {
-                    const uint32_t tn = ret_u32(T.tex_num, mc.c, { arg_i32(static_cast<int32_t>(i)) });
-                    for (uint32_t j = 0; j < tn && j < 64; ++j) {
-                        const std::string p = holder_path(call_obj(T.get_tex, mc.c, { arg_i32(static_cast<int32_t>(i)), arg_i32(static_cast<int32_t>(j)) }));
-                        const std::string t = target_of(s, p);
-                        auto it = want.find(t);
-                        if (it != want.end() && it->second.kind == "texture") mc.binds.push_back({ i, j, t });
-                    }
-                }
-            }
+            // the bindings of a material that names an option's target: not all found within this frame's share, the
+            // part's textures wait for the next frames (scan_bindings)
+            if (pt != mc.mat_key && !scan_bindings(md, mc, pt, nm, want, s)) { pending = true; sliced = true; continue; }
             for (auto& b : mc.binds) {
                 const std::string cur = holder_path(call_obj(T.get_tex, mc.c, { arg_i32(static_cast<int32_t>(b.mi)), arg_i32(static_cast<int32_t>(b.ti)) }));
                 const std::string w = want_path(md, want, b.target);
@@ -891,7 +1035,7 @@ void pass(Model& md) {
         } else ++it;
     }
     if (!md.units.empty()) { md.next = g_frame + 1; return; }
-    if (pending) { md.next = g_frame + (vs_model(md) ? 1 : 5); return; }   // a VS model: its first ready frame
+    if (pending) { md.next = g_frame + (vs_model(md) || sliced ? 1 : 5); return; }   // a VS model: its first ready frame
     if (!md.verify.empty()) { md.next = g_frame + 1; return; }
     md.settled = true;
     for (auto& mc : md.meshes)
@@ -903,7 +1047,8 @@ void pass(Model& md) {
 void process(Model& md, int side, bool light) {
     if (!alive_as(md.root, T.go)) { reset(md); return; }
     if (!md.walked || (!md.slot && g_frame >= md.walk_at)) {
-        walk(md);
+        if (!md.walked) walk(md);
+        else rewalk(md);                             // no outfit of ours at its last walk
         // a VS model with no outfit of ours yet: its parts may still be set up, looked at again each frame for a second
         md.walk_at = g_frame + (vs_model(md) && g_frame - md.seen < 60 ? 1 : select_model(md) ? 20 : 60);
     }
@@ -1109,10 +1254,21 @@ void preview_tick() {
 
 uint32_t g_fighters_at = 0;         // both fighters seen built since the VS screen's models were looked for (vs_tick)
 uint32_t g_fighter_at[2] = {};      // the frame each fighter's model (a new GameObject) was last found (fighter_built_at)
+// An event started or extended the watch: the fighters searched for kScanFrames (the whole watch while model builds are
+// ignored, g_model_noisy: then the only events are the outfit manifests, a model may come later without its own event)
+void scan_window() {
+    g_scan_until = std::max(g_scan_until, g_frame + (g_model_noisy ? 600u : kScanFrames));
+}
 void watch_tick() {
     if (g_frame >= g_watch_until && g_hold_side < 0) {
         g_watch_until = 0;
+        g_watch_busy = false;
         logf("rto: fighters watch done (%u model builds seen)", g_model_calls.exchange(0));
+        // the load's files: the fighters wear them (unless they were asked for in the last 2 s: a next load's)
+        if (!g_warm_load.empty() && g_frame - g_warm_load_at > 120) {
+            logf("rto: the %zu files asked for ahead for the fighters' load no longer kept (the fighters wear them)", g_warm_load.size());
+            g_warm_load.clear();
+        }
         // the fighters wear the confirmed options now (each model keeps its own reference): ours go, unless a menu that
         // may still show them is up (Battle Settings, the Training popup)
         if (!g_bs && !menu::active() && !select::popup_busy()) {
@@ -1125,23 +1281,27 @@ void watch_tick() {
         return;
     }
     if (g_frame < g_watch_next) return;
+    if (g_frame >= g_scan_until && !g_watch_busy && g_hold_side < 0) return;   // nothing in progress: until the next event
     g_watch_next = g_frame + 10;
     bool net = costumes::online();
     Obj* list = find_components(T.pb);
     bool seen[2] = {};
+    bool busy = false;
     for (int i = 0, n = list_count(list); i < n; ++i) {
         Obj* pb = list_item(list, i);
         int32_t id = -1;
         if (!pb || !get_i32(pb, "_PlayerID", id) || id < 0 || id > 1) continue;
         Obj* go = call_obj(T.pb_go, pb);
-        if (T.pb_applied && !ret_bool(T.pb_applied, pb)) continue;     // its resources are not set up yet
+        if (T.pb_applied && !ret_bool(T.pb_applied, pb)) { busy = true; continue; }   // its resources are not set up yet
         Model& md = g_models[1 + id];
         seen[id] = true;
         if (go != md.root) { reset(md); md.root = go; if (go) g_fighter_at[id] = g_frame; }
         if (go) process(md, net ? 0 : id, true);      // online: the player's own fighter wears P1's options
         if (!md.units.empty()) g_watch_next = g_frame + 1;
         else if (!md.settled && md.next && md.next < g_watch_next) g_watch_next = md.next;   // a held swap: its next frame
+        if (go && (!md.walked || (md.slot && (!md.settled || !md.units.empty() || !md.verify.empty())))) busy = true;
     }
+    g_watch_busy = busy;
     for (int i = 0; i < 2; ++i) if (!seen[i] && g_models[1 + i].root) reset(g_models[1 + i]);
     if (seen[0] && seen[1] && !g_fighters_at) g_fighters_at = g_frame;   // the fight is built (vs_tick: no VS screen to wait for)
 }
@@ -1151,12 +1311,30 @@ void watch_tick() {
 // every 10 frames while the screen is up, like the Battle Settings preview: the options chosen in the menu show
 // there too (20/10: C. Viper Outfit 1 Coatless in Battle Settings, Outfit 1 with its coat on the character select).
 // Online, the player's own side wears P1's options (as in a fight).
+// One scene search's answers (one frame, the game's hierarchy does not change meanwhile): each GameObject's name, each
+// Transform's parent and GameObject asked for once, however many colour controllers share them (a fight's intro: 93
+// controllers, most of them under the same few parents, 24/10)
+struct ScanMemo {
+    std::unordered_map<Obj*, std::string> names;
+    std::unordered_map<Obj*, Obj*> parents, gos;
+    const std::string& name_of(Obj* go) {
+        auto it = names.find(go);
+        if (it == names.end()) it = names.emplace(go, str(call_obj(T.go_name, go))).first;
+        return it->second;
+    }
+    Obj* parent_of(Obj* tr) {
+        auto it = parents.find(tr);
+        if (it == parents.end()) it = parents.emplace(tr, call_obj(T.tr_parent, tr)).first;
+        return it->second;
+    }
+    Obj* go_of(Obj* tr) {
+        auto it = gos.find(tr);
+        if (it == gos.end()) it = gos.emplace(tr, call_obj(T.tr_go, tr)).first;
+        return it->second;
+    }
+};
 uint32_t g_sel_scan = 0, g_sel_next = 0, g_sel_start = 0;
 std::string g_sel_log;                // the last search result logged (logged on change)
-int visual_side(Obj* go) {
-    const std::string nm = str(call_obj(T.go_name, go));
-    return nm == "FighterVisual_01" ? 1 : nm == "FighterVisual_02" ? 2 : 0;
-}
 void vs_open(uint32_t frames, const char* why);
 void warm_vs();
 void select_tick() {
@@ -1180,15 +1358,17 @@ void select_tick() {
         Obj* found[2] = {};
         Obj* list = find_components(T.pcc);
         const int n = list_count(list);
+        ScanMemo memo;
+        auto side_of = [&memo](Obj* g) { const std::string& nm = memo.name_of(g); return nm == "FighterVisual_01" ? 1 : nm == "FighterVisual_02" ? 2 : 0; };
         for (int i = 0; i < n; ++i) {
             Obj* c = list_item(list, i);
             Obj* go = c ? call_obj(T.pcc_go, c) : nullptr;
-            int side = go ? visual_side(go) : 0;
+            int side = go ? side_of(go) : 0;
             Obj* tr = (!side && go && T.tr_parent) ? call_obj(T.go_tr, go) : nullptr;
             for (int up = 0; up < 4 && tr && !side; ++up) {
-                tr = call_obj(T.tr_parent, tr);
-                go = tr ? call_obj(T.tr_go, tr) : nullptr;
-                side = go ? visual_side(go) : 0;
+                tr = memo.parent_of(tr);
+                go = tr ? memo.go_of(tr) : nullptr;
+                side = go ? side_of(go) : 0;
             }
             if (side && !found[side - 1]) found[side - 1] = go;
         }
@@ -1230,6 +1410,7 @@ std::atomic<uint32_t> g_color_setups{ 0 };  // PlayerColorController.SetupColor 
 bool g_color_hook = false;
 uint32_t g_vs_setups = 0, g_vs_burst = 0;
 std::string g_vs_log;
+bool g_vs_paused = false;             // the search stopped for a Training's fighters (told once a search)
 std::set<std::string> g_vs_odd;       // Left / Right chains not under FighterEmoteCtrl, told once a session
 int pre_color_setup(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     g_color_setups.fetch_add(1, std::memory_order_relaxed);
@@ -1254,12 +1435,50 @@ void warm_vs() {
     for (auto& f : files) res_get(f.first, f.second, false);
     if (n) logf("rto: %zu files of the select models' options kept for the VS screen (%zu not loaded yet)", n, fresh);
 }
+// The files of the options the fighters of a load will wear, asked for as soon as the game asks for their files or
+// builds them from their description (EV_FIGHTER_LOAD): who wears what is read from that description (costumes::
+// load_fighters: the outfit, the slot dressed by the alias, the side). Without a select before (the Training shortcut
+// of the main menu, a Battle Hub or online match, the Training popup's reload) nothing else asks for them before the
+// fighters are built: created then, a part unit waited their 30 frames and was swapped on a model whose chain was set
+// up and running already, and it stayed detached (28/10, Ken KenSFV's hair, Training shortcut; swapped on the first
+// frames of a fresh model, after a select, it is clean). Asked for here (~200 frames before the model on the shortcut),
+// they are usable on the first frame the model is found. Kept (g_warm_load) until the fighters watch that follows is
+// done. Each read adds only files not asked for yet; with a select before, they are there already (warm_vs, "0 not
+// loaded yet").
+void warm_load() {
+    std::vector<costumes::LoadFighter> fs;
+    const char* why = "";
+    if (!costumes::load_fighters(fs, &why)) return;
+    size_t added = 0, fresh = 0;
+    std::string who;
+    std::vector<std::pair<std::string, std::string>> files;     // path, kind
+    for (auto& f : fs) {
+        const Slot* s = g_m.slot_of(f.fid, f.cos);
+        if (!s) continue;
+        size_t mine = 0;
+        for (auto& [t, w] : desired(g_m, *s, chosen_of(g_m, *s, g_c, f.side))) {
+            if (w.orig || w.path.empty() || !swappable(w.kind) || !g_warm_load.insert(w.path).second) continue;
+            if (!g_res.count(w.path)) ++fresh;
+            files.push_back({ w.path, w.kind });
+            ++mine;
+        }
+        if (mine) who += (who.empty() ? "" : ", ") + std::string(f.side ? "P2 " : "P1 ") + s->fighter_dir + "/" + s->folder;
+        added += mine;
+    }
+    if (!added) return;
+    g_warm_load_at = g_frame;
+    if (fresh) mem_mark("fighters' load: " + std::to_string(fresh) + " new files asked for ahead");
+    for (auto& f : files) res_get(f.first, f.second, false);
+    logf("rto: %zu files of the fighters' options asked for ahead (%s, %s; %zu not loaded yet): %s", added, why,
+         g_watch_until ? "fighters watch on" : "before the fighters watch", fresh, who.c_str());
+}
 void vs_open(uint32_t frames, const char* why) {
     if (!g_vs_until) {
         g_vs_scan = g_vs_first = g_fighters_at = 0;
         g_vs_setups = g_color_setups.load(std::memory_order_relaxed);
         g_vs_burst = 0;
         g_vs_log.clear();
+        g_vs_paused = false;
         logf("rto: VS screen models looked for (%s)", why);
     }
     g_vs_until = std::max(g_vs_until, g_frame + frames);
@@ -1280,11 +1499,23 @@ void vs_tick() {
     const uint32_t setups = g_color_setups.load(std::memory_order_relaxed);
     if (setups != g_vs_setups) { g_vs_setups = setups; g_vs_burst = g_frame + 60; }   // a model was just built
     const uint32_t every = both ? 120u : (g_frame < g_vs_burst ? 1u : g_color_hook ? 30u : 5u);
+    // Training has no VS screen. Once both fighters are built from an offline Training description (costumes saw
+    // setupFighterAsset's), no fighter file asked for since (a battle asks for its fighters' files before its VS screen)
+    // and the flow's description still Training, the scene is not searched (each search of a fight's scene: 1-2 ms,
+    // every frame after a colour set-up, 28/10). The search goes on as before once any of that changes; the window and
+    // its ends are unchanged.
+    if (g_frame - g_vs_scan >= every && !g_vs_first && g_fighters_at && costumes::training_built() && !costumes::online()
+        && costumes::battle_mode() == 2) {
+        g_vs_scan = g_frame;
+        if (!g_vs_paused) { g_vs_paused = true; logf("rto: VS screen: a Training's fighters are built, the scene is no longer searched"); }
+    }
     if (g_frame - g_vs_scan >= every) {
+        perf::Scope ps(perf::RtoVsScan);
         g_vs_scan = g_frame;
         Obj* found[2] = {};
         Obj* list = find_components(T.pcc);
         const int n = list_count(list);
+        ScanMemo memo;
         for (int i = 0; i < n; ++i) {
             Obj* c = list_item(list, i);
             Obj* go = c ? call_obj(T.pcc_go, c) : nullptr;
@@ -1292,10 +1523,11 @@ void vs_tick() {
             std::vector<Obj*> objs;
             Obj* tr = go ? call_obj(T.go_tr, go) : nullptr;
             for (int d = 0; go && d < 7; ++d) {
-                up.push_back(str(call_obj(T.go_name, go)));
+                up.push_back(memo.name_of(go));
                 objs.push_back(go);
-                tr = tr ? call_obj(T.tr_parent, tr) : nullptr;
-                go = tr ? call_obj(T.tr_go, tr) : nullptr;
+                if (d == 6) break;                     // the 7th name is the last one used
+                tr = tr ? memo.parent_of(tr) : nullptr;
+                go = tr ? memo.go_of(tr) : nullptr;
             }
             int root = -1;
             const int side = vs_model_side(up, &root);
@@ -1393,6 +1625,7 @@ void fighters_refresh(const char* why, int hold_side) {
     if (!g_watch_until) { logf("rto: fighters watch (%s)", why); g_watch_start = g_frame; }
     g_watch_until = g_frame + 600;
     g_watch_next = 0;
+    scan_window();
     if (hold_side == 0 || hold_side == 1) {
         g_hold_side = hold_side;
         ++g_hold_id;
@@ -1408,9 +1641,11 @@ void fighters_hold_end(const char* why) {
          g_hold_side + 1, g_frame, why, menu_state_now(), tm_state("_TrainingState"), total - left, total,
          left ? "the rest swapped as each one is ready" : "swapped now");
     g_hold_side = -1;
+    g_unsliced_until = g_frame + 120;                // inside the black screen: every search whole, as before
     md.next = 0;                                     // its pass now (watch_tick runs after the popup's tick)
     g_watch_next = 0;
     if (g_watch_until < g_frame + 600) g_watch_until = g_frame + 600;
+    scan_window();
 }
 int training_menu_state() { return menu_state_now(); }
 uint32_t fighter_built_at(int side) { return side == 0 || side == 1 ? g_fighter_at[side] : 0; }
@@ -1556,7 +1791,7 @@ void install_hooks() {
 bool busy() {
     if (!on()) return false;
     if (g_bs || g_select || g_watch_until || g_vs_until || menu::busy() || select::popup_busy()) return true;
-    return !g_mem.empty();                              // a "5 s later" memory line to write
+    return !g_mem.empty() || !g_warm_load.empty();      // a "5 s later" memory line to write, a load's files to let go
 }
 
 bool nsfw_options() { return on() && g_m.has_nsfw; }
@@ -1564,7 +1799,7 @@ bool nsfw_options() { return on() && g_m.has_nsfw; }
 void tick(uint32_t ev) {
     if (!on() || !T.ok) return;
     try {
-        if (!g_mem.empty()) mem_tick();
+        if (!g_mem.empty()) { perf::Scope pm(perf::RtoMem); mem_tick(); }
         // "Display NSFW Outfits" (costumes.cpp reads settings.json): NSFW options offered and worn, or not; the models
         // apply it at once (the preview now, fighters at their next build)
         if (g_m.has_nsfw && costumes::display_nsfw() != g_m.show_nsfw) {
@@ -1601,14 +1836,24 @@ void tick(uint32_t ev) {
                 g_watch_start = g_frame;
                 vs_open(60 * 20, "fighters watch");
             }
-            if ((ev & EV_HOLDER) || g_frame - g_watch_start < 60 * 30) g_watch_until = g_frame + 600;
+            if ((ev & EV_HOLDER) || g_frame - g_watch_start < 60 * 30) { g_watch_until = g_frame + 600; scan_window(); }
             else if (!g_model_noisy) {
                 g_model_noisy = true;
                 logf("rto: PlayerBehavior.SetupAppearance is called all the time: not a build event, ignored from now on");
             }
         }
-        if (g_select) { select::tick(); select_tick(); return; }
-        if ((ev & EV_POPUP) || select::popup_busy()) select::popup_tick((ev & EV_POPUP) != 0);   // Training pause menu
+        // a fighters' load: their options' files asked for now (the select has its own: warm_vs)
+        if ((ev & EV_FIGHTER_LOAD) && !g_select) warm_load();
+        if (!g_warm_load.empty() && !g_watch_until && g_frame - g_warm_load_at > 60 * 60) {
+            logf("rto: the %zu files asked for ahead for the fighters' load no longer kept (no fighters watch came)", g_warm_load.size());
+            g_warm_load.clear();
+            res_gc(kGcQuick, "no fighters watch after the fighters' load");
+        }
+        if (g_select) { perf::Scope ps(perf::RtoSelect); select::tick(); select_tick(); return; }
+        if ((ev & EV_POPUP) || select::popup_busy()) {                                         // Training pause menu
+            perf::Scope pp(perf::RtoPopup);
+            select::popup_tick((ev & EV_POPUP) != 0);
+        }
         bool fs = false;
         if (g_bs) {
             fs = fighter_settings_visible();
@@ -1627,10 +1872,13 @@ void tick(uint32_t ev) {
                 res_gc(kGcQuick, "Battle Settings closed");
             }
         }
-        menu::tick(fs);
-        if (g_bs || menu::active()) preview_tick();
-        if (g_watch_until) watch_tick();
-        if (g_vs_until) vs_tick();
+        {
+            perf::Scope ps(perf::RtoPreview);
+            menu::tick(fs);
+            if (g_bs || menu::active()) preview_tick();
+        }
+        if (g_watch_until) { perf::Scope ps(perf::RtoWatch); watch_tick(); }
+        if (g_vs_until) { perf::Scope ps(perf::RtoVs); vs_tick(); }
     } catch (...) {
         fault("tick");
     }

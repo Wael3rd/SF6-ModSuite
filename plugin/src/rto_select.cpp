@@ -55,6 +55,7 @@
 // DI mode takes the claim of the target side, its popup guide carries our entry, its guard asks ours); otherwise it
 // stays off. The popup is found from an event (EV_POPUP: its MatchingFighterSetting set up or written, its flow's
 // update), then followed each frame while it shows.
+#include "perf.hpp"
 #include "rto.hpp"
 #include "slots_ui.hpp"
 
@@ -573,12 +574,26 @@ struct Keys {
 };
 Keys g_keys;
 
+// settings.json's text, read again only when its size or write time changed: read_keys runs at each popup visit and
+// each character select, and opening the file on the game thread cost milliseconds there (28/10: 5 ms frames)
+std::string settings_text() {
+    static bool have = false;
+    static uint64_t stamp = 0, size = 0;
+    static std::string text;
+    WIN32_FILE_ATTRIBUTE_DATA d{};
+    if (!GetFileAttributesExA(kSettings, GetFileExInfoStandard, &d)) { have = false; return {}; }
+    const uint64_t st = (static_cast<uint64_t>(d.ftLastWriteTime.dwHighDateTime) << 32) | d.ftLastWriteTime.dwLowDateTime;
+    const uint64_t sz = (static_cast<uint64_t>(d.nFileSizeHigh) << 32) | d.nFileSizeLow;
+    if (!have || st != stamp || sz != size) { text = read_file(kSettings); have = true; stamp = st; size = sz; }
+    return text;
+}
 void read_keys() {
+    perf::Scope ps(perf::RtoKeys);
     Keys k;
     k.read = true;
     k.at = g_frame;
     Json j;
-    std::string text = read_file(kSettings);
+    std::string text = settings_text();
     if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);
     if (!text.empty() && json_parse(text, j)) {
         if (const Json* b = j.get("select_options_button"); b && b->kind == Json::String && !b->s.empty()) k.pad_name = b->s;
@@ -1340,6 +1355,7 @@ void step(Side& st, int s, int screen_row, int dir) {
 // bindings could not be read offline (no dump of its input table): this is the check in the game.
 bool g_guide_logged = false;
 void log_game_guide(const char* where) {
+    perf::Scope ps(perf::RtoGuide);
     g_guide_logged = true;
     void* buf[4] = {};
     const uint32_t n = A()->ui_agents("InputGuide", buf, 4);

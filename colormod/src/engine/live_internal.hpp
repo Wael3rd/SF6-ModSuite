@@ -21,6 +21,9 @@ std::recursive_mutex& mx();      // the colour engine's one lock (hooks, frame t
 // trees read from the files the decisions name (Lua read_tree): re-read when size / write time change, null when
 // the file is missing, empty or unreadable. path = relative to the game folder ("reframework/data/...").
 rsz::NodeRef file_tree(const std::string& path);
+// a colour file was written, moved or deleted by this DLL (editor, catalogue, state, color_mods): what file_tree
+// remembered of this frame's file checks is asked again (any thread)
+void files_changed();
 
 // System.Array the way REFramework's Lua reads it (GetLength / GetValue(Int32)): the findComponents quirk of 02/10
 uint32_t arr_size(MO* a);

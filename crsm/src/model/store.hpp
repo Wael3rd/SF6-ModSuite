@@ -108,7 +108,8 @@ json com_state_save(const ComState& s);                   // { last_id = ..., do
 // The pack file a community loadout is saved as: display_name without ".json", every character outside [%w-_. ] removed
 // (the non-ASCII ones too), ".json" added.
 std::string community_filename(const std::string& display_name);
-// dl_version: the version of the downloaded copy (legacy true = 1), nullopt when never downloaded.
+// dl_version: the version of the downloaded copy (legacy true = 1), nullopt when never downloaded. A name ending with the
+// Worker's test-row tag " [TEST]" (list only, the download gives the name without it) also finds the copy without the tag.
 std::optional<json> dl_version(const ComState& s, const std::string& display_name);
 // sync_downloaded_with_disk: drop the entries whose pack is erased or no longer on disk. True when something changed.
 bool sync_downloaded(ComState& s, const std::set<std::string>& erased, const std::function<bool(const std::string&)>& file_exists);

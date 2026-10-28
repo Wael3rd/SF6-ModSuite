@@ -686,7 +686,7 @@ void p3a_dummy_info_engine(const fs::path& work) {
 }
 
 void p3a_list_reglob(const fs::path& work) {
-    begin("P3a files: the loadout list read again at each Manager page entry (ensure)");
+    begin("P3a files: the drill list read again at each Manager page entry (ensure)");
     const fs::path root = work / "p3a_reglob";
     const fs::path ken = root / "SF6_RecordingSlotManager_data" / "Ken";
     std::error_code ec;

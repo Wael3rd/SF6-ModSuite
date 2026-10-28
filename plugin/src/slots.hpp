@@ -73,6 +73,7 @@ enum Event : uint32_t {
     EV_TITLE_END     = 1u << 10,  // title screen left (the game clears DLC ownership at login)
     EV_RTO_MODEL     = 1u << 11,  // a fighter's model was built (runtime costume options, rto.cpp)
     EV_POPUP         = 1u << 12,  // the Training pause menu's character popup built or updated (rto_select.cpp)
+    EV_FIGHTER_LOAD  = 1u << 13,  // the game asked for fighters' files or builds fighters from a description (costumes.cpp)
     EV_DIAG          = 1u << 31,  // a method watched for the log was called
 };
 // Methods watched for the log only: which of them the game calls, and when
@@ -150,6 +151,15 @@ namespace costumes {
     bool online();                    // an online battle is loaded or played (its description says so)
     bool select_active();             // the character select screen is open (read now, not watched)
     int battle_mode();                // the battle description's app.EGameMode (2 Training), -1 none (read now)
+    // the last fighters were built from an offline Training description (app.EGameMode 2: Training, a Custom Room's
+    // training area) and no fighter files were asked for since (a new battle asks for its fighters' files first)
+    bool training_built();
+    // The fighters of the load the game is doing (EV_FIGHTER_LOAD; rto asks for their options' files ahead): fighter id,
+    // the outfit it will wear (the slot the plugin dressed it in, else the description's costume) and its side (its
+    // team; online 0: the player's options are P1's). Read now, on the game thread, from the description of the last
+    // load request or fighters' build; false: none. *why: which of the two
+    struct LoadFighter { int fid, cos, side; };
+    bool load_fighters(std::vector<LoadFighter>& out, const char** why);
     std::string slot_label(int fighter, int costume_no);   // one of our outfits: its label (outfits.json), else ""
     int slot_by_name(int fighter, const std::string& name); // one of our outfits by its game name ("Outfit II"), else -1
     bool display_nsfw();              // settings.json "display_nsfw": NSFW outfits and options shown

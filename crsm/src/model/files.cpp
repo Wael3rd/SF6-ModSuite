@@ -559,7 +559,7 @@ std::string Engine::export_selected(std::string* ticker) {
 }
 
 std::string Engine::erase_selected() {
-    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No loadout selected"; return status_; }
+    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No drill selected"; return status_; }
     const std::string name = custom_file_input_;
     write_json(model::store::pack_path(model::chars::get_char_name(fid_), name), json::object());
     mark_erased(name);
@@ -573,7 +573,7 @@ std::string Engine::erase_selected() {
 }
 
 std::string Engine::rename_selected(const json& new_name, std::string* ticker) {
-    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No loadout selected"; return status_; }
+    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No drill selected"; return status_; }
     const std::string old_name = custom_file_input_;
     const std::string res = export_as(new_name, ticker);
     if (res.find("Saved") == std::string::npos) return res;
@@ -592,7 +592,7 @@ std::string Engine::rename_selected(const json& new_name, std::string* ticker) {
 std::string Engine::reopen_loaded() {
     if (fid_ == -1) { status_ = "No character"; return status_; }
     std::string name = loaded_file_name_;
-    if (name.empty()) { status_ = "No loadout loaded"; return status_; }
+    if (name.empty()) { status_ = "No drill loaded"; return status_; }
     if (!lutil::ends_with(name, ".json")) name += ".json";
     const json data = load_json(model::store::pack_path(model::chars::get_char_name(fid_), name));
     if (data.is_null()) { status_ = "Load Failed: " + name; return status_; }

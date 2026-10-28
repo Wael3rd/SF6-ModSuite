@@ -285,7 +285,15 @@ std::string community_filename(const std::string& display_name) {
 
 std::optional<json> dl_version(const ComState& s, const std::string& display_name) {
     auto it = s.downloaded.find(community_filename(display_name));
-    if (it == s.downloaded.end()) return std::nullopt;
+    if (it == s.downloaded.end()) {
+        // a test row: the Worker's list adds kTestSuffix to its name, its download answer gives the stored name (the file
+        // written): the downloaded copy is under the name without the tag
+        constexpr std::string_view kTestSuffix = " [TEST]";
+        if (display_name.size() <= kTestSuffix.size() ||
+            display_name.compare(display_name.size() - kTestSuffix.size(), kTestSuffix.size(), kTestSuffix) != 0) return std::nullopt;
+        it = s.downloaded.find(community_filename(display_name.substr(0, display_name.size() - kTestSuffix.size())));
+        if (it == s.downloaded.end()) return std::nullopt;
+    }
     if (it->second.is_boolean() && it->second.get<bool>()) return json(1);
     return it->second;
 }

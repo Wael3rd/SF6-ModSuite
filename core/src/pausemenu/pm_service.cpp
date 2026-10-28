@@ -168,6 +168,9 @@ static bool g_prepared = false;                // engine client + GetMessage hoo
 
 void pausemenu_frame() {
     if (g_wanted.load() && !g_installed.load() && !g_failed.load()) {     // from the first frame after a client asked
+        // the engine client, the GetMessage hook (an add_hook: 1-8 ms), then the install frames (1-6 ms each when the method
+        // had no hook yet) all show up in perf_live.log as PmInstall
+        perf::Scope install_scope(perf::PmInstall);
         if (!g_prepared) {
             SF6CoreClientDesc d{ sizeof(SF6CoreClientDesc), "sf6core.pausemenu", "1", 0 };
             if (!g_self && sf6core_api_ptr()->register_client(&d, &g_self) != SF6CORE_OK) g_self = nullptr;
@@ -180,7 +183,6 @@ void pausemenu_frame() {
             calls.decide = c_decide; calls.spin_value = c_spin_value; calls.on_spin = c_on_spin;
             calls.page_shown = c_page_shown; calls.hints = c_hints; calls.any_hints = c_any_hints;
             // Pending while the code check runs on its thread, then one hook per frame (the frame never waits)
-            perf::Scope install_scope(perf::PmInstall);   // the add_hook frames (1-6 ms each) show up in perf_live.log
             switch (pausemenu::install(calls, g_self)) {
             case pausemenu::Install::Done: g_installed = true; break;
             case pausemenu::Install::Failed:

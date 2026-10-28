@@ -55,7 +55,7 @@ namespace lg = ui::logic;
 using gx::MO;
 
 constexpr const char* kKey = "Community";       // _com.KEY (RMT:151)
-constexpr const char* kDesc = "Community loadouts.";   // the group's description (RMT:297)
+constexpr const char* kDesc = "Community drills.";   // the group's description (RMT:297)
 constexpr int kKeyA = 0x41, kKeyE = 0x45, kKeyT = 0x54, kKeyR = 0x52;   // RMT:329-332
 constexpr uint64_t kSetupWait = 60;              // frames a rebuilt dialog may take to show its page
 

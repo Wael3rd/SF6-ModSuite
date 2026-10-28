@@ -80,7 +80,7 @@ bool community_label(const json& item, const json& downloaded_version, std::stri
 }
 
 std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages, bool pad) {
-    return sort_label + "  " + char_name + " Loadouts\n" + (pad ? "<ICON BtnL1>" : "<ICON KeyA>") + "   Page " + std::to_string(page) + "/" +
+    return sort_label + "  " + char_name + " Drills\n" + (pad ? "<ICON BtnL1>" : "<ICON KeyA>") + "   Page " + std::to_string(page) + "/" +
            std::to_string(total_pages) + "   " + (pad ? "<ICON BtnR1>" : "<ICON KeyE>");
 }
 

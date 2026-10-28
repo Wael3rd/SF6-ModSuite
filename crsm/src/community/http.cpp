@@ -276,7 +276,7 @@ Worker::Done Worker::run_job(const Job& j) {
         const std::string fp = cmd["file_path"].is_string() ? cmd["file_path"].get<std::string>() : "";
         cmd.erase("file_path");
         const json file = model::luajson::load_file(fp);
-        if (file.is_null()) { logf("http: share: cannot read " + fp); return finish(error_reply("cannot read the loadout file")); }
+        if (file.is_null()) { logf("http: share: cannot read " + fp); return finish(error_reply("cannot read the drill file")); }
         cmd["file"] = model::luajson::encode(file);
     }
     Request rq;

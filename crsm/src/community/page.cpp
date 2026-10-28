@@ -65,7 +65,7 @@ Msg auth_verdict(const json& data) {
     if (code == "update_required") return {"com_auth_update", "", "Update SF6 Recording Manager to share, like or delete"};
     if (code == "invalid_token") return {"com_auth_invalid", "", "Steam verification failed: try again"};
     if (code == "banned" || code == "steam_banned") return {"com_auth_banned", "", "This Steam account is banned from SF6 Community"};
-    if (code == "not_owner") return {"com_not_owner", "", "Only its author can delete this loadout"};
+    if (code == "not_owner") return {"com_not_owner", "", "Only its author can delete this drill"};
     if (code == "rate_limited") return {"com_rate_limited", "", "Too many requests: try again later"};
     return {};
 }
@@ -100,8 +100,8 @@ Msg share_verdict(bool ok, const json& resp, const std::string&) {
     }
     const std::string code = auth::error_code(resp);
     if (code == "no_changes" || starts_with(err, "No changes")) return {"com_share_dup", "", "Already shared: nothing changed"};   // 409 identical pack
-    if (code == "too_large") return {"com_share_big", "", "Loadout too large to share"};                                // 413 (v4)
-    if (starts_with(err, "File too large")) return {"com_share_big", "", "Loadout too large to share"};            // 413
+    if (code == "too_large") return {"com_share_big", "", "Drill too large to share"};                                // 413 (v4)
+    if (starts_with(err, "File too large")) return {"com_share_big", "", "Drill too large to share"};            // 413
     if (starts_with(err, "Upload limit")) return {"com_share_limit", "", "Share limit reached, try again later"};   // 429 (20 per day)
     return {"com_share_refused", err, "Share refused: " + err};                                                      // 400 invalid, 401, 403, 500...
 }
@@ -268,7 +268,7 @@ void Page::fetch(int page_after) {
             total_ = (int64_t)lj::len(all_items_);
             page_ = page_after > 0 ? page_after : 1;
             rebuild();
-            say("Community: " + std::to_string(total_) + " loadout" + (total_ != 1 ? "s" : ""));
+            say("Community: " + std::to_string(total_) + " drill" + (total_ != 1 ? "s" : ""));
         } else {
             say(bad);
         }
@@ -405,11 +405,11 @@ void Page::vote(int row) {
 }
 
 void Page::share(const std::string& char_name, const std::string& pack_file, const std::string& display_in) {
-    if (pack_file.empty()) { say("No loadout selected to share"); return; }
+    if (pack_file.empty()) { say("No drill selected to share"); return; }
     const std::string display = lu::strip_json_ext(display_in.empty() ? pack_file : display_in);
     const Identity info = who();
     const json data = lj::load_file(data_path(st::pack_path(char_name, pack_file)));
-    if (!lu::truthy(data)) { say("Cannot read the loadout file"); return; }
+    if (!lu::truthy(data)) { say("Cannot read the drill file"); return; }
     if (client_.busy()) { say(busy_verdict(client_.verifying())); return; }
     json cmd = json::object();
     cmd["cmd"] = "share";
@@ -421,10 +421,10 @@ void Page::share(const std::string& char_name, const std::string& pack_file, con
     cmd["file"] = lj::encode(data);
     client_.send(std::move(cmd), [this, display](bool ok, const json& resp) {
         const Msg m = share_verdict(ok, resp, display);
-        if (m.en.empty()) say("Loadout shared: " + display);
+        if (m.en.empty()) say("Drill shared: " + display);
         else say(m);       // a refusal of the Worker (409 / 400 / 413 / 429...) is not "shared"; nothing is marked
     });
-    say("Sharing loadout...");
+    say("Sharing drill...");
 }
 
 }  // namespace community

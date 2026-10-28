@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,12 @@ void reset();                                                         // forget 
 // queue(addr, value) receives the EfxMeshColor.queue writes (baked originals back).
 struct QueueFn { void (*fn)(void* ctx, uint64_t addr, uint32_t value); void* ctx; };
 int tick(const StaticCfg statics[2], const int side_chars[2], bool dirty, bool in_fight, QueueFn queue);
+// tick() spread over frames (one provider's walk took ~2 ms, five in one frame, 28/10 perf logs): tick_start scans and
+// lists the providers to set (the same conditions, right after the scan); tick_step sets them in order, each one's
+// walk within the deadline (QueryPerformanceCounter ticks), and returns how many it set; tick_busy until the list is done.
+void tick_start(const StaticCfg statics[2], const int side_chars[2], bool dirty, bool in_fight);
+int tick_step(int64_t deadline, QueueFn queue);
+bool tick_busy();
 void scan();                                                           // shadow: the providers only, no static writes
 
 // relay builders (SF6_DriveRecolor di_lines / di_container / di_key read these)
@@ -41,9 +48,15 @@ bool lines(int side_fighter, const MechColors& mc, std::vector<WLine>& out);   /
 // lines() one step at a time (the parts list, then one provider per call, then the armour rim), so the static pass can
 // stop between two steps within its frame budget. Start with a fresh cursor and an empty out, call until it returns
 // true; c.present is then what lines() returns. Providers scanned again in between: the cursor starts over (out cleared).
-struct LinesCursor { int stage = 0; size_t idx = 0; uint64_t gen = 0, sig = 0; std::string parts; bool present = false; };
-bool lines_step(int side_fighter, const MechColors& mc, std::vector<WLine>& out, LinesCursor& c);
+// deadline (QueryPerformanceCounter ticks, 0 = none): a provider's walk stops at the first element past it and goes on
+// at the next call (one provider took 2-3 ms in one frame, 24/10 perf logs); 0 = one whole provider per call, as before.
+struct SnapJob;
+struct LinesCursor { int stage = 0; size_t idx = 0; uint64_t gen = 0, sig = 0; std::string parts; bool present = false; std::shared_ptr<SnapJob> job; };
+bool lines_step(int side_fighter, const MechColors& mc, std::vector<WLine>& out, LinesCursor& c, int64_t deadline = 0);
 int container(int side_fighter);                                       // the style provider's number, -1 = unknown
+// what container() walks when the style providers are new (their extern lists), done ahead within a deadline: call with
+// a fresh cursor until it returns true, container(side_fighter) then reads no list. Scanned again: starts over.
+bool container_step(int side_fighter, LinesCursor& c, int64_t deadline);
 std::string key(int side_fighter, const MechColors& mc);               // changes when a relay rewrite is needed
 // parts of a fighter (collect_parts): "key\tname" lines, recomputed when its providers move
 std::string parts(int fighter);

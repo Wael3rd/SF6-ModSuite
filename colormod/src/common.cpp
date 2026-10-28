@@ -26,7 +26,7 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "0.23.1";
+constexpr const char* kVersion = "0.23.2";
 constexpr const char* kClientId = "SF6_ColorModNative";
 // The game's working directory is the game folder (same convention as SF6_MenuRowsNative / SF6_MemWriterNative).
 constexpr const char* kDataDir = "reframework/data/SF6_ColorModNative_data";
@@ -79,6 +79,47 @@ void journal_flush() {
         for (auto& l : g_lines) arr.push_back(l);
     }
     bgwriter::write((std::string(kDataDir) + "/debug_log.json").c_str(), arr.dump(4));
+}
+// The periodic flush: the lines copied now, the same text built and handed to the background writer by a thread of
+// its own (building the 400-line json took ~1.8 ms in the frame, 28/10 perf logs). The last copy wins, as the file is
+// rewritten whole each time. The flush at closing stays journal_flush (built at once).
+struct JournalBuild { std::mutex mx; std::condition_variable cv; std::optional<std::vector<std::string>> next; int state = 0; };
+JournalBuild& g_jb = *new JournalBuild();                // never destroyed (the thread may outlive static destruction)
+void journal_flush_bg() {
+    std::vector<std::string> lines;
+    {
+        std::lock_guard lk(g_jmx);
+        if (!g_dirty) return;
+        g_dirty = false;
+        lines.assign(g_lines.begin(), g_lines.end());
+    }
+    if (g_jb.state == 0) {
+        try {
+            std::thread([] {
+                for (;;) {
+                    std::vector<std::string> l;
+                    {
+                        std::unique_lock<std::mutex> lk(g_jb.mx);
+                        g_jb.cv.wait(lk, [] { return g_jb.next.has_value(); });
+                        l = std::move(*g_jb.next);
+                        g_jb.next.reset();
+                    }
+                    nlohmann::json arr = nlohmann::json::array();
+                    for (auto& s : l) arr.push_back(s);
+                    bgwriter::write((std::string(kDataDir) + "/debug_log.json").c_str(), arr.dump(4));
+                }
+            }).detach();
+            g_jb.state = 1;
+        } catch (...) { g_jb.state = -1; }
+    }
+    if (g_jb.state < 0) {
+        nlohmann::json arr = nlohmann::json::array();
+        for (auto& s : lines) arr.push_back(s);
+        bgwriter::write((std::string(kDataDir) + "/debug_log.json").c_str(), arr.dump(4));
+        return;
+    }
+    { std::lock_guard<std::mutex> lk(g_jb.mx); g_jb.next = std::move(lines); }
+    g_jb.cv.notify_one();
 }
 
 std::string now_text() {
@@ -195,7 +236,7 @@ void SF6CORE_CALL on_frame(uint64_t, void*) {
         try { g_screens_frame(); } catch (...) { journal_line("screens frame: exception"); }
         perf::end(perf::FrameScreens, ts);
     }
-    if (g_frame % kJournalFlushEvery == 0) { const int64_t tj = perf::begin(); journal_flush(); perf::end(perf::CoreJournalFlush, tj); }
+    if (g_frame % kJournalFlushEvery == 0) { const int64_t tj = perf::begin(); journal_flush_bg(); perf::end(perf::CoreJournalFlush, tj); }
     // write journal: sentinel check every 120 frames, flush every 60 frames when on
     if (g_frame % 120 == 2) { const int64_t tw = perf::begin(); wjournal::check(); perf::end(perf::CoreFileCheck, tw); }
     if (wjournal::active() && g_frame % 60 == 0) wjournal::flush();

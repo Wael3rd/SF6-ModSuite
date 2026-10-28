@@ -457,7 +457,7 @@ void test_package_settings(const fs::path& repo) {
 void test_name_keys() {
     begin("name keys: T / pad Y and G / R / pad X routed once");
     using lg::NameKey;
-    check(lg::route_name_key(true, false, false, true, true) == NameKey::RenameLoadout, "T on the Manager page: rename the loadout (P5)");
+    check(lg::route_name_key(true, false, false, true, true) == NameKey::RenameLoadout, "T on the Manager page: rename the drill (P5)");
     check(lg::route_name_key(true, false, false, true, false) == NameKey::NameSlot, "T elsewhere (a Record row): the slot name dialog (P4)");
     check(lg::route_name_key(false, true, false, true, false) == NameKey::DeleteSlotName, "G / R / X on a Record row: the name deleted");
     check(lg::route_name_key(false, true, false, true, true) == NameKey::None, "G / R / X on the Manager page: nothing");
@@ -489,10 +489,10 @@ void test_rename_key() {
     const auto acts = q.drain();
     check(acts.size() == 1 && acts[0].act == mgr::Act::Rename, "one rename queued (the Record page's T queues none)");
     for (const auto& a : acts) r.run(a);
-    check(s.count("text_input") == 1 && s.input_title == "Rename loadout" && s.input_initial == "Old", "the rename dialog with the selected name",
+    check(s.count("text_input") == 1 && s.input_title == "Rename drill" && s.input_initial == "Old", "the rename dialog with the selected name",
           s.input_title + " / " + s.input_initial);
     check(std::find(f.calls.begin(), f.calls.end(), "rename_selected(New)") != f.calls.end(), "renamed to the typed name", join(f.calls));
-    check(!s.tickers.empty() && s.tickers.back() == "Loadout renamed: New", "the page's ticker", join(s.tickers));
+    check(!s.tickers.empty() && s.tickers.back() == "Drill renamed: New", "the page's ticker", join(s.tickers));
     check(s.count("rows_dirty") == 0 && s.count("list_changed") == 1, "a rename resyncs the spin, not the slot rows (RMT:1620-1625)");
     f.sel.clear();
     r.run(mgr::Action{ mgr::Act::Rename, 0 });

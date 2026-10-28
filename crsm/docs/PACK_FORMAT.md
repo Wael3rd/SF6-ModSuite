@@ -1,6 +1,6 @@
-# Loadout pack format
+# Drill pack format
 
-A loadout ("pack") is `reframework/data/SF6_RecordingSlotManager_data/<Char>/<file>.json`: what Save / Save As write,
+A drill ("pack") is `reframework/data/SF6_RecordingSlotManager_data/<Char>/<file>.json`: what Save / Save As write,
 what Open imports, what the Community stores and serves as it is. Code: `src/model/pack.*` (entries, validation, split),
 `src/model/setup.*` (the `active` flags and the training block), `src/model/files.cpp` (export, import, backup).
 
@@ -85,23 +85,23 @@ its id, not by its place.
   zero. `IsGuardSwitching` is a JSON boolean. Not carried: `CpuLevel`, the counter's `StyleNo` (ranges unknown), the
   gauges (`ParameterSetting`) and the start position (`SelectMenu.StartLocation`).
 
-## The loadout's metadata (entry 1, key `info`)
+## The drill's metadata (entry 1, key `info`)
 
 ```json
 "info": { "author": "Chris_F (drillcodes)", "description": "Pick Ken and throw him. He will auto break it. Then, STOP THE SLOP", "source": "community" }
 ```
 
 - Carried like the training block: a key of the entry whose id is 1, ignored by every older reader.
-- `description`: the loadout's text for the player (what to do in a drill), free text, may hold line breaks. `""` or absent
+- `description`: the drill's text for the player (what to do), free text, may hold line breaks. `""` or absent
   = none. `author`: who made it, as the source names them. `source`: where the pack came from: `"community"` (a
   Community download), `"drillcodes.com"` (a drill code converted by CRSM). Other keys may be added; a writer keeps
   the keys it does not know.
 - Written by a Community download (`community::with_info`): the description of the download answer (`/api/download/:id`,
   else the list item's), the author shown in the list (`author_cfn`, else `uploader_name`), source `"community"`. An
   `info` already in the stored file keeps its other keys, and its description when the server sends none.
-- Read by the screens: the Community list shows the focused loadout's description in the dialog's description area,
-  above the "Like / Sort" line (2 lines at most, cut with "…"); the Manager page's Loadout row shows the selected
-  loadout's description as its help line, its paragraphs on one line joined with " | " (cut with "…"), in place of the
+- Read by the screens: the Community list shows the focused drill's description in the dialog's description area,
+  above the "Like / Sort" line (2 lines at most, cut with "…"); the Manager page's Drill row shows the selected
+  drill's description as its help line, its paragraphs on one line joined with " | " (cut with "…"), in place of the
   row's own help. Share sends the shared pack's description to the Worker (cut to 1000 characters).
 - Save / Save As (the export, `src/model/files.cpp`) build the pack from the game's slots, and carry the `info` of the
   loaded pack (the last one opened, or saved, in this session for this dummy), read from its file just before the
@@ -116,7 +116,7 @@ its id, not by its place.
   categories is valid (a user who does not use reversals does not hand his empty setup to every importer), with 10 rows
   per category when CRSM's rows 11-30 are all empty, 30 otherwise. The reversal part needs the reversal layer native
   (it owns the map and rows 11-30); a Lua reversal layer gives a block without it. `dummy` always (every field the
-  game gives, as it is: the dummy's settings are part of how the author plays the loadout).
+  game gives, as it is: the dummy's settings are part of how the author plays the drill).
 - `info` on entry 1: the loaded pack's (see above).
 
 ## Import (Open, reopen, a Community download)

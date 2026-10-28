@@ -1050,11 +1050,12 @@ void on_setup_pre(void* p) {                          // Lua on_setup_pre after 
             ++g_n.edit;
         } else {
             Resolved r;
-            side = should_inject(ctrl, r);
+            { perf::Scope t(perf::SetupResolve); side = should_inject(ctrl, r); }
             bs = r.bs;
             if (!side) g_applied.erase((uintptr_t)ctrl);
-            else n = inject(ctrl, side, r);
+            else { perf::Scope t(perf::SetupInject); n = inject(ctrl, side, r); }
         }
+        perf::Scope tj(perf::SetupJournal);
         auto it = g_applied.find((uintptr_t)ctrl);                     // what it wears: k:<entry> / ov:<colour> / edit
         cmn::journal("SetupColor %s -> %s%s%s (rw p1=%d p2=%d%s)", describe(ctrl).c_str(), side ? std::to_string(side).c_str() : "false",
                      (it != g_applied.end() && !it->second.empty()) ? (" " + it->second).c_str() : "",

@@ -286,6 +286,7 @@ bool be_file_write(const std::string& rel, const std::vector<uint8_t>& bytes) {
         if (!f) { cmn::journal("[editor] short write %s", rel.c_str()); return false; }
     }
     fs::rename(tmp, p, ec);
+    engine::live::files_changed();
     if (ec) { cmn::journal("[editor] cannot replace %s: %s", rel.c_str(), ec.message().c_str()); fs::remove(tmp, ec); return false; }
     if (rel.size() >= 15 && rel.compare(rel.size() - 15, 15, "chip_slots.json") == 0) {
         if (!screens::colour::track::acting()) op({ "CHIPS" });
@@ -304,6 +305,7 @@ bool be_file_delete(const std::string& rel) {
     std::error_code ec;
     const fs::path p = fs::path(kData) / r;
     const bool ok = fs::is_regular_file(p, ec) && fs::remove(p, ec);
+    engine::live::files_changed();
     if (ok) cmn::journal("file deleted: %s", r.c_str());
     return ok;
 }
@@ -324,6 +326,7 @@ void be_purge_empty_files() {                                                   
             if (nm.size() > 7 && nm.compare(nm.size() - 7, 7, ".user.2") == 0) gone.push_back(it->path());
         }
         for (auto& p : gone) if (fs::remove(p, ec)) ++removed;
+        engine::live::files_changed();
     }
     if (removed > 0) cmn::journal("empty colour files deleted: %d", removed);
 }

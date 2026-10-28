@@ -169,6 +169,18 @@ std::vector<Spot> load_spots_file(const std::string& path, size_t& total) {
     return out;
 }
 
+std::string spots_json(const std::vector<Spot>& spots) {
+    nlohmann::json j = nlohmann::json::array();
+    for (auto& sp : spots) {
+        char a[32];
+        std::snprintf(a, sizeof a, "%llX", (unsigned long long)sp.addr);
+        nlohmann::json e = nlohmann::json::array({ a, sp.r, sp.g, sp.b, sp.file });
+        if (!sp.written.empty()) e.push_back(sp.written);              // the Lua reads e[1..5] and ignores a 6th element
+        j.push_back(std::move(e));
+    }
+    return j.dump(4);
+}
+
 bool save_spots_file(const std::string& path, const std::vector<Spot>& spots) {
     nlohmann::json j = nlohmann::json::array();
     for (auto& sp : spots) {
