@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.19.7 (2026-11-02) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.3 | unchanged |
+| SF6 Color Mod | 0.23.3 | colour files named `_CMD_` (capital letters) are listed too |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.5 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Color Mod 0.23.2, then install 0.23.3. Slots Loader 1.16.3,
+Native Core 0.9.4 and Recording Manager 2.2.5 are the same files as in 1.19.6: keep them. With the all-in-one package,
+replace 1.19.6 with 1.19.7. The costume pak is not rebuilt.
+
+### SF6 Color Mod 0.23.3
+- Fix: a colour file whose name has capital letters (`esf001_002_CMD_001.user.2`, as some colour packs ship them) was
+  unpacked from its archive but never listed. It is now listed like `esf001_002_cmd_001.user.2`.
+- Reminder: a colour pack for the whole cast works from any folder under `reframework\color_mods\` (for example
+  `color_mods\All_Chars\<the pack's .zip>`): the fighter and the outfit of each colour come from its file name.
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
 ## 1.19.6 (2026-10-28) — SF6 Mod Suite
 
 | Package | Version | |

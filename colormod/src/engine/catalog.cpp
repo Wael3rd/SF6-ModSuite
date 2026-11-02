@@ -54,7 +54,8 @@ void Catalog::build(const fs::path& data_dir) {
     data_dir_ = data_dir;
     lists_.clear();
     trees_.clear();
-    static const std::regex name_rx(R"(^esf(\d\d\d)_(\d\d\d)_cmd_(\d\d\d)\.user\.2$)");
+    // letters of any case, as color_mods::is_colour_name keeps them from an archive (some packs ship "_CMD_")
+    static const std::regex name_rx(R"(^esf(\d\d\d)_(\d\d\d)_cmd_(\d\d\d)\.user\.2$)", std::regex::icase);
     std::error_code ec;
     auto add = [&](const fs::path& file, const std::string& rel) {
         const std::string fname = file.filename().string();
