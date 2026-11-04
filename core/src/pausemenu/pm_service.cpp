@@ -8,6 +8,7 @@
 // R29): each call is SEH-guarded (no C++ object in the __try frame) and a fault counts on the client's breaker
 // (ADR-0008); a client that is disabled by its breaker or unregistered is skipped (its spins then show the value the
 // core kept, its buttons do nothing). Nothing is locked while a callback runs: it may call any pm_* function.
+// on_confirm (0.9.5) is the one that runs on the game thread: the engine's frame reads the decide input raw.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -35,10 +36,10 @@ constexpr size_t kHintText = 128;
 struct Owner { SF6CoreClient* client = nullptr; SF6CorePmCallbacks cb{}; };
 std::mutex g_mx;                               // g_owners (never held while a callback runs)
 std::vector<Owner> g_owners;
-std::atomic<bool> g_wanted{false}, g_installed{false}, g_failed{false}, g_any_hints{false};
+std::atomic<bool> g_wanted{false}, g_installed{false}, g_failed{false}, g_any_hints{false}, g_any_confirm{false};
 SF6CoreClient* g_self = nullptr;               // the engine's own client "sf6core.pausemenu"
 std::mutex g_fault_mx;                         // breaker accounting from the job threads, one at a time
-std::atomic<uint64_t> g_cb_faults{0}, g_decides{0}, g_spins{0};
+std::atomic<uint64_t> g_cb_faults{0}, g_decides{0}, g_spins{0}, g_confirms{0};
 
 bool client_live(const SF6CoreClient* c) { return c && c->active && c->state == SF6CORE_CLIENT_ACTIVE; }
 
@@ -57,7 +58,7 @@ bool callbacks_of(const void* owner, SF6CorePmCallbacks& out, SF6CoreClient*& cl
 
 // ---- one callback call under SEH ----
 struct PmCall {
-    int what = 0;                              // 1 decide, 2 spin_value, 3 on_spin, 4 page_shown, 5 hints
+    int what = 0;                              // 1 decide, 2 spin_value, 3 on_spin, 4 page_shown, 5 hints, 6 on_confirm
     const SF6CorePmCallbacks* cb = nullptr;
     int64_t id = 0;
     int32_t arg = 0;
@@ -87,6 +88,7 @@ bool call_seh(PmCall* c, DWORD* exc) {
             c->n = n;
             break;
         }
+        case 6: cb->on_confirm(cb->user, c->id); break;
         default: break;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -134,6 +136,15 @@ void c_page_shown(pausemenu::Owner owner, int64_t page, bool shown) {
     run(cl, c, "pm_on_page_shown");
 }
 bool c_any_hints() { return g_any_hints.load(std::memory_order_relaxed); }
+// 0.9.5: the game thread, from the engine's frame (pausemenu::frame, its lock released)
+void c_confirm(pausemenu::Owner owner, int64_t row) {
+    SF6CorePmCallbacks cb; SF6CoreClient* cl = nullptr;
+    if (!callbacks_of(owner, cb, cl) || !cb.on_confirm) return;
+    ++g_confirms;
+    PmCall c; c.what = 6; c.cb = &cb; c.id = row;
+    run(cl, c, "pm_on_confirm");
+}
+bool c_any_confirm() { return g_any_confirm.load(std::memory_order_relaxed); }
 void c_hints(void* focused, std::vector<pausemenu::Hint>& out) {
     std::vector<Owner> owners;
     {
@@ -153,10 +164,11 @@ void c_hints(void* focused, std::vector<pausemenu::Hint>& out) {
 
 const char* s(const char* p) { return p ? p : ""; }
 
-void refresh_any_hints() {
-    bool any = false;
-    for (const auto& o : g_owners) if (o.cb.hints) { any = true; break; }
+void refresh_any_hints() {                     // (and the Confirm providers)
+    bool any = false, confirm = false;
+    for (const auto& o : g_owners) { any = any || o.cb.hints; confirm = confirm || o.cb.on_confirm; }
     g_any_hints = any;
+    g_any_confirm = confirm;
 }
 
 }  // namespace
@@ -182,6 +194,7 @@ void pausemenu_frame() {
             pausemenu::Calls calls;
             calls.decide = c_decide; calls.spin_value = c_spin_value; calls.on_spin = c_on_spin;
             calls.page_shown = c_page_shown; calls.hints = c_hints; calls.any_hints = c_any_hints;
+            calls.confirm = c_confirm; calls.any_confirm = c_any_confirm;
             // Pending while the code check runs on its thread, then one hook per frame (the frame never waits)
             switch (pausemenu::install(calls, g_self)) {
             case pausemenu::Install::Done: g_installed = true; break;
@@ -297,10 +310,10 @@ uint32_t SF6CORE_CALL api_pm_status(char* buf, uint32_t cap) {
         size_t clients = 0;
         { std::lock_guard lk(g_mx); clients = g_owners.size(); }
         char b[256];
-        std::snprintf(b, sizeof b, "pausemenu: %s, clients %zu, callbacks: decides %llu, spin changes %llu, faults %llu; ",
-                      g_installed ? "on" : (g_failed ? "failed" : (g_wanted ? "pending" : "idle")), clients,
+        std::snprintf(b, sizeof b, "pausemenu: %s, clients %zu, callbacks: decides %llu, spin changes %llu, spin confirms %llu, "
+                      "faults %llu; ", g_installed ? "on" : (g_failed ? "failed" : (g_wanted ? "pending" : "idle")), clients,
                       (unsigned long long)g_decides.load(), (unsigned long long)g_spins.load(),
-                      (unsigned long long)g_cb_faults.load());
+                      (unsigned long long)g_confirms.load(), (unsigned long long)g_cb_faults.load());
         line = b;
         line += g_installed ? pausemenu::status() : pc::status();
     } catch (...) {

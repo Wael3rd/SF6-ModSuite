@@ -502,6 +502,25 @@ MO* find_param() {
     return nullptr;
 }
 
+MO* input_guide_main() {
+    if (!api() || !SF6CORE_HAS(api(), ui_agents)) return nullptr;
+    void* out[4] = {};
+    const uint32_t n = perf::counted(api())->ui_agents("InputGuide", out, 4);
+    for (uint32_t i = 0; i < n && i < 4; ++i) {
+        int64_t on = 0;
+        MO* ag = static_cast<MO*>(out[i]);
+        if (get_i64(ag, "_IsEnableInput", &on) && on) return call_obj(ag, "get_ControlMain");
+    }
+    return nullptr;
+}
+
+MO* input_guide_help() {
+    MO* root = input_guide_main();
+    if (!root || !api()) return nullptr;
+    MO* scroll = static_cast<MO*>(perf::counted(api())->ui_find_child(root, "p_ScrollText_0", 4));
+    return scroll ? static_cast<MO*>(perf::counted(api())->ui_find_child(scroll, "e_text", 2)) : nullptr;
+}
+
 MO* pause_agent() {
     if (!api() || !SF6CORE_HAS(api(), ui_agents)) return nullptr;
     void* out[1] = {};

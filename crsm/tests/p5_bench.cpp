@@ -6,7 +6,8 @@
 // Groups: the rows and their texts (the shipped locale.json, English and French), the loadout spin (labels, value, the
 // core's wrap), the sub-page memory (RecordType), the hints, the action queue (order, threads), the actions on fakes
 // (every ticker, confirmation text and dialog of RMT's Manager page), then the actions on the real files engine
-// (model::files::Engine on a scratch folder under --work, a fake game): Save As, Save, Open, Reset, Rename, Erase.
+// (model::files::Engine on a scratch folder under --work, a fake game): Save As, Save, Open, Reset, Rename, Erase; and the
+// drill details dialog's texts in every language of the shipped locale.json (src/ui/details_logic.*).
 // Exit code 0 only when every check passed.
 #include <algorithm>
 #include <cstdio>
@@ -25,6 +26,7 @@
 #include "model/labels.hpp"
 #include "model/locale.hpp"
 #include "model/luajson.hpp"
+#include "ui/details_logic.hpp"
 #include "ui/manager_logic.hpp"
 
 namespace fs = std::filesystem;
@@ -67,6 +69,7 @@ std::string join(const std::vector<std::string>& v) {
 
 // ---- the translator: the shipped locale.json through the P1 model -------------------------------------------------------------
 model::locale::Locale g_loc;
+std::vector<std::string> g_langs;                // the language blocks of the shipped file
 Tr translator() {
     return [](const std::string& key, const std::vector<std::string>& args) { return g_loc.T(key, args); };
 }
@@ -132,6 +135,48 @@ struct FakeScreen final : Screen {
 bool has(const std::vector<std::string>& v, const std::string& x) { return std::find(v.begin(), v.end(), x) != v.end(); }
 
 // ---- groups ----------------------------------------------------------------------------------------------------------------------
+// The drill details dialog's keys (rsm.cancel, rsm.details_*, rsm.source_*) in every language block, formatted with their
+// arguments (a template string.format refuses comes back as it is: the arguments then never show)
+void test_details_texts() {
+    begin("P5 drill details texts (locale.json, every language)");
+    const Tr T = translator();
+    check(g_langs.size() >= 14, "14 languages", std::to_string(g_langs.size()));
+    const char* plain[] = { "cancel", "source_community", "source_local", "details_more_slots", "details_edit", "details_confirm",
+                            "edit_drill_name", "details_help", "see_details" };
+    for (const std::string& l : g_langs) {
+        g_loc.set_lang(l);
+        for (const char* k : plain) {
+            const std::string v = T(k, {});
+            check(!v.empty() && v != k && g_loc.lookup(std::string("rsm.") + k).has_value(), l + " rsm." + k, v);
+        }
+        const std::string h = ui::details::header_text(T, 15, 0, 2);
+        check(h.find("15") != std::string::npos && h.find("1/2") != std::string::npos, l + " header 15 slots, page 1/2", h);
+        const std::string h1 = ui::details::header_text(T, 1, 0, 1);
+        check(h1.find("1/1") != std::string::npos && g_loc.lookup("rsm.details_header_one").has_value(), l + " header of one slot", h1);
+        const std::string sl = T("details_slot", { "27" });
+        check(sl.find("27") != std::string::npos && sl != "details_slot", l + " slot label", sl);
+        const std::string au = T("details_author", { "Chris_F" }), so = T("details_source", { "drillcodes.com" });
+        check(au.find("Chris_F") != std::string::npos, l + " author line", au);
+        check(so.find("drillcodes.com") != std::string::npos, l + " source line", so);
+        for (const char* k : { "details_header", "details_slot", "details_author", "details_source" })
+            check(g_loc.lookup(std::string("rsm.") + k).has_value(), l + " has rsm." + k);
+    }
+    g_loc.set_lang("en");
+    eq(ui::details::header_text(T, 15, 1, 2), std::string("15 SLOTS SAVED - PAGE 2/2"), "en header");
+    eq(ui::details::row_text(T("details_slot", { "7" }), "Fireball", 64, 0), std::string("Slot 7 - Fireball - 64F"), "en slot row");
+    eq(ui::details::detail_text(T, "Do it.", "Chris_F", ui::details::source_label(T, "community")),
+       std::string("Do it.\n\nAuthor: Chris_F\nSource: Community"), "en description box");
+    eq(ui::details::source_label(T, ""), std::string("Local file"), "en local file");
+    eq(T("open", {}), std::string("Open drill"), "en left button: the Manager's own label");
+    eq(T("cancel", {}), std::string("Cancel"), "en right button");
+    eq(T("details_more_slots", {}), std::string("Show More Slots"), "en guide: the slot pages");
+    eq(T("details_edit", {}), std::string("Edit description"), "en guide: the edit");
+    eq(T("details_confirm", {}), std::string("Confirm"), "en guide: confirm");
+    eq(T("edit_drill_name", {}), std::string("Edit Drill Name"), "en Drill row hint: the rename");
+    eq(T("details_help", {}), std::string("Up / down: scroll the description"), "en key guide: the help line");
+    eq(T("see_details", {}), std::string("See Details"), "en Drill row hint: the details");
+}
+
 void test_texts() {
     begin("P5 rows and texts (locale.json)");
     const Tr T = translator();
@@ -548,7 +593,10 @@ struct EngineLoadouts final : Loadouts {
     std::string export_selected(std::string* tk) override { return e.export_selected(tk); }
     std::string export_as(const std::string& n, std::string* tk) override { return e.export_as(json(n), tk); }
     std::string erase_selected() override { return e.erase_selected(); }
-    std::string rename_selected(const std::string& n, std::string* tk) override { return e.rename_selected(json(n), tk); }
+    std::string rename_selected(const std::string& n, std::string* tk) override {   // as the DLL's port: the file renamed
+        if (tk) tk->clear();
+        return e.rename_file(json(n));
+    }
     void invalidate() override { e.invalidate(); }
     bool ensure() override { return e.ensure(1); }
 };
@@ -627,6 +675,46 @@ void test_actions_engine(const fs::path& work) {
     const std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     eq(body, std::string("null"), "the erased file holds null (json.dump_file of {})");
     check(!r.dialog_open(), "no dialog left");
+
+    f.close();                                                      // (an open file cannot be replaced on Windows)
+
+    // Edit Drill Name (T): the file renamed, its content kept (not the game's slots), names checked
+    begin("P5 Edit Drill Name on the files engine (scratch data)");
+    const fs::path ryu = root / "SF6_RecordingSlotManager_data" / "Ryu";
+    s.input_text = "Gamma";
+    r.run({ Act::SaveAs, 0 });
+    s.input_text = "Delta";
+    r.run({ Act::SaveAs, 0 });                                      // Delta selected now
+    const std::string delta_before = model::luajson::load_file(ryu / "Ryu_Delta.json").dump();
+    for (auto& sl : live.s) { sl.valid = false; sl.frames = 0; } // the game's slots emptied: a rename must not save them
+    s.input_text = "  Echo: <x>?  ";
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Drill renamed:   Echo: <x>?  "), "rename ticker (the typed name)");
+    check(!fs::exists(ryu / "Ryu_Delta.json"), "the old file is gone");
+    check(fs::exists(ryu / "Ryu_Echo x.json"), "Ryu_Echo x.json: trimmed, Windows' forbidden characters dropped, prefix added");
+    eq(model::luajson::load_file(ryu / "Ryu_Echo x.json").dump(), delta_before, "the content kept (not the emptied game slots)");
+    labels = spin_labels(L.dropdown());
+    eq(L.selected_name(), std::string("Echo: <x>?"), "the renamed drill still selected, its display name kept");
+    check(index_of(labels, "Echo: <x>?") != (size_t)-1 && index_of(labels, "Delta") == (size_t)-1, "the spin shows the new name", join(labels));
+    eq(spin_value(L.dropdown_index(), labels.size()), (int32_t)index_of(labels, "Echo: <x>?"), "the spin's value on it");
+    s.input_text = "gamma";
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Rename failed: Name already used: Gamma"), "a name another drill has (any case): refused");
+    check(fs::exists(ryu / "Ryu_Echo x.json") && fs::exists(ryu / "Ryu_Gamma.json"), "both files untouched");
+    s.input_text = "???";
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Rename failed: No name"), "nothing left after the cleaning: refused");
+    s.input_text = "Beta";                                          // the erased drill's name is free again
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Drill renamed: Beta"), "onto an erased drill's name");
+    eq(model::luajson::load_file(ryu / "Ryu_Beta.json").dump(), delta_before, "the erased file replaced by the drill");
+    labels = spin_labels(L.dropdown());
+    check(index_of(labels, "Beta") != (size_t)-1, "Beta listed again", join(labels));
+    r.run({ Act::Select, dropdown_of_spin(0, labels.size()) });
+    s.input_text = "Zeta";
+    const size_t before = s.count("text_input");
+    r.run({ Act::Rename, 0 });
+    check(s.count("text_input") == before, "on \"-- Select File --\": no dialog");
 }
 
 }  // namespace
@@ -647,6 +735,7 @@ int main(int argc, char** argv) {
     const json file = model::luajson::load_file(repo / "data" / "SF6_CRSM_data" / "locale.json");
     if (file.is_null()) { std::fprintf(stderr, "locale.json not found under %s\n", repo.string().c_str()); return 2; }
     g_loc.load(file);
+    for (auto it = file.begin(); it != file.end(); ++it) if (it.key() != "_readme" && it->is_object()) g_langs.push_back(it.key());
     std::printf("[P5] Manager page\n");
     test_texts();
     test_spin();
@@ -656,6 +745,7 @@ int main(int argc, char** argv) {
     test_queue();
     test_actions_fake();
     test_actions_engine(work);
+    test_details_texts();
 
     int checks = 0, fails = 0;
     std::printf("\n%-60s %8s %8s\n", "group", "checks", "failed");

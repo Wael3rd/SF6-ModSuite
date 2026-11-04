@@ -17,6 +17,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -69,6 +70,9 @@ constexpr int kKeyT = 0x54, kKeyG = 0x47, kKeyR = 0x52;     // RMT:1380-1381
 constexpr uint32_t kPadXFallback = 64;          // via.hid.GamePadButton.RLeft (RMT:1383)
 constexpr uint32_t kPadYFallback = 16;          // RUp, read from the live enum (RMT:1382, 1384-1387)
 constexpr uint32_t kPadL1Fallback = 256, kPadR1Fallback = 1024;   // LTrigTop / RTrigTop (the Community dialog's pages), same
+constexpr uint32_t kPadUpFallback = 1, kPadDownFallback = 2, kPadSouthFallback = 32, kPadEastFallback = 128;   // LUp / LDown
+                                                // (d-pad), RDown (A / Cross), RRight (B / Circle)
+constexpr float kStickDir = 0.5f;               // the left stick past half way: a direction (the drill details' scroll)
 
 // ---- state (under ui::lock) ---------------------------------------------------------------------------------------------
 struct Phys { MO* page = nullptr; MO* rows[8]{}; bool have = false; };
@@ -102,7 +106,11 @@ bool g_states_read = false, g_states_logged = false;
 lg::KeyEdge g_t, g_del;
 uint32_t g_pad_y = kPadYFallback, g_pad_x = kPadXFallback;
 uint32_t g_pad_l1 = kPadL1Fallback, g_pad_r1 = kPadR1Fallback;
+uint32_t g_pad_up = kPadUpFallback, g_pad_down = kPadDownFallback, g_pad_south = kPadSouthFallback, g_pad_east = kPadEastFallback;
+uint32_t g_stick_up = 0, g_stick_down = 0;       // GamePadButton.EmuLup / EmuLdown (the stick as buttons) when the enum has them
 bool g_pad_read = false;
+bool g_read_axis = false;                        // pad_held(stick): the left stick's axis read too, this pass
+float g_axis_y = 0;                              // its y (up > 0) of the last read, the largest of the pads
 // the pads (pad_mask)
 constexpr uint64_t kPadListEvery = 30;
 std::vector<MO*> g_pads;                         // the connected devices of the last list, held
@@ -801,7 +809,14 @@ void pads_drop() {
 
 uint32_t pad_buttons(MO* p) {
     reframework::InvokeRet rb{};
-    return (p && gm::call(p, "get_Button", {}, &rb)) ? rb.dword : 0;
+    const uint32_t b = (p && gm::call(p, "get_Button", {}, &rb)) ? rb.dword : 0;
+    reframework::InvokeRet ra{};
+    float xy[2] = {};
+    if (g_read_axis && p && gm::call(p, "get_AxisL", {}, &ra)) {   // via.vec2
+        std::memcpy(xy, ra.bytes.data(), sizeof xy);
+        if (std::fabs(xy[1]) > std::fabs(g_axis_y)) g_axis_y = xy[1];
+    }
+    return b;
 }
 
 uint32_t pads_list() {                           // lists the devices (held when they can be) and reads their buttons
@@ -839,7 +854,15 @@ uint32_t pad_mask() {
             if (reframework::API::Field* f = pb->find_field("RLeft")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_x = (uint32_t)v; }
             if (reframework::API::Field* f = pb->find_field("LTrigTop")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_l1 = (uint32_t)v; }
             if (reframework::API::Field* f = pb->find_field("RTrigTop")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_r1 = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("LUp")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_up = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("LDown")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_down = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("RDown")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_south = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("RRight")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_east = (uint32_t)v; }
+            if (reframework::API::Field* f = pb->find_field("EmuLup")) g_stick_up = (uint32_t)f->get_data<int32_t>(nullptr);
+            if (reframework::API::Field* f = pb->find_field("EmuLdown")) g_stick_down = (uint32_t)f->get_data<int32_t>(nullptr);
         }
+        cmn::journal("ui: pad d-pad up %u down %u, south %u, east %u, stick as buttons %u / %u", g_pad_up, g_pad_down, g_pad_south,
+                     g_pad_east, g_stick_up, g_stick_down);
     }
     if (!g_pads_held || tick() >= g_pads_next) {
         g_pads_next = tick() + kPadListEvery;
@@ -1103,8 +1126,11 @@ void scroll_post_body(void**, const ScrollCall* c) {
     if (!ours && g_fit_watch <= 0) return;       // back at once unless our list or a re-fit is pending (ours: a compare)
     std::lock_guard lk(ui::lock());
     try {
-        if (ours && g_rows_request.exchange(false)) g_rows_dirty = true;
-        if (ours && g_rows_dirty) {
+        // a redraw asked (the Manager's Open / Reset / Erase, a rename...) waits for a Record / Replay page: on the Manager
+        // page (the strip's other page, the same row list) it was spent with nothing to draw, and the slot names of an
+        // import then showed only after the menu was opened again (Wael, 04/11)
+        if (ours && (g_rows_dirty || g_rows_request.load()) && page_shown(param_now()) != kNone) {
+            g_rows_request.store(false);
             g_rows_dirty = false;
             redraw_rows();
             if (g_fit_watch < kRefitAfterRedraw) g_fit_watch = kRefitAfterRedraw;   // rendered sizes lag a frame
@@ -1273,9 +1299,17 @@ void style_text(MO* t, MO* ref) {                // RMT:2193-2197
 std::string slot_display_name(int n) { return display_name(n); }
 std::optional<std::string> live_frames_text(int n) { return live_frames(n); }
 std::string virtual_frames_text(int n) { return virtual_text(n); }
-PadHeld pad_held() {
+PadHeld pad_held(bool stick) {
+    g_read_axis = stick;
+    g_axis_y = 0;
     const uint32_t mask = pad_mask();
-    return PadHeld{ (mask & g_pad_l1) != 0, (mask & g_pad_r1) != 0, (mask & g_pad_y) != 0, (mask & g_pad_x) != 0 };
+    g_read_axis = false;
+    PadHeld h{ (mask & g_pad_l1) != 0, (mask & g_pad_r1) != 0, (mask & g_pad_y) != 0, (mask & g_pad_x) != 0 };
+    h.south = (mask & g_pad_south) != 0;
+    h.east = (mask & g_pad_east) != 0;
+    h.up = (mask & g_pad_up) != 0 || (g_stick_up && (mask & g_stick_up) != 0) || (stick && g_axis_y > kStickDir);
+    h.down = (mask & g_pad_down) != 0 || (g_stick_down && (mask & g_stick_down) != 0) || (stick && g_axis_y < -kStickDir);
+    return h;
 }
 
 void specs(std::vector<mech::hooks::Spec>& out) {

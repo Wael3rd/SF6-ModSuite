@@ -97,6 +97,11 @@ std::string describe_text(MO* t);
 // ---- finders ----------------------------------------------------------------------------------------------------------
 MO* find_param();                              // the training pause menu's flow Param (UIFlowManager._Handles, RMT:440-446)
 MO* pause_agent();                             // the pause menu's agent ui11200 (core discovery)
+// The key guide at the bottom of the screen (in game 04/11): the GUI "InputGuide" (two exist: the live one's UIAgent has
+// _IsEnableInput), its main control, and its help line (p_ScrollText_0 / e_text). Found again at each call (core
+// discovery, read-only); nullptr when not there.
+MO* input_guide_main();
+MO* input_guide_help();
 MO* singleton(const char* name);
 
 }  // namespace ui::gx

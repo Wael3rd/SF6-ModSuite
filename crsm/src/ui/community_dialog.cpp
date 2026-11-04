@@ -26,6 +26,7 @@
 #include "common.hpp"
 #include "community/community.hpp"
 #include "community/page.hpp"
+#include "details_logic.hpp"
 #include "dialogs.hpp"
 #include "dump.hpp"
 #include "game/gm.hpp"
@@ -172,8 +173,9 @@ public:
             if (!l.empty()) out.push_back(l[0]);
         }
         const auto ds = model::luajson::index(r.item, "description");
-        if (ds.is_string())
-            for (const std::string& l : lg::desc_lines(ds.get<std::string>(), em, lg::kComDescMaxLines - (int)out.size())) out.push_back(l);
+        if (ds.is_string())                      // (the drill details' Markdown shown without its markers)
+            for (const std::string& l : lg::desc_lines(ui::details::strip_markdown(ds.get<std::string>()), em, lg::kComDescMaxLines - (int)out.size()))
+                out.push_back(l);
         return out;
     }
     bool data_changed() override { return page().data_changed(); }
@@ -659,6 +661,7 @@ void do_share() {
 }  // namespace
 
 bool open() { return g_open.load(); }
+std::optional<bool> guide_mode_pad() { return guide_pad(); }
 
 void frame() {                                   // _com.tick (RMT:317-395), every frame
     if (g_share_request.exchange(false)) { try { do_share(); } catch (...) { ui::fault("Community share"); } }

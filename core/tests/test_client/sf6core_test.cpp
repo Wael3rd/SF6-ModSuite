@@ -130,6 +130,10 @@ static void SF6CORE_CALL pm_on_spin(void*, int64_t row, int32_t index) {
     s_pm_value.store(index);
     test_log("PM spin row %lld -> option %d", (long long)row, index);
 }
+// Core 0.9.5: F / pad A on the test spin (the game thread, from the core's frame)
+static void SF6CORE_CALL pm_on_confirm(void*, int64_t row) {
+    test_log("PM confirm on spin row %lld", (long long)row);
+}
 static void SF6CORE_CALL pm_on_page_shown(void*, int64_t page, int32_t shown) {
     test_log("PM page %lld %s", (long long)page, shown ? "shown" : "not shown");
 }
@@ -156,6 +160,7 @@ static void pm_make_page() {
     cb.on_spin = pm_on_spin;
     cb.on_page_shown = pm_on_page_shown;
     cb.hints = pm_hints;
+    cb.on_confirm = pm_on_confirm;                      // (an older core ignores it)
     auto st = s_api->pm_set_callbacks(s_client, &cb);
     SF6CorePmPageDesc pd = {};
     pd.struct_size = sizeof pd;

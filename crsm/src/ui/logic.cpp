@@ -305,8 +305,8 @@ std::vector<std::string> desc_lines(const std::string& raw, double max_em, int m
     for (char ch : in) {
         if (ch == '\r') continue;
         if (ch == '\t') ch = ' ';
-        else if (ch == '<') ch = '[';
-        else if (ch == '>') ch = ']';
+        else if (ch == '<' || ch == '[') ch = '(';   // (a '<' starts a game tag; the game's texts draw no square bracket, 04/11)
+        else if (ch == '>' || ch == ']') ch = ')';
         else if (ch != '\n' && ((unsigned char)ch < 0x20 || ch == 0x7F)) continue;
         clean += ch;
     }
@@ -351,6 +351,23 @@ std::vector<std::string> desc_lines(const std::string& raw, double max_em, int m
         last = h + kEllipsis;
     }
     return lines;
+}
+
+std::vector<std::string> help_pages(const std::string& raw, double max_em) {
+    std::string joined;
+    for (const std::string& l : desc_lines(raw, 1e9, 1000)) joined += (joined.empty() ? "" : " | ") + l;
+    if (joined.empty()) return {};
+    if (text_em(joined) <= max_em) return { joined };
+    std::vector<std::string> pages;
+    for (std::string p : desc_lines(joined, max_em - text_em("  (99/99)"), 1000)) {
+        if (p.rfind("| ", 0) == 0) p.erase(0, 2);
+        if (p.size() >= 2 && p.compare(p.size() - 2, 2, " |") == 0) p.erase(p.size() - 2);
+        trim(p);
+        if (!p.empty() && p != "|") pages.push_back(std::move(p));
+    }
+    if (pages.size() < 2) return { pages.empty() ? joined : pages[0] };
+    for (size_t i = 0; i < pages.size(); ++i) pages[i] += "  (" + std::to_string(i + 1) + "/" + std::to_string(pages.size()) + ")";
+    return pages;
 }
 
 std::string desc_line(const std::string& raw, double max_em) {

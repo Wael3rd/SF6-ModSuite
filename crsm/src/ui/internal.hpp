@@ -41,8 +41,10 @@ void style_text(MO* t, MO* ref);               // RecordingManagerTab.style_text
 std::string slot_display_name(int n);          // RSM name of 1-8 / virtual name of 9-30
 std::optional<std::string> live_frames_text(int n);   // "59F" / the empty word of live slot n (nullopt = no slot data)
 std::string virtual_frames_text(int n);        // "78F" / the empty word of virtual slot n
-struct PadHeld { bool l1 = false, r1 = false, y = false, x = false; };   // Y = RUp (Triangle), X = RLeft (Square)
-PadHeld pad_held();                            // L1 / R1 / Y / X held on a connected pad now (the name keys' pad read; under ui::lock)
+// Y = RUp (Triangle), X = RLeft (Square), south = RDown (A / Cross), east = RRight (B / Circle); up / down = the d-pad,
+// or the left stick (EmuLup / EmuLdown when the game's enum has them, or with `stick` its AxisL past half way, up > 0)
+struct PadHeld { bool l1 = false, r1 = false, y = false, x = false, south = false, east = false, up = false, down = false; };
+PadHeld pad_held(bool stick = false);          // held on a connected pad now (the name keys' pad read; under ui::lock)
 }  // namespace windows
 
 // ---- reversal pages and picker (reversal_ui.cpp) ------------------------------------------------------------------------
@@ -66,7 +68,8 @@ namespace dlg {
 void specs(std::vector<mech::hooks::Spec>& out);
 void frame(bool paused);                       // finished text dialogs, the message box poll (paused only)
 bool naming();                                 // a text dialog is up
-bool modal();                                  // a text dialog, the Community dialog, or a box under the pause: the tab held
+bool modal();                                  // a text dialog, the Community dialog, the drill details, or a box under the
+                                               // pause: the tab held
 // The menu's tab under CRSM's dialogs (logic.hpp TabGuard; L1+R1 / A+E): the data (TrainingManager._tData) put back to
 // the spot the dialog opened on when it moved. at: the frame / CreateViewData's pre (the cursor row too) / InitTabItem's
 // pre; fallback = the tab held when nothing was kept yet (-1: none). Under ui::lock; returns modal().
@@ -88,9 +91,19 @@ namespace com {
 void specs(std::vector<mech::hooks::Spec>& out);
 void frame();
 bool open();                                   // _com.dialog_open
+// The game's guide glyphs: app.InputGuideManager.GetMode(0): true pad, false keyboard, nullopt nothing to follow (game thread)
+std::optional<bool> guide_mode_pad();
 void hand_back();
 std::string status();
 }  // namespace com
+
+// ---- drill details dialog (drill_details.cpp; the Manager page asks through drill_details.hpp) ---------------------------
+namespace details {
+void specs(std::vector<mech::hooks::Spec>& out);
+void frame(bool training, bool paused);        // the request, the fill when no hook did, the lines, the keys, the end
+void hand_back();                              // the UI stopped: the dialog closed, released
+std::string status();
+}  // namespace details
 
 // ---- REC HUD (hud.cpp) ----------------------------------------------------------------------------------------------------
 namespace hud {

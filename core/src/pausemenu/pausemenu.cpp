@@ -1689,6 +1689,77 @@ bool pause_up() {
     return b != kPauseNone && b != kPauseNone2;
 }
 
+// ---- Confirm on a spin row (0.9.5, SF6CorePmCallbacks.on_confirm) ----
+// The game gives a spin row no decide: TrainingMenuFunc.Function is never called for a decide on one (a hook counted
+// none on F over a spin row, one over a button row, 04/11), and its guide shows no Confirm there. So the decide input
+// is read raw, here on the frame: keyboard F (the game window's key messages, sf6core.cpp) or a pad's south button
+// (via.hid.GamePadButton.RDown on any connected pad, as the clients read their pads). Read only while a client has
+// on_confirm, the menu is up with a page of ours shown live, no option window is open and the menu's focused row
+// (Param.get_SelectChildIndex, its list entry) is one of our spin rows. Sent at the press edge with the same row
+// focused on the frame before: a key held into the row, or the press that moved the focus there, is not one, and a
+// held key never sends it again. The client's own dialogs are the client's to check.
+constexpr int kVkConfirm = 0x46;              // F
+uint32_t g_pad_south = 32;                    // via.hid.GamePadButton.RDown (A / Cross), read from the live enum once
+bool g_pad_looked = false;
+void* g_gamepad = nullptr;                    // via.hid.GamePad (a native singleton: the process's)
+API::Method* g_m_devices = nullptr;           // its get_ConnectingDevices
+int64_t g_cf_row = -1;                        // the spin row focused on the last frame (-1: none)
+bool g_cf_down = false;                       // the decide input on the last frame (read while a row was focused)
+int64_t g_cf_send = -1;                       // a Confirm to send once the engine lock is released (frame())
+pc::Owner g_cf_owner = nullptr;
+uint64_t g_cf_sent = 0;
+
+uint32_t pad_buttons() {                       // every connected pad's buttons, OR-ed
+    if (!g_pad_looked) {
+        g_pad_looked = true;
+        auto* tdb = API::get()->tdb();
+        if (TD* pb = tdb ? tdb->find_type("via.hid.GamePadButton") : nullptr)
+            if (API::Field* f = pb->find_field("RDown")) { const int32_t v = f->get_data<int32_t>(nullptr); if (v) g_pad_south = (uint32_t)v; }
+        if (TD* gp = tdb ? tdb->find_type("via.hid.GamePad") : nullptr) g_m_devices = gp->find_method("get_ConnectingDevices");
+    }
+    if (!g_gamepad) { op("get_native_singleton GamePad"); g_gamepad = API::get()->get_native_singleton("via.hid.GamePad"); }
+    if (!g_gamepad || !g_m_devices) return 0;
+    op("GamePad.get_ConnectingDevices");
+    const auto r = g_m_devices->invoke(reinterpret_cast<MO*>(g_gamepad), std::vector<void*>{});
+    MO* devices = r.exception_thrown ? nullptr : reinterpret_cast<MO*>(r.ptr);
+    const int32_t n = devices ? list_count(devices) : 0;
+    uint32_t mask = 0;
+    for (int32_t i = 0; i < n && i < 8; ++i) {
+        reframework::InvokeRet b;
+        if (MO* d = list_item(devices, i); d && call(d, "get_Button", {}, b)) mask |= b.dword;
+    }
+    return mask;
+}
+
+int64_t focused_spin(pc::Owner* owner) {       // our spin row with the menu's focus, on our page shown live; -1 = none
+    step("frame: confirm (focused row)");
+    if (!pc::any_shown() || dialogs::options::core::window_open()) return -1;
+    const int64_t page = pc::shown_page();
+    MO* param = page >= 0 ? param_get() : nullptr;
+    if (!param) return -1;
+    int64_t row = -1;
+    int32_t idx = -1;
+    if (page_shown_live(param, page) && call_i32(param, "get_SelectChildIndex", idx) && idx >= 0) {
+        const pc::Ident i = row_ident_of_entry(view_entry(param, idx));
+        if (is_our_spin(i) && i.page == page) { row = i.id; *owner = i.owner; }
+    }
+    param_put(param);
+    return row;
+}
+
+void confirm_tick(bool on) {
+    pc::Owner owner = nullptr;
+    const int64_t row = on ? focused_spin(&owner) : -1;
+    bool down = false;
+    if (row >= 0) {
+        step("frame: confirm (decide input)");
+        down = core_key_down(kVkConfirm) || (pad_buttons() & g_pad_south) != 0;
+    }
+    if (row >= 0 && row == g_cf_row && down && !g_cf_down) { g_cf_send = row; g_cf_owner = owner; }
+    g_cf_row = row;
+    g_cf_down = down;
+}
+
 void frame_inner(uint64_t f) {
     step("frame: flow");
     const int32_t flow = g_api->get_flow_id();
@@ -1711,6 +1782,7 @@ void frame_inner(uint64_t f) {
         param_drop();
     }
     g_menu_up = paused;
+    confirm_tick(paused && g_calls.any_confirm && g_calls.any_confirm());   // (nothing read without a client asking)
     step("frame: state machine");             // the install pass sets its own steps (pass_begin and the backend)
     pc::tick(f, g_training, paused);
     if (g_training && !paused && f % 60 == 20) { step("frame: game rows"); scan_game_rows(); }
@@ -2230,6 +2302,16 @@ void frame(uint64_t f) {
     tl_tracing = false;
     perf::end(perf::PmFrame, pt);
     eng_unlock(lk);
+    if (g_cf_send >= 0) {                      // a Confirm on a spin row: to its client, with no lock of the engine held
+        const int64_t row = g_cf_send;
+        const pc::Owner owner = g_cf_owner;
+        g_cf_send = -1;
+        g_cf_owner = nullptr;
+        if (g_calls.confirm && !core_closing()) {
+            if (g_cf_sent++ < 3) core_log(SF6CORE_LOG_INFO, nullptr, "[pausemenu] Confirm on spin row %lld (the decide input, raw)", (long long)row);
+            g_calls.confirm(owner, row);
+        }
+    }
 }
 
 bool dyn_row_removable(void* dynamic_data) {

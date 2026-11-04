@@ -8,8 +8,11 @@
 //  * one page (title rsm.page, the English guide of v1.6) at index 0 of the Recording strip: Manager > Record > Replay;
 //  * eight rows: the loadout spin (64 option slots built once, labels retexted in place, arrows 70 px apart: the core
 //    wraps Q / D and fits the font) and seven buttons (Open, Save, Save As, Reset, Erase, Share, Download), all keeping
-//    the menu open; T (or pad Y) on the page renames the selected loadout (no hint, as in v1.6): P4's key reader
-//    (ui/windows.cpp) routes the key here (rename_key);
+//    the menu open; T (or pad Y) on the page renames the selected drill (its file renamed, content kept; the hint
+//    "Edit Drill Name" on the Drill row): P4's key reader (ui/windows.cpp) routes the key here (rename_key);
+//  * Confirm (F, pad A / Cross) on the Drill row (core 0.9.5, on_confirm: the game gives a spin row no decide): the
+//    selected drill's details in the game's image dialog (ui/drill_details), whose "Open drill" runs Open and whose T
+//    (pad Y) edits the drill's description (the game's text dialog, written into the drill file's info.description);
 //  * the key-guide hints "Edit slot name" (Y) / "Delete slot name" (X) on the Record page's slot rows only;
 //  * the sub-page memory: RecordType set at the end of P4's CreateViewData pre-hook (before_create_view_data);
 //  * the texts from SF6_CRSM_data/locale.json (ui/lang) in the game's language, retexted by pm_set_texts when it changes.

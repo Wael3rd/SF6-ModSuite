@@ -100,12 +100,19 @@ constexpr size_t kComAuthorMinChars = 8;
 // stay. Still wider: the shortest label made.
 std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, const std::string& full, double budget_em);
 // A free text (a loadout's description) made safe for a game text, in at most max_lines lines of max_em: \r and other
-// control characters dropped, tabs as spaces, '<' / '>' as '[' / ']' (the game's markup), each paragraph (\n) wrapped at
+// control characters dropped, tabs as spaces, '<' / '>' and '[' / ']' as '(' / ')' (a '<' starts the game's markup; its
+// texts draw no square bracket: "[x]" showed "x", 04/11), each paragraph (\n) wrapped at
 // word boundaries (a word wider than a line is split), empty lines dropped; past max_lines the last line kept ends with
 // "…". The first 4000 bytes are read.
 std::vector<std::string> desc_lines(const std::string& raw, double max_em, int max_lines);
 // The same text on ONE line: its paragraphs joined with " | ", wrapped at a word boundary with "…" past max_em.
 std::string desc_line(const std::string& raw, double max_em);
+// The Manager's help line in pages (the fallback of help_pages_on.txt: the game scrolls the whole line by itself, 04/11;
+// pages shown in turn): desc_line's one line, uncut,
+// split at word boundaries into pages of max_em less the counter's room, each then ending with "  (n/N)"; a page never
+// starts or ends with the " | " separator. Fits max_em whole: one page, no counter. Nothing to show: none.
+std::vector<std::string> help_pages(const std::string& raw, double max_em);
+constexpr uint64_t kHelpPageFrames = 240;      // a help line page shown 4 s, then the next (looping)
 // The Community dialog's description area (UIFlowOptionBGDialog.Param.GuideMessageText, the game's own description of
 // the focused unit, which CRSM's guide line replaces). Seen in game at 1920x1080 (27/10): its font draws ~14.4 px per em
 // of text_em (a 20 em line 289 px) from the rows' left edge, ~23 px a line, bottom-aligned just above "F Confirm", in a

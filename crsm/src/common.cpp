@@ -74,6 +74,8 @@ std::atomic<bool> g_lua_called{false};        // a Lua called the bridge (ui_cla
 // Closing guard: the game window got WM_CLOSE / WM_DESTROY / WM_NCDESTROY / WM_ENDSESSION. Once set, every
 // per-frame entry point and every pre-hook returns immediately (a WM_CLOSE the user cancels is lifted after 30 s).
 std::array<std::atomic<bool>, 256> g_keys{};      // key_down(): REFramework's m_last_keys, from the window's messages
+std::array<std::atomic<bool>, 256> g_scans{};     // scan_down(): the same keys by scancode
+std::array<std::atomic<uint32_t>, 256> g_presses{};   // key_presses(): fresh presses by virtual key (and the mouse buttons)
 std::atomic<bool> g_closing{false};
 std::atomic<bool> g_closing_final{false};
 std::atomic<int64_t> g_closing_tick{0};
@@ -198,11 +200,31 @@ void status_tick() {
     bgwriter::write((std::string(kDataDir) + "/status.json").c_str(), j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace));
 }
 
-bool on_message_cb(void*, unsigned int msg, unsigned long long wparam, long long) {
+bool on_message_cb(void*, unsigned int msg, unsigned long long wparam, long long lparam) {
     PERF_TOP(pm, "OnMessage");
-    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) { if (wparam < 256) g_keys[(size_t)wparam].store(true); return true; }
-    if (msg == WM_KEYUP || msg == WM_SYSKEYUP) { if (wparam < 256) g_keys[(size_t)wparam].store(false); return true; }
-    if (msg == WM_KILLFOCUS) { for (auto& k : g_keys) k.store(false); return true; }
+    const size_t sc = (size_t)((lparam >> 16) & 0xFF);
+    const bool extended = ((lparam >> 24) & 1) != 0;
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
+        if (wparam < 256) {
+            if (!(lparam & (1LL << 30))) g_presses[(size_t)wparam].fetch_add(1);   // (bit 30: down before, an auto-repeat)
+            g_keys[(size_t)wparam].store(true);
+        }
+        if (!extended) g_scans[sc].store(true);
+        return true;
+    }
+    if (msg == WM_KEYUP || msg == WM_SYSKEYUP) {
+        if (wparam < 256) g_keys[(size_t)wparam].store(false);
+        if (!extended) g_scans[sc].store(false);
+        return true;
+    }
+    if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) {
+        const size_t vk = msg == WM_LBUTTONDOWN ? VK_LBUTTON : VK_RBUTTON;
+        g_presses[vk].fetch_add(1);
+        g_keys[vk].store(true);
+        return true;
+    }
+    if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) { g_keys[msg == WM_LBUTTONUP ? VK_LBUTTON : VK_RBUTTON].store(false); return true; }
+    if (msg == WM_KILLFOCUS) { for (auto& k : g_keys) k.store(false); for (auto& k : g_scans) k.store(false); return true; }
     const char* name = nullptr;
     bool final_msg = false;
     if (msg == WM_CLOSE) name = "WM_CLOSE";
@@ -447,6 +469,8 @@ void journal(const char* fmt, ...) {
 }
 void append_file(const char* path, std::string text) { bgwriter::append(path, std::move(text)); }
 bool key_down(int vk) { return vk >= 0 && vk < 256 && g_keys[(size_t)vk].load(std::memory_order_relaxed); }
+bool scan_down(int sc) { return sc >= 0 && sc < 256 && g_scans[(size_t)sc].load(std::memory_order_relaxed); }
+uint32_t key_presses(int vk) { return vk >= 0 && vk < 256 ? g_presses[(size_t)vk].load(std::memory_order_relaxed) : 0; }
 
 void refresh_status() { bgwriter::write((std::string(kDataDir) + "/status.json").c_str(), status_json().dump(4)); }
 

@@ -28,6 +28,19 @@ bool validate(const json& data, std::string* err);
 
 // info.description of a pack (the entry whose id is 1, docs/PACK_FORMAT.md): "" when none
 std::string description(const json& data);
+// info.author / info.source of a pack, as description: "" when none (source: "community", "drillcodes.com", ...)
+std::string author(const json& data);
+std::string source(const json& data);
+// The pack with info.description = desc on the entry whose id is 1 (its `info` made when it has none; author, source and
+// every other key kept). false (out untouched) when the pack has no such entry.
+bool with_description(const json& data, const std::string& desc, json* out);
+
+// One slot of a pack as the drill details dialog lists it (docs/PACK_FORMAT.md): its id (1-30), `empty` (truthy, or
+// neither a timeline nor inputs), its name ("" when none) and its length in frames: the timeline's run lengths summed
+// (timeline::entry_frames, as the Record page counts them), else the inputs' count.
+struct SlotSummary { int id = 0; bool empty = true; std::string name; int64_t frames = 0; };
+// The entries with an integer id 1..30, by id (the first entry of an id wins); not an array: none.
+std::vector<SlotSummary> slot_summaries(const json& data);
 
 // apply_data_to_character's split of a pack: entries with id <= 8 go to the live slots, the others to the virtual ones
 // (in file order). Call after validate(). An id that is not an integer is compared as a number (3.5 <= 8: live).
@@ -51,6 +64,9 @@ std::string save_filename(const std::string& typed, const std::string& char_name
 // file name (the characters \ / : * ? " < > | removed, trimmed, ".json" added). file is empty when nothing is left.
 struct TypedName { std::string display; std::string file; };
 TypedName typed_name(const std::string& typed);
+
+// Two drill file names that are one file on Windows (ASCII case ignored)
+bool same_file_name(const std::string& a, const std::string& b);
 
 // "<Char>_pre_import_<YYYYMMDD_HHMMSS>.json" (in <Char>/Backups/)
 std::string backup_filename(const std::string& char_name, const std::tm& when);

@@ -15,6 +15,7 @@
 #include <optional>
 
 #include "common.hpp"
+#include "drill_details.hpp"
 #include "dump.hpp"
 #include "game/gm.hpp"
 #include "gx.hpp"
@@ -63,6 +64,7 @@ struct Job {
     int walk_frames = 0, found_at = -1;
     int again_run = 0;                           // frames running the game's line came back (3: left to the game)
     bool again_off = false;
+    bool max_read = false;                       // the field's MaxLength read back once (a cap of the game's: journaled)
 };
 
 std::mutex g_q_mx;                               // the request queues (any thread)
@@ -389,10 +391,11 @@ int hide_pre_body(void** argv) {
 }
 UI_PRE_ALWAYS(hide_pre, hide_pre_body)
 
-// -- the menu's tab changes blocked while a text dialog or the Community dialog is up (RMT:1717-1745). As the Lua: every
-//    agent's tab inputs (the Community option dialog's own tab handling would otherwise take A / E); UIAgent is every
-//    screen's, so a box (which has no tab) does not block it
-bool blocking() { return g_naming.load() || com::open(); }
+// -- the menu's tab changes blocked while a text dialog, the Community dialog or the drill details are up (RMT:1717-1745).
+//    As the Lua: every agent's tab inputs (the Community option dialog's own tab handling would otherwise take A / E; the
+//    drill details take A / E and L1 / R1 for their slot pages); UIAgent is every screen's, so a box (which has no tab)
+//    does not block it
+bool blocking() { return g_naming.load() || com::open() || ui::details::is_open(); }
 int agent_tab_pre_body(void**) {
     if (!blocking()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     ++g_blocks;
@@ -449,7 +452,7 @@ MO* primary_list() { return gx::ref(gx::ref(gx::ref(tm(), "_UITrainingMenu"), "_
 
 bool naming() { return g_naming.load(); }
 
-bool modal() { return lg::tabs_held(g_naming.load(), com::open(), g_box_up.load(), ui::paused()); }
+bool modal() { return lg::tabs_held(g_naming.load(), com::open() || ui::details::is_open(), g_box_up.load(), ui::paused()); }
 
 bool hold_tab(MO* tdata, lg::TabAt at, int64_t fallback) {
     static const char* const kAt[3] = { "frame", "CreateViewData", "InitTabItem" };
@@ -515,6 +518,14 @@ void frame(bool is_paused) {
     for (auto& r : boxes) open_box(std::move(r));
     if (is_paused) box_tick();                   // polled under the pause (RMT:2102)
     if (g_job && !g_job->finished) relabel_tick(*g_job);   // route 3A: the explanation line, from the frame
+    if (g_job && !g_job->finished && !g_job->max_read && gm::is_managed(reinterpret_cast<void*>(g_job->addr))) {
+        int64_t ml = -1;                         // the length the field takes, as the game set it up (asked: job.max)
+        if (gx::get_i64(gx::ref(reinterpret_cast<MO*>(g_job->addr), "TextInputParts"), "MaxLength", &ml) && ml > 0) {
+            g_job->max_read = true;
+            cmn::journal("ui: text dialog for %s: the field takes %lld characters (asked %zu)%s", g_job->title.c_str(), (long long)ml,
+                         g_job->max, ml < (int64_t)g_job->max ? ": the game's cap" : "");
+        }
+    }
     // the menu's tab: kept on the frame a dialog opens (a text dialog / box opened above; the Community dialog's one frame
     // later, before its window shows), put back if it moved without a rebuild yet; menu closed: left alone. No dialog: one
     // call to forget, then no game read
@@ -613,7 +624,7 @@ void community_share() { ui::com_api::share(); }
 void ticker(const std::string& text) { ui::ticker::push(text); }
 
 bool busy() {                                    // lock-free but for the request queue's own small mutex
-    if (dlg::g_naming.load() || dlg::g_job_up.load() || dlg::g_box_up.load() || ui::com::open()) return true;
+    if (dlg::g_naming.load() || dlg::g_job_up.load() || dlg::g_box_up.load() || ui::com::open() || ui::details::is_open()) return true;
     std::lock_guard lk(dlg::g_q_mx);
     return !dlg::g_text_q.empty() || !dlg::g_box_q.empty();
 }

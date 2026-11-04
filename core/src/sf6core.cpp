@@ -2038,11 +2038,26 @@ SF6CoreStatus SF6CORE_CALL api_opt_group_place(SF6CoreClient*, int64_t, int32_t,
 // Closing guard: window message callback (0.7.2)
 // ========================================================================
 
+// The game window's keyboard as REFramework's own is_key_down reads it (0.9.5: the pause menu's Confirm on a spin row
+// reads F): WM_KEYDOWN / WM_KEYUP, all up when the window loses the focus; a key typed in another application is not
+// seen. Written on the window's thread, read on the game thread.
+static std::atomic<bool> s_keys[256] = {};
+bool core_key_down(int vk) { return vk >= 0 && vk < 256 && s_keys[vk].load(std::memory_order_relaxed); }
+
 static bool on_message(void* /*hwnd*/, unsigned int msg,
                        unsigned long long wparam, long long /*lparam*/) {
     bool final_msg = false;
     const char* name = nullptr;
     switch (msg) {
+    case 0x0100: case 0x0104:                    // WM_KEYDOWN / WM_SYSKEYDOWN
+        if (wparam < 256) s_keys[wparam].store(true, std::memory_order_relaxed);
+        return true;
+    case 0x0101: case 0x0105:                    // WM_KEYUP / WM_SYSKEYUP
+        if (wparam < 256) s_keys[wparam].store(false, std::memory_order_relaxed);
+        return true;
+    case 0x0008:                                 // WM_KILLFOCUS
+        for (auto& k : s_keys) k.store(false, std::memory_order_relaxed);
+        return true;
     case 0x0010: name = "WM_CLOSE";     break;
     case 0x0002: name = "WM_DESTROY";   final_msg = true; break;
     case 0x0082: name = "WM_NCDESTROY"; final_msg = true; break;
@@ -2853,10 +2868,10 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     if (param->functions->on_message) {
         param->functions->on_message(on_message);
         core_log(SF6CORE_LOG_INFO, nullptr,
-                 "registered on_message (closing guard)");
+                 "registered on_message (closing guard, raw keys)");
     } else {
         core_log(SF6CORE_LOG_WARN, nullptr,
-                 "on_message not available (closing guard disabled)");
+                 "on_message not available (closing guard and raw keys disabled)");
     }
 
     // Initialize Lua bridge (increment 3)

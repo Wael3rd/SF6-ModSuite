@@ -37,7 +37,8 @@ void ticker(const std::string& text);
 // The message box with its title: the Manager's boxes are titled ("Save loadout", "Save loadout as", "Reset loadout",
 // "Erase loadout", RMT:116-141). The two-argument confirm above shows no title.
 void confirm(const std::string& text, const std::string& title, std::function<void(bool yes)> done);
-// A text dialog or a message box is up, or the Community dialog: the Lua's guards (`if naming or confirm_box then
-// return end`, RMT:1459, 1464; T / G / R ignored, RMT:1762) for the keys of the Manager page (T = rename).
+// A text dialog or a message box is up, or the Community dialog, or the drill details: the Lua's guards (`if naming or
+// confirm_box then return end`, RMT:1459, 1464; T / G / R ignored, RMT:1762) for the keys of the Manager page (T =
+// rename, Confirm on the Drill row = the details).
 bool busy();
 }
