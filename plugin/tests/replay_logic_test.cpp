@@ -44,8 +44,8 @@ int main() {
     check(row_text(f, c) == "Outfit 1 - Color 01", "row text of Outfit 1 colour 0");
     c.color = 200;
     check(row_text(f, c) == "Outfit 1 - Color DX 1", "colour 200 shows as the game's DX 1");
-    check(color_label(9) == "10" && color_label(10) == "EX 1" && color_label(11) == "EX 2" && color_label(207) == "DX 8",
-          "colour names as the game's grid: 10, EX 1, EX 2, DX 8");
+    check(color_label(9) == "10" && color_label(100) == "EX 1" && color_label(101) == "EX 2" && color_label(105) == "EX 6" &&
+          color_label(207) == "DX 8", "colour names as the game's grid: 10, EX 1 (100), EX 2, EX 6, DX 8");
     c = cycle_outfit(f, c, +1);
     check(c.costume == 1 && c.color == 0, "Outfit 2 has no colour 200: its first colour");
     c.color = 5;

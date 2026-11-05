@@ -111,12 +111,13 @@ inline Choice cycle_color(const Fighter& f, const Choice& c, int dir) {
     return r;
 }
 
-// The colour's name as the game's Opponent Outfit Settings grid shows it: colours 0-9 "01".."10", 10.. "EX 1".., 200..
-// "DX 1"..
+// The colour's name as the game's Opponent Outfit Settings grid shows it: colours 0-9 "01".."10", 100.. "EX 1"..,
+// 200.. "DX 1".. (the costume colour table holds 0-9, 100-105 and 200-207 only; Luke's Outfit 1: 100, 101 = EX 1, EX 2,
+// 200-207 = DX 1-8 in the game's grid, read 05/11. The grid's RW / MC entries are not colour numbers of that table.)
 inline std::string color_label(int color) {
     char b[32];
     if (color >= 0 && color < 10) std::snprintf(b, sizeof b, "%02d", color + 1);
-    else if (color >= 10 && color < 200) std::snprintf(b, sizeof b, "EX %d", color - 9);
+    else if (color >= 100 && color < 200) std::snprintf(b, sizeof b, "EX %d", color - 99);
     else if (color >= 200 && color < 300) std::snprintf(b, sizeof b, "DX %d", color - 199);
     else std::snprintf(b, sizeof b, "#%d", color);
     return b;

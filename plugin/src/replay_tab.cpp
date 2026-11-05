@@ -1,12 +1,22 @@
 // SF6 Slots — "Replay Outfits": a 6th tab of the Replays menu (agent CFNReplayTop), after Search.
 //
-// The page is laid out like Battle Settings > Other > Opponent Outfit Settings: a grid of character portraits (4 columns,
-// the game's order, "On" over a character whose replays get a chosen outfit, the name below) and, on the left, the
-// focused character's settings as the game's page has them: Outfit Settings On / Off, Costume, Color. Confirm (F, pad A)
-// on a portrait edits its rows (Up / Down a row, Left / Right its value, Confirm or Back to the grid); R (pad X / Square)
-// cycles the colour anywhere. On = the outfit a replay's fighter of that character wears (replay_logic.hpp; the playback
-// override reads the file), Off = what the replay holds. Every change writes
-// reframework/data/SF6_CostumeSlots_data/replay_outfits.json at once (temporary file + rename).
+// The page is laid out and works like Battle Settings > Other > Opponent Outfit Settings (read 05/11):
+//   - the option row: on the left one row, "Replay Outfit Settings", selected (light, blue bar); right of the divider
+//     line, the character portraits (4 columns, the game's order, "On" over a character whose replays get a chosen
+//     outfit, the name below), dimmed. Confirm (F, pad A) goes into the grid; Back (Esc, the tab-back key, pad B / L1)
+//     goes back to Search;
+//   - the grid: the row turns dark with its small marker, the grid's panel lights up, the focused portrait is light
+//     (the last one focused, as the game's). Arrows move (wrapping), Confirm opens the character's page, Esc (pad B)
+//     goes back to the row; the tab keys do nothing (as the game's);
+//   - the character's page: the tab bar gives way to the character's name (the game's header), its settings as the
+//     game's rows ("Outfit Settings < On >", "Costume < Outfit 1 >", "Color < 01 >": Up / Down a row, wrapping, Left /
+//     Right its value; Off disables the two rows below, the focus stays on the first) and the fighter in 3D at the game's
+//     place. Back (Esc, pad B) goes back to the grid; Confirm and the tab keys do nothing there, as on the game's page.
+// Not taken: the game's "Game Settings" summary on the right (not wanted), its T / R shortcuts.
+// The game picks the colours with a grid of colour boxes (several at once); a choice here is one colour, hence the
+// third row. On = the outfit a replay's fighter of that character wears (replay_logic.hpp; the playback override reads
+// the file), Off = what the replay holds. Every change writes reframework/data/SF6_CostumeSlots_data/replay_outfits.json
+// at once (temporary file + rename).
 //
 // The game's own page (app.UIFlowOtherMatchingFighterSetting.Start(fighter, save)) cannot run here: its flow looks up the
 // GameObject "OtherMatchingFighterSetting" by name (UIParam.get_ObjectName, empty folder path), which only Battle
@@ -22,23 +32,34 @@
 //   - While ours: the Search page's agents (every visible CFN* agent but CFNTop and CFNReplayTop: CFNReplayChildSearch,
 //     CFNSearchItemList) get ForceInvisible on their main control and BlockInput; both are put back when we leave, when
 //     the game changes tab by itself (a mouse click) and when the screen goes.
-//   - The page is made of copies of three plain controls of the tab bar's screen (the core's ui_clone_control, inside
-//     the tab hook: R19, the screen's own input update): the header's title text, the bar's solid mask rectangle
-//     (e_rect_mask_00, turned into a plain coloured rectangle: MaskType NonTarget; cells, rows, the focus borders) and the
-//     "new" badge's texture (the portraits: the game's own characterselect face pictures, loaded by path through the
-//     core, shown once loaded). Named e_ro_*, under c_title
-//     (root space); they live and die with the screen's tree (R35: found again by name, every write through the core).
-//     Text, place, size, colour, texture and visibility from LateUpdateBehavior (R1), written when the page changed and
+//   - The page is made of copies (the core's ui_clone_control, inside the tab hook: R19, the screen's own input
+//     update), named e_ro_*, under c_title (root space); they live and die with the screen's tree (R35: found again by
+//     name, every write through the core). Of the tab bar's screen: the header's title text (captions, the name), the
+//     bar's solid mask rectangle (e_rect_mask_00, made a plain coloured rectangle: MaskType NonTarget; the cells, the
+//     grid's panel), the header's line (e_scale9grid_line_00, the line with its end dots: turned 90 degrees, the
+//     divider, as the game's own divider is the same line turned) and the "new" badge's texture (the portraits: the
+//     game's own characterselect face pictures, loaded by path through the core, shown once loaded; the 3D model). The
+//     rows (the option row too) are the game's own row: a
+//     via.gui.SelectItem of the resident GUI Resident_Cmn_CertifiedMatch (c_SelectItem_0: the very background of the
+//     game's selector rows, c_bg_m, dark with a bevel, light with the blue bar when selected, its PlayState DEFAULT /
+//     SELECT; its value text, its darken; the label a copy of its plain value text, its own title text being tinted),
+//     sized like the game's rows. The arrows: the main menu banner's two arrow textures (StartMenuUI, the same
+//     12 x 25 arrows; rows without arrows when that screen is not there). Both GUIs stay loaded
+//     longer than the Replays screen (the copies never outlive what they were copied from). The Search page's rows were
+//     not used: their agent is rebuilt with each of its sub-tabs (Keyword / Conditional Search).
+//     Text, place, size, colour, state and visibility from LateUpdateBehavior (R1), written when the page changed and
 //     every 20 frames.
+//   - The character's page hides the tab bar's items, guides, lower line and background and the title (ForceInvisible,
+//     put back on the grid, on leaving, on the screen's next build) and writes our description in the bottom line
+//     (InputGuide > p_ScrollText_0; the game's text put back when we leave, if it still shows ours).
 //   - Input: read natively while the game window has the focus (keys by scancode, so any keyboard layout: W A S D
-//     places and the arrows, F / Enter; via.hid.GamePad's merged device: d-pad, left stick, A, X / Square), never hooked.
+//     places and the arrows, F / Enter; via.hid.GamePad's merged device: d-pad, left stick, A, B, L1), never hooked.
 //     The screen's whole input goes through the page's agent (its BlockInput also stops the tab bar's A / E and Esc:
-//     seen 05/11), so Back is ours too: the tab-back key (Q place, the game's default), Esc, pad L1 or B go back to the
-//     grid from the rows, to Search from the grid; the page gets its input back only once that key is released.
+//     seen 05/11), so Back is ours too; the page gets its input back only once that key is released.
 //   - The tab items' look is their via.gui PlayState: c_item_05 is DISABLE as the game leaves it, DEFAULT shown,
 //     SELECT while ours (c_item_04 DEFAULT meanwhile, SELECT again when we leave).
-//   - The focused character in 3D, as the game's own page shows it: Battle Settings' fighter capture room, borrowed
-//     while our page is up (namespace preview below); its render target on a texture copy, the 2D portrait meanwhile.
+//   - The character in 3D, as the game's own page shows it: Battle Settings' fighter capture room, borrowed while the
+//     character's page is up (namespace preview below); its render target on a texture copy, nothing meanwhile.
 // Gate: nothing but one core registry read every 15 frames while the Replays screen is not up.
 #include "slots.hpp"
 #include "slots_ui.hpp"
@@ -62,24 +83,55 @@ constexpr int kMaxRefused = 3;
 constexpr uint32_t kActFlags = 2 | 8;             // app.InputDigitalFlag Trigger | Repeat
 constexpr uint32_t kDirTabBack = 16, kDirTabNext = 32;   // app.UIPartsItemDirection
 constexpr const char* kTabLabel = "Replay Outfits";
-// layout, root space (1920 x 1080; c_title sits at the root's origin), Battle Settings > Other's own places
-constexpr int kCols = 4, kVisRows = 8, kCells = kCols * kVisRows, kPanelRows = 3;
+// layout, root space (1920 x 1080; c_title sits at the root's origin): Battle Settings > Other > Opponent Outfit
+// Settings' own places (read 05/11)
+constexpr int kCols = 4, kVisRows = 8, kCells = kCols * kVisRows, kRows = 3;
 constexpr float kGridX = 760, kGridY = 184, kCellW = 160, kCellH = 72, kStepX = 168, kStepY = 80;
-constexpr float kRowX = 60, kRowY = 250, kRowW = 640, kRowH = 58, kRowStep = 70;
-constexpr float kBigX = 200, kBigY = 500, kBigW = 400, kBigH = 300;
-// the 3D preview: the middle of the render target (16:9, the fighter stands in its middle), drawn below the rows
-// (read on Battle Settings' page, which draws the whole target at 2304 x 1296 centred on 1437, 605: Luke spans u 0.32 -
-// 0.54, v 0.21 - 0.82; a tall fighter's head reaches v 0.05)
-constexpr float kModelX = 130, kModelY = 452, kModelW = 520, kModelH = 500;
-constexpr double kModelU = 0.18, kModelV = 0.05, kModelUW = 0.50, kModelVH = 0.85;
-constexpr float kFontCell = 24, kFontRow = 30, kFontName = 44, kFontHelp = 24;
+// the option list: its row 640 x 58 at (60, 150) (p_Group_0_v > p_GroupItem_*); the divider: the line 703 x 5 at
+// (739, 150) turned 90 degrees, colour 80FFFFFF; the grid's panel 960 x 702 at (731, 150), 66000000, its focus tint
+// 1CE98A31 while the grid has the focus (p_FighterSelectSimple_cos_h)
+constexpr float kListX = 60, kListY = 150, kListW = 640;
+constexpr float kLineX = 739, kLineY = 150, kLineLen = 703, kLineW = 5;
+constexpr float kPanelX = 731, kPanelY = 150, kPanelW = 960, kPanelH = 702;
+constexpr const char* kListLabel = "Replay Outfit Settings";
+// the character's page: its rows (p_Spin_*) 740 x 58, 70 apart from (156, 210); in a row, the label's left middle at
+// (23, 29), the value's centre at (524, 29), the arrows' centres at (348, 29) and (700, 29); label font 25, value 23
+constexpr float kRowX = 156, kRowY = 210, kRowW = 740, kRowH = 58, kRowStep = 70, kRowMatH = 280;
+constexpr float kLabelX = 23, kMidY = 29, kLabelW = 320, kValueX = 524, kValueW = 300, kArrowL = 348, kArrowR = 700;
+constexpr float kFontLabel = 25, kFontValue = 23;
+constexpr size_t kValueMax = 24;                  // a longer outfit name is cut (it stays between the arrows)
+// its fighter: the capture room's render target drawn 1:1 from x 320 (e_texture_rtt, 1920 x 1080 at 320, 0); the part
+// on screen: u 0 - 0.8333
+constexpr float kModelX = 320, kModelY = 0, kModelW = 1600, kModelH = 1080;
+constexpr double kModelU = 0.0, kModelV = 0.0, kModelUW = 1600.0 / 1920.0, kModelVH = 1.0;
+// its header: the character's name at the title's place, in the title's font (e_text_name, 58, 22, font 32)
+constexpr float kNameX = 58, kNameY = 22, kFontName = 32;
+constexpr float kFontCell = 24;
 // via.Color raw (R in the low byte)
-constexpr uint32_t kColText = 0xFFFFFFFF, kColDim = 0xFF8C8C8C, kColFocus = 0xFF40D0FF, kColOn = 0xFFFFB040;
-constexpr uint32_t kColCell = 0xE6342C2A, kColCellFocus = 0xF5EEEEEE, kColBorder = 0xFFFFA040, kColRow = 0xCC342C2A;
-constexpr uint32_t kColRowFocus = 0xF0B06020, kColDark = 0xFF2A2A2A;   // the focused cell: light, dark caption (the game's)
-// Draw order: the GUI sorts its elements by Priority (child order only breaks ties): borders, frames, pictures, texts
-constexpr int kPrioBorder = 1, kPrioFrame = 2, kPrioImage = 3, kPrioText = 4;
-constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (cells and the big picture are 4:3)
+constexpr uint32_t kColText = 0xFFFFFFFF, kColOn = 0xFFFDBF3F, kColName = 0xFFFBBE40;   // "On": the game's e_text_on
+constexpr uint32_t kColCell = 0xE62A201E, kColCellFocus = 0xF5EEEEEE;
+constexpr uint32_t kColDark = 0xFF2A2A2A;         // the focused cell: light, dark caption (the game's)
+// the option row: the grid dims its cells by 40 % (their e_darken 66000000); the cells, the panel and its tint: plain
+// rectangles matched to the game's on screen (its panel's textured Scale9Grids, 66000000 / 1CE98A31, show lighter)
+constexpr uint32_t kColCellDim = 0xE6241F1F, kColTextDim = 0xFF999999, kColOnDim = 0xFF987226;
+constexpr uint32_t kColPanel = 0x3A000000, kColPanelFocus = 0x0CE98A31, kColLine = 0x80FFFFFF;
+// a row's texts and arrows: light, dark on the selected row's light background, dimmer on a disabled row; the game
+// darkens an unselected row by 20 % and a disabled one by 50 % (its e_darken over the row): the texts under the row's
+// darken (its value) are written light, the ones over it (label, arrows) at the result (read on the game's page)
+constexpr uint32_t kColRowText = 0xFFF3F3F3, kColRowTextSel = 0xFF4D4949, kColRowTextDim = 0xFFC1C1C1;
+constexpr uint32_t kColRowTextOff = 0xFF7A7A7A;
+constexpr uint32_t kColDarkenRow = 0x33000000, kColDarkenOff = 0x80000000;
+// the option row while the grid has the focus (the game's p_GroupItem: SELECT, no blue bar, dark material, its marker)
+constexpr uint32_t kColListMatDecided = 0xE61A1A1A, kColListDefaultDecided = 0x1AFFFFFF, kColListTextDecided = 0xFFF1F1F1;
+constexpr uint32_t kColRowBar = 0xFFD76407, kColRowMarker = 0xFFF0F0F0;   // the blue bar, the marker (the template's is clear)
+// Draw order: the GUI sorts its elements by Priority (child order only breaks ties): the model and the grid's panel
+// under the cells and rows, pictures and arrows over them, texts on top
+constexpr int kPrioPanel = 1, kPrioModel = 1, kPrioFrame = 2, kPrioImage = 3, kPrioText = 4;
+constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (the cells' pictures are 4:3)
+const char* const kDescGrid = "Set which outfit each character will appear in during replays.";
+const char* const kDescPage = "Set which outfit and color this character will appear in during replays.";
+const char* const kRowTemplateAgent = "Resident_Cmn_CertifiedMatch";
+const char* const kArrowTemplateAgent = "StartMenuUI";
 
 const SF6CoreAPI* A() { return ui::core(); }
 SF6CoreClient* C() { return ui::client(); }
@@ -107,8 +159,12 @@ std::vector<Fighter> g_cat;
 Choices g_choices;
 std::map<int, Choice> g_last_on;                  // per character, the outfit it had before being turned Off
 int g_cursor = 0, g_top_row = 0;                  // the focused cell (catalog index), the first grid row shown
-bool g_edit = false;                              // the focused character's rows have the input
-int g_row = 0;                                    // the focused row while editing
+// The page's level, as on Battle Settings > Other: the option row (the grid shown dimmed), the grid, a character's page
+enum Level { kLevelList = 0, kLevelGrid = 1, kLevelPage = 2 };
+std::atomic<int> g_level{ kLevelList };           // the hooks read it
+int g_row = 0;                                    // the character's page's focused row
+bool g_header_hidden = false;                     // the tab bar's pieces hidden for the character's page
+std::string g_desc_game, g_desc_ours;             // the bottom line: the game's text, ours while it shows
 bool g_copies_shown = false, g_dirty = true;
 uint32_t g_drawn_at = 0;
 uintptr_t g_model_tex = 0;                        // the model copy given the render target (address)
@@ -117,13 +173,13 @@ std::set<uintptr_t> g_styled;
 int g_status_logged = 1000;
 bool g_place_logged = false;
 uint32_t g_enter_frame = 0;
-std::string g_back_hint = "L1";                   // the bar's tab-back guide text (the game's icon of the key)
 int64_t g_cp_lefttop = -1;                        // via.gui.ControlPoint.LeftTop
+bool g_no_arrows_logged = false;
 std::map<int, void*> g_faces;                     // fighter -> portrait TextureResourceHolder (one reference held)
 
 // ---- the page's copies, made inside the tab hook (R19) ----
-// Three kinds, each a copy of a plain control of the tab bar's screen (no UIParts)
-enum Kind { kText, kRect, kImage };
+// Plain controls of the tab bar's screen (no UIParts), the game's row and its plain text, the banner's two arrows
+enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow };
 struct Copy { std::string name; Kind kind; };
 
 std::string cname(const char* what, int i) {
@@ -131,23 +187,32 @@ std::string cname(const char* what, int i) {
     std::snprintf(b, sizeof b, "e_ro_%s_%02d", what, i);
     return b;
 }
-// Draw order = creation order (each copy becomes its parent's last child): frames, focus frames, pictures, texts
+// Draw order: Priority (set by the frame), then creation order (each copy becomes its parent's last child)
 const std::vector<Copy>& copies() {
     static std::vector<Copy> v;
     if (!v.empty()) return v;
-    v.push_back({ "e_ro_rfocus", kRect });         // the borders first: under the frame they surround
-    for (int r = 0; r < kPanelRows; ++r) v.push_back({ cname("rbg", r), kRect });
-    v.push_back({ "e_ro_cfocus", kRect });
+    v.push_back({ "e_ro_gpanel", kRect });         // the grid's panel and its focus tint: under the cells
+    v.push_back({ "e_ro_gfocus", kRect });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cbg", i), kRect });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cimg", i), kImage });
-    v.push_back({ "e_ro_bigimg", kImage });
     v.push_back({ "e_ro_model", kImage });         // the 3D preview: the capture room's render target
+    v.push_back({ "e_ro_divider", kLine });
+    v.push_back({ "e_ro_lrow", kRow });            // the option row
+    for (int r = 0; r < kRows; ++r) v.push_back({ cname("row", r), kRow });
+    for (int r = 0; r < kRows; ++r) { v.push_back({ cname("arl", r), kLeftArrow }); v.push_back({ cname("arr", r), kRightArrow }); }
+    v.push_back({ "e_ro_llbl", kLabel });
+    for (int r = 0; r < kRows; ++r) v.push_back({ cname("rlbl", r), kLabel });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cname", i), kText });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("con", i), kText });
-    for (int r = 0; r < kPanelRows; ++r) { v.push_back({ cname("rlbl", r), kText }); v.push_back({ cname("rval", r), kText }); }
-    v.push_back({ "e_ro_pname", kText });
-    v.push_back({ "e_ro_help", kText });
+    v.push_back({ "e_ro_name", kText });
     return v;
+}
+
+// The main control of the first agent of that name (nullptr: none)
+void* agent_main(const char* agent) {
+    void* buf[2] = {};
+    if (!A()->ui_agents(agent, buf, 2) || !buf[0]) return nullptr;
+    return call_obj(static_cast<Obj*>(buf[0]), "get_ControlMain");
 }
 
 bool make_copies() {
@@ -159,19 +224,40 @@ bool make_copies() {
     void* bar = main ? a->ui_find_child(main, "p_SimpleList_0_tab", 8) : nullptr;
     void* bar_bg = bar ? a->ui_find_child(bar, "c_bg", 0) : nullptr;
     void* t_rect = bar_bg ? a->ui_find_child(bar_bg, "e_rect_mask_00", 0) : nullptr;
+    void* t_line = bar_bg ? a->ui_find_child(bar_bg, "e_scale9grid_line_00", 0) : nullptr;
     void* item0 = bar ? a->ui_find_child(bar, "c_item_00", 0) : nullptr;
     void* batch = item0 ? a->ui_find_child(item0, "c_batch", 0) : nullptr;
     void* t_image = batch ? a->ui_find_child(batch, "e_texture_new", 0) : nullptr;
-    if (!title || !t_text || !t_rect || !t_image) { ++g_refused; g_copy_status.store(-3000); return false; }
+    void* rows = agent_main(kRowTemplateAgent);
+    void* t_row = rows ? a->ui_find_child(rows, "c_SelectItem_0", 8) : nullptr;
+    // the row's labels: its plain text (e_text_detail; its own title text has a tinted style)
+    void* t_label = t_row ? a->ui_find_child(t_row, "e_text_detail", 2) : nullptr;
+    void* menu = agent_main(kArrowTemplateAgent);
+    void* arrow_l = menu ? a->ui_find_child(menu, "p_MouseDecideOperable_L", 8) : nullptr;
+    void* arrow_r = menu ? a->ui_find_child(menu, "p_MouseDecideOperable_R", 8) : nullptr;
+    void* t_arrow_l = arrow_l ? a->ui_find_child(arrow_l, "e_texture_arrow", 2) : nullptr;
+    void* t_arrow_r = arrow_r ? a->ui_find_child(arrow_r, "e_texture_arrow", 2) : nullptr;
+    const bool arrows = t_arrow_l && t_arrow_r;
+    if (!title || !t_text || !t_rect || !t_line || !t_image || !t_row || !t_label) {
+        ++g_refused;
+        g_copy_status.store(t_row && t_label ? -3000 : -3001);
+        return false;
+    }
+    if (!arrows && !g_no_arrows_logged) { g_no_arrows_logged = true; logf("replay tab: no arrow to copy (%s not up): rows without arrows", kArrowTemplateAgent); }
     for (const Copy& cp : copies()) {
+        if ((cp.kind == kLeftArrow || cp.kind == kRightArrow) && !arrows) continue;
         if (a->ui_find_child(title, cp.name.c_str(), 0)) continue;
-        void* tmpl = cp.kind == kText ? t_text : cp.kind == kRect ? t_rect : t_image;
+        void* tmpl = cp.kind == kText ? t_text : cp.kind == kRect ? t_rect : cp.kind == kLine ? t_line : cp.kind == kRow ? t_row
+                   : cp.kind == kLabel ? t_label
+                   : cp.kind == kLeftArrow ? t_arrow_l : cp.kind == kRightArrow ? t_arrow_r : t_image;
         void* c = nullptr;
         const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, title, cp.name.c_str(), &c);
         g_copy_status.store(st == SF6CORE_OK && !c ? -1000 : static_cast<int>(st));
         if (st != SF6CORE_OK || !c) { ++g_refused; return false; }
-        SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 1;    // via.gui.MaskType.NonTarget (the rectangle was a mask: 2)
-        a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
+        if (cp.kind == kRect) {
+            SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 1;    // via.gui.MaskType.NonTarget (the rectangle was a mask: 2)
+            a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
+        }
         a->ui_set_visible(C(), c, 0);                           // placed and shown by the frame
     }
     return true;
@@ -184,7 +270,8 @@ int decide(void* self, int dir, uint32_t flag) {
     if (!top || reinterpret_cast<uintptr_t>(self) != top || g_closing.load(std::memory_order_relaxed)) return kCall;
     const bool acts = (flag & kActFlags) != 0;
     if (g_ours.load(std::memory_order_acquire)) {
-        if (acts && dir < 0) { g_ours.store(false); g_leave.store(true); g_leave_frame.store(g_frame); }
+        // tab back leaves from the option row; in the grid and on the character's page the tab keys do nothing (the game's)
+        if (acts && dir < 0 && g_level.load() == kLevelList) { g_ours.store(false); g_leave.store(true); g_leave_frame.store(g_frame); }
         g_swallowed.fetch_add(1);
         return kSkip;                                   // our tab: the game's list stays on Search
     }
@@ -341,10 +428,10 @@ void load_faces() {
 // under way: the new fighter loaded right (Luke VisualId 1, folder esf002v01, Outfit 2's meshes esf002_002_*) but the
 // page kept showing Outfit 1, the render target no longer refreshed by the room's camera (Wael 05/11; the same outfit
 // asked in a fresh room drew right). Shown only once the room's fighter is the one asked (fighter, VisualId = the costume
-// number, colour: true of every outfit seen, game and Slots Loader) and ready (CurrentState 6) for kShowAfter frames; the
-// 2D portrait meanwhile and whenever anything fails (kTries failures: the portrait for the rest of the session). Given
-// back when the page goes (tab back, another tab, the screen closed) and when a character is Off: no room nor fighter
-// left behind.
+// number, colour: true of every outfit seen, game and Slots Loader) and ready (CurrentState 6) for kShowAfter frames;
+// nothing meanwhile and whenever anything fails (kTries failures: no model for the rest of the session). Given
+// back when the character's page goes (back to the grid, tab back, another tab, the screen closed) and when the character
+// is Off: no room nor fighter left behind.
 namespace preview {
 constexpr int kRoomType = 5;                      // app.worldtour.CaptureRoomObserver.CaptureRoomType.BattleSettingFighter
 constexpr int kStateReady = 6;                    // app.worldtour.CaptureRoomFighter.State when drawn in Battle Settings
@@ -612,10 +699,10 @@ struct Rep {
     }
     void prime(bool now) { held = now; next = g_frame + 1000000; }   // a key held at entry acts only once released
 };
-Rep k_up, k_down, k_left, k_right, k_color, k_back, k_ok;
+Rep k_up, k_down, k_left, k_right, k_esc, k_tab, k_ok;
 Method* m_pad_merged = nullptr;
 Method* m_pad_button = nullptr;
-uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_x = 64, b_l1 = 256, b_b = 128, b_a = 32;   // via.hid.GamePadButton
+uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_l1 = 256, b_b = 128, b_a = 32;   // via.hid.GamePadButton
 uint32_t b_sup = 0, b_sdown = 0, b_sleft = 0, b_sright = 0;
 
 bool focused() {
@@ -637,7 +724,7 @@ uint32_t pad_buttons() {
     auto r = call(m_pad_button, dev);
     return r.exception_thrown ? 0u : r.dword;
 }
-struct Keys { bool up, down, left, right, color, back, ok; };
+struct Keys { bool up, down, left, right, esc, tab, ok; };   // esc: Back; tab: the tab-back key
 Keys read_keys() {
     Keys k{};
     if (focused()) {
@@ -645,8 +732,8 @@ Keys read_keys() {
         k.down = vk_down(VK_DOWN) || sc_down(0x1F);
         k.left = vk_down(VK_LEFT) || sc_down(0x1E);
         k.right = vk_down(VK_RIGHT) || sc_down(0x20);
-        k.color = sc_down(0x13);                   // R (its place on a QWERTY keyboard)
-        k.back = vk_down(VK_ESCAPE) || sc_down(0x10);   // Esc, the tab-back key (Q's place: A on AZERTY)
+        k.esc = vk_down(VK_ESCAPE);
+        k.tab = sc_down(0x10);                     // the tab-back key (Q's place: A on AZERTY)
         k.ok = vk_down(VK_RETURN) || sc_down(0x21);     // Enter, F (the game's Confirm)
     }
     const uint32_t b = pad_buttons();
@@ -654,15 +741,15 @@ Keys read_keys() {
     k.down = k.down || (b & b_down) || (b_sdown && (b & b_sdown));
     k.left = k.left || (b & b_left) || (b_sleft && (b & b_sleft));
     k.right = k.right || (b & b_right) || (b_sright && (b & b_sright));
-    k.color = k.color || (b & b_x);
-    k.back = k.back || (b & b_l1) || (b & b_b);
+    k.esc = k.esc || (b & b_b);
+    k.tab = k.tab || (b & b_l1);
     k.ok = k.ok || (b & b_a);
     return k;
 }
 void prime_keys() {
     const Keys k = read_keys();
-    k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right); k_color.prime(k.color);
-    k_back.prime(k.back); k_ok.prime(k.ok);
+    k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right);
+    k_esc.prime(k.esc); k_tab.prime(k.tab); k_ok.prime(k.ok);
 }
 
 const Fighter* focused_fighter() {
@@ -699,26 +786,28 @@ void apply_choice(const Fighter& f, const Choice& cur, const Choice& next) {
 
 void input() {
     const Keys k = read_keys();
-    const bool back = k_back.press(k.back), ok = k_ok.press(k.ok);
+    const bool esc = k_esc.press(k.esc), tab = k_tab.press(k.tab), ok = k_ok.press(k.ok);
     const Fighter* f = focused_fighter();
-    if (g_edit) {
-        if (back || ok) { g_edit = false; g_dirty = true; return; }   // back to the grid
-        if (k_up.step(k.up)) { g_row = (g_row + kPanelRows - 1) % kPanelRows; g_dirty = true; }
-        if (k_down.step(k.down)) { g_row = (g_row + 1) % kPanelRows; g_dirty = true; }
-        if (!f) return;
+    const int level = g_level.load();
+    if (level == kLevelList) {                     // the option row: Confirm into the grid, Back to Search
+        if (esc || tab) { g_ours.store(false); g_leaving = true; return; }   // (the page's input comes back once released)
+        if (ok && f) { g_level.store(kLevelGrid); g_dirty = true; }
+        return;
+    }
+    if (level == kLevelPage) {                     // the character's page (Confirm and the tab keys: nothing, as the game's)
+        if (esc || !f) { g_level.store(kLevelGrid); g_dirty = true; return; }   // back to the grid
         const Choice cur = choice_of(*f);
+        const int rows = cur.forced ? kRows : 1;   // Off: the rows below are disabled, the focus stays on the first
+        if (k_up.step(k.up)) { g_row = (g_row + rows - 1) % rows; g_dirty = true; }
+        if (k_down.step(k.down)) { g_row = (g_row + 1) % rows; g_dirty = true; }
         Choice next = cur;
         if (k_left.step(k.left)) next = row_step(*f, next, g_row, -1);
         if (k_right.step(k.right)) next = row_step(*f, next, g_row, 1);
-        if (k_color.step(k.color)) next = cycle_color(*f, next, 1);
         apply_choice(*f, cur, next);
         return;
     }
-    if (back) {                                    // back to Search (the page's input comes back once released)
-        g_ours.store(false);
-        g_leaving = true;
-        return;
-    }
+    // the grid: Esc back to the option row, the tab keys nothing (as the game's)
+    if (esc) { g_level.store(kLevelList); g_dirty = true; return; }
     const int n = static_cast<int>(g_cat.size());
     const int before = g_cursor;
     if (k_up.step(k.up)) g_cursor = grid_move(g_cursor, 0, -1, n, kCols);
@@ -726,9 +815,7 @@ void input() {
     if (k_left.step(k.left)) g_cursor = grid_move(g_cursor, -1, 0, n, kCols);
     if (k_right.step(k.right)) g_cursor = grid_move(g_cursor, 1, 0, n, kCols);
     if (g_cursor != before) g_dirty = true;
-    if (!f) return;
-    if (ok) { g_edit = true; g_row = 0; g_dirty = true; return; }
-    if (k_color.step(k.color)) { const Choice cur = choice_of(*f); apply_choice(*f, cur, cycle_color(*f, cur, 1)); }
+    if (ok && f) { g_level.store(kLevelPage); g_row = 0; g_dirty = true; }
 }
 
 // ---- the screen ----
@@ -851,7 +938,7 @@ void put_box(void* title, const std::string& name, float x, float y, float w, fl
     }
     show(c, on);
 }
-void put_image(void* title, const std::string& name, int fid, float x, float y, float w, float h, bool on) {
+void put_image(void* title, const std::string& name, int fid, float x, float y, float w, float h, bool on, uint32_t col = kColText) {
     void* c = copy_of(title, name);
     if (!c) return;
     style_box(c, kPrioImage);
@@ -860,7 +947,7 @@ void put_image(void* title, const std::string& name, int fid, float x, float y, 
     const bool ready = on && holder && A()->ui_texture_ready(holder) == 1;
     if (ready) {
         A()->ui_set_texture_rect(C(), c, holder, 0.0f, kFaceV0, 1.0f, kFaceVH);
-        A()->ui_set_color(C(), c, kColText);
+        A()->ui_set_color(C(), c, col);
         A()->ui_set_position(C(), c, x, y, 0);
         A()->ui_set_size(C(), c, w, h);
     } else if (on && holder) {
@@ -871,7 +958,7 @@ void put_image(void* title, const std::string& name, int fid, float x, float y, 
 void put_model(void* title, bool on) {
     void* c = copy_of(title, "e_ro_model");
     if (!c) return;
-    style_box(c, kPrioImage);
+    style_box(c, kPrioModel);
     if (on && g_model_tex != reinterpret_cast<uintptr_t>(c)) {
         Obj* h = preview::rtt();
         if (!h) on = false;
@@ -913,22 +1000,198 @@ void put_text(void* title, const std::string& name, const std::string& text, flo
     show(c, on);
 }
 
-void render(Obj* main) {
+// Through the core: an enum value (via.gui.ControlPoint and PageAlignment: LeftCenter 4, CenterCenter 5, read 05/11)
+constexpr int64_t kLeftCenter = 4, kCenterCenter = 5;
+void set_enum(void* c, const char* sig, int64_t v) {
+    if (!c) return;
+    SF6CoreArg a{}; a.type = SF6CORE_ARG_I64; a.v.i = v;
+    A()->obj_invoke(C(), c, sig, &a, 1, nullptr);
+}
+void place(void* c, float x, float y) { if (c) A()->ui_set_position(C(), c, x, y, 0); }
+void resize(void* c, float w, float h) { if (c) A()->ui_set_size(C(), c, w, h); }
+
+// A text of a row: placed by `point` (LeftCenter, CenterCenter), aligned the same in its region (w x the row's height)
+void style_row_text(void* e, int64_t point, float w, float font) {
+    if (!e) return;
+    set_enum(e, "set_ControlPoint(via.gui.ControlPoint)", point);
+    set_enum(e, "set_PageAlignment(via.gui.PageAlignment)", point);
+    A()->ui_set_region_size(C(), e, w, kRowH);
+    A()->ui_set_font_size(C(), e, font, font);
+}
+// A row (a copy of the game's row), once: the size of the game's rows (w x 58, its material w x 280, its shadow
+// w + 20 x 77 at -8, -6), the template's own extras hidden (colour block, frame, mouse area, its tinted title: the label
+// is a copy of its plain text), its value centred on (524, 29) (`value`: false, no value: the option row)
+void style_row(void* row, float w, bool value) {
+    if (!row || g_styled.count(reinterpret_cast<uintptr_t>(row))) return;
+    g_styled.insert(reinterpret_cast<uintptr_t>(row));
+    set_priority(row, kPrioFrame);
+    auto el = [row](const char* n) { return A()->ui_find_cached(row, n); };
+    for (const char* n : { "c_color", "e_scale9grid_frame", "e_hit_mouse", "e_text_title" }) set_vis(el(n), false);
+    resize(el("e_scale9grid_shadow"), w + 20, kRowH + 19);
+    for (const char* n : { "e_scale9grid_mask", "e_scale9grid_default", "e_darken" }) resize(el(n), w, kRowH);
+    resize(el("e_mat_bg"), w, kRowMatH);
+    void* v = el("e_text_detail");
+    if (!value) { set_vis(v, false); return; }
+    style_row_text(v, kCenterCenter, kValueW, kFontValue);
+    place(v, kValueX, kMidY);
+}
+// A row's look by its own PlayState (set on the row and its two background panels: SELECT, DEFAULT)
+void row_state(void* row, const char* st) {
+    set_state(row, st);
+    set_state(A()->ui_find_cached(row, "c_bg_m"), st);
+    set_state(A()->ui_find_cached(row, "c_bg"), st);
+}
+// The darken over a row: none on the selected row, 20 % on the others, 50 % on a disabled one (the game's)
+void row_darken(void* row, bool sel, bool disabled) {
+    void* d = A()->ui_find_cached(row, "e_darken");
+    if (!d) return;
+    if (!sel) A()->ui_set_color(C(), d, disabled ? kColDarkenOff : kColDarkenRow);
+    set_vis(d, !sel);
+}
+// A label copy (over its row): its left middle at (23, 29) of the row
+void put_label(void* title, const std::string& name, const char* text, float x, float y, uint32_t col, bool on) {
+    void* l = copy_of(title, name);
+    if (!l) return;
+    if (on) {
+        if (g_styled.insert(reinterpret_cast<uintptr_t>(l)).second) {
+            style_row_text(l, kLeftCenter, kLabelW, kFontLabel);
+            set_priority(l, kPrioText);
+        }
+        place(l, x + kLabelX, y + kMidY);
+        A()->ui_set_text(C(), l, text);
+        A()->ui_set_color(C(), l, col);
+    }
+    show(l, on);
+}
+// The character's page's row r: SELECT on the focused row, DEFAULT; texts and arrows coloured as the game's (the value
+// under the row's darken, the label and arrows over it); a disabled row darker, without arrows
+void put_row(void* title, int r, const char* label, const std::string& value, bool on, bool sel, bool disabled) {
+    void* row = copy_of(title, cname("row", r));
+    if (!row) return;
+    const float y = kRowY + r * kRowStep;
+    const uint32_t over = sel ? kColRowTextSel : disabled ? kColRowTextOff : kColRowTextDim;
+    if (on) {
+        style_row(row, kRowW, true);
+        row_state(row, sel ? "SELECT" : "DEFAULT");
+        place(row, kRowX, y);
+        if (void* t = A()->ui_find_cached(row, "e_text_detail")) {
+            A()->ui_set_text(C(), t, value.c_str());
+            A()->ui_set_color(C(), t, sel ? kColRowTextSel : kColRowText);
+        }
+        row_darken(row, sel, disabled);
+    }
+    show(row, on);
+    put_label(title, cname("rlbl", r), label, kRowX, y, over, on);
+    for (int s = 0; s < 2; ++s) {
+        void* a = copy_of(title, cname(s ? "arr" : "arl", r));
+        if (!a) continue;
+        const bool vis = on && !disabled;
+        if (vis) {
+            if (g_styled.insert(reinterpret_cast<uintptr_t>(a)).second) set_priority(a, kPrioImage);
+            place(a, kRowX + (s ? kArrowR : kArrowL), y + kMidY);   // its centre (the template's ControlPoint)
+            A()->ui_set_color(C(), a, over);
+        }
+        show(a, vis);
+    }
+}
+
+// The option row, the divider and the grid's panel (on: the option row or the grid is up; grid: the grid has the focus).
+// The row: selected (the game's SELECT look) while it has the focus; while the grid has it, the game's p_GroupItem stays
+// SELECT with its blue bar hidden, its material dark, its bevel shown, its small marker (e_focus_bar), its text light
+void render_list(void* title, bool on, bool grid) {
+    void* row = copy_of(title, "e_ro_lrow");
+    if (row) {
+        if (on) {
+            style_row(row, kListW, false);
+            row_state(row, "SELECT");
+            place(row, kListX, kListY);
+            auto el = [row](const char* n) { return A()->ui_find_cached(row, n); };
+            if (void* bar = el("e_rect_bar")) { A()->ui_set_color(C(), bar, kColRowBar); set_vis(bar, !grid); }
+            if (void* mk = el("e_focus_bar")) { A()->ui_set_color(C(), mk, kColRowMarker); set_vis(mk, true); }
+            if (void* m = el("e_mat_bg")) A()->ui_set_color(C(), m, grid ? kColListMatDecided : kColText);
+            if (void* d = el("e_scale9grid_default")) {
+                if (grid) A()->ui_set_color(C(), d, kColListDefaultDecided);
+                set_vis(d, grid);
+            }
+            set_vis(el("e_darken"), false);
+        }
+        show(row, on);
+    }
+    put_label(title, "e_ro_llbl", kListLabel, kListX, kListY, grid ? kColListTextDecided : kColRowTextSel, on);
+    // the divider: the header's line turned 90 degrees about its left end (the game's divider is that same line turned)
+    if (void* l = copy_of(title, "e_ro_divider")) {
+        if (on) {
+            if (g_styled.insert(reinterpret_cast<uintptr_t>(l)).second) {
+                set_enum(l, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop >= 0 ? g_cp_lefttop : 0);
+                set_priority(l, kPrioFrame);
+                float rot[4] = { 0.0f, 0.0f, 90.0f, 0.0f };   // via.vec3, passed by address as the core's own set_Position
+                SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = rot;
+                A()->obj_invoke(C(), l, "set_Rotation(via.vec3)", &a, 1, nullptr);
+            }
+            place(l, kLineX, kLineY);
+            resize(l, kLineLen, kLineW);
+            A()->ui_set_color(C(), l, kColLine);
+        }
+        show(l, on);
+    }
+    put_box(title, "e_ro_gpanel", kPanelX, kPanelY, kPanelW, kPanelH, kColPanel, on, kPrioPanel);
+    put_box(title, "e_ro_gfocus", kPanelX, kPanelY, kPanelW, kPanelH, kColPanelFocus, on && grid, kPrioPanel);
+}
+
+// The character's page: the tab bar gives way to the name (the bar's items, guides, lower line and background, the
+// title), as on the game's page; put back otherwise
+const char* const kHeaderParts[] = { "c_item_00", "c_item_01", "c_item_02", "c_item_03", "c_item_04", "c_item_05",
+                                     "p_InputGuide_L_s_dUITabL", "p_InputGuide_R_s_dUITabR", "e_scale9grid_line_01",
+                                     "e_scale9grid_bg" };
+void header(Obj* main, bool hide) {
+    if (!main || hide == g_header_hidden) return;
+    g_header_hidden = hide;
+    for (const char* n : kHeaderParts)
+        if (void* c = find(main, n)) A()->ui_set_force_invisible(C(), c, hide ? 1 : 0);
     void* title = find(main, "c_title");
-    if (!title) return;
-    if (!g_dirty && g_copies_shown && g_frame - g_drawn_at < 20) return;
-    g_dirty = false;
-    g_drawn_at = g_frame;
-    const int n = static_cast<int>(g_cat.size());
-    const int rows = (n + kCols - 1) / kCols;
-    g_top_row = window_top(g_top_row, n ? g_cursor / kCols : 0, rows, kVisRows);
-    // the grid
+    if (void* t = title ? A()->ui_find_child(title, "e_text_title", 0) : nullptr) A()->ui_set_force_invisible(C(), t, hide ? 1 : 0);
+}
+
+// The bottom line: the shown InputGuide's p_ScrollText_0 > e_text (the description of the page)
+Obj* desc_text() {
+    void* buf[4] = {};
+    const uint32_t n = A()->ui_agents("InputGuide", buf, 4);
+    for (uint32_t i = 0; i < n && i < 4; ++i) {
+        Obj* cm = call_obj(static_cast<Obj*>(buf[i]), "get_ControlMain");
+        if (!actual_visible(cm)) continue;
+        void* st = A()->ui_find_child(cm, "p_ScrollText_0", 4);
+        if (void* t = st ? A()->ui_find_child(st, "e_text", 1) : nullptr) return static_cast<Obj*>(t);
+    }
+    return nullptr;
+}
+void set_desc(const char* text) {
+    Obj* t = desc_text();
+    if (!t) return;
+    const std::string cur = str(call_obj(t, "get_Message"));
+    if (cur == text) return;
+    if (cur != g_desc_ours) g_desc_game = cur;    // the game's own text, put back when we leave
+    g_desc_ours = text;
+    A()->ui_set_text(C(), t, text);
+}
+// Only if it still shows ours: the game writes its own when it changes tab
+void restore_desc() {
+    if (g_desc_ours.empty()) return;
+    if (Obj* t = desc_text(); t && str(call_obj(t, "get_Message")) == g_desc_ours) A()->ui_set_text(C(), t, g_desc_game.c_str());
+    g_desc_ours.clear();
+}
+
+// The grid (on: the option row or the grid is up; grid: the grid has the focus: the focused portrait light; otherwise
+// every portrait dimmed, none focused, as the game's grid behind its option row)
+void render_grid(void* title, bool on, bool grid) {
+    const int n = on ? static_cast<int>(g_cat.size()) : 0;
+    if (on) g_top_row = window_top(g_top_row, n ? g_cursor / kCols : 0, (n + kCols - 1) / kCols, kVisRows);
     for (int i = 0; i < kCells; ++i) {
         const int idx = g_top_row * kCols + i;
-        const bool on = idx < n;
+        const bool cell = idx < n;
+        const bool foc = grid && idx == g_cursor;
         const float x = kGridX + (i % kCols) * kStepX, y = kGridY + (i / kCols) * kStepY;
-        put_box(title, cname("cbg", i), x, y, kCellW, kCellH, idx == g_cursor ? kColCellFocus : kColCell, on);
-        if (!on) {
+        put_box(title, cname("cbg", i), x, y, kCellW, kCellH, foc ? kColCellFocus : grid ? kColCell : kColCellDim, cell);
+        if (!cell) {
             put_image(title, cname("cimg", i), 0, 0, 0, 0, 0, false);
             put_text(title, cname("cname", i), "", 0, 0, 0, 0, false);
             put_text(title, cname("con", i), "", 0, 0, 0, 0, false);
@@ -936,50 +1199,52 @@ void render(Obj* main) {
         }
         const Fighter& f = g_cat[static_cast<size_t>(idx)];
         const bool forced = choice_of(f).forced;
-        put_image(title, cname("cimg", i), f.fid, x + kCellW - 96, y, 96, kCellH, true);
-        put_text(title, cname("cname", i), grid_caption(f.name), x + 10, y + 40, kFontCell, idx == g_cursor ? kColDark : kColText);
-        put_text(title, cname("con", i), "On", x + 10, y + 6, kFontCell, kColOn, forced);
+        put_image(title, cname("cimg", i), f.fid, x + kCellW - 96, y, 96, kCellH, true, grid ? kColText : kColTextDim);
+        put_text(title, cname("cname", i), grid_caption(f.name), x + 10, y + 40, kFontCell,
+                 foc ? kColDark : grid ? kColText : kColTextDim);
+        put_text(title, cname("con", i), "On", x + 10, y + 6, kFontCell, grid ? kColOn : kColOnDim, forced);
     }
-    const int vis = g_cursor - g_top_row * kCols;
-    const bool cell_on = n > 0 && vis >= 0 && vis < kCells;
-    put_box(title, "e_ro_cfocus", kGridX + (vis % kCols) * kStepX - 3, kGridY + (vis / kCols) * kStepY - 3, kCellW + 6, kCellH + 6,
-            kColBorder, cell_on, kPrioBorder);
-    // the focused character's settings, on the left
-    const Fighter* f = focused_fighter();
-    const Choice c = f ? choice_of(*f) : Choice{};
-    const int oi = f ? outfit_index(*f, c) : -1;
-    put_text(title, "e_ro_pname", f ? grid_caption(f->name) : "", kRowX + 20, kRowY - 80, kFontName, kColText, f != nullptr);
-    const char* labels[kPanelRows] = { "Outfit Settings", "Costume", "Color" };
-    // a long mod name is cut so that it stays inside its row (the grid starts right after it)
+}
+
+// The character's page (f: its character; nullptr: not up)
+void render_page(void* title, const Fighter* f) {
+    const bool on = f != nullptr;
+    const Choice c = on ? choice_of(*f) : Choice{};
+    // Off: the disabled rows show what On would bring back (the game keeps a disabled row's value)
+    const Choice shown = on && !c.forced ? row_step(*f, c, 0, 1) : c;
+    const int oi = on ? outfit_index(*f, shown) : -1;
+    put_text(title, "e_ro_name", on ? grid_caption(f->name) : "", kNameX, kNameY, kFontName, kColName, on);
     auto fit = [](std::string v) {
-        constexpr size_t kMax = 18;
-        if (v.size() <= kMax) return v;
-        size_t cut = kMax - 1;
+        if (v.size() <= kValueMax) return v;
+        size_t cut = kValueMax - 1;
         while (cut > 0 && (static_cast<unsigned char>(v[cut]) & 0xC0) == 0x80) --cut;   // not inside a UTF-8 sequence
         return v.substr(0, cut) + "...";
     };
-    std::string values[kPanelRows] = { c.forced ? "On" : "Off", oi >= 0 ? fit(f->outfits[static_cast<size_t>(oi)].name) : "-",
-                                       c.forced ? color_label(c.color) : "-" };
-    for (int r = 0; r < kPanelRows; ++r) {
-        const float y = kRowY + r * kRowStep;
-        const bool foc = g_edit && r == g_row;
-        const uint32_t col = (foc || r == 0 || c.forced) ? kColText : kColDim;
-        put_box(title, cname("rbg", r), kRowX, y, kRowW, kRowH, foc ? kColRowFocus : kColRow, f != nullptr);
-        put_text(title, cname("rlbl", r), labels[r], kRowX + 24, y + 12, kFontRow, col, f != nullptr);
-        put_text(title, cname("rval", r), values[r], kRowX + 380, y + 12, kFontRow, col, f != nullptr);
-    }
-    put_box(title, "e_ro_rfocus", kRowX - 3, kRowY + g_row * kRowStep - 3, kRowW + 6, kRowH + 6, kColBorder, g_edit && f != nullptr,
-            kPrioBorder);
-    // Off (Default): no preview at all, the room given back; On: the model, the portrait while it loads
-    const bool forced = f != nullptr && c.forced;
+    const char* labels[kRows] = { "Outfit Settings", "Costume", "Color" };
+    const std::string values[kRows] = { c.forced ? "On" : "Off", oi >= 0 ? fit(f->outfits[static_cast<size_t>(oi)].name) : "-",
+                                        shown.forced ? color_label(shown.color) : "-" };
+    for (int r = 0; r < kRows; ++r) put_row(title, r, labels[r], values[r], on, r == g_row, r > 0 && !c.forced);
+    // Off: no model at all, the room given back; On: the model once it shows the choice, nothing meanwhile
+    const bool forced = on && c.forced;
     preview::want(forced ? f->fid : 0, forced ? c.costume : 0, forced ? c.color : 0);
     const bool model = forced && preview::showing();
     g_model_shown = model;
     put_model(title, model);
-    put_image(title, "e_ro_bigimg", f ? f->fid : 0, kBigX, kBigY, kBigW, kBigH, forced && !model);
-    const std::string help = g_edit ? "Up / Down: setting     Left / Right: change     R / Square (X): colour     F / Esc: done"
-                                    : "F: edit     Arrows: character     R / Square (X): colour     " + g_back_hint + " / Esc: back";
-    put_text(title, "e_ro_help", help, kRowX + 20, 960, kFontHelp, kColDim);
+}
+
+void render(Obj* main) {
+    void* title = find(main, "c_title");
+    if (!title) return;
+    if (!g_dirty && g_copies_shown && g_frame - g_drawn_at < 20) return;
+    g_dirty = false;
+    g_drawn_at = g_frame;
+    const int level = g_level.load();
+    const Fighter* f = level == kLevelPage ? focused_fighter() : nullptr;
+    header(main, f != nullptr);
+    set_desc(f ? kDescPage : kDescGrid);
+    render_list(title, f == nullptr, level == kLevelGrid);
+    render_grid(title, f == nullptr, level == kLevelGrid);
+    render_page(title, f);
     g_copies_shown = true;
     if (!g_place_logged && g_frame - g_enter_frame >= 3) {
         g_place_logged = true;
@@ -995,14 +1260,8 @@ void render(Obj* main) {
 
 void enter(Obj* main) {
     g_enter_frame = g_frame;
-    if (void* g = find(main, "p_InputGuide_L_s_dUITabL")) {
-        if (Obj* t = static_cast<Obj*>(A()->ui_find_child(g, "e_text_0", 1))) {
-            const std::string m = str(call_obj(t, "get_Message"));
-            if (!m.empty()) g_back_hint = m;
-        }
-    }
     g_place_logged = false;
-    g_edit = false;
+    g_level.store(kLevelList);
     g_dirty = true;
     build_catalog();                              // each time: the NSFW setting may have changed
     load_faces();
@@ -1010,17 +1269,21 @@ void enter(Obj* main) {
     hide_page(false);
     prime_keys();
     g_cursor = std::max(0, std::min(g_cursor, static_cast<int>(g_cat.size()) - 1));
-    logf("replay tab: entered (%zu forced in the file, back key shown as %s)", g_choices.size(), g_back_hint.c_str());
+    void* title = find(main, "c_title");
+    logf("replay tab: entered (%zu forced in the file; rows %d, arrows %d)", g_choices.size(),
+         title && copy_of(title, cname("row", 0)) ? 1 : 0, title && copy_of(title, cname("arl", 0)) ? 1 : 0);
 }
 
 void leave(Obj* main, const char* why) {
     preview::stop(why);
     restore_page();
     hide_copies(main);
+    header(main, false);
+    restore_desc();
     if (main) set_state(find(main, "c_item_04"), "SELECT");
     if (main) set_state(find(main, "c_item_05"), "DEFAULT");
     g_ours.store(false);
-    g_edit = false;
+    g_level.store(kLevelList);
     logf("replay tab: left (%s)", why);
 }
 
@@ -1028,6 +1291,8 @@ void down() {                                      // the screen went: nothing o
     g_leaving = false;
     preview::stop("the Replays screen closed");
     if (g_ours.load() || !g_hidden.empty()) leave(nullptr, "the Replays screen closed");
+    restore_desc();                                // the guide outlives the screen (resident)
+    g_header_hidden = false;                       // the tab bar went with the screen
     g_enter.store(false);
     g_leave.store(false);
     g_top_addr.store(0);
@@ -1063,15 +1328,15 @@ void init() {
     m_pad_merged = tdb_pad ? method_of(tdb_pad, "get_MergedDevice", 0) : nullptr;
     if (TD* btn = api().tdb()->find_type("via.hid.GamePadButton")) {
         auto bit = [&](const char* f, uint32_t fb) { auto* x = btn->find_field(f); return x ? static_cast<uint32_t>(x->get_data<int32_t>(nullptr)) : fb; };
-        b_up = bit("LUp", 1); b_down = bit("LDown", 2); b_left = bit("LLeft", 4); b_right = bit("LRight", 8); b_x = bit("RLeft", 64);
+        b_up = bit("LUp", 1); b_down = bit("LDown", 2); b_left = bit("LLeft", 4); b_right = bit("LRight", 8);
         b_l1 = bit("LTrigTop", 256); b_b = bit("RRight", 128); b_a = bit("RDown", 32);
         b_sup = bit("EmuLup", 0); b_sdown = bit("EmuLdown", 0); b_sleft = bit("EmuLleft", 0); b_sright = bit("EmuLright", 0);
     }
     if (TD* cp = api().tdb()->find_type("via.gui.ControlPoint"))
         if (auto* fld = cp->find_field("LeftTop")) g_cp_lefttop = fld->get_data<int32_t>(nullptr);
     g_ok = true;
-    logf("replay tab: on (hooks InputTab %d, InputTabNext %d, InputTabBack %d; pad bits %u %u %u %u x %u a %u; LeftTop %lld)", h1,
-         h2, h3, b_up, b_down, b_left, b_right, b_x, b_a, static_cast<long long>(g_cp_lefttop));
+    logf("replay tab: on (hooks InputTab %d, InputTabNext %d, InputTabBack %d; pad bits %u %u %u %u a %u b %u l1 %u; LeftTop %lld)",
+         h1, h2, h3, b_up, b_down, b_left, b_right, b_a, b_b, b_l1, static_cast<long long>(g_cp_lefttop));
 }
 
 void tick() {
@@ -1094,6 +1359,7 @@ void tick() {
         g_copies_shown = false;
         g_dirty = true;
         g_model_tex = 0;
+        g_header_hidden = false;                  // a new tab bar: nothing of it hidden
     }
     int32_t sel = -1;
     if (Obj* ti = get_obj(agent, "_TabItem")) {
@@ -1115,7 +1381,7 @@ void tick() {
     if (g_leaving) {
         hide_copies(main);
         const Keys k = read_keys();
-        if (!k.back) { g_leaving = false; leave(main, "back key"); }
+        if (!k.esc && !k.tab) { g_leaving = false; leave(main, "back key"); }
     }
     tab_bar(main);
     if (g_ours.load()) {
