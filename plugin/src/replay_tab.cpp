@@ -1,29 +1,40 @@
 // SF6 Slots — "Replay Outfits": a 6th tab of the Replays menu (agent CFNReplayTop), after Search.
 //
-// The page lists every playable character; each row shows "Default" or "<outfit> - Color N", the outfit a replay's fighter
-// of that character will wear (replay_logic.hpp; the playback override reads the file). Left / Right cycle Default ->
-// the game's outfits -> the Slots Loader's outfits -> Default, R (pad X / Square) cycles the colour, Up / Down move. Every
-// change writes reframework/data/SF6_CostumeSlots_data/replay_outfits.json at once (temporary file + rename).
+// The page is laid out like Battle Settings > Other > Opponent Outfit Settings: a grid of character portraits (4 columns,
+// the game's order, "On" over a character whose replays get a chosen outfit, the name below) and, on the left, the
+// focused character's settings as the game's page has them: Outfit Settings On / Off, Costume, Color. Confirm (F, pad A)
+// on a portrait edits its rows (Up / Down a row, Left / Right its value, Confirm or Back to the grid); R (pad X / Square)
+// cycles the colour anywhere. On = the outfit a replay's fighter of that character wears (replay_logic.hpp; the playback
+// override reads the file), Off = what the replay holds. Every change writes
+// reframework/data/SF6_CostumeSlots_data/replay_outfits.json at once (temporary file + rename).
+//
+// The game's own page (app.UIFlowOtherMatchingFighterSetting.Start(fighter, save)) cannot run here: its flow looks up the
+// GameObject "OtherMatchingFighterSetting" by name (UIParam.get_ObjectName, empty folder path), which only Battle
+// Settings' scene holds; started from the Replays menu its flow ends at once (tried 05/11). So the look is rebuilt from
+// the Replays screen's own pieces.
 //
 // How (a virtual tab: the game never hears of a 6th tab, its own tab list stays on Search):
 //   - The tab bar (CFNReplayTop > p_SimpleList_0_tab) has six items, c_item_00 - c_item_05, the game shows five
 //     (app.UICFNReplayTop.TabType NUM 5). c_item_05 is shown with our label; its mouse hit area is hidden.
 //   - E / R1 on Search: app.UIAgent.InputTab / InputTabNext of the CFNReplayTop agent (its _TabItem, an
-//     app.UIPartsSimpleList, says SelectedIndex 4) are swallowed (pre-hook, SKIP) and the tab becomes ours. A / L1 on
-//     ours: swallowed too, back to Search. Next on ours: swallowed (nothing after us). The core's code check found these
-//     three methods unique (pm_codecheck.txt, R18).
+//     app.UIPartsSimpleList, says SelectedIndex 4) are swallowed (pre-hook, SKIP) and the tab becomes ours. Next on
+//     ours: swallowed (nothing after us). The core's code check found these three methods unique (pm_codecheck.txt, R18).
 //   - While ours: the Search page's agents (every visible CFN* agent but CFNTop and CFNReplayTop: CFNReplayChildSearch,
 //     CFNSearchItemList) get ForceInvisible on their main control and BlockInput; both are put back when we leave, when
 //     the game changes tab by itself (a mouse click) and when the screen goes.
-//   - The page's texts are copies of the header's title text (c_title > e_text_title), made by the core's
-//     ui_clone_control inside the tab hook (R19: the screen's own input update), named e_text_ro_*, under c_title (root
-//     space). They live and die with the screen's tree (R35: found again by name every frame, every write through the
-//     core). Text, place, font, colour and visibility from LateUpdateBehavior (R1).
+//   - The page is made of copies of three plain controls of the tab bar's screen (the core's ui_clone_control, inside
+//     the tab hook: R19, the screen's own input update): the header's title text, the bar's solid mask rectangle
+//     (e_rect_mask_00, turned into a plain coloured rectangle: MaskType NonTarget; cells, rows, the focus borders) and the
+//     "new" badge's texture (the portraits: the game's own characterselect face pictures, loaded by path through the
+//     core, shown once loaded). Named e_ro_*, under c_title
+//     (root space); they live and die with the screen's tree (R35: found again by name, every write through the core).
+//     Text, place, size, colour, texture and visibility from LateUpdateBehavior (R1), written when the page changed and
+//     every 20 frames.
 //   - Input: read natively while the game window has the focus (keys by scancode, so any keyboard layout: W A S D
-//     places and the arrows; via.hid.GamePad's merged device: d-pad, left stick, X / Square), never hooked. The
-//     screen's whole input goes through the page's agent (its BlockInput also stops the tab bar's A / E and Esc: seen
-//     05/11), so Back is ours too: the tab-back key (Q place, the game's default), Esc, pad L1 or B go back to Search,
-//     and the page gets its input back only once that key is released (the game never sees the press).
+//     places and the arrows, F / Enter; via.hid.GamePad's merged device: d-pad, left stick, A, X / Square), never hooked.
+//     The screen's whole input goes through the page's agent (its BlockInput also stops the tab bar's A / E and Esc:
+//     seen 05/11), so Back is ours too: the tab-back key (Q place, the game's default), Esc, pad L1 or B go back to the
+//     grid from the rows, to Search from the grid; the page gets its input back only once that key is released.
 //   - The tab items' look is their via.gui PlayState: c_item_05 is DISABLE as the game leaves it, DEFAULT shown,
 //     SELECT while ours (c_item_04 DEFAULT meanwhile, SELECT again when we leave).
 // Gate: nothing but one core registry read every 15 frames while the Replays screen is not up.
@@ -45,15 +56,23 @@ using namespace slots::replay;
 constexpr const char* kTop = "CFNReplayTop";
 constexpr int kSearch = 4;                        // app.UICFNReplayTop.TabType.SEARCH
 constexpr uint32_t kPollEvery = 15;
-constexpr int kRows = 20;                         // rows shown at once
 constexpr int kMaxRefused = 3;
 constexpr uint32_t kActFlags = 2 | 8;             // app.InputDigitalFlag Trigger | Repeat
 constexpr uint32_t kDirTabBack = 16, kDirTabNext = 32;   // app.UIPartsItemDirection
 constexpr const char* kTabLabel = "Replay Outfits";
-// layout, root space (1920 x 1080): c_title sits at the root's origin
-constexpr float kXName = 170, kXValue = 560, kYHead = 150, kYRow0 = 200, kDy = 37, kYHelp = 200 + kRows * 37 + 18;
-constexpr float kFontRow = 28, kFontHead = 30, kFontHelp = 24;
-constexpr uint32_t kColText = 0xFFFFFFFF, kColDim = 0xFFC8C8C8, kColFocus = 0xFF40D0FF;   // via.Color raw (R low byte)
+// layout, root space (1920 x 1080; c_title sits at the root's origin), Battle Settings > Other's own places
+constexpr int kCols = 4, kVisRows = 8, kCells = kCols * kVisRows, kPanelRows = 3;
+constexpr float kGridX = 760, kGridY = 184, kCellW = 160, kCellH = 72, kStepX = 168, kStepY = 80;
+constexpr float kRowX = 60, kRowY = 250, kRowW = 640, kRowH = 58, kRowStep = 70;
+constexpr float kBigX = 200, kBigY = 500, kBigW = 400, kBigH = 300;
+constexpr float kFontCell = 24, kFontRow = 30, kFontName = 44, kFontHelp = 24;
+// via.Color raw (R in the low byte)
+constexpr uint32_t kColText = 0xFFFFFFFF, kColDim = 0xFF8C8C8C, kColFocus = 0xFF40D0FF, kColOn = 0xFFFFB040;
+constexpr uint32_t kColCell = 0xE6342C2A, kColCellFocus = 0xF5EEEEEE, kColBorder = 0xFFFFA040, kColRow = 0xCC342C2A;
+constexpr uint32_t kColRowFocus = 0xF0B06020, kColDark = 0xFF2A2A2A;   // the focused cell: light, dark caption (the game's)
+// Draw order: the GUI sorts its elements by Priority (child order only breaks ties): borders, frames, pictures, texts
+constexpr int kPrioBorder = 1, kPrioFrame = 2, kPrioImage = 3, kPrioText = 4;
+constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (cells and the big picture are 4:3)
 
 const SF6CoreAPI* A() { return ui::core(); }
 SF6CoreClient* C() { return ui::client(); }
@@ -64,7 +83,7 @@ std::atomic<uintptr_t> g_main_addr{ 0 };         // its main control (frame)
 std::atomic<int> g_tab{ -1 };                     // the game's tab as the frame last read it
 std::atomic<bool> g_ours{ false };
 std::atomic<bool> g_enter{ false }, g_leave{ false };
-bool g_leaving = false;                           // Back pressed on our page: the page waits for the key's release
+bool g_leaving = false;                           // Back pressed on the grid: the page waits for the key's release
 std::atomic<int> g_refused{ 0 };
 std::atomic<int> g_copy_status{ 1000 };
 std::atomic<uint32_t> g_swallowed{ 0 };
@@ -79,42 +98,69 @@ bool g_guide_moved = false;
 std::vector<std::string> g_hidden;                // agents hidden for our page (names, found again to restore)
 std::vector<Fighter> g_cat;
 Choices g_choices;
-int g_cursor = 0, g_top_row = 0;
-bool g_copies_shown = false;
+std::map<int, Choice> g_last_on;                  // per character, the outfit it had before being turned Off
+int g_cursor = 0, g_top_row = 0;                  // the focused cell (catalog index), the first grid row shown
+bool g_edit = false;                              // the focused character's rows have the input
+int g_row = 0;                                    // the focused row while editing
+bool g_copies_shown = false, g_dirty = true;
+uint32_t g_drawn_at = 0;
 std::set<uintptr_t> g_styled;
 int g_status_logged = 1000;
 bool g_place_logged = false;
 uint32_t g_enter_frame = 0;
 std::string g_back_hint = "L1";                   // the bar's tab-back guide text (the game's icon of the key)
+int64_t g_cp_lefttop = -1;                        // via.gui.ControlPoint.LeftTop
+std::map<int, void*> g_faces;                     // fighter -> portrait TextureResourceHolder (one reference held)
 
-std::string copy_name(const char* what, int i) {
+// ---- the page's copies, made inside the tab hook (R19) ----
+// Three kinds, each a copy of a plain control of the tab bar's screen (no UIParts)
+enum Kind { kText, kRect, kImage };
+struct Copy { std::string name; Kind kind; };
+
+std::string cname(const char* what, int i) {
     char b[48];
-    std::snprintf(b, sizeof b, "e_text_ro_%s_%02d", what, i);
+    std::snprintf(b, sizeof b, "e_ro_%s_%02d", what, i);
     return b;
 }
-std::vector<std::string> all_copy_names() {
-    std::vector<std::string> v;
-    for (int i = 0; i < kRows; ++i) { v.push_back(copy_name("name", i)); v.push_back(copy_name("value", i)); }
-    v.push_back("e_text_ro_head");
-    v.push_back("e_text_ro_help");
+// Draw order = creation order (each copy becomes its parent's last child): frames, focus frames, pictures, texts
+const std::vector<Copy>& copies() {
+    static std::vector<Copy> v;
+    if (!v.empty()) return v;
+    v.push_back({ "e_ro_rfocus", kRect });         // the borders first: under the frame they surround
+    for (int r = 0; r < kPanelRows; ++r) v.push_back({ cname("rbg", r), kRect });
+    v.push_back({ "e_ro_cfocus", kRect });
+    for (int i = 0; i < kCells; ++i) v.push_back({ cname("cbg", i), kRect });
+    for (int i = 0; i < kCells; ++i) v.push_back({ cname("cimg", i), kImage });
+    v.push_back({ "e_ro_bigimg", kImage });
+    for (int i = 0; i < kCells; ++i) v.push_back({ cname("cname", i), kText });
+    for (int i = 0; i < kCells; ++i) v.push_back({ cname("con", i), kText });
+    for (int r = 0; r < kPanelRows; ++r) { v.push_back({ cname("rlbl", r), kText }); v.push_back({ cname("rval", r), kText }); }
+    v.push_back({ "e_ro_pname", kText });
+    v.push_back({ "e_ro_help", kText });
     return v;
 }
 
-// ---- the copies, made inside the tab hook (R19) ----
 bool make_copies() {
     const SF6CoreAPI* a = A();
     if (!a || g_refused.load() >= kMaxRefused) return false;
     void* main = reinterpret_cast<void*>(g_main_addr.load(std::memory_order_acquire));
     void* title = main ? a->ui_find_child(main, "c_title", 8) : nullptr;
-    void* tmpl = title ? a->ui_find_child(title, "e_text_title", 1) : nullptr;
-    if (!tmpl) { ++g_refused; g_copy_status.store(-3000); return false; }
-    for (const std::string& nm : all_copy_names()) {
-        if (a->ui_find_child(title, nm.c_str(), 0)) continue;
+    void* t_text = title ? a->ui_find_child(title, "e_text_title", 0) : nullptr;
+    void* bar = main ? a->ui_find_child(main, "p_SimpleList_0_tab", 8) : nullptr;
+    void* bar_bg = bar ? a->ui_find_child(bar, "c_bg", 0) : nullptr;
+    void* t_rect = bar_bg ? a->ui_find_child(bar_bg, "e_rect_mask_00", 0) : nullptr;
+    void* item0 = bar ? a->ui_find_child(bar, "c_item_00", 0) : nullptr;
+    void* batch = item0 ? a->ui_find_child(item0, "c_batch", 0) : nullptr;
+    void* t_image = batch ? a->ui_find_child(batch, "e_texture_new", 0) : nullptr;
+    if (!title || !t_text || !t_rect || !t_image) { ++g_refused; g_copy_status.store(-3000); return false; }
+    for (const Copy& cp : copies()) {
+        if (a->ui_find_child(title, cp.name.c_str(), 0)) continue;
+        void* tmpl = cp.kind == kText ? t_text : cp.kind == kRect ? t_rect : t_image;
         void* c = nullptr;
-        const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, title, nm.c_str(), &c);
+        const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, title, cp.name.c_str(), &c);
         g_copy_status.store(st == SF6CORE_OK && !c ? -1000 : static_cast<int>(st));
         if (st != SF6CORE_OK || !c) { ++g_refused; return false; }
-        SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 1;    // via.gui.MaskType.NonTarget
+        SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 1;    // via.gui.MaskType.NonTarget (the rectangle was a mask: 2)
         a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
         a->ui_set_visible(C(), c, 0);                           // placed and shown by the frame
     }
@@ -259,6 +305,17 @@ void save_choices() {
     if (!write_file(kFile, to_json(g_choices))) logf("replay tab: could not write %s", kFile);
 }
 
+// The portraits: loaded once per session (the core holds them loading; drawn once ready)
+void load_faces() {
+    for (const Fighter& f : g_cat) {
+        if (g_faces.count(f.fid)) continue;
+        void* h = nullptr;
+        const std::string path = face_path(f.fid);
+        if (A()->ui_texture_load(C(), path.c_str(), &h) == SF6CORE_OK && h) g_faces[f.fid] = h;
+        else g_faces[f.fid] = nullptr;
+    }
+}
+
 // ---- input ----
 struct Rep {
     bool held = false;
@@ -269,12 +326,17 @@ struct Rep {
         if (g_frame >= next) { next = g_frame + 5; return true; }
         return false;
     }
+    bool press(bool now) {                         // a press only
+        const bool p = now && !held;
+        held = now;
+        return p;
+    }
     void prime(bool now) { held = now; next = g_frame + 1000000; }   // a key held at entry acts only once released
 };
-Rep k_up, k_down, k_left, k_right, k_color, k_back;
+Rep k_up, k_down, k_left, k_right, k_color, k_back, k_ok;
 Method* m_pad_merged = nullptr;
 Method* m_pad_button = nullptr;
-uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_x = 64, b_l1 = 256, b_b = 128;   // via.hid.GamePadButton
+uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_x = 64, b_l1 = 256, b_b = 128, b_a = 32;   // via.hid.GamePadButton
 uint32_t b_sup = 0, b_sdown = 0, b_sleft = 0, b_sright = 0;
 
 bool focused() {
@@ -296,7 +358,7 @@ uint32_t pad_buttons() {
     auto r = call(m_pad_button, dev);
     return r.exception_thrown ? 0u : r.dword;
 }
-struct Keys { bool up, down, left, right, color, back; };
+struct Keys { bool up, down, left, right, color, back, ok; };
 Keys read_keys() {
     Keys k{};
     if (focused()) {
@@ -306,6 +368,7 @@ Keys read_keys() {
         k.right = vk_down(VK_RIGHT) || sc_down(0x20);
         k.color = sc_down(0x13);                   // R (its place on a QWERTY keyboard)
         k.back = vk_down(VK_ESCAPE) || sc_down(0x10);   // Esc, the tab-back key (Q's place: A on AZERTY)
+        k.ok = vk_down(VK_RETURN) || sc_down(0x21);     // Enter, F (the game's Confirm)
     }
     const uint32_t b = pad_buttons();
     k.up = k.up || (b & b_up) || (b_sup && (b & b_sup));
@@ -314,35 +377,79 @@ Keys read_keys() {
     k.right = k.right || (b & b_right) || (b_sright && (b & b_sright));
     k.color = k.color || (b & b_x);
     k.back = k.back || (b & b_l1) || (b & b_b);
+    k.ok = k.ok || (b & b_a);
     return k;
 }
 void prime_keys() {
     const Keys k = read_keys();
-    k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right); k_color.prime(k.color); k_back.prime(k.back);
+    k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right); k_color.prime(k.color);
+    k_back.prime(k.back); k_ok.prime(k.ok);
 }
+
+const Fighter* focused_fighter() {
+    if (g_cat.empty()) return nullptr;
+    g_cursor = std::max(0, std::min(g_cursor, static_cast<int>(g_cat.size()) - 1));
+    return &g_cat[static_cast<size_t>(g_cursor)];
+}
+Choice choice_of(const Fighter& f) {
+    auto it = g_choices.find(f.fid);
+    return it != g_choices.end() ? it->second : Choice{};
+}
+// A row's Left / Right on the focused character (Outfit Settings On / Off, Costume, Color)
+Choice row_step(const Fighter& f, const Choice& cur, int row, int dir) {
+    if (row == 0) {                                // On / Off
+        if (cur.forced) { g_last_on[f.fid] = cur; return Choice{}; }
+        auto l = g_last_on.find(f.fid);
+        if (l != g_last_on.end() && outfit_index(f, l->second) >= 0) return l->second;
+        return cycle_outfit(f, Choice{}, 1);
+    }
+    if (row == 1) {                                // the outfit; Default is the Off of row 0, skipped here
+        Choice n = cycle_outfit(f, cur, dir);
+        if (!n.forced) n = cycle_outfit(f, n, dir);
+        return n;
+    }
+    return cur.forced ? cycle_color(f, cur, dir) : cur;   // the colour
+}
+void apply_choice(const Fighter& f, const Choice& cur, const Choice& next) {
+    if (next == cur) return;
+    if (next.forced) g_choices[f.fid] = next; else g_choices.erase(f.fid);
+    save_choices();
+    g_dirty = true;
+    logf("replay tab: %s -> %s", f.name.c_str(), row_text(f, next).c_str());
+}
+
 void input() {
     const Keys k = read_keys();
-    if (k_back.step(k.back)) {                     // back to Search (the page's input comes back once released)
+    const bool back = k_back.press(k.back), ok = k_ok.press(k.ok);
+    const Fighter* f = focused_fighter();
+    if (g_edit) {
+        if (back || ok) { g_edit = false; g_dirty = true; return; }   // back to the grid
+        if (k_up.step(k.up)) { g_row = (g_row + kPanelRows - 1) % kPanelRows; g_dirty = true; }
+        if (k_down.step(k.down)) { g_row = (g_row + 1) % kPanelRows; g_dirty = true; }
+        if (!f) return;
+        const Choice cur = choice_of(*f);
+        Choice next = cur;
+        if (k_left.step(k.left)) next = row_step(*f, next, g_row, -1);
+        if (k_right.step(k.right)) next = row_step(*f, next, g_row, 1);
+        if (k_color.step(k.color)) next = cycle_color(*f, next, 1);
+        apply_choice(*f, cur, next);
+        return;
+    }
+    if (back) {                                    // back to Search (the page's input comes back once released)
         g_ours.store(false);
         g_leaving = true;
         return;
     }
     const int n = static_cast<int>(g_cat.size());
-    if (k_up.step(k.up)) g_cursor = move_cursor(g_cursor, -1, n);
-    if (k_down.step(k.down)) g_cursor = move_cursor(g_cursor, 1, n);
-    g_cursor = std::max(0, std::min(g_cursor, n - 1));
-    if (g_cat.empty()) return;
-    const Fighter& f = g_cat[static_cast<size_t>(g_cursor)];
-    auto it = g_choices.find(f.fid);
-    const Choice cur = it != g_choices.end() ? it->second : Choice{};
-    Choice next = cur;
-    if (k_left.step(k.left)) next = cycle_outfit(f, next, -1);
-    if (k_right.step(k.right)) next = cycle_outfit(f, next, 1);
-    if (k_color.step(k.color)) next = cycle_color(f, next, 1);
-    if (next == cur) return;
-    if (next.forced) g_choices[f.fid] = next; else g_choices.erase(f.fid);
-    save_choices();
-    logf("replay tab: %s -> %s", f.name.c_str(), row_text(f, next).c_str());
+    const int before = g_cursor;
+    if (k_up.step(k.up)) g_cursor = grid_move(g_cursor, 0, -1, n, kCols);
+    if (k_down.step(k.down)) g_cursor = grid_move(g_cursor, 0, 1, n, kCols);
+    if (k_left.step(k.left)) g_cursor = grid_move(g_cursor, -1, 0, n, kCols);
+    if (k_right.step(k.right)) g_cursor = grid_move(g_cursor, 1, 0, n, kCols);
+    if (g_cursor != before) g_dirty = true;
+    if (!f) return;
+    if (ok) { g_edit = true; g_row = 0; g_dirty = true; return; }
+    if (k_color.step(k.color)) { const Choice cur = choice_of(*f); apply_choice(*f, cur, cycle_color(*f, cur, 1)); }
 }
 
 // ---- the screen ----
@@ -431,59 +538,137 @@ void hide_copies(Obj* main) {
     g_copies_shown = false;
     void* title = find(main, "c_title");
     if (!title) return;
-    for (const std::string& nm : all_copy_names()) set_vis(A()->ui_find_child(title, nm.c_str(), 0), false);
+    for (const Copy& cp : copies()) set_vis(A()->ui_find_child(title, cp.name.c_str(), 0), false);
 }
 
-void put(void* title, const std::string& name, const std::string& text, float x, float y, float font, uint32_t col) {
-    void* c = A()->ui_find_cached(title, name.c_str());
+void* copy_of(void* title, const std::string& name) { return A()->ui_find_cached(title, name.c_str()); }
+void show(void* c, bool on) {
+    if (!c) return;
+    A()->ui_set_force_invisible(C(), c, 0);
+    A()->ui_set_visible(C(), c, on ? 1 : 0);
+}
+void set_priority(void* c, int prio) {
+    SF6CoreArg a{}; a.type = SF6CORE_ARG_I64; a.v.i = prio;
+    A()->obj_invoke(C(), c, "set_Priority(System.UInt16)", &a, 1, nullptr);
+}
+// Frames and pictures: placed by their top left corner
+void style_box(void* c, int prio) {
+    if (!c || g_styled.count(reinterpret_cast<uintptr_t>(c))) return;
+    g_styled.insert(reinterpret_cast<uintptr_t>(c));
+    if (g_cp_lefttop >= 0) {
+        SF6CoreArg a{}; a.type = SF6CORE_ARG_I64; a.v.i = g_cp_lefttop;
+        A()->obj_invoke(C(), c, "set_ControlPoint(via.gui.ControlPoint)", &a, 1, nullptr);
+    }
+    set_priority(c, prio);
+}
+void put_box(void* title, const std::string& name, float x, float y, float w, float h, uint32_t col, bool on, int prio = kPrioFrame) {
+    void* c = copy_of(title, name);
+    if (!c) return;
+    style_box(c, prio);
+    if (on) {
+        A()->ui_set_color(C(), c, col);
+        A()->ui_set_position(C(), c, x, y, 0);
+        A()->ui_set_size(C(), c, w, h);
+    }
+    show(c, on);
+}
+void put_image(void* title, const std::string& name, int fid, float x, float y, float w, float h, bool on) {
+    void* c = copy_of(title, name);
+    if (!c) return;
+    style_box(c, kPrioImage);
+    auto it = g_faces.find(fid);
+    void* holder = it != g_faces.end() ? it->second : nullptr;
+    const bool ready = on && holder && A()->ui_texture_ready(holder) == 1;
+    if (ready) {
+        A()->ui_set_texture_rect(C(), c, holder, 0.0f, kFaceV0, 1.0f, kFaceVH);
+        A()->ui_set_color(C(), c, kColText);
+        A()->ui_set_position(C(), c, x, y, 0);
+        A()->ui_set_size(C(), c, w, h);
+    } else if (on && holder) {
+        g_dirty = true;                            // drawn again once its picture has loaded
+    }
+    show(c, ready);
+}
+void put_text(void* title, const std::string& name, const std::string& text, float x, float y, float font, uint32_t col, bool on = true) {
+    void* c = copy_of(title, name);
     if (!c) return;
     if (!g_styled.count(reinterpret_cast<uintptr_t>(c))) {
         g_styled.insert(reinterpret_cast<uintptr_t>(c));
         SF6CoreArg t{}; t.type = SF6CORE_ARG_I64; t.v.i = 1;
         A()->obj_invoke(C(), c, "set_AutoRegionFit(System.Boolean)", &t, 1, nullptr);
+        set_priority(c, kPrioText);
     }
-    A()->ui_set_text(C(), c, text.c_str());
-    A()->ui_set_font_size(C(), c, font, font);
-    A()->ui_set_color(C(), c, col);
-    A()->ui_set_position(C(), c, x, y, 0);
-    A()->ui_set_force_invisible(C(), c, 0);
-    A()->ui_set_visible(C(), c, 1);
+    if (on) {
+        A()->ui_set_text(C(), c, text.c_str());
+        A()->ui_set_font_size(C(), c, font, font);
+        A()->ui_set_color(C(), c, col);
+        A()->ui_set_position(C(), c, x, y, 0);
+    }
+    show(c, on);
 }
 
 void render(Obj* main) {
     void* title = find(main, "c_title");
     if (!title) return;
+    if (!g_dirty && g_copies_shown && g_frame - g_drawn_at < 20) return;
+    g_dirty = false;
+    g_drawn_at = g_frame;
     const int n = static_cast<int>(g_cat.size());
-    g_top_row = window_top(g_top_row, g_cursor, n, kRows);
-    char head[96];
-    std::snprintf(head, sizeof head, "Outfits in replays   %d / %d", n ? g_cursor + 1 : 0, n);   // the title font has no triangle
-    put(title, "e_text_ro_head", n ? head : "No character found", kXName, kYHead, kFontHead, kColText);
-    for (int r = 0; r < kRows; ++r) {
-        const int i = g_top_row + r;
-        const float y = kYRow0 + r * kDy;
-        if (i >= n) {
-            set_vis(A()->ui_find_cached(title, copy_name("name", r).c_str()), false);
-            set_vis(A()->ui_find_cached(title, copy_name("value", r).c_str()), false);
+    const int rows = (n + kCols - 1) / kCols;
+    g_top_row = window_top(g_top_row, n ? g_cursor / kCols : 0, rows, kVisRows);
+    // the grid
+    for (int i = 0; i < kCells; ++i) {
+        const int idx = g_top_row * kCols + i;
+        const bool on = idx < n;
+        const float x = kGridX + (i % kCols) * kStepX, y = kGridY + (i / kCols) * kStepY;
+        put_box(title, cname("cbg", i), x, y, kCellW, kCellH, idx == g_cursor ? kColCellFocus : kColCell, on);
+        if (!on) {
+            put_image(title, cname("cimg", i), 0, 0, 0, 0, 0, false);
+            put_text(title, cname("cname", i), "", 0, 0, 0, 0, false);
+            put_text(title, cname("con", i), "", 0, 0, 0, 0, false);
             continue;
         }
-        const Fighter& f = g_cat[static_cast<size_t>(i)];
-        auto it = g_choices.find(f.fid);
-        const Choice c = it != g_choices.end() ? it->second : Choice{};
-        const bool foc = i == g_cursor;
-        // the focused row in the focus colour only: the title font draws no triangle, and '<' opens a text tag
-        put(title, copy_name("name", r), f.name, kXName, y, kFontRow, foc ? kColFocus : kColText);
-        put(title, copy_name("value", r), row_text(f, c), kXValue, y, kFontRow, foc ? kColFocus : (c.forced ? kColText : kColDim));
+        const Fighter& f = g_cat[static_cast<size_t>(idx)];
+        const bool forced = choice_of(f).forced;
+        put_image(title, cname("cimg", i), f.fid, x + kCellW - 96, y, 96, kCellH, true);
+        put_text(title, cname("cname", i), grid_caption(f.name), x + 10, y + 40, kFontCell, idx == g_cursor ? kColDark : kColText);
+        put_text(title, cname("con", i), "On", x + 10, y + 6, kFontCell, kColOn, forced);
     }
-    put(title, "e_text_ro_help", "Up / Down: character     Left / Right: outfit     R / Square (X): colour     " + g_back_hint +
-        " / Esc: back     Saved at once", kXName, kYHelp, kFontHelp, kColDim);
+    const int vis = g_cursor - g_top_row * kCols;
+    const bool cell_on = n > 0 && vis >= 0 && vis < kCells;
+    put_box(title, "e_ro_cfocus", kGridX + (vis % kCols) * kStepX - 3, kGridY + (vis / kCols) * kStepY - 3, kCellW + 6, kCellH + 6,
+            kColBorder, cell_on, kPrioBorder);
+    // the focused character's settings, on the left
+    const Fighter* f = focused_fighter();
+    const Choice c = f ? choice_of(*f) : Choice{};
+    const int oi = f ? outfit_index(*f, c) : -1;
+    put_text(title, "e_ro_pname", f ? grid_caption(f->name) : "", kRowX + 20, kRowY - 80, kFontName, kColText, f != nullptr);
+    const char* labels[kPanelRows] = { "Outfit Settings", "Costume", "Color" };
+    std::string values[kPanelRows] = { c.forced ? "On" : "Off", oi >= 0 ? f->outfits[static_cast<size_t>(oi)].name : "-",
+                                       c.forced ? color_label(c.color) : "-" };
+    for (int r = 0; r < kPanelRows; ++r) {
+        const float y = kRowY + r * kRowStep;
+        const bool foc = g_edit && r == g_row;
+        const uint32_t col = (foc || r == 0 || c.forced) ? kColText : kColDim;
+        put_box(title, cname("rbg", r), kRowX, y, kRowW, kRowH, foc ? kColRowFocus : kColRow, f != nullptr);
+        put_text(title, cname("rlbl", r), labels[r], kRowX + 24, y + 12, kFontRow, col, f != nullptr);
+        put_text(title, cname("rval", r), values[r], kRowX + 380, y + 12, kFontRow, col, f != nullptr);
+    }
+    put_box(title, "e_ro_rfocus", kRowX - 3, kRowY + g_row * kRowStep - 3, kRowW + 6, kRowH + 6, kColBorder, g_edit && f != nullptr,
+            kPrioBorder);
+    put_image(title, "e_ro_bigimg", f ? f->fid : 0, kBigX, kBigY, kBigW, kBigH, f != nullptr);
+    const std::string help = g_edit ? "Up / Down: setting     Left / Right: change     R / Square (X): colour     F / Esc: done"
+                                    : "F: edit     Arrows: character     R / Square (X): colour     " + g_back_hint + " / Esc: back";
+    put_text(title, "e_ro_help", help, kRowX + 20, 960, kFontHelp, kColDim);
     g_copies_shown = true;
-    if (!g_place_logged && g_frame - g_enter_frame == 3) {
+    if (!g_place_logged && g_frame - g_enter_frame >= 3) {
         g_place_logged = true;
-        if (Obj* c = static_cast<Obj*>(A()->ui_find_cached(title, copy_name("name", 0).c_str()))) {
-            auto r = call(c, "get_Position");
+        if (Obj* cc = static_cast<Obj*>(copy_of(title, cname("cbg", 0)))) {
+            auto r = call(cc, "get_Position");
             float p[3] = {};
             if (!r.exception_thrown) std::memcpy(p, r.bytes.data(), 12);
-            logf("replay tab: first row placed at %.0f, %.0f (asked %.0f, %.0f)", p[0], p[1], kXName, kYRow0);
+            logf("replay tab: first cell placed at %.0f, %.0f (asked %.0f, %.0f), control point LeftTop = %lld", p[0], p[1], kGridX,
+                 kGridY, static_cast<long long>(g_cp_lefttop));
         }
     }
 }
@@ -497,7 +682,10 @@ void enter(Obj* main) {
         }
     }
     g_place_logged = false;
+    g_edit = false;
+    g_dirty = true;
     build_catalog();                              // each time: the NSFW setting may have changed
+    load_faces();
     load_choices();
     hide_page(false);
     prime_keys();
@@ -511,6 +699,7 @@ void leave(Obj* main, const char* why) {
     if (main) set_state(find(main, "c_item_04"), "SELECT");
     if (main) set_state(find(main, "c_item_05"), "DEFAULT");
     g_ours.store(false);
+    g_edit = false;
     logf("replay tab: left (%s)", why);
 }
 
@@ -530,8 +719,9 @@ void down() {                                      // the screen went: nothing o
 
 void init() {
     const SF6CoreAPI* a = A();
-    if (!a || !C() || !SF6CORE_HAS(a, ui_clone_control) || !SF6CORE_HAS(a, ui_agents) || !SF6CORE_HAS(a, ui_find_cached)) {
-        logf("replay tab: off (needs the core with ui_clone_control, 0.8.2)");
+    if (!a || !C() || !SF6CORE_HAS(a, ui_clone_control) || !SF6CORE_HAS(a, ui_agents) || !SF6CORE_HAS(a, ui_find_cached) ||
+        !SF6CORE_HAS(a, ui_set_texture_rect)) {
+        logf("replay tab: off (needs the core with ui_clone_control and ui_set_texture_rect, 0.8.2)");
         return;
     }
     TD* td = api().tdb()->find_type("app.UIAgent");
@@ -551,12 +741,14 @@ void init() {
     if (TD* btn = api().tdb()->find_type("via.hid.GamePadButton")) {
         auto bit = [&](const char* f, uint32_t fb) { auto* x = btn->find_field(f); return x ? static_cast<uint32_t>(x->get_data<int32_t>(nullptr)) : fb; };
         b_up = bit("LUp", 1); b_down = bit("LDown", 2); b_left = bit("LLeft", 4); b_right = bit("LRight", 8); b_x = bit("RLeft", 64);
-        b_l1 = bit("LTrigTop", 256); b_b = bit("RRight", 128);
+        b_l1 = bit("LTrigTop", 256); b_b = bit("RRight", 128); b_a = bit("RDown", 32);
         b_sup = bit("EmuLup", 0); b_sdown = bit("EmuLdown", 0); b_sleft = bit("EmuLleft", 0); b_sright = bit("EmuLright", 0);
     }
+    if (TD* cp = api().tdb()->find_type("via.gui.ControlPoint"))
+        if (auto* fld = cp->find_field("LeftTop")) g_cp_lefttop = fld->get_data<int32_t>(nullptr);
     g_ok = true;
-    logf("replay tab: on (hooks InputTab %d, InputTabNext %d, InputTabBack %d; pad bits %u %u %u %u x %u)", h1, h2, h3,
-         b_up, b_down, b_left, b_right, b_x);
+    logf("replay tab: on (hooks InputTab %d, InputTabNext %d, InputTabBack %d; pad bits %u %u %u %u x %u a %u; LeftTop %lld)", h1,
+         h2, h3, b_up, b_down, b_left, b_right, b_x, b_a, static_cast<long long>(g_cp_lefttop));
 }
 
 void tick() {
@@ -577,6 +769,7 @@ void tick() {
         g_guide_moved = false;
         g_styled.clear();
         g_copies_shown = false;
+        g_dirty = true;
     }
     int32_t sel = -1;
     if (Obj* ti = get_obj(agent, "_TabItem")) {

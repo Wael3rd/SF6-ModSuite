@@ -111,12 +111,14 @@ inline Choice cycle_color(const Fighter& f, const Choice& c, int dir) {
     return r;
 }
 
-// "Color 3" for the game's colours 0-9 (shown 1-10); the special colours (200+) as the game numbers them past 10
+// The colour's name as the game's Opponent Outfit Settings grid shows it: colours 0-9 "01".."10", 10.. "EX 1".., 200..
+// "DX 1"..
 inline std::string color_label(int color) {
     char b[32];
-    if (color >= 0 && color < 100) std::snprintf(b, sizeof b, "Color %d", color + 1);
-    else if (color >= 200 && color < 300) std::snprintf(b, sizeof b, "Color %d", color - 200 + 11);
-    else std::snprintf(b, sizeof b, "Color #%d", color);
+    if (color >= 0 && color < 10) std::snprintf(b, sizeof b, "%02d", color + 1);
+    else if (color >= 10 && color < 200) std::snprintf(b, sizeof b, "EX %d", color - 9);
+    else if (color >= 200 && color < 300) std::snprintf(b, sizeof b, "DX %d", color - 199);
+    else std::snprintf(b, sizeof b, "#%d", color);
     return b;
 }
 
@@ -124,7 +126,7 @@ inline std::string color_label(int color) {
 inline std::string row_text(const Fighter& f, const Choice& c) {
     const int i = outfit_index(f, c);
     if (i < 0) return "Default";
-    return f.outfits[static_cast<size_t>(i)].name + " - " + color_label(c.color);
+    return f.outfits[static_cast<size_t>(i)].name + " - Color " + color_label(c.color);
 }
 
 // ---- the file ------------------------------------------------------------------------------------------------------------
@@ -184,12 +186,40 @@ inline int window_top(int top, int cursor, int count, int rows) {
     return std::max(0, std::min(top, count - rows));
 }
 
-// Fighter order: the game's Opponent Outfit Settings grid (launch roster, then DLC by release); ids not listed follow,
-// ascending
+// Fighter order: the game's Opponent Outfit Settings grid, 4 columns (read in game on 05/11: Luke, Jamie, Manon, Kimberly,
+// Marisa, Lily, JP, Juri, ...); ids not listed follow, ascending
 inline const std::vector<int>& grid_order() {
-    static const std::vector<int> v = { 1, 2, 21, 4, 18, 3, 16, 10, 15, 8, 20, 11, 5, 17, 7, 6, 12, 9,
-                                        14, 13, 19, 22, 26, 27, 28, 29, 25, 30, 31, 32, 33, 34 };
+    static const std::vector<int> v = { 2, 21, 5, 3, 17, 12, 7, 16, 11, 9, 1, 20, 15, 18, 10, 4,
+                                        6, 8, 14, 13, 19, 22, 26, 27, 28, 29, 25, 30, 31, 32, 33, 34 };
     return v;
+}
+// The portrait the game's grid shows (TextureResourceHolder path; the older fighters' folder is spelt "caracterselect")
+inline std::string face_path(int fid) {
+    char b[160];
+    std::snprintf(b, sizeof b, "Product/GUI/data/Character_Image/%03d/%s/tex_Esf%03d_face_L_s_IAM.tex", fid,
+                  fid >= 30 ? "characterselect" : "caracterselect", fid);
+    return b;
+}
+// The grid's caption: the name in capitals ("C. VIPER")
+inline std::string grid_caption(const std::string& name) {
+    std::string r = name;
+    for (auto& ch : r) if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+    return r;
+}
+// Grid moves (4 columns): wrap inside the row / column like the game's grid
+inline int grid_move(int cursor, int dx, int dy, int count, int cols) {
+    if (count <= 0) return 0;
+    const int rows = (count + cols - 1) / cols;
+    int c = cursor % cols, r = cursor / cols;
+    if (dx) {
+        const int in_row = std::min(cols, count - r * cols);
+        c = ((c + dx) % in_row + in_row) % in_row;
+    }
+    if (dy) {
+        r = ((r + dy) % rows + rows) % rows;
+        while (r * cols + c >= count) r = dy > 0 ? 0 : r - 1;   // the last row may be short
+    }
+    return r * cols + c;
 }
 inline void order_fighters(std::vector<Fighter>& fs) {
     const auto& g = grid_order();

@@ -41,9 +41,11 @@ int main() {
     check(row_text(f, c) == "Default", "no entry: Default");
     c = cycle_outfit(f, c, +1);
     check(c.forced && c.costume == 0 && c.mod_id.empty() && c.color == 0, "Right from Default: Outfit 1, colour 0");
-    check(row_text(f, c) == "Outfit 1 - Color 1", "row text of Outfit 1 colour 0");
+    check(row_text(f, c) == "Outfit 1 - Color 01", "row text of Outfit 1 colour 0");
     c.color = 200;
-    check(row_text(f, c) == "Outfit 1 - Color 11", "special colour 200 shows as Color 11");
+    check(row_text(f, c) == "Outfit 1 - Color DX 1", "colour 200 shows as the game's DX 1");
+    check(color_label(9) == "10" && color_label(10) == "EX 1" && color_label(11) == "EX 2" && color_label(207) == "DX 8",
+          "colour names as the game's grid: 10, EX 1, EX 2, DX 8");
     c = cycle_outfit(f, c, +1);
     check(c.costume == 1 && c.color == 0, "Outfit 2 has no colour 200: its first colour");
     c.color = 5;
@@ -116,7 +118,17 @@ int main() {
     std::vector<Fighter> fs(3);
     fs[0].fid = 99; fs[1].fid = 21; fs[2].fid = 1;
     order_fighters(fs);
-    check(fs[0].fid == 1 && fs[1].fid == 21 && fs[2].fid == 99, "grid order, unknown ids last");
+    check(fs[0].fid == 21 && fs[1].fid == 1 && fs[2].fid == 99, "grid order (Jamie before Ryu), unknown ids last");
+    check(face_path(1) == "Product/GUI/data/Character_Image/001/caracterselect/tex_Esf001_face_L_s_IAM.tex" &&
+          face_path(30) == "Product/GUI/data/Character_Image/030/characterselect/tex_Esf030_face_L_s_IAM.tex",
+          "portrait paths, both folder spellings");
+    check(grid_caption("C. Viper") == "C. VIPER", "grid caption in capitals");
+    // 32 cells, 4 columns
+    check(grid_move(0, -1, 0, 32, 4) == 3 && grid_move(3, 1, 0, 32, 4) == 0, "Left / Right wrap inside the row");
+    check(grid_move(0, 0, -1, 32, 4) == 28 && grid_move(29, 0, 1, 32, 4) == 1, "Up / Down wrap inside the column");
+    check(grid_move(1, 0, -1, 30, 4) == 29 && grid_move(29, 0, 1, 30, 4) == 1 && grid_move(3, 0, -1, 30, 4) == 27 &&
+          grid_move(27, 0, 1, 30, 4) == 3 && grid_move(28, 1, 0, 30, 4) == 29 &&
+          grid_move(29, 1, 0, 30, 4) == 28, "a short last row: wraps to the cells that exist");
     check(std::string(fighter_name(30)) == "C. Viper" && fighter_name(23) == nullptr, "fighter names");
     check(game_outfit_name(0) == "Outfit 1" && game_outfit_name(3) == "Outfit 4" && game_outfit_name(4) == "DriveTech",
           "game outfit names");
