@@ -168,6 +168,13 @@ namespace costumes {
     void set_display_nsfw(bool on);   // the row changed: settings.json written, applied on the next tick
     bool online_drivetech();          // settings.json "online_outfit": "DriveTech" (else Outfit 1) is the carrier
     void set_online_drivetech(bool on);   // the row changed: settings.json written, applied on the next tick
+    // The slot the online alias dressed the player's fighter in: that FighterDesc's, else the last one dressed for `fid` still
+    // alive (any thread); false: none
+    bool dressed_slot(Obj* fd, int fid, int& slot, int& color);
+}
+// replay_outfits.cpp: Replay Outfits, what each fighter wears in a replay (rules: replay_outfits.hpp)
+namespace replay {
+    void install_hooks();             // first frame
 }
 // nsfw_option.cpp: the rows "Display NSFW Outfits" and "Outfit Others See" in Options > Interface > Other Settings
 // (core option service)

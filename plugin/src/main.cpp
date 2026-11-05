@@ -78,6 +78,7 @@ void on_late_update() {
             stages::install_hooks();
             rto::install_hooks();
             fsname::install_hooks();
+            replay::install_hooks();
             nsfwopt::setup();
         }
         if (ev & EV_DIAG) diag_flush();
