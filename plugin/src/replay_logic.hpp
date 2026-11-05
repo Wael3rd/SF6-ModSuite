@@ -175,6 +175,14 @@ inline std::string cut_utf8(const std::string& v, size_t max) {
     while (cut > 0 && (static_cast<unsigned char>(v[cut]) & 0xC0) == 0x80) --cut;
     return v.substr(0, cut) + "...";
 }
+// A line wider than its region once drawn: the bytes to keep next (cut_utf8: "..." included), `len` kept now drew `drawn`
+// wide; in proportion, always fewer, never under 4 ("x..."); `len` when it fits
+inline size_t fit_length(size_t len, float drawn, float region) {
+    if (drawn <= region + 0.5f || len <= 4 || drawn <= 0) return len;
+    size_t next = static_cast<size_t>(static_cast<float>(len) * region / drawn);
+    if (next >= len) next = len - 1;
+    return next < 4 ? 4 : next;
+}
 // A character set to On: "Luke: Outfit 4, 01" (its outfit, its colour as the page shows it); an outfit no longer listed:
 // "Luke: Default", as its row
 inline std::string summary_line(const Fighter& f, const Choice& c) {
