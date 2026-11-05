@@ -186,7 +186,8 @@ struct TextLook { uint32_t shadow; float dist, rot, blur, strength; bool glow; u
 constexpr TextLook kSumTitleLook{ 0x54000000, 3, 45, 5, 2, false, 0x80000000, 10, 4 };
 constexpr TextLook kSumLineLook{ 0xCC000000, 0, 0, 3, 5, true, 0x80000000, 10, 4 };
 constexpr const char* kPillFill = "e_ro_pfill";    // the pill's rect: a rectangle copy inside the pill's panel copy
-constexpr const char* kHubSheet = "UVS_hub.uvs";   // the pill's UV sheet (Product/GUI/hub/lib/part/)
+constexpr const char* kPillShade = "e_ro_pshade";  // the pill's shadow: a copy of the row's shadow inside it
+constexpr float kPillShadowBorders = 11 + 14.5f, kPillMaskBorders = 11 + 11;   // the sums of the game's BorderRects (15, 14)
 const char* const kSumTitleGrid = "Replay Settings";
 const char* const kSumTitlePage = "Outfit Settings (Replay)";
 constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (the cells' pictures are 4:3)
@@ -262,8 +263,8 @@ int g_stage_cursor = 0, g_stage_top = 0;          // the focused cell (0 = Defau
 
 // ---- the page's copies, made inside the tab hook (R19) ----
 // Plain controls of the tab bar's screen (no UIParts), the game's row and its plain text, the banner's two arrows; the
-// summary's title pill: the row's shadow and its masked background panel (the same UVS_hub sheet as the game's pill)
-enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow, kPillShadow, kPill };
+// summary's title pill: the row's masked background panel (the same UVS_hub sheet as the game's pill)
+enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow, kPill };
 struct Copy { std::string name; Kind kind; };
 
 std::string cname(const char* what, int i) {
@@ -297,8 +298,7 @@ const std::vector<Copy>& copies() {
     v.push_back({ "e_ro_name", kText });
     v.push_back({ "e_ro_sname", kText });          // the banner's stage name, the Default cell's label
     v.push_back({ "e_ro_sdeflbl", kText });
-    v.push_back({ "e_ro_pshadow", kPillShadow });  // the summary on the right: its title pill, picture and texts
-    v.push_back({ "e_ro_pill", kPill });
+    v.push_back({ "e_ro_pill", kPill });           // the summary on the right: its title pill, picture and texts
     v.push_back({ "e_ro_sumpic", kImage });
     v.push_back({ "e_ro_sumtitle", kLabel });
     for (int i = 0; i < kSumTexts; ++i) v.push_back({ cname("sum", i), kLabel });
@@ -335,8 +335,8 @@ bool make_copies() {
     void* t_arrow_l = arrow_l ? a->ui_find_child(arrow_l, "e_texture_arrow", 2) : nullptr;
     void* t_arrow_r = arrow_r ? a->ui_find_child(arrow_r, "e_texture_arrow", 2) : nullptr;
     const bool arrows = t_arrow_l && t_arrow_r;
-    // the summary's pill: the row's shadow (c_bg_m > e_scale9grid_shadow) and its background panel (c_bg_m > c_bg: its
-    // mask, then its material, bar and marker), both drawing the game's UVS_hub sheet
+    // the summary's pill: the row's background panel (c_bg_m > c_bg: its mask, then its material, bar and marker) and its
+    // shadow (c_bg_m > e_scale9grid_shadow), both drawing the game's UVS_hub sheet
     void* t_shadow = t_row ? a->ui_find_child(t_row, "e_scale9grid_shadow", 3) : nullptr;
     void* t_pill = t_row ? a->ui_find_child(t_row, "c_bg", 3) : nullptr;
     if (!title || !t_text || !t_rect || !t_line || !t_image || !t_row || !t_label) {
@@ -348,10 +348,10 @@ bool make_copies() {
     if ((!t_shadow || !t_pill) && !g_no_pill_logged) { g_no_pill_logged = true; logf("replay tab: the row has no shadow / c_bg to copy: a summary without its title pill"); }
     for (const Copy& cp : copies()) {
         if ((cp.kind == kLeftArrow || cp.kind == kRightArrow) && !arrows) continue;
-        if ((cp.kind == kPillShadow && !t_shadow) || (cp.kind == kPill && !t_pill)) continue;
+        if (cp.kind == kPill && (!t_pill || !t_shadow)) continue;
         if (a->ui_find_child(title, cp.name.c_str(), 0)) continue;
         void* tmpl = cp.kind == kText ? t_text : cp.kind == kRect ? t_rect : cp.kind == kLine ? t_line : cp.kind == kRow ? t_row
-                   : cp.kind == kLabel ? t_label : cp.kind == kPillShadow ? t_shadow : cp.kind == kPill ? t_pill
+                   : cp.kind == kLabel ? t_label : cp.kind == kPill ? t_pill
                    : cp.kind == kLeftArrow ? t_arrow_l : cp.kind == kRightArrow ? t_arrow_r : t_image;
         void* c = nullptr;
         const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, title, cp.name.c_str(), &c);
@@ -363,14 +363,21 @@ bool make_copies() {
         }
         a->ui_set_visible(C(), c, 0);                           // placed and shown by the frame
     }
-    // the pill's rect: a rectangle copy as the last child of the pill's panel copy, after its mask, so the mask cuts it
-    // (as the game's c_mask: e_scale9grid_mask, then e_rect_bg); MaskType 0 like e_rect_bg (the template was a mask)
-    if (void* pill = a->ui_find_child(title, "e_ro_pill", 0); pill && !a->ui_find_child(pill, kPillFill, 0)) {
-        void* f = nullptr;
-        const SF6CoreStatus st = a->ui_clone_control(C(), t_rect, pill, kPillFill, &f);
-        if (st != SF6CORE_OK || !f) { ++g_refused; g_copy_status.store(st == SF6CORE_OK ? -1000 : static_cast<int>(st)); return false; }
-        SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 0;
-        a->obj_invoke(C(), f, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
+    // inside the pill's panel copy: the shadow (a copy of the row's shadow) and the rect (a rectangle copy, MaskType 0 like
+    // the game's e_rect_bg: the template was a mask), cut by the panel's mask (as the game's c_mask: e_scale9grid_mask, then
+    // e_rect_bg); their order is set by their priorities (style_pill)
+    if (void* pill = a->ui_find_child(title, "e_ro_pill", 0)) {
+        for (int k = 0; k < 2; ++k) {
+            const char* name = k ? kPillFill : kPillShade;
+            if (a->ui_find_child(pill, name, 0)) continue;
+            void* c = nullptr;
+            const SF6CoreStatus st = a->ui_clone_control(C(), k ? t_rect : t_shadow, pill, name, &c);
+            if (st != SF6CORE_OK || !c) { ++g_refused; g_copy_status.store(st == SF6CORE_OK ? -1000 : static_cast<int>(st)); return false; }
+            if (k) {
+                SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 0;
+                a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
+            }
+        }
     }
     return true;
 }
@@ -1712,83 +1719,96 @@ void restore_desc() {
 // ---- the summary on the right (the game's own on Battle Settings > Other and on the Opponent Outfit page) ----
 float sum_x(float x) { return kSumX + x * kSumScale; }
 float sum_y(float y) { return kSumY + y * kSumScale; }
-// A Scale9Grid of the pill: the UVS_hub sequence on its 9 cells (via.gui.GridPos LT..RB = 0-8, their patterns kept; the
-// borders come with the sequence: BorderRect has no setter)
-void pill_grid(void* g, uint32_t seq, float w, float h) {
-    if (!g) return;
+// A Scale9Grid of the pill on a UVS_hub sequence: its 9 cells (via.gui.GridPos LT..RB = 0-8) on the sequence, each on its
+// pattern (0-8, the game's). Its BorderRect (the corners' sizes) follows the sequence's frames but is worked out when they
+// are given, not by setSequenceNo (read 05/11, probe g49: the copied row's mask, on sequence 14, kept sequence 2's borders
+// 19 / 24 / 19 / 24, the shadow sequence 3's 27 / 30.5 / 30.5 / 36.5: taller than the pill, so neither drew anything;
+// the game's sequence 14 has 11 / 0 / 11 / 0, 15 has 11 / 0 / 14.5 / 0). So: the cells' sequence and pattern; the borders
+// read back (their sum, whatever the struct's order); still the old ones: the sheet given again (its frames worked out
+// anew), the cells again. The outcome is logged.
+float border_sum(void* g) {
+    float b[4] = {};
+    if (auto r = call(static_cast<Obj*>(g), "get_BorderRect"); !r.exception_thrown) std::memcpy(b, r.bytes.data(), sizeof b);
+    return b[0] + b[1] + b[2] + b[3];
+}
+void pill_cells(void* g, uint32_t seq) {
     for (int64_t pos = 0; pos < 9; ++pos) {
         SF6CoreArg a[2] = {};
         a[0].type = SF6CORE_ARG_I64; a[0].v.i = pos;
         a[1].type = SF6CORE_ARG_I64; a[1].v.i = seq;
         A()->obj_invoke(C(), g, "setSequenceNo(via.gui.GridPos,System.UInt32)", a, 2, nullptr);
+        a[1].v.i = pos;
+        A()->obj_invoke(C(), g, "setPatternNo(via.gui.GridPos,System.UInt32)", a, 2, nullptr);
+    }
+}
+void pill_grid(void* g, uint32_t seq, float borders, float w, float h, const char* what) {
+    if (!g) return;
+    const float before = border_sum(g);
+    pill_cells(g, seq);
+    float now = border_sum(g);
+    bool regiven = false;
+    if (std::fabs(now - borders) > 0.5f) {
+        if (Obj* sheet = call_obj(static_cast<Obj*>(g), "get_UVSequence")) {
+            SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = sheet;
+            A()->obj_invoke(C(), g, "set_UVSequence(via.uvsequence.UVSequenceResourceHolder)", &a, 1, nullptr);
+            regiven = true;
+        }
+        pill_cells(g, seq);
+        now = border_sum(g);
     }
     resize(g, w, h);
+    logf("replay tab: summary pill: %s on sequence %u, borders %.1f -> %.1f (the game's %.1f)%s%s", what, seq, before, now, borders,
+         regiven ? ", sheet given again" : "", std::fabs(now - borders) > 0.5f ? ": STILL OFF" : "");
 }
-// The UV sheet (via.uvsequence.UVSequenceResourceHolder) a Scale9Grid draws, and its path
-Obj* sheet_of(void* g) { return g ? call_obj(static_cast<Obj*>(g), "get_UVSequence") : nullptr; }
-std::string sheet_path(Obj* h) { return h ? str(call_obj(h, "get_ResourcePath")) : std::string(); }
-// The game's pill draws UVS_hub.uvs (sequences 14, 15): a copied Scale9Grid on another sheet is given that one, taken (not
-// kept, R35) from the resident row's colour block (c_SelectItem > c_color > e_scale9grid_color: UVS_hub, read 05/11)
-void hub_sheet(void* g, const char* what) {
-    if (!g) return;
-    const std::string cur = sheet_path(sheet_of(g));
-    std::string hub_path;
-    if (cur.find(kHubSheet) == std::string::npos) {
-        void* rows = agent_main(kRowTemplateAgent);
-        void* row = rows ? A()->ui_find_child(rows, "c_SelectItem_0", 8) : nullptr;
-        void* block = row ? A()->ui_find_child(row, "e_scale9grid_color", 2) : nullptr;
-        Obj* hub = sheet_of(block);
-        hub_path = sheet_path(hub);
-        if (hub && hub_path.find(kHubSheet) != std::string::npos) {
-            SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = hub;
-            A()->obj_invoke(C(), g, "set_UVSequence(via.uvsequence.UVSequenceResourceHolder)", &a, 1, nullptr);
-        }
-    }
-    logf("replay tab: summary pill: the %s draws %s%s%s", what, cur.empty() ? "no sheet" : cur.c_str(), hub_path.empty() ? "" : ", given ",
-         hub_path.c_str());
-}
-// Once, a few frames after the pill is first shown: what the game makes of it (the next test says why it would not show)
+// Once, a few frames after the pill is first shown: what the game makes of it (shown, sequence, borders)
 void log_pill(void* title) {
     if (g_pill_logged || g_frame - g_enter_frame < 10) return;
     g_pill_logged = true;
     auto vis = [](void* c) { if (!c) return -1; auto r = call(static_cast<Obj*>(c), "get_ActualVisible"); return r.exception_thrown ? -2 : (r.byte & 1); };
     auto seq = [](void* c) { if (!c) return -1; auto r = call(static_cast<Obj*>(c), "getSequenceNo", { arg_i32(4) }); return r.exception_thrown ? -2 : static_cast<int>(r.dword); };
-    void* sh = copy_of(title, "e_ro_pshadow");
     void* pill = copy_of(title, "e_ro_pill");
+    void* sh = pill ? A()->ui_find_child(pill, kPillShade, 0) : nullptr;
     void* mask = pill ? A()->ui_find_child(pill, "e_scale9grid_mask", 0) : nullptr;
     void* fill = pill ? A()->ui_find_child(pill, kPillFill, 0) : nullptr;
-    logf("replay tab: summary pill: shadow %s, shown %d, sequence %d; panel %s, shown %d; mask shown %d, sequence %d; rect %s, shown %d",
-         sh ? "up" : "missing", vis(sh), seq(sh), pill ? "up" : "missing", vis(pill), vis(mask), seq(mask), fill ? "up" : "missing", vis(fill));
+    logf("replay tab: summary pill: panel %s shown %d; shadow shown %d, sequence %d, borders %.1f; mask shown %d, sequence %d, borders %.1f; "
+         "rect shown %d", pill ? "up" : "missing", vis(pill), vis(sh), seq(sh), sh ? border_sum(sh) : -1.0f, vis(mask), seq(mask),
+         mask ? border_sum(mask) : -1.0f, vis(fill));
 }
-// The pill, once per copy: its shadow; its panel (the row's c_bg) showing only its mask and our rect, the rect coloured
-// as the game's e_rect_bg (ColorType 2: white, its right side and right top corner grey)
+// The pill, once per copy: a copy of the row's c_bg panel at the panel's scale (a Panel has a Scale: everything in it
+// scales), showing only, in this order (their priorities): the shadow (a copy of the row's shadow, never masked), the
+// mask, our rect under the mask; the rect coloured as the game's e_rect_bg (ColorType Horizontal, white, its right side
+// grey: the corner colours are written first, they turn ColorType to EachVertex)
 void style_pill(void* title) {
-    if (void* sh = copy_of(title, "e_ro_pshadow"); sh && g_styled.insert(reinterpret_cast<uintptr_t>(sh)).second) {
-        set_priority(sh, kPrioFrame);
-        if (g_cp_lefttop >= 0) set_enum(sh, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
-        hub_sheet(sh, "shadow");
-        pill_grid(sh, kPillShadowSeq, kPillW * kSumScale, kPillShadowH * kSumScale);   // a Scale9Grid has no Scale: its size scaled
-        A()->ui_set_color(C(), sh, kColText);
-    }
     void* pill = copy_of(title, "e_ro_pill");
     if (!pill || !g_styled.insert(reinterpret_cast<uintptr_t>(pill)).second) return;
     set_priority(pill, kPrioFrame);
     A()->ui_set_scale(C(), pill, kSumScale, kSumScale, 1);
     for (const char* n : { "e_mat_bg", "e_rect_bar", "e_focus_bar" })
         if (void* e = A()->ui_find_child(pill, n, 0)) A()->ui_set_force_invisible(C(), e, 1);
-    void* mask = A()->ui_find_child(pill, "e_scale9grid_mask", 0);
-    hub_sheet(mask, "mask");
-    pill_grid(mask, kPillMaskSeq, kPillW, kPillH);
+    if (void* sh = A()->ui_find_child(pill, kPillShade, 0)) {
+        set_enum(sh, "set_MaskType(via.gui.MaskType)", 1);   // NonTarget: under the pill's mask's reach, never cut by it
+        set_priority(sh, 1);
+        if (g_cp_lefttop >= 0) set_enum(sh, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
+        place(sh, 0, 0);
+        pill_grid(sh, kPillShadowSeq, kPillShadowBorders, kPillW, kPillShadowH, "shadow");
+        A()->ui_set_color(C(), sh, kColText);
+        A()->ui_set_visible(C(), sh, 1);
+    }
+    if (void* mask = A()->ui_find_child(pill, "e_scale9grid_mask", 0)) {
+        set_priority(mask, 2);
+        pill_grid(mask, kPillMaskSeq, kPillMaskBorders, kPillW, kPillH, "mask");
+    }
     if (void* f = A()->ui_find_child(pill, kPillFill, 0)) {
+        set_priority(f, 3);
         if (g_cp_lefttop >= 0) set_enum(f, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
         place(f, 0, 0);
         resize(f, kPillW, kPillH);
-        set_enum(f, "set_ColorType", kPillColorType);
         uint32_t left = kColPillLeft, right = kColPillRight;
-        for (const char* m : { "set_Color", "set_ColorLeft", "set_ColorTop", "set_ColorBottom", "set_ColorLeftTop", "set_ColorLeftBottom",
-                               "set_ColorRightBottom" })
+        for (const char* m : { "set_Color", "set_ColorLeftTop", "set_ColorLeftBottom", "set_ColorRightBottom", "set_ColorTop", "set_ColorBottom",
+                               "set_ColorLeft" })
             set_value(f, m, &left);
-        for (const char* m : { "set_ColorRight", "set_ColorRightTop" }) set_value(f, m, &right);
+        for (const char* m : { "set_ColorRightTop", "set_ColorRight" }) set_value(f, m, &right);
+        set_enum(f, "set_ColorType(via.gui.ColorType)", kPillColorType);
         A()->ui_set_visible(C(), f, 1);
     }
 }
@@ -1877,11 +1897,10 @@ void put_sum_text(void* title, const std::string& name, bool head, const std::st
 struct SumItem { SumKind kind; std::string text; const uint8_t* guid = nullptr; };
 void render_summary(void* title, bool on, const char* heading, const std::vector<SumItem>& items) {
     style_pill(title);
-    for (const char* n : { "e_ro_pshadow", "e_ro_pill" })
-        if (void* c = copy_of(title, n)) {
-            if (on) place(c, kSumX, kSumY);
-            show(c, on);
-        }
+    if (void* c = copy_of(title, "e_ro_pill")) {
+        if (on) place(c, kSumX, kSumY);
+        show(c, on);
+    }
     if (on) log_pill(title);
     put_sum_text(title, "e_ro_sumtitle", true, heading, nullptr, sum_x(kSumTitleX), sum_y(kSumTitleY), kColSumTitle, on);
     std::vector<SumKind> kinds;
