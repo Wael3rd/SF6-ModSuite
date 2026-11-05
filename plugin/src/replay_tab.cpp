@@ -108,8 +108,14 @@ constexpr float kGridX = 760, kGridY = 184, kCellW = 160, kCellH = 72, kStepX = 
 // 1CE98A31 while the grid has the focus (p_FighterSelectSimple_cos_h)
 constexpr float kListX = 60, kListY = 150, kListW = 640, kListStep = 70;
 constexpr float kLineX = 739, kLineY = 150, kLineLen = 703, kLineW = 5;
-constexpr float kPanelX = 731, kPanelY = 150, kPanelW = 960, kPanelH = 702;
-constexpr float kLineLenStage = 706, kPanelHStage = 710;   // Stage Settings' own panel and divider (c_StageSelect)
+// The right side's background: ONE box for both pages (Wael 05/11, measured on his 42.png and 43.png), its left edge on the
+// divider's line (the middle of its 5 units: the outfit page's began at 731, left of the squares), its top and bottom those of
+// the outfit page (the stage page's sat at 155 - 860), its right end 1691.
+constexpr float kBoxL = kLineX - kLineW / 2, kBoxT = 150, kBoxR = 1691, kBoxB = 852;
+// The game's panel fades in over 10 units at its edges (half way 5 in: read on its screen, 37.png), so its rectangle is 5
+// larger than the box where the box must show: left, top, bottom (its right end is faded out by its mask).
+constexpr float kBoxSoft = 5;
+constexpr float kPanelX = kBoxL - kBoxSoft, kPanelY = kBoxT - kBoxSoft, kPanelW = kBoxR - kPanelX, kPanelH = kBoxB + kBoxSoft - kPanelY;
 constexpr int kListRows = 2;                                // the option rows: Replay Outfit Settings, Stage Settings
 const char* const kListLabels[kListRows] = { "Replay Outfit Settings", "Stage Settings" };
 // Stage Settings' page (c_StageSelect > p_StageSelectSimple_0_h, read 05/11): the banner 776 x 194 at (760, 184), its name
@@ -124,28 +130,23 @@ constexpr float kStageNameRightW = stagelogic::kNameMaxW + 10;
 constexpr int64_t kRightCenter = 6;                // via.gui.ControlPoint / PageAlignment: the text's right middle
 constexpr int64_t kStageNameFontSlot = 6;
 constexpr uint32_t kColStageName = 0xFFFFF3FA, kColStageNameGlow = 0xFF000000;
-// The stage grid and its panel as the game draws them (c_StageSelect, read 05/11, probes p13, p14, g47), every piece on the
-// UVS_hub sheet: copies of the row's shadow (Scale9Grids) and of its c_bg (a panel with a mask), each on its sequence.
-//   the panel: a panel at (731, 150) with a mask rect, white to clear from left to right (the fade), the background
-//   (sequence 10, 66000000: its soft edges are why it seems to start at the divider's line) and the focus tint (1CE98A31);
-//   a cell (252 x 63): its shadow (6, 271 x 82 at -8, -6), the picture under a mask (5: the bevelled corners), a thin frame
-//   (4, 33FFFFFF) and the darkening (5, CC000000) on all but the focused cell;
-//   the cursor: its glow (20, FF811900, 277 x 89) and its ring (19, 257 x 68), centred on the cell; the game's ring is its
-//   outline material seen through that sequence: the colour here is what it shows.
-constexpr uint32_t kSeqPanel = 10, kSeqCellMask = 5, kSeqCellFrame = 4, kSeqCellShadow = 6, kSeqRing = 19, kSeqGlow = 20;
-// the sums of the game's BorderRects (they tell when a copy's borders follow its sequence)
-constexpr float kBordPanel = 50, kBordCell = 58, kBordShadow = 96.5f, kBordRing = 58, kBordGlow = 93;
-constexpr float kSShadowX = -8, kSShadowY = -6, kSShadowW = 271, kSShadowH = 82;
-constexpr float kRingW = 257, kRingH = 68, kGlowW = 277, kGlowH = 89;
-constexpr uint32_t kColPanelBg = 0x66000000, kColPanelTint = 0x1CE98A31, kColMaskLeft = 0xFFFFFFFF, kColMaskRight = 0x00FFFFFF;
-constexpr uint32_t kColCellFrame = 0x33FFFFFF, kColCellDarken = 0xCC000000, kColRing = 0xFFFF8D00, kColGlow = 0xFF811900;
-constexpr int kGridsPerFrame = 14;                 // pieces put on their sequences per frame (about 40 core calls each)
+// The stage page's look is the game's own: copies of the parts of Battle Settings' c_StageSelect (read 05/11, probes p13, p14),
+// whose screen stays in the menus' scene, hidden. A copy keeps its sheet, sequences and borders, which can't be changed on a
+// copy (the summary's pill, 05/11): so the real parts, not others put on their sequences.
+//   the panel: c_bgContents (its mask rect fading from left to right, the background 66000000, the focus tint 1CE98A31);
+//   a cell (252 x 63): c_bg_s (shadow, the picture under its bevelled mask, the thin frame 33FFFFFF), e_darken (CC000000) on
+//   all but the focused cell;
+//   the cursor: c_outline, centred on its cell (126, 31.5), in its SELECT state (glow, ring);
+//   the chosen cell's mark: c_check at (11.5, 11.5), state pattern 1.
+const char* const kStagePartsAgent = "MatchingSetting";
+constexpr float kSOutlineX = 126, kSOutlineY = 31.5f, kSCheckX = 11.5f, kSCheckY = 11.5f;
+constexpr uint32_t kColPanelBg = 0x66000000, kColPanelTint = 0x1CE98A31;
 constexpr float kSGridX = 760, kSGridY = 404, kSCellW = 252, kSCellH = 63, kSStepX = 262, kSStepY = 73;
 constexpr float kSBarX = 1546, kSBarY = 404, kSBarW = 6, kSBarH = 430;
 constexpr int kSCols = 3, kSVisRows = 6, kSCells = kSCols * kSVisRows;
 constexpr float kFontStageName = 30, kFontStageCell = 24;
-// the chosen cell's mark: the game's yellow corner triangle (legs 20 along the cell's top and left edges, read on Battle
-// Settings' grid 05/11), drawn as rows one unit high (no triangle element to copy here)
+// the chosen cell's mark without the game's parts: a yellow corner triangle (legs 20 along the cell's top and left edges, read
+// on Battle Settings' grid 05/11), drawn as rows one unit high
 constexpr int kSMarkLeg = 20;
 // the character's page: its rows (p_Spin_*) 740 x 58, 70 apart from (156, 210); in a row, the label's left middle at
 // (23, 29), the value's centre at (524, 29), the arrows' centres at (348, 29) and (700, 29); label font 25, value 23
@@ -165,7 +166,8 @@ constexpr uint32_t kColText = 0xFFFFFFFF, kColOn = 0xFFFDBF3F, kColName = 0xFFFB
 constexpr uint32_t kColCell = 0xE62A201E, kColCellFocus = 0xF5EEEEEE;
 constexpr uint32_t kColDark = 0xFF2A2A2A;         // the focused cell: light, dark caption (the game's)
 // the option row: the grid dims its cells by 40 % (their e_darken 66000000); the cells, the panel and its tint: plain
-// rectangles matched to the game's on screen (its panel's textured Scale9Grids, 66000000 / 1CE98A31, show lighter)
+// rectangles matched to the game's on screen (its panel's textured Scale9Grids, 66000000 / 1CE98A31, show lighter): the
+// panel's only when the game's own can't be copied (put_panel)
 constexpr uint32_t kColCellDim = 0xE6241F1F, kColTextDim = 0xFF999999, kColOnDim = 0xFF987226;
 constexpr uint32_t kColPanel = 0x3A000000, kColPanelFocus = 0x0CE98A31, kColLine = 0x80FFFFFF;
 // a row's texts and arrows: light, dark on the selected row's light background, dimmer on a disabled row; the game
@@ -187,7 +189,7 @@ constexpr int kPrioPanel = 1, kPrioModel = 1, kPrioFrame = 2, kPrioImage = 3, kP
 // p_BattleSettingProfileGameSetting_) and the Opponent Outfit page's (OtherMatchingFighterSetting c_CostumeSetting), read
 // 05/11 (probes g45, g48a). The panel at (1596, 189) drawn at 0.81 (0.9 x 0.9), in its own units below (replay_logic.hpp:
 // the items' y). Its title pill (c_title): a UVS_hub shadow (sequence 15, 334 x 36.5) under c_mask (colour scale alpha
-// 0.302): a white-to-grey rect (334 x 32, ColorType Horizontal) masked by sequence 14 (the borders come with the sequence).
+// 0.302): a white-to-grey rect (334 x 32, ColorType Horizontal) masked by sequence 14.
 // The title at (20, 16), font 24, 0xFFD9D9D9; the names at x 36 (0xFFFFBF65), the values at x 48 (0xFFEEEEEE), font 23,
 // region 320 x 36, LeftCenter; the game's UI font (FontSlot 8); the stage picture (248 x 62) at x 50. The title's shadow
 // 54000000, 3 at 45, blur 5, strength 2, no glow; the others' shadow CC000000, 0, blur 3, strength 5 and glow 80000000,
@@ -199,19 +201,26 @@ constexpr float kSumTitleRegionW = 430, kSumTitleRegionH = 37, kSumRegionW = 320
 constexpr float kFontSumTitle = 24, kFontSumLine = 23;
 constexpr int64_t kSumFontSlot = 8;
 constexpr int kSumTexts = 24, kSumMaxFighters = 20;   // 2 names + 20 outfit lines + the stage's line, the page's 6
-constexpr size_t kSumLineMax = 80;                 // at most (a line is then cut to its region's width, put_line_text)
+constexpr size_t kSumLineMax = 38;                 // at most, whatever is measured: stays on the screen (then cut to the region, put_line_text)
+constexpr size_t kSumAlwaysFits = 15;              // bytes that fit the region whatever the letters (15 x the widest glyph, about 17 px)
+constexpr float kSumDrawRegionW = 1200;            // a line's region: wider than any line (never clips what is measured)
+constexpr float kSumOffScreen = -4000;             // a line while its cut is not settled
+constexpr uint32_t kSumLayoutFrames = 2, kSumMeasureMax = 30;   // frames for the game's layout of a new text; at most, without a width
 constexpr uint32_t kColSumTitle = 0xFFD9D9D9, kColSumName = 0xFFFFBF65, kColSumLine = 0xFFEEEEEE;
-// the pill's rect: the game's colours (white, its right side and right top corner grey) at c_mask's alpha 0.302 (0x4D),
-// written on the rect itself: the copied panel's own animation may key its colour scale
-constexpr uint32_t kColPillLeft = 0x4DFFFFFF, kColPillRight = 0x4D5A5A5A;
-constexpr int64_t kPillColorType = 2;              // via.gui.ColorType.Horizontal
-constexpr uint32_t kPillShadowSeq = 15, kPillMaskSeq = 14;
+// The pill's frames can't be had on a copied Scale9Grid: a copy keeps the BorderRect of the frames it was loaded with
+// (setSequenceNo, setPatternNo and giving the sheet again leave it: 124.5 and 86 against the game's 25.5 and 22, log 05/11),
+// taller than the pill, so it draws nothing. So the same frames as plain Textures: those frames' top and bottom rows have no
+// height (borders 11 / 0 / 11 / 0 on 14, 11 / 0 / 14.5 / 0 on 15), only the middle row's 3 patterns (LC 3, CC 4, RC 5) draw:
+// a left end, a middle, a right end, drawn tinted (the frame's own alpha stays, as under the game's mask).
+struct PillStrip { uint32_t seq; float h, cap_l, cap_r; };
+constexpr PillStrip kPillStrips[2] = { { 15, kPillShadowH, 11, 14.5f }, { 14, kPillH, 11, 11 } };   // the shadow, the pill
+constexpr int kPillParts = 6;
+constexpr uint32_t kPillAlpha = 0x4D;              // c_mask's colour scale alpha, 0.302
+constexpr float kPillGreyLeft = 255, kPillGreyRight = 0x5A;   // the game's rect, left to right
+constexpr int64_t kPillSampler = 5;                // the game's Scale9Grids' SamplerType
 struct TextLook { uint32_t shadow; float dist, rot, blur, strength; bool glow; uint32_t glow_col; float glow_blur, glow_strength; };
 constexpr TextLook kSumTitleLook{ 0x54000000, 3, 45, 5, 2, false, 0x80000000, 10, 4 };
 constexpr TextLook kSumLineLook{ 0xCC000000, 0, 0, 3, 5, true, 0x80000000, 10, 4 };
-constexpr const char* kPillFill = "e_ro_pfill";    // the pill's rect: a rectangle copy inside the pill's panel copy
-constexpr const char* kPillShade = "e_ro_pshade";  // the pill's shadow: a copy of the row's shadow inside it
-constexpr float kPillShadowBorders = 11 + 14.5f, kPillMaskBorders = 11 + 11;   // the sums of the game's BorderRects (15, 14)
 const char* const kSumTitleGrid = "Replay Settings";
 const char* const kSumTitlePage = "Outfit Settings (Replay)";
 constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (the cells' pictures are 4:3)
@@ -287,10 +296,10 @@ int g_stage_cursor = 0, g_stage_top = 0;          // the focused cell (0 = Defau
 
 // ---- the page's copies, made inside the tab hook (R19) ----
 // Plain controls of the tab bar's screen (no UIParts), the game's row and its plain text, the banner's two arrows; the
-// summary's title pill: the row's masked background panel (the same UVS_hub sheet as the game's pill)
-enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow, kPill,
-            kBody, kCell, kGrid,                   // the game's panel and cells: the row's c_bg (kBody, kCell), its shadow (kGrid)
-            kRectPlain, kImagePlain };             // the plain ones in their place when the row has neither
+// summary's title pill: the row's marker, a plain Texture on the same UVS_hub sheet as the game's pill; the stage page's look:
+// the game's own parts (kGame*, from Battle Settings' c_StageSelect), plain copies in their place when that screen is not there
+enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow, kPillPart,
+            kGamePanel, kGameCell, kGameDarken, kGameOutline, kGameCheck, kRectPlain, kImagePlain };
 struct Copy { std::string name; Kind kind; };
 
 std::string cname(const char* what, int i) {
@@ -302,21 +311,19 @@ std::string cname(const char* what, int i) {
 const std::vector<Copy>& copies() {
     static std::vector<Copy> v;
     if (!v.empty()) return v;
-    v.push_back({ "e_ro_gbody", kBody });          // the grid's panel and its focus tint: under the cells
+    v.push_back({ "e_ro_gbody", kGamePanel });     // the grid's panel and its focus tint: under the cells
     v.push_back({ "e_ro_gpanel", kRectPlain });
     v.push_back({ "e_ro_gfocus", kRectPlain });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cbg", i), kRect });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cimg", i), kImage });
-    v.push_back({ "e_ro_sglow", kGrid });          // the stage grid: the cursor's glow, then each cell: shadow, picture, frame, darkening
-    for (int i = 0; i < kSCells; ++i) v.push_back({ cname("ssh", i), kGrid });
-    for (int i = 0; i < kSCells; ++i) v.push_back({ cname("scl", i), kCell });
-    for (int i = 0; i < kSCells; ++i) v.push_back({ cname("sdf", i), kGrid });
-    for (int i = 0; i < kSCells; ++i) v.push_back({ cname("sdk", i), kGrid });
-    v.push_back({ "e_ro_sring", kGrid });          // the cursor's ring, over the cells
-    v.push_back({ "e_ro_sfocus", kRectPlain });
+    for (int i = 0; i < kSCells; ++i) v.push_back({ cname("scl", i), kGameCell });   // the stage grid: cells, darkening, cursor, mark
+    for (int i = 0; i < kSCells; ++i) v.push_back({ cname("sdk", i), kGameDarken });
+    v.push_back({ "e_ro_sout", kGameOutline });
+    v.push_back({ "e_ro_schk", kGameCheck });
+    v.push_back({ "e_ro_sfocus", kRectPlain });    // the same, plain, when the game's parts are not there
     for (int i = 0; i < kSCells; ++i) v.push_back({ cname("simg", i), kImagePlain });
     v.push_back({ "e_ro_sbanner", kImage });
-    for (int i = 0; i < kSMarkLeg; ++i) v.push_back({ cname("smk", i), kRect });   // the chosen stage's corner mark, the scroll bar
+    for (int i = 0; i < kSMarkLeg; ++i) v.push_back({ cname("smk", i), kRectPlain });   // the plain corner mark, the scroll bar
     v.push_back({ "e_ro_sbarbg", kRect });
     v.push_back({ "e_ro_sbar", kRect });
     v.push_back({ "e_ro_model", kImage });         // the 3D preview: the capture room's render target
@@ -331,8 +338,8 @@ const std::vector<Copy>& copies() {
     v.push_back({ "e_ro_name", kText });
     v.push_back({ "e_ro_sname", kText });          // the banner's stage name, the Default cell's label
     v.push_back({ "e_ro_sdeflbl", kText });
-    v.push_back({ "e_ro_pill", kPill });           // the summary on the right: its title pill, picture and texts
-    v.push_back({ "e_ro_sumpic", kImage });
+    for (int i = 0; i < kPillParts; ++i) v.push_back({ cname("ppart", i), kPillPart });   // the summary on the right: its title pill,
+    v.push_back({ "e_ro_sumpic", kImage });        // picture and texts
     v.push_back({ "e_ro_sumtitle", kLabel });
     for (int i = 0; i < kSumTexts; ++i) v.push_back({ cname("sum", i), kLabel });
     return v;
@@ -368,69 +375,47 @@ bool make_copies() {
     void* t_arrow_l = arrow_l ? a->ui_find_child(arrow_l, "e_texture_arrow", 2) : nullptr;
     void* t_arrow_r = arrow_r ? a->ui_find_child(arrow_r, "e_texture_arrow", 2) : nullptr;
     const bool arrows = t_arrow_l && t_arrow_r;
-    // the summary's pill: the row's background panel (c_bg_m > c_bg: its mask, then its material, bar and marker) and its
-    // shadow (c_bg_m > e_scale9grid_shadow), both drawing the game's UVS_hub sheet
-    void* t_shadow = t_row ? a->ui_find_child(t_row, "e_scale9grid_shadow", 3) : nullptr;
-    void* t_pill = t_row ? a->ui_find_child(t_row, "c_bg", 3) : nullptr;
+    // the summary's pill: the row's marker (c_bg_m > c_bg > e_focus_bar), a plain Texture drawing the game's UVS_hub sheet
+    void* t_part = t_row ? a->ui_find_child(t_row, "e_focus_bar", 3) : nullptr;
+    // the stage page's look: the game's own parts (constants above); the item is the grid's own hidden template
+    void* stage_main = agent_main(kStagePartsAgent);
+    void* stage_root = stage_main ? a->ui_find_child(stage_main, "c_StageSelect", 8) : nullptr;
+    void* t_gpanel = stage_root ? a->ui_find_child(stage_root, "c_bgContents", 4) : nullptr;
+    void* t_item = stage_root ? a->ui_find_child(stage_root, "p_StageSelectSimpleSelectItem_", 8) : nullptr;
+    void* t_gcell = t_item ? a->ui_find_child(t_item, "c_bg_s", 0) : nullptr;
+    void* t_gdarken = t_item ? a->ui_find_child(t_item, "e_darken", 0) : nullptr;
+    void* t_goutline = t_item ? a->ui_find_child(t_item, "c_outline", 0) : nullptr;
+    void* t_gcheck = t_item ? a->ui_find_child(t_item, "c_check", 0) : nullptr;
+    const bool game_parts = t_gpanel && t_gcell && t_gdarken && t_goutline && t_gcheck;
     if (!title || !t_text || !t_rect || !t_line || !t_image || !t_row || !t_label) {
         ++g_refused;
         g_copy_status.store(t_row && t_label ? -3000 : -3001);
         return false;
     }
     if (!arrows && !g_no_arrows_logged) { g_no_arrows_logged = true; logf("replay tab: no arrow to copy (%s not up): rows without arrows", kArrowTemplateAgent); }
-    if ((!t_shadow || !t_pill) && !g_no_pill_logged) { g_no_pill_logged = true; logf("replay tab: the row has no shadow / c_bg to copy: a summary without its title pill"); }
+    logf("replay tab: the grid's panel and the stage cells: %s", game_parts ? "copies of the game's own parts" : "plain copies (Battle Settings' screen is not in the scene)");
+    if (!t_part && !g_no_pill_logged) { g_no_pill_logged = true; logf("replay tab: the row has no e_focus_bar to copy: a summary without its title pill"); }
     for (const Copy& cp : copies()) {
         if ((cp.kind == kLeftArrow || cp.kind == kRightArrow) && !arrows) continue;
-        if (cp.kind == kPill && (!t_pill || !t_shadow)) continue;
-        const bool gamelook = cp.kind == kBody || cp.kind == kCell || cp.kind == kGrid;
-        if (gamelook && (!t_pill || !t_shadow)) continue;
-        if ((cp.kind == kRectPlain || cp.kind == kImagePlain) && t_pill && t_shadow) continue;
+        if (cp.kind == kPillPart && !t_part) continue;
+        const bool game = cp.kind == kGamePanel || cp.kind == kGameCell || cp.kind == kGameDarken || cp.kind == kGameOutline || cp.kind == kGameCheck;
+        if (game && !game_parts) continue;
+        if ((cp.kind == kRectPlain || cp.kind == kImagePlain) && game_parts) continue;
         if (a->ui_find_child(title, cp.name.c_str(), 0)) continue;
-        void* tmpl = cp.kind == kText ? t_text : (cp.kind == kRect || cp.kind == kRectPlain) ? t_rect : cp.kind == kLine ? t_line
-                   : cp.kind == kRow ? t_row : cp.kind == kLabel ? t_label : (cp.kind == kPill || cp.kind == kBody || cp.kind == kCell) ? t_pill
-                   : cp.kind == kGrid ? t_shadow
+        void* tmpl = cp.kind == kText ? t_text : (cp.kind == kRect || cp.kind == kRectPlain) ? t_rect : cp.kind == kLine ? t_line : cp.kind == kRow ? t_row
+                   : cp.kind == kLabel ? t_label : cp.kind == kPillPart ? t_part
+                   : cp.kind == kGamePanel ? t_gpanel : cp.kind == kGameCell ? t_gcell : cp.kind == kGameDarken ? t_gdarken
+                   : cp.kind == kGameOutline ? t_goutline : cp.kind == kGameCheck ? t_gcheck
                    : cp.kind == kLeftArrow ? t_arrow_l : cp.kind == kRightArrow ? t_arrow_r : t_image;
         void* c = nullptr;
         const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, title, cp.name.c_str(), &c);
         g_copy_status.store(st == SF6CORE_OK && !c ? -1000 : static_cast<int>(st));
         if (st != SF6CORE_OK || !c) { ++g_refused; return false; }
-        if (cp.kind == kRect || cp.kind == kRectPlain || cp.kind == kGrid) {
+        if (cp.kind == kRect || cp.kind == kRectPlain) {
             SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 1;    // via.gui.MaskType.NonTarget (the rectangle was a mask: 2)
             a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
         }
         a->ui_set_visible(C(), c, 0);                           // placed and shown by the frame
-    }
-    // inside the pill's panel copy: the shadow (a copy of the row's shadow) and the rect (a rectangle copy, MaskType 0 like
-    // the game's e_rect_bg: the template was a mask), cut by the panel's mask (as the game's c_mask: e_scale9grid_mask, then
-    // e_rect_bg); their order is set by their priorities (style_pill)
-    if (void* pill = a->ui_find_child(title, "e_ro_pill", 0)) {
-        for (int k = 0; k < 2; ++k) {
-            const char* name = k ? kPillFill : kPillShade;
-            if (a->ui_find_child(pill, name, 0)) continue;
-            void* c = nullptr;
-            const SF6CoreStatus st = a->ui_clone_control(C(), k ? t_rect : t_shadow, pill, name, &c);
-            if (st != SF6CORE_OK || !c) { ++g_refused; g_copy_status.store(st == SF6CORE_OK ? -1000 : static_cast<int>(st)); return false; }
-            if (k) {
-                SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 0;
-                a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
-            }
-        }
-    }
-    // inside the panel's copy: its mask rect, background and tint; inside each cell's: its picture, cut by the cell's mask
-    if (t_pill && t_shadow) {
-        auto inner = [&](void* parent, const char* name, void* tmpl, int64_t mask) {
-            if (!parent || a->ui_find_child(parent, name, 0)) return true;
-            void* c = nullptr;
-            const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, parent, name, &c);
-            if (st != SF6CORE_OK || !c) { ++g_refused; g_copy_status.store(st == SF6CORE_OK ? -1000 : static_cast<int>(st)); return false; }
-            SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = mask;
-            a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
-            return true;
-        };
-        void* body = a->ui_find_child(title, "e_ro_gbody", 0);
-        if (!inner(body, "e_ro_gmask", t_rect, 2) || !inner(body, "e_ro_gbg", t_shadow, 0) || !inner(body, "e_ro_gfoc", t_shadow, 0)) return false;
-        for (int i = 0; i < kSCells; ++i)
-            if (!inner(a->ui_find_child(title, cname("scl", i).c_str(), 0), "e_ro_spic", t_image, 0)) return false;
     }
     return true;
 }
@@ -1605,89 +1590,26 @@ void put_row(void* title, int r, const char* label, const std::string& value, bo
 }
 
 // The option rows, the divider and the grid's panel (on: the option rows' level or one of their grids is up; row: the
-// focused / entered row; entered: its grid has the focus; stage: the right side is the stage page, whose panel and
-// divider are a little longer). A row's look, as the game's Other list: the focused row selected (SELECT: blue bar,
+// focused / entered row; entered: its grid has the focus). A row's look, as the game's Other list: the focused row selected (SELECT: blue bar,
 // light material, its marker); the row whose grid has the focus "entered" (the game's p_GroupItem stays SELECT with its
 // blue bar hidden, its material dark, its bevel shown, its small marker, its text light); the other rows plain (DEFAULT,
 // darkened 20 %). Every piece written each time: the copies keep what was written to them.
-// ---- the game's Scale9Grids on the UVS_hub sheet (constants above) ----
-void pill_cells(void* g, uint32_t seq);
-float border_sum(void* g);
-int g_grids_left = 0;                             // pieces still allowed on their sequences this frame
-// A copy of a Scale9Grid on a sequence: its 9 cells, then its borders worked out (they follow the sheet being given, as the
-// summary's pill found: pill_grid)
-void grid_seq(void* g, uint32_t seq, float borders, float w, float h) {
-    if (!g) return;
-    pill_cells(g, seq);
-    if (std::fabs(border_sum(g) - borders) > 0.5f) {
-        if (Obj* sheet = call_obj(static_cast<Obj*>(g), "get_UVSequence")) {
-            SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = sheet;
-            A()->obj_invoke(C(), g, "set_UVSequence(via.uvsequence.UVSequenceResourceHolder)", &a, 1, nullptr);
-        }
-        pill_cells(g, seq);
-        if (const float now = border_sum(g); std::fabs(now - borders) > 0.5f) logf("replay tab: a stage piece on sequence %u: borders %.1f, not %.1f", seq, now, borders);
-    }
-    resize(g, w, h);
-}
-void leftop(void* c) { if (c && g_cp_lefttop >= 0) set_enum(c, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop); }
-// One piece of the look: once on its sequence (at most kGridsPerFrame a frame: the others wait, hidden), then placed
-void put_grid(void* title, const std::string& name, uint32_t seq, float borders, float x, float y, float w, float h, uint32_t col, bool on, int prio) {
-    void* c = copy_of(title, name);
-    if (!c) return;
-    if (!g_styled.count(reinterpret_cast<uintptr_t>(c))) {
-        if (!on || g_grids_left <= 0) { if (on) g_dirty = true; show(c, false); return; }
-        --g_grids_left;
-        g_styled.insert(reinterpret_cast<uintptr_t>(c));
-        leftop(c);
-        set_priority(c, prio);
-        grid_seq(c, seq, borders, w, h);
-    }
-    if (on) {
-        A()->ui_set_color(C(), c, col);
-        A()->ui_set_position(C(), c, x, y, 0);
-        A()->ui_set_size(C(), c, w, h);
-    }
-    show(c, on);
-}
-// A copy of the row's c_bg made a plain panel: its material, bar and marker off
-void panel_extras_off(void* panel) {
-    for (const char* n : { "e_mat_bg", "e_rect_bar", "e_focus_bar" })
-        if (void* e = A()->ui_find_child(panel, n, 0)) A()->ui_set_force_invisible(C(), e, 1);
-}
-// The grid's panel, the game's on both pages; false: no copy of it (the plain rectangles then)
-bool put_panel(void* title, float h, bool on, bool entered) {
+// The grid's panel, the game's on both pages, in the shared box; false: no copy of it (the plain rectangle then)
+bool put_panel(void* title, bool on, bool entered) {
     void* b = copy_of(title, "e_ro_gbody");
     if (!b) return false;
-    void* mask = A()->ui_find_child(b, "e_ro_gmask", 0);
-    void* bg = A()->ui_find_child(b, "e_ro_gbg", 0);
-    void* tint = A()->ui_find_child(b, "e_ro_gfoc", 0);
-    if (!mask || !bg || !tint) { show(b, false); return false; }
-    if (on && g_styled.insert(reinterpret_cast<uintptr_t>(b)).second) {
-        set_priority(b, kPrioPanel);
-        panel_extras_off(b);
-        if (void* m = A()->ui_find_child(b, "e_scale9grid_mask", 0)) {   // the row's own mask: not one here
-            set_enum(m, "set_MaskType(via.gui.MaskType)", 1);
-            A()->ui_set_force_invisible(C(), m, 1);
-        }
-        leftop(mask); set_priority(mask, 1); place(mask, 0, 0);
-        uint32_t left = kColMaskLeft, right = kColMaskRight;
-        for (const char* n : { "set_Color", "set_ColorLeftTop", "set_ColorLeftBottom", "set_ColorRightBottom", "set_ColorTop", "set_ColorBottom", "set_ColorLeft" })
-            set_value(mask, n, &left);
-        for (const char* n : { "set_ColorRightTop", "set_ColorRight" }) set_value(mask, n, &right);
-        set_enum(mask, "set_ColorType(via.gui.ColorType)", kPillColorType);
-        show(mask, true);
-        leftop(bg); set_priority(bg, 2); place(bg, 0, 0);
-        grid_seq(bg, kSeqPanel, kBordPanel, kPanelW, h);
-        A()->ui_set_color(C(), bg, kColPanelBg);
-        show(bg, true);
-        leftop(tint); set_priority(tint, 3); place(tint, 0, 0);
-        grid_seq(tint, kSeqPanel, kBordPanel, kPanelW, h);
-        A()->ui_set_color(C(), tint, kColPanelTint);
-    }
+    void* mask = A()->ui_find_cached(b, "e_rect_mask");
+    void* bg = A()->ui_find_cached(b, "e_scale9grid_bg");
+    void* tint = A()->ui_find_cached(b, "e_scale9grid_focus");
     if (on) {
-        resize(mask, kPanelW, h);
-        resize(bg, kPanelW, h);
-        resize(tint, kPanelW, h);
+        if (g_styled.insert(reinterpret_cast<uintptr_t>(b)).second) {
+            set_priority(b, kPrioPanel);
+            A()->ui_set_color(C(), bg, kColPanelBg);
+            A()->ui_set_color(C(), tint, kColPanelTint);
+        }
+        resize(mask, kPanelW, kPanelH);
+        resize(bg, kPanelW, kPanelH);
+        resize(tint, kPanelW, kPanelH);
         place(b, kPanelX, kPanelY);
     }
     show(tint, on && entered);
@@ -1695,7 +1617,7 @@ bool put_panel(void* title, float h, bool on, bool entered) {
     return true;
 }
 
-void render_list(void* title, bool on, int focus, bool entered, bool stage) {
+void render_list(void* title, bool on, int focus, bool entered) {
     for (int r = 0; r < kListRows; ++r) {
         void* row = copy_of(title, cname("lrow", r));
         const float y = kListY + r * kListStep;
@@ -1730,17 +1652,14 @@ void render_list(void* title, bool on, int focus, bool entered, bool stage) {
                 A()->obj_invoke(C(), l, "set_Rotation(via.vec3)", &a, 1, nullptr);
             }
             place(l, kLineX, kLineY);
-            resize(l, stage ? kLineLenStage : kLineLen, kLineW);
+            resize(l, kLineLen, kLineW);
             A()->ui_set_color(C(), l, kColLine);
         }
         show(l, on);
     }
-    const float ph = stage ? kPanelHStage : kPanelH;
-    if (put_panel(title, ph, on, entered)) return;
-    // no game panel to copy: plain rectangles from the divider's line, below its top square (where the game's shows)
-    const float px = kLineX - kLineW / 2, pw = kPanelW - (kLineX - kLineW / 2 - kPanelX);
-    put_box(title, "e_ro_gpanel", px, kPanelY + kLineW, pw, ph - kLineW, kColPanel, on, kPrioPanel);
-    put_box(title, "e_ro_gfocus", px, kPanelY + kLineW, pw, ph - kLineW, kColPanelFocus, on && entered, kPrioPanel);
+    if (put_panel(title, on, entered)) return;
+    put_box(title, "e_ro_gpanel", kBoxL, kBoxT, kBoxR - kBoxL, kBoxB - kBoxT, kColPanel, on, kPrioPanel);   // the plain ones, in the same box
+    put_box(title, "e_ro_gfocus", kBoxL, kBoxT, kBoxR - kBoxL, kBoxB - kBoxT, kColPanelFocus, on && entered, kPrioPanel);
 }
 
 // A centred text copy (the banner's stage name, the Default cell's label): the title's display font, its middle on (x, y);
@@ -1801,28 +1720,59 @@ void put_stage_picture(void* title, const std::string& name, const std::string& 
     style_box(c, kPrioImage);
     picture_on(c, path, x, y, w, h, col, on);
 }
-// A cell's picture under its mask (the bevelled corners): a panel at the cell's place, once made of the mask and the picture;
-// the plain picture where the row gave no panel to copy
-void put_stage_cell(void* title, int i, const std::string& path, float x, float y, bool on) {
+// A cell: the game's c_bg_s at the cell's place (its shadow, its picture under the bevelled mask, its thin frame) and its
+// e_darken, frame and darkening off on the focused cell; a plain picture, dimmed, without the game's parts
+void put_stage_cell(void* title, int i, const std::string& path, float x, float y, bool on, bool lit, bool grid) {
     void* c = copy_of(title, cname("scl", i));
-    if (!c) { put_stage_picture(title, cname("simg", i), path, x, y, kSCellW, kSCellH, kColText, on); return; }
-    void* pic = A()->ui_find_child(c, "e_ro_spic", 0);
-    if (!pic) { show(c, false); return; }
-    if (!g_styled.count(reinterpret_cast<uintptr_t>(c))) {
-        if (!on || g_grids_left <= 0) { if (on) g_dirty = true; show(c, false); return; }
-        --g_grids_left;
-        g_styled.insert(reinterpret_cast<uintptr_t>(c));
-        set_priority(c, kPrioImage);
-        panel_extras_off(c);
-        if (void* m = A()->ui_find_child(c, "e_scale9grid_mask", 0)) {
-            set_priority(m, 2);
-            grid_seq(m, kSeqCellMask, kBordCell, kSCellW, kSCellH);
-        }
-        leftop(pic);
-        set_priority(pic, 3);
+    if (!c) {
+        put_stage_picture(title, cname("simg", i), path, x, y, kSCellW, kSCellH, grid ? kColText : kColTextDim, on);
+        return;
     }
-    picture_on(pic, path, 0, 0, kSCellW, kSCellH, kColText, on);
+    void* pic = A()->ui_find_child(c, "e_texture_thumb", 2);
+    if (on && g_styled.insert(reinterpret_cast<uintptr_t>(c)).second) {
+        set_priority(c, kPrioImage);
+        if (void* r = A()->ui_find_child(c, "e_texture_random", 2)) A()->ui_set_force_invisible(C(), r, 1);
+    }
+    if (pic) picture_on(pic, path, 0, 0, kSCellW, kSCellH, kColText, on);
+    set_vis(A()->ui_find_cached(c, "e_scale9grid_default"), !lit);
     if (on) place(c, x, y);
+    show(c, on);
+    if (void* d = copy_of(title, cname("sdk", i))) {
+        if (on && g_styled.insert(reinterpret_cast<uintptr_t>(d)).second) set_priority(d, kPrioImage);
+        if (on) place(d, x, y);
+        show(d, on && !lit);
+    }
+}
+// The cursor: the game's c_outline in its SELECT state (glow and ring); a plain frame behind the cell without it
+void put_stage_cursor(void* title, float x, float y, bool on) {
+    void* c = copy_of(title, "e_ro_sout");
+    if (!c) { put_box(title, "e_ro_sfocus", x - 4, y - 4, kSCellW + 8, kSCellH + 8, kColStageFocus, on, kPrioFrame); return; }
+    if (on && g_styled.insert(reinterpret_cast<uintptr_t>(c)).second) {
+        set_priority(c, kPrioImage);
+        set_state(c, "SELECT");
+        void* inner = A()->ui_find_child(c, "c_inner", 0);
+        set_state(inner, "SELECT");
+        set_state(inner ? A()->ui_find_child(inner, "c_mask", 0) : nullptr, "SELECT");
+        show(inner, true);
+    }
+    if (on) place(c, x + kSOutlineX, y + kSOutlineY);
+    show(c, on);
+}
+// The chosen cell's mark: the game's c_check (state pattern 1: its yellow corner), else rows of plain rectangles
+void put_stage_mark(void* title, float x, float y, bool on) {
+    void* c = copy_of(title, "e_ro_schk");
+    if (!c) {
+        for (int i = 0; i < kSMarkLeg; ++i)        // the full leg on the cell's top edge, one unit shorter each row
+            put_box(title, cname("smk", i), x, y + static_cast<float>(i), static_cast<float>(kSMarkLeg - i), 1.0f, kColStageMark, on, kPrioText);
+        return;
+    }
+    if (on && g_styled.insert(reinterpret_cast<uintptr_t>(c)).second) {
+        set_priority(c, kPrioText);
+        if (void* h = A()->ui_find_child(c, "e_hit_mouse", 0)) A()->ui_set_force_invisible(C(), h, 1);
+        set_state(c, "DEFAULT");                   // not its Random Stage Settings' BOX
+        set_enum(c, "set_StatePattern(System.UInt32)", 1);
+    }
+    if (on) place(c, x + kSCheckX, y + kSCheckY);
     show(c, on);
 }
 
@@ -1835,16 +1785,12 @@ void render_stage(void* title, bool on, bool grid) {
     const int shown = grid ? g_stage_cursor : chosen;
     const int rows = (n + kSCols - 1) / kSCols;
     if (on) g_stage_top = window_top(g_stage_top, shown / kSCols, rows, kSVisRows);
-    g_grids_left = kGridsPerFrame;
     for (int i = 0; i < kSCells; ++i) {
         const int idx = g_stage_top * kSCols + i;
         const bool cell = idx < n;
-        const bool lit = on && grid && idx == g_stage_cursor;   // the focused cell: no darkening, no thin frame (the game's)
+        const bool lit = on && grid && idx == g_stage_cursor;   // the focused cell
         const float x = kSGridX + (i % kSCols) * kSStepX, y = kSGridY + (i / kSCols) * kSStepY;
-        put_grid(title, cname("ssh", i), kSeqCellShadow, kBordShadow, x + kSShadowX, y + kSShadowY, kSShadowW, kSShadowH, kColText, cell, kPrioFrame);
-        put_stage_cell(title, i, cell ? stage_look(idx).pic : std::string(), x, y, cell);
-        put_grid(title, cname("sdf", i), kSeqCellFrame, kBordCell, x, y, kSCellW, kSCellH, kColCellFrame, cell && !lit, kPrioImage);
-        put_grid(title, cname("sdk", i), kSeqCellMask, kBordCell, x, y, kSCellW, kSCellH, kColCellDarken, cell && !lit, kPrioImage);
+        put_stage_cell(title, i, cell ? stage_look(idx).pic : std::string(), x, y, cell, lit, grid);
     }
     // the Default cell's label, over its picture while it is in view
     const int def_vis = 0 - g_stage_top * kSCols;
@@ -1854,15 +1800,10 @@ void render_stage(void* title, bool on, bool grid) {
     // the focus frame (behind the focused cell), the chosen cell's corner mark
     const int fv = g_stage_cursor - g_stage_top * kSCols;
     const bool f_on = on && grid && fv >= 0 && fv < kSCells;
-    const float fx = kSGridX + (fv % kSCols) * kSStepX, fy = kSGridY + (fv / kSCols) * kSStepY;
-    put_grid(title, "e_ro_sglow", kSeqGlow, kBordGlow, fx + (kSCellW - kGlowW) / 2, fy + (kSCellH - kGlowH) / 2, kGlowW, kGlowH, kColGlow, f_on, kPrioFrame);
-    put_grid(title, "e_ro_sring", kSeqRing, kBordRing, fx + (kSCellW - kRingW) / 2, fy + (kSCellH - kRingH) / 2, kRingW, kRingH, kColRing, f_on, kPrioImage);
-    put_box(title, "e_ro_sfocus", fx - 4, fy - 4, kSCellW + 8, kSCellH + 8, kColStageFocus, f_on, kPrioFrame);   // no game parts: plain
+    put_stage_cursor(title, kSGridX + (fv % kSCols) * kSStepX, kSGridY + (fv / kSCols) * kSStepY, f_on);
     const int cv = chosen - g_stage_top * kSCols;
     const bool c_on = on && cv >= 0 && cv < kSCells;
-    for (int i = 0; i < kSMarkLeg; ++i)            // its rows: the full leg on the cell's top edge, one unit shorter each row
-        put_box(title, cname("smk", i), kSGridX + (cv % kSCols) * kSStepX, kSGridY + (cv / kSCols) * kSStepY + static_cast<float>(i),
-                static_cast<float>(kSMarkLeg - i), 1.0f, kColStageMark, c_on, kPrioText);
+    put_stage_mark(title, kSGridX + (cv % kSCols) * kSStepX, kSGridY + (cv / kSCols) * kSStepY, c_on);
     // the banner: the focused cell's picture and name (the chosen cell's while the option row has the focus), every frame
     // from cell_name / stage_look: one source, one writer mode (text)
     put_stage_picture(title, "e_ro_sbanner", stage_look(shown).pic, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
@@ -1929,112 +1870,63 @@ void restore_desc() {
 // ---- the summary on the right (the game's own on Battle Settings > Other and on the Opponent Outfit page) ----
 float sum_x(float x) { return kSumX + x * kSumScale; }
 float sum_y(float y) { return kSumY + y * kSumScale; }
-// A Scale9Grid of the pill on a UVS_hub sequence: its 9 cells (via.gui.GridPos LT..RB = 0-8) on the sequence, each on its
-// pattern (0-8, the game's). Its BorderRect (the corners' sizes) follows the sequence's frames but is worked out when they
-// are given, not by setSequenceNo (read 05/11, probe g49: the copied row's mask, on sequence 14, kept sequence 2's borders
-// 19 / 24 / 19 / 24, the shadow sequence 3's 27 / 30.5 / 30.5 / 36.5: taller than the pill, so neither drew anything;
-// the game's sequence 14 has 11 / 0 / 11 / 0, 15 has 11 / 0 / 14.5 / 0). So: the cells' sequence and pattern; the borders
-// read back (their sum, whatever the struct's order); still the old ones: the sheet given again (its frames worked out
-// anew), the cells again. The outcome is logged.
-float border_sum(void* g) {
-    float b[4] = {};
-    if (auto r = call(static_cast<Obj*>(g), "get_BorderRect"); !r.exception_thrown) std::memcpy(b, r.bytes.data(), sizeof b);
-    return b[0] + b[1] + b[2] + b[3];
+// The pill: three plain Textures per strip on the sheet's frames (kPillStrips), at the panel's scale, the pill's own grey
+// across its 3 pieces as the game's rect across its width (their corner colours: EachVertex)
+uint32_t pill_color(float x) {
+    const uint32_t g = static_cast<uint32_t>(kPillGreyLeft + (kPillGreyRight - kPillGreyLeft) * x / kPillW + 0.5f);
+    return (kPillAlpha << 24) | (g << 16) | (g << 8) | g;
 }
-void pill_cells(void* g, uint32_t seq) {
-    for (int64_t pos = 0; pos < 9; ++pos) {
-        SF6CoreArg a[2] = {};
-        a[0].type = SF6CORE_ARG_I64; a[0].v.i = pos;
-        a[1].type = SF6CORE_ARG_I64; a[1].v.i = seq;
-        A()->obj_invoke(C(), g, "setSequenceNo(via.gui.GridPos,System.UInt32)", a, 2, nullptr);
-        a[1].v.i = pos;
-        A()->obj_invoke(C(), g, "setPatternNo(via.gui.GridPos,System.UInt32)", a, 2, nullptr);
-    }
-}
-void pill_grid(void* g, uint32_t seq, float borders, float w, float h, const char* what) {
-    if (!g) return;
-    const float before = border_sum(g);
-    pill_cells(g, seq);
-    float now = border_sum(g);
-    bool regiven = false;
-    if (std::fabs(now - borders) > 0.5f) {
-        if (Obj* sheet = call_obj(static_cast<Obj*>(g), "get_UVSequence")) {
-            SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = sheet;
-            A()->obj_invoke(C(), g, "set_UVSequence(via.uvsequence.UVSequenceResourceHolder)", &a, 1, nullptr);
-            regiven = true;
+void put_pill(void* title, bool on) {
+    for (int s = 0; s < 2; ++s) {
+        const PillStrip& st = kPillStrips[s];
+        const float xs[3] = { 0, st.cap_l, kPillW - st.cap_r };
+        const float ws[3] = { st.cap_l, kPillW - st.cap_l - st.cap_r, st.cap_r };
+        for (int k = 0; k < 3; ++k) {
+            void* c = copy_of(title, cname("ppart", s * 3 + k));
+            if (!c) continue;
+            if (on) {
+                if (g_styled.insert(reinterpret_cast<uintptr_t>(c)).second) {
+                    set_priority(c, s ? kPrioImage : kPrioFrame);     // the shadow under the pill
+                    if (g_cp_lefttop >= 0) set_enum(c, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
+                    set_enum(c, "set_UVSequenceNo(System.UInt32)", st.seq);
+                    set_enum(c, "set_UVPatternNo(System.UInt32)", 3 + k);
+                    set_enum(c, "set_SamplerType", kPillSampler);
+                    uint32_t l = s ? pill_color(xs[k]) : kColText, r = s ? pill_color(xs[k] + ws[k]) : kColText;
+                    for (const char* m : { "set_Color", "set_ColorLeftTop", "set_ColorLeftBottom" }) set_value(c, m, &l);
+                    for (const char* m : { "set_ColorRightTop", "set_ColorRightBottom" }) set_value(c, m, &r);
+                }
+                place(c, sum_x(xs[k]), sum_y(0));
+                resize(c, ws[k] * kSumScale, st.h * kSumScale);
+            }
+            show(c, on);
         }
-        pill_cells(g, seq);
-        now = border_sum(g);
     }
-    resize(g, w, h);
-    logf("replay tab: summary pill: %s on sequence %u, borders %.1f -> %.1f (the game's %.1f)%s%s", what, seq, before, now, borders,
-         regiven ? ", sheet given again" : "", std::fabs(now - borders) > 0.5f ? ": STILL OFF" : "");
 }
-// Once, a few frames after the pill is first shown: what the game makes of it (shown, sequence, borders)
+// Once, a few frames after the pill is first shown: what the game makes of it (the pill's middle piece)
 void log_pill(void* title) {
     if (g_pill_logged || g_frame - g_enter_frame < 10) return;
     g_pill_logged = true;
-    auto vis = [](void* c) { if (!c) return -1; auto r = call(static_cast<Obj*>(c), "get_ActualVisible"); return r.exception_thrown ? -2 : (r.byte & 1); };
-    auto seq = [](void* c) { if (!c) return -1; auto r = call(static_cast<Obj*>(c), "getSequenceNo", { arg_i32(4) }); return r.exception_thrown ? -2 : static_cast<int>(r.dword); };
-    void* pill = copy_of(title, "e_ro_pill");
-    void* sh = pill ? A()->ui_find_child(pill, kPillShade, 0) : nullptr;
-    void* mask = pill ? A()->ui_find_child(pill, "e_scale9grid_mask", 0) : nullptr;
-    void* fill = pill ? A()->ui_find_child(pill, kPillFill, 0) : nullptr;
-    logf("replay tab: summary pill: panel %s shown %d; shadow shown %d, sequence %d, borders %.1f; mask shown %d, sequence %d, borders %.1f; "
-         "rect shown %d", pill ? "up" : "missing", vis(pill), vis(sh), seq(sh), sh ? border_sum(sh) : -1.0f, vis(mask), seq(mask),
-         mask ? border_sum(mask) : -1.0f, vis(fill));
-}
-// The pill, once per copy: a copy of the row's c_bg panel at the panel's scale (a Panel has a Scale: everything in it
-// scales), showing only, in this order (their priorities): the shadow (a copy of the row's shadow, never masked), the
-// mask, our rect under the mask; the rect coloured as the game's e_rect_bg (ColorType Horizontal, white, its right side
-// grey: the corner colours are written first, they turn ColorType to EachVertex)
-void style_pill(void* title) {
-    void* pill = copy_of(title, "e_ro_pill");
-    if (!pill || !g_styled.insert(reinterpret_cast<uintptr_t>(pill)).second) return;
-    set_priority(pill, kPrioFrame);
-    A()->ui_set_scale(C(), pill, kSumScale, kSumScale, 1);
-    for (const char* n : { "e_mat_bg", "e_rect_bar", "e_focus_bar" })
-        if (void* e = A()->ui_find_child(pill, n, 0)) A()->ui_set_force_invisible(C(), e, 1);
-    if (void* sh = A()->ui_find_child(pill, kPillShade, 0)) {
-        set_enum(sh, "set_MaskType(via.gui.MaskType)", 1);   // NonTarget: under the pill's mask's reach, never cut by it
-        set_priority(sh, 1);
-        if (g_cp_lefttop >= 0) set_enum(sh, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
-        place(sh, 0, 0);
-        pill_grid(sh, kPillShadowSeq, kPillShadowBorders, kPillW, kPillShadowH, "shadow");
-        A()->ui_set_color(C(), sh, kColText);
-        A()->ui_set_visible(C(), sh, 1);
-    }
-    if (void* mask = A()->ui_find_child(pill, "e_scale9grid_mask", 0)) {
-        set_priority(mask, 2);
-        pill_grid(mask, kPillMaskSeq, kPillMaskBorders, kPillW, kPillH, "mask");
-    }
-    if (void* f = A()->ui_find_child(pill, kPillFill, 0)) {
-        set_priority(f, 3);
-        if (g_cp_lefttop >= 0) set_enum(f, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
-        place(f, 0, 0);
-        resize(f, kPillW, kPillH);
-        uint32_t left = kColPillLeft, right = kColPillRight;
-        for (const char* m : { "set_Color", "set_ColorLeftTop", "set_ColorLeftBottom", "set_ColorRightBottom", "set_ColorTop", "set_ColorBottom",
-                               "set_ColorLeft" })
-            set_value(f, m, &left);
-        for (const char* m : { "set_ColorRightTop", "set_ColorRight" }) set_value(f, m, &right);
-        set_enum(f, "set_ColorType(via.gui.ColorType)", kPillColorType);
-        A()->ui_set_visible(C(), f, 1);
-    }
+    void* c = copy_of(title, cname("ppart", 4));
+    if (!c) { logf("replay tab: summary pill: no piece (the row has no e_focus_bar to copy)"); return; }
+    Obj* o = static_cast<Obj*>(c);
+    auto num = [o](const char* m) { auto r = call(o, m); return r.exception_thrown ? -1 : static_cast<int>(r.dword); };
+    logf("replay tab: summary pill: middle piece shown %d, sequence %d, pattern %d", num("get_ActualVisible") & 1, num("get_UVSequenceNo"),
+         num("get_UVPatternNo"));
 }
 // A text of the summary, once per copy: the game's place (its left middle), alignment, region, font, shadow and glow,
 // at the panel's scale. A Text has no Scale (only Panels do: ui_set_scale finds no get_Scale on it), so every size is
-// written scaled: the font (23 x 0.81 = 18.6), the region, the shadow's distance and blur, the glow's blur.
+// written scaled: the font (23 x 0.81 = 18.6), the title's region (a line's is wider than any line: kSumDrawRegionW), the
+// shadow's distance and blur, the glow's blur.
 void style_sum_text(void* t, bool head) {
     const TextLook& k = head ? kSumTitleLook : kSumLineLook;
     const float s = kSumScale;
     set_enum(t, "set_ControlPoint(via.gui.ControlPoint)", kLeftCenter);
     set_enum(t, "set_PageAlignment(via.gui.PageAlignment)", kLeftCenter);
-    A()->ui_set_region_size(C(), t, (head ? kSumTitleRegionW : kSumRegionW) * s, (head ? kSumTitleRegionH : kSumRegionH) * s);
+    A()->ui_set_region_size(C(), t, head ? kSumTitleRegionW * s : kSumDrawRegionW, (head ? kSumTitleRegionH : kSumRegionH) * s);
     const float font = (head ? kFontSumTitle : kFontSumLine) * s;
     A()->ui_set_font_size(C(), t, font, font);
     set_enum(t, "set_FontSlot(via.gui.FontSlot)", kSumFontSlot);
-    set_enum(t, "set_AutoRegionFit(System.Boolean)", 1);
+    set_enum(t, "set_AutoRegionFit(System.Boolean)", 0);   // never squeezed (the game's is on): a long line is cut (put_line_text)
     set_enum(t, "set_Bold(System.Boolean)", 0);
     set_enum(t, "set_ShadowEnable(System.Boolean)", 1);
     uint32_t shadow = k.shadow;
@@ -2054,43 +1946,51 @@ void style_sum_text(void* t, bool head) {
     }
     set_priority(t, kPrioText);
 }
-// The width a line drew at, in screen pixels: its natural width (AutoRegionFit shrinks a text wider than its region to the
-// region: then region / its fit scale), else its display size; -1 unknown
-float drawn_width(void* t, float region) {
-    Obj* o = static_cast<Obj*>(t);
-    float sc[2] = { 1, 1 }, ds[2] = { -1, -1 };
-    if (auto r = call(o, "get_AutoRegionFitScale"); !r.exception_thrown) std::memcpy(sc, r.bytes.data(), sizeof sc);
-    if (sc[0] > 0.01f && sc[0] < 0.999f) return region / sc[0];
-    if (auto r = call(o, "get_DisplaySize"); !r.exception_thrown) std::memcpy(ds, r.bytes.data(), sizeof ds);
+// A line's real width, in screen pixels (AutoRegionFit is off and its region far wider than any line: nothing squeezes or
+// clips it): its display size; -1 unknown
+float drawn_width(void* t) {
+    float ds[2] = { -1, -1 };
+    if (auto r = call(static_cast<Obj*>(t), "get_DisplaySize"); !r.exception_thrown) std::memcpy(ds, r.bytes.data(), sizeof ds);
     return ds[0];
 }
-// A line's fit (per copy): the text it shows, the bytes of it kept (then "..."), the frame that was written
-struct SumFit { std::string full; size_t len = 0; uint32_t since = 0; };
+// A line's fit (per copy): the text it shows, the bytes of it kept (then "..."), the frame that was written, its cut settled
+struct SumFit { std::string full; size_t len = 0; uint32_t since = 0, born = 0; bool settled = false; };
 std::map<std::string, SumFit> g_sum_fit;
-// A line: `text` at the game's size, cut with "..." when it is wider than its region, as measured on what the game drew
-// (the layout is the game's: measured from the next frame on; a new cut, measured again). Always written as text, never
-// by a message id: a copy shows one line then another, and a text written over a message id leaves the id behind, so the
-// core's compare would skip the same id later and keep the old text (the stage agent's finding, 05/11).
-void put_line_text(void* t, const std::string& name, const std::string& text) {
+// A line: `text` at the game's size, never squeezed: cut with "..." when wider than the game's region (320 x 0.81), as measured
+// on what the game laid out (from the next frame on; a new cut, measured again). Returns true once its cut is settled: until
+// then it is kept off the screen (a short line fits whatever its letters: settled at once, nothing blinks). Always written as
+// text, never by a message id: a copy shows one line then another, and a text written over a message id leaves the id
+// behind, so the core's compare would skip the same id later and keep the old text (the stage agent's finding, 05/11).
+bool put_line_text(void* t, const std::string& name, const std::string& text) {
     const float region = kSumRegionW * kSumScale;
     SumFit& f = g_sum_fit[name];
-    if (f.full != text || f.since == 0) { f.full = text; f.len = text.size(); f.since = g_frame; }
+    if (f.full != text || f.since == 0) {
+        f.full = text; f.len = text.size(); f.since = f.born = g_frame;
+        f.settled = text.size() <= kSumAlwaysFits;
+    }
     A()->ui_set_text(C(), t, cut_utf8(f.full, f.len).c_str());
-    if (g_frame < f.since + 2) { g_dirty = true; return; }
-    const float drawn = drawn_width(t, region);
-    if (drawn < 0 || drawn <= region + 0.5f) return;
+    if (f.settled) return true;
+    g_dirty = true;
+    if (g_frame < f.since + kSumLayoutFrames) return false;
+    const float drawn = drawn_width(t);
+    if (drawn <= 0 && g_frame - f.born < kSumMeasureMax) return false;   // not laid out yet
     const size_t next = fit_length(f.len, drawn, region);
-    if (next != f.len) { f.len = next; f.since = g_frame; g_dirty = true; }
+    if (drawn > 0 && next != f.len) { f.len = next; f.since = g_frame; return false; }
+    f.settled = true;
+    logf("replay tab: summary line \"%s\": %.0f px wide (region %.0f), %zu of %zu bytes", cut_utf8(f.full, f.len).c_str(), drawn, region, f.len,
+         f.full.size());
+    return true;
 }
 void put_sum_text(void* title, const std::string& name, bool head, const std::string& text, float x, float y, uint32_t col, bool on) {
     void* t = copy_of(title, name);
     if (!t) return;
     if (on) {
         if (g_styled.insert(reinterpret_cast<uintptr_t>(t)).second) style_sum_text(t, head);
+        bool settled = true;
         if (head) A()->ui_set_text(C(), t, text.c_str());
-        else put_line_text(t, name, text);
+        else settled = put_line_text(t, name, text);
         A()->ui_set_color(C(), t, col);
-        place(t, x, y);
+        place(t, settled ? x : kSumOffScreen, y);
     }
     show(t, on);
 }
@@ -2098,11 +1998,7 @@ void put_sum_text(void* title, const std::string& name, bool head, const std::st
 // summary_layout puts them
 struct SumItem { SumKind kind; std::string text; };
 void render_summary(void* title, bool on, const char* heading, const std::vector<SumItem>& items) {
-    style_pill(title);
-    if (void* c = copy_of(title, "e_ro_pill")) {
-        if (on) place(c, kSumX, kSumY);
-        show(c, on);
-    }
+    put_pill(title, on);
     if (on) log_pill(title);
     put_sum_text(title, "e_ro_sumtitle", true, heading, sum_x(kSumTitleX), sum_y(kSumTitleY), kColSumTitle, on);
     std::vector<SumKind> kinds;
@@ -2230,7 +2126,7 @@ void render(Obj* main) {
     const int row = level == kLevelStage ? 1 : level == kLevelGrid ? 0 : g_list_row;
     header(main, f != nullptr);
     set_desc(f ? kDescPage : stage ? kDescStage : kDescGrid);
-    render_list(title, f == nullptr, row, level == kLevelGrid || level == kLevelStage, stage);
+    render_list(title, f == nullptr, row, level == kLevelGrid || level == kLevelStage);
     render_grid(title, f == nullptr && !stage, level == kLevelGrid);
     render_stage(title, f == nullptr && stage, level == kLevelStage);
     render_page(title, f);
