@@ -344,6 +344,10 @@ namespace preview {
 constexpr int kRoomType = 5;                      // app.worldtour.CaptureRoomObserver.CaptureRoomType.BattleSettingFighter
 constexpr int kStateReady = 6;                    // app.worldtour.CaptureRoomFighter.State when drawn in Battle Settings
 constexpr uint32_t kSettle = 15, kShowAfter = 8, kTimeout = 600, kPollEvery = 5;
+// The room given back lives on a frame or two: its fighter (same character, maybe the same colour) is not the one asked.
+// A fighter counts only kFresh frames after the request, and wearing the costume asked (its VisualId, the costume number
+// for every outfit seen on 05/11) or, failing that, kVisualWait frames after it.
+constexpr uint32_t kFresh = 20, kVisualWait = 150;
 constexpr int kTries = 3;
 const char* const kRtt = "Product/GUI/menu/ui91000/ui91060/RTT_MatchingFighterSetting.rtex";
 
@@ -534,7 +538,9 @@ void frame() {
     }
     int fid = 0, col = -1, vis = -1, state = -1;
     const bool has = fighter_state(g_ctrl, &fid, &col, &vis, &state);
-    const bool now = has && fid == g_asked.fid && col == g_asked.col && state == kStateReady && g_activated;
+    const uint32_t since = g_frame - g_asked_at;
+    const bool fresh = since >= kFresh && (vis == g_asked.cos || since >= kVisualWait);
+    const bool now = has && fresh && fid == g_asked.fid && col == g_asked.col && state == kStateReady && g_activated;
     if (now && !g_ready) {
         if (!g_ready_since) g_ready_since = g_frame;
         if (g_frame - g_ready_since >= kShowAfter) {
@@ -917,7 +923,15 @@ void render(Obj* main) {
     const int oi = f ? outfit_index(*f, c) : -1;
     put_text(title, "e_ro_pname", f ? grid_caption(f->name) : "", kRowX + 20, kRowY - 80, kFontName, kColText, f != nullptr);
     const char* labels[kPanelRows] = { "Outfit Settings", "Costume", "Color" };
-    std::string values[kPanelRows] = { c.forced ? "On" : "Off", oi >= 0 ? f->outfits[static_cast<size_t>(oi)].name : "-",
+    // a long mod name is cut so that it stays inside its row (the grid starts right after it)
+    auto fit = [](std::string v) {
+        constexpr size_t kMax = 18;
+        if (v.size() <= kMax) return v;
+        size_t cut = kMax - 1;
+        while (cut > 0 && (static_cast<unsigned char>(v[cut]) & 0xC0) == 0x80) --cut;   // not inside a UTF-8 sequence
+        return v.substr(0, cut) + "...";
+    };
+    std::string values[kPanelRows] = { c.forced ? "On" : "Off", oi >= 0 ? fit(f->outfits[static_cast<size_t>(oi)].name) : "-",
                                        c.forced ? color_label(c.color) : "-" };
     for (int r = 0; r < kPanelRows; ++r) {
         const float y = kRowY + r * kRowStep;
