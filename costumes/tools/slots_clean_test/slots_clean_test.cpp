@@ -869,6 +869,177 @@ static int run_row_test(const char* build, const char* work, const char* game, c
         remove_tree(oroot.substr(0, oroot.size() - 1));
     }
 
+    printf("[25] several mods in one sub-folder of a character folder: handled together, retouches included\n");
+    {
+        const std::string mods = g_row_game + "\\reframework\\costume_mods\\", bison = mods + "M. Bison\\";
+        const std::string nsfw_root = g_row_game + "\\reframework\\costume_mods_nsfw\\";
+        const std::string zdir = g_work + "\\zz_zips\\";
+        // Retouches of M. Bison, as RE4R Wesker and Krauser Hair are: meshes only, made of the game's own (not its bytes)
+        const auto bscene = game_bytes("natives/stm/product/charparam/esf/esf026/esf026v00.scn.20");
+        const auto b2scene = game_bytes("natives/stm/product/charparam/esf/esf026/esf026v01.scn.20");
+        std::string body_p, hair_p, head_p, body2_p, unused;
+        body_of(bscene, "esf026/001/01/", body_p, unused);
+        body_of(bscene, "esf026/001/02/", hair_p, unused);
+        body_of(bscene, "esf026/000/00/", head_p, unused);
+        body_of(b2scene, "esf026/002/01/", body2_p, unused);
+        const auto body0 = game_bytes(body_p), hair0 = game_bytes(hair_p), head0 = game_bytes(head_p), body20 = game_bytes(body2_p);
+        check(!body0.empty() && !hair0.empty() && !head0.empty() && !body20.empty(),
+              "M. Bison's Outfit 1 body and hair, his head, his Outfit 2 body read from the game");
+        using Files = std::vector<std::pair<std::string, std::vector<uint8_t>>>;
+        auto changed = [](std::vector<uint8_t> d, uint8_t x) { if (!d.empty()) d.back() ^= x; return d; };
+        const Files body = {{body_p, changed(body0, 0x21)}};
+        const Files body_b = {{body_p, changed(body0, 0x42)}};
+        const Files both = {{body_p, changed(body0, 0x63)}, {body2_p, changed(body20, 0x63)}};
+        const Files hair = {{hair_p, changed(hair0, 0x21)}, {head_p, changed(head0, 0x21)}};
+        const Files hair_b = {{hair_p, changed(hair0, 0x42)}};
+        const Files head = {{head_p, changed(head0, 0x42)}};
+        auto put_mod = [&](const std::string& dir, const std::string& name, const Files& files, const std::string& ini = {}) {
+            put(dir + "\\modinfo.ini", "name=" + name + "\r\n" + ini);
+            for (auto& [p, d] : files) put_bin(dir + "\\" + win(p), d);
+        };
+        // A .zip of a mod folder (its folder at the top of the archive, as these mods ship), by Windows' own tar
+        auto zip_of = [&](const std::string& zip, const std::string& name) {
+            make_dirs(zip);
+            system(("cmd /c \"\"%SystemRoot%\\System32\\tar.exe\" -a -cf \"" + zip + "\" -C \"" + zdir.substr(0, zdir.size() - 1) + "\" \"" + name + "\"\"").c_str());
+            check(exists(zip), "a test archive made");
+            remove_tree(zdir.substr(0, zdir.size() - 1));
+        };
+        auto put_zip = [&](const std::string& zip, const std::string& name, const Files& files) {
+            put_mod(zdir + name, name, files);
+            zip_of(zip, name);
+        };
+        int layout = 0;
+        auto clean = [&]() {   // (each layout's log is kept: row_25_<n>.txt)
+            CopyFileA((g_work + "\\row_costume.txt").c_str(), (g_work + "\\row_25_" + std::to_string(layout++) + ".txt").c_str(), FALSE);
+            remove_tree(bison.substr(0, bison.size() - 1));
+            remove_tree(nsfw_root + "M. Bison");
+        };
+        auto options = [&]() { return slurp(data_dir + "\\costume_options.json"); };
+        auto outfits = [&]() { return slurp(data_dir + "\\outfits.json"); };
+        auto no_game_options = [&](const char* what) {
+            run_loader("costume");
+            expect_said("costume", "Up to date (fingerprint match", false);
+            expect_said("costume", "slots checked, 0 left out");
+            expect_said("costume", "retouch M. Bison", false);
+            const bool none = !has(options(), "esf026/game ");
+            if (!none) printf("    %s: something of the group is on a game outfit of M. Bison\n", what);
+            check(none, what);
+        };
+        auto game_options = [&](const char* what) {
+            const bool got = has(options(), "esf026/game outfit 1");
+            if (!got) printf("    %s: no option on M. Bison's Outfit 1\n", what);
+            check(got, what);
+        };
+        const char* together = "2 mods, handled together";
+
+        clean();
+        put_zip(bison + "ZZ Group\\ZZ Hair.zip", "ZZ Hair", hair);
+        put_zip(bison + "ZZ Group\\ZZ Body.zip", "ZZ Body", body);
+        no_game_options("two archives, one with a body mesh: nothing on a game outfit");
+        expect_said("costume", "sub-folder ZZ Group: 2 mods, handled together");
+        expect_said("costume", "ZZ Body: 1 add-on as runtime options (ZZ Hair)");
+        expect_said("costume", "put with its add-ons in one sub-folder: worn by default");
+        check(has(outfits(), "\"label\": \"ZZ Body\"") && !has(outfits(), "\"label\": \"ZZ Hair\""), "one outfit, the body's; none for the hair");
+        check(has(options(), "\"ZZ Hair\""), "the hair is an option");
+
+        clean();
+        put_mod(bison + "ZZ Group\\Body", "ZZ Body", body);
+        put_mod(bison + "ZZ Group\\Hair", "ZZ Hair", hair);
+        no_game_options("two folder mods, one with a body mesh: nothing on a game outfit");
+        expect_said("costume", together);
+        expect_said("costume", "ZZ Body: 1 add-on as runtime options (ZZ Hair)");
+
+        clean();
+        put_mod(bison + "ZZ Two\\A", "ZZ Body A", body);
+        put_mod(bison + "ZZ Two\\B", "ZZ Body B", body_b);
+        no_game_options("two mods with a body mesh: nothing on a game outfit");
+        expect_said("costume", together);
+        expect_said("costume", "versions of one archive");
+        check(has(options(), "\"ZZ Body B\""), "the second one is an option of the first (Version)");
+
+        clean();
+        put(zdir + "ZZ Modular\\Menu\\modinfo.ini", "name=ZZ Menu\r\nDummyMod=True\r\n");
+        put_mod(zdir + "ZZ Modular\\A", "ZZ Pick A", body, "AddonFor=ZZ Menu\r\n");
+        put_mod(zdir + "ZZ Modular\\B", "ZZ Pick B", body_b, "AddonFor=ZZ Menu\r\n");
+        zip_of(bison + "ZZ Modular\\ZZ Modular.zip", "ZZ Modular");
+        put_zip(bison + "ZZ Modular\\ZZ Hair.zip", "ZZ Hair", hair);
+        no_game_options("a modular mod and an add-on: the add-on stays in the sub-folder");
+        expect_said("costume", "sub-folder ZZ Modular: 2 mods, handled together");
+        expect_said("costume", "for esf026 Outfit", false);
+        check(has(options(), "\"ZZ Hair\""), "the add-on is an option of the sub-folder's outfit");
+
+        clean();
+        put_mod(bison + "ZZ Both\\Both", "ZZ Both", both);
+        put_mod(bison + "ZZ Both\\Head", "ZZ Head", head);
+        no_game_options("an outfit of two costumes and an add-on of neither of their folders: nothing on a game outfit");
+        expect_said("costume", together);
+        expect_said("costume", "applied to the original outfit it modifies", false);
+
+        clean();
+        put_mod(bison + "ZZ Addons\\A", "ZZ Hair A", hair);
+        put_mod(bison + "ZZ Addons\\B", "ZZ Hair B", hair_b);
+        run_loader("costume");
+        expect_said("costume", "handled together", false);
+        expect_said("costume", "add-on M. Bison/ZZ Addons/A: applied to the original outfit it modifies");
+        expect_said("costume", "add-on M. Bison/ZZ Addons/B: applied to the original outfit it modifies");
+
+        clean();
+        put_mod(bison + "ZZ Body", "ZZ Body", body);
+        put_mod(bison + "ZZ Hair", "ZZ Hair", hair);
+        run_loader("costume");
+        expect_said("costume", "handled together", false);
+        expect_said("costume", "retouch M. Bison/ZZ Body: meshes / textures only");
+        expect_said("costume", "retouch M. Bison/ZZ Hair: meshes / textures only");
+        game_options("two folder mods loose at character level: still options of the game outfits");
+        check(!has(outfits(), "\"label\": \"ZZ Body\""), "and no outfit");
+
+        clean();
+        put_zip(bison + "ZZ Body.zip", "ZZ Body", body);
+        put_zip(bison + "ZZ Hair.zip", "ZZ Hair", hair);
+        run_loader("costume");
+        expect_said("costume", "handled together", false);
+        expect_said("costume", "retouch M. Bison/ZZ Body.zip/ZZ Body: meshes / textures only");
+        expect_said("costume", "retouch M. Bison/ZZ Hair.zip/ZZ Hair: meshes / textures only");
+        game_options("two archives loose at character level: still options of the game outfits");
+
+        clean();
+        put_zip(bison + "ZZ Hair.zip", "ZZ Hair", hair);
+        put_zip(bison + "ZZ Lone\\ZZ Body.zip", "ZZ Body", body);
+        run_loader("costume");
+        expect_said("costume", "ZZ Body: alone in its sub-folder ZZ Lone: its own outfit (no merge)");
+        expect_said("costume", "handled together", false);
+        expect_said("costume", "retouch M. Bison/ZZ Hair.zip/ZZ Hair: meshes / textures only");
+        check(has(outfits(), "\"label\": \"ZZ Body\""), "alone in its sub-folder: its own outfit");
+        game_options("the loose hair: still an option of the game outfits");
+        expect_said("costume", "ZZ Body (ZZ Hair)", false);
+
+        clean();
+        put_mod(bison + "ZZ Bundle\\A", "ZZ Bundle A", body, "NameAsBundle=ZZ Bundle\r\n");
+        put_mod(bison + "ZZ Bundle\\B", "ZZ Bundle B", body_b, "NameAsBundle=ZZ Bundle\r\n");
+        run_loader("costume");
+        expect_said("costume", "handled together", false);
+        expect_said("costume", "retouch M. Bison/ZZ Bundle/A: meshes / textures only");
+        game_options("the options of one unpacked bundle: still a retouch");
+
+        clean();
+        put_mod(nsfw_root + "M. Bison\\ZZ Group\\Body", "ZZ Body", body);
+        put_mod(nsfw_root + "M. Bison\\ZZ Group\\Hair", "ZZ Hair", hair);
+        no_game_options("a sub-folder of costume_mods_nsfw: nothing on a game outfit");
+        expect_said("costume", together);
+        check(has(outfits(), "\"label\": \"ZZ Body\""), "the NSFW sub-folder's outfit");
+
+        clean();
+        put_mod(bison + "ZZ Roots\\Body", "ZZ Body", body);
+        put_mod(nsfw_root + "M. Bison\\ZZ Roots\\Hair", "ZZ Hair", hair);
+        run_loader("costume");
+        expect_said("costume", "handled together", false);
+        expect_said("costume", "ZZ Body: alone in its sub-folder ZZ Roots: its own outfit (no merge)");
+        expect_said("costume", "ZZ Hair: alone in its sub-folder ZZ Roots, but a pure add-on");
+
+        clean();
+        run_loader("costume");  expect_row("M. Bison's fixtures removed", "1M 2S 3C");
+    }
+
     if (previous) {
         printf("[23] an install built by the previous build: this one says Up to date; built afresh, the same pak byte for byte\n");
         remove_tree(mroot.substr(0, mroot.size() - 1));
