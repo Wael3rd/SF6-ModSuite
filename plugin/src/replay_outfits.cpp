@@ -26,6 +26,7 @@ const char* kRegistry = "reframework/data/SF6_Costumes_Data/registry.json";
 std::mutex g_mx;                                    // everything below: the hooks may run on any thread
 std::vector<RegSlot> g_reg;   uint64_t g_reg_stamp = 0;
 std::map<int, Forced> g_forced; uint64_t g_forced_stamp = 0;
+int g_stage = -1;                                   // the forced stage (StageDesc.StageId), -1: the replay's own
 std::map<std::string, Entry> g_journal; uint64_t g_journal_stamp = 0;
 std::string g_last_written;                         // the last journal key written (one line per match)
 std::mutex g_list_mx;                               // g_list_methods (read before g_mx is taken)
@@ -47,11 +48,14 @@ void refresh() {
     }
     if (uint64_t s = stamp(kOutfits); s != g_forced_stamp) {
         std::map<int, Forced> f;
-        if (!s) { g_forced.clear(); g_forced_stamp = 0; }
-        else if (parse_outfits(read_file(kOutfits), f)) {
+        int stage = -1;
+        if (!s) { g_forced.clear(); g_stage = -1; g_forced_stamp = 0; }
+        else if (parse_outfits(read_file(kOutfits), f, &stage)) {
             g_forced = std::move(f);
+            g_stage = stage;
             g_forced_stamp = s;
-            logf("replay outfits: replay_outfits.json read, %zu character%s forced", g_forced.size(), g_forced.size() == 1 ? "" : "s");
+            logf("replay outfits: replay_outfits.json read, %zu character%s forced, stage %s", g_forced.size(),
+                 g_forced.size() == 1 ? "" : "s", stage >= 0 ? std::to_string(stage).c_str() : "the replay's own");
         } else logf("replay outfits: replay_outfits.json unreadable: the last choices kept");   // read again next time
     }
     if (uint64_t s = stamp(kJournal); s != g_journal_stamp) {
@@ -250,6 +254,16 @@ void dress_replay(Obj* map) {
                      recorded[i].color, w.costume, w.color, w.why);
         } else snprintf(b, sizeof b, "%sP%zu F%d c%d/%d (%s)", i ? ", " : "", i + 1, recorded[i].fid, recorded[i].costume, recorded[i].color, w.why);
         line += b;
+    }
+    // The stage: the description's StageDesc.StageId (the replay's ReplayInfo.StageId is left as recorded); the game loads
+    // the stage of the description. Only the stage's look changes: every battle stage is as wide as the others.
+    if (g_stage >= 0) {
+        int32_t recorded_stage = -1;
+        Obj* sd = get_obj(desc, "Stage");
+        if (sd && get_i32(sd, "StageId", recorded_stage)) {
+            if (recorded_stage != g_stage) set_i32(sd, "StageId", g_stage);
+            line += ", stage " + std::to_string(recorded_stage) + " -> " + std::to_string(g_stage);
+        } else line += ", stage: no StageDesc (left alone)";
     }
     logf("replay outfits: replay %s%s: %s", key.c_str(), entry ? " (in the journal)" : "", line.c_str());
 }

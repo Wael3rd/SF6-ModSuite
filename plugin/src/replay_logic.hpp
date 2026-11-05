@@ -4,8 +4,9 @@
 // The data file, read by the replay playback override (another module of this plugin):
 //   reframework/data/SF6_CostumeSlots_data/replay_outfits.json
 //   {"version":1,"fighters":{"<fighter id>":{"mode":"forced","costume":<FighterDesc.Costume>,
-//                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>}}}
-// No entry = Default (the replay's own outfit).
+//                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>}},
+//    "stage":{"mode":"forced","id":<StageDesc.StageId>}}
+// No entry = Default (the replay's own outfit); no "stage" = the replay's own stage.
 #pragma once
 
 #include "json.hpp"
@@ -48,6 +49,12 @@ struct Choice {
 
 using Choices = std::map<int, Choice>;   // fighter id -> forced choice (Default fighters are absent)
 
+struct StageChoice {
+    bool forced = false;              // false = Default (the replay's recorded stage)
+    int id = 0;                       // StageDesc.StageId (the game's stage table ManageId)
+    bool operator==(const StageChoice& o) const { return forced == o.forced && (!forced || id == o.id); }
+};
+
 // The outfit list of a fighter: game outfits first in costume order, then extra outfits by name (case-insensitive),
 // ties by costume number. Outfits without any colour are dropped.
 inline void sort_outfits(std::vector<Outfit>& v) {
@@ -80,8 +87,9 @@ inline int color_on(const Outfit& o, int keep) {
 }
 
 // Left / Right on a row: Default -> outfit 0 -> ... -> last outfit -> Default (dir +1), the other way for -1.
-// The colour is kept when the new outfit has it.
-inline Choice cycle_outfit(const Fighter& f, const Choice& c, int dir) {
+// keep_color: the colour is kept when the new outfit has it; otherwise (a costume change on the page) the outfit's first
+// colour, "01".
+inline Choice cycle_outfit(const Fighter& f, const Choice& c, int dir, bool keep_color = true) {
     const int n = static_cast<int>(f.outfits.size());
     if (n == 0) return Choice{};
     int pos = outfit_index(f, c) + 1;                       // 0 = Default, 1..n = outfits
@@ -92,7 +100,7 @@ inline Choice cycle_outfit(const Fighter& f, const Choice& c, int dir) {
     r.forced = true;
     r.costume = o.costume;
     r.mod_id = o.mod_id;
-    r.color = color_on(o, c.forced ? c.color : 0);
+    r.color = color_on(o, c.forced && keep_color ? c.color : 0);
     return r;
 }
 
@@ -131,7 +139,7 @@ inline std::string row_text(const Fighter& f, const Choice& c) {
 }
 
 // ---- the file ------------------------------------------------------------------------------------------------------------
-inline std::string to_json(const Choices& cs) {
+inline std::string to_json(const Choices& cs, const StageChoice& stage = {}) {
     std::string o = "{\n    \"version\": 1,\n    \"fighters\": {";
     bool first = true;
     for (const auto& [fid, c] : cs) {
@@ -142,19 +150,31 @@ inline std::string to_json(const Choices& cs) {
         if (!c.mod_id.empty()) o += ", \"mod_id\": \"" + json_escape(c.mod_id) + "\"";
         o += ", \"color\": " + std::to_string(c.color) + "}";
     }
-    o += first ? "}\n}\n" : "\n    }\n}\n";
+    o += first ? "}" : "\n    }";
+    if (stage.forced) o += ",\n    \"stage\": {\"mode\": \"forced\", \"id\": " + std::to_string(stage.id) + "}";
+    o += "\n}\n";
     return o;
 }
 
 // false: not a file of this format (out left empty). Entries that are not "forced" or lack a costume are skipped.
-inline bool from_json(const std::string& text, Choices& out) {
+// `stage` (when given): the forced stage, Default when absent or not "forced".
+inline bool from_json(const std::string& text, Choices& out, StageChoice* stage = nullptr) {
     out.clear();
+    if (stage) *stage = StageChoice{};
     Json j;
     if (!json_parse(text, j) || j.kind != Json::Object) return false;
     const Json* v = j.get("version");
     if (!v || v->as_int(-1) != 1) return false;
     const Json* fs = j.get("fighters");
     if (!fs || fs->kind != Json::Object) return false;
+    if (const Json* st = j.get("stage"); stage && st && st->kind == Json::Object) {
+        const Json* mode = st->get("mode");
+        const Json* id = st->get("id");
+        if (mode && mode->as_str() == "forced" && id && id->kind == Json::Number && id->as_int(-1) >= 0) {
+            stage->forced = true;
+            stage->id = static_cast<int>(id->as_int());
+        }
+    }
     for (const auto& [key, e] : fs->obj) {
         if (e.kind != Json::Object) continue;
         const Json* mode = e.get("mode");
@@ -201,6 +221,16 @@ inline std::string face_path(int fid) {
                   fid >= 30 ? "characterselect" : "caracterselect", fid);
     return b;
 }
+// A stage's picture, as the game's Stage Settings shows it (thumbnail and banner are the same texture): the stage
+// table's ManageId / 100 on four digits (40000 -> ess0400, 400000 -> ess4000, 0 -> ess0000, the Training Room)
+inline std::string stage_image_path(int id) {
+    char b[160];
+    std::snprintf(b, sizeof b, "Product/GUI/data/Area_Image/ess/ess%04d_00/tex_StageImage_ess%04d_00_IM.tex", id / 100, id / 100);
+    return b;
+}
+// The picture of the Default cell: the game's own "no stage in particular" globe (its Random cell's)
+constexpr const char* kStageDefaultImage = "Product/GUI/data/Area_Image/random/tex_random_IM.tex";
+
 // The grid's caption: the name in capitals ("C. VIPER")
 inline std::string grid_caption(const std::string& name) {
     std::string r = name;

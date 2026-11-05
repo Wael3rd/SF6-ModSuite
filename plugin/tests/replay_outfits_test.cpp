@@ -85,6 +85,12 @@ int main() {
     check(!parse_outfits("{\"version\":1,\"fighters\":{", kept) && kept.size() == 2, "a half-written file: refused, the last choices kept");
     std::map<int, Forced> none;
     check(parse_outfits("{\"version\":1}", none) && none.empty(), "no fighters: nothing forced");
+    int stage = 7;
+    check(parse_outfits("{\"version\":1,\"fighters\":{},\"stage\":{\"mode\":\"forced\",\"id\":40000}}", none, &stage) && stage == 40000,
+          "a forced stage is read");
+    check(parse_outfits("{\"version\":1,\"fighters\":{}}", none, &stage) && stage == -1, "no stage entry: the replay's own stage");
+    check(parse_outfits("{\"version\":1,\"stage\":{\"mode\":\"auto\",\"id\":3}}", none, &stage) && stage == -1,
+          "a stage entry that is not forced: the replay's own stage");
 
     // ---- the journal ----
     Entry e;

@@ -64,6 +64,12 @@ int main() {
     Fighter empty;
     empty.fid = 99;
     check(!cycle_outfit(empty, Choice{}, +1).forced, "a fighter without outfits stays Default");
+    Choice k = cycle_outfit(f, Choice{}, +1);              // Outfit 1
+    k.color = 5;
+    Choice k2 = cycle_outfit(f, k, +1, false);
+    check(k2.costume == 1 && k2.color == 0, "a costume change on the page: the colour goes back to 01");
+    k2 = cycle_outfit(f, cycle_outfit(f, k2, +1, false), +1, false);   // Aloha Ryu (colours from 0)
+    check(k2.color == 0, "the colour reset again on the next costume");
 
     // colour cycling
     Choice d;
@@ -108,6 +114,23 @@ int main() {
                     "\"8\":{\"mode\":\"forced\",\"costume\":2,\"color\":3}}}", back2) &&
           back2.size() == 1 && back2[8].costume == 2 && back2[8].color == 3,
           "entries not forced, or with a bad id, are skipped");
+    // the stage
+    StageChoice st;
+    st.forced = true; st.id = 40000;
+    const std::string with_stage = to_json(cs, st);
+    StageChoice st_back;
+    Choices back3;
+    check(from_json(with_stage, back3, &st_back) && st_back == st && back3.size() == 2, "a forced stage survives the round trip");
+    check(with_stage.find("\"stage\": {\"mode\": \"forced\", \"id\": 40000}") != std::string::npos, "the stage entry as written");
+    check(to_json(cs) == to_json(cs, StageChoice{}) && to_json(cs).find("stage") == std::string::npos, "Default stage: no entry");
+    check(from_json(to_json(none, st), back3, &st_back) && back3.empty() && st_back.forced && st_back.id == 40000,
+          "a forced stage with no forced fighter");
+    check(from_json("{\"version\":1,\"fighters\":{},\"stage\":{\"mode\":\"auto\",\"id\":3}}", back3, &st_back) && !st_back.forced,
+          "a stage entry that is not forced: Default");
+    check(stage_image_path(40000) == "Product/GUI/data/Area_Image/ess/ess0400_00/tex_StageImage_ess0400_00_IM.tex" &&
+          stage_image_path(400000) == "Product/GUI/data/Area_Image/ess/ess4000_00/tex_StageImage_ess4000_00_IM.tex" &&
+          stage_image_path(0) == "Product/GUI/data/Area_Image/ess/ess0000_00/tex_StageImage_ess0000_00_IM.tex",
+          "stage picture paths (the game's Stage Settings')");
 
     // cursor and window
     check(move_cursor(0, -1, 32) == 31 && move_cursor(31, 1, 32) == 0 && move_cursor(4, 1, 32) == 5, "Up / Down wrap");

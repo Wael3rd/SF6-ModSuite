@@ -82,7 +82,7 @@ constexpr uint32_t kPollEvery = 15;
 constexpr int kMaxRefused = 3;
 constexpr uint32_t kActFlags = 2 | 8;             // app.InputDigitalFlag Trigger | Repeat
 constexpr uint32_t kDirTabBack = 16, kDirTabNext = 32;   // app.UIPartsItemDirection
-constexpr const char* kTabLabel = "Replay Outfits";
+constexpr const char* kTabLabel = "Settings";
 // layout, root space (1920 x 1080; c_title sits at the root's origin): Battle Settings > Other > Opponent Outfit
 // Settings' own places (read 05/11)
 constexpr int kCols = 4, kVisRows = 8, kCells = kCols * kVisRows, kRows = 3;
@@ -90,10 +90,20 @@ constexpr float kGridX = 760, kGridY = 184, kCellW = 160, kCellH = 72, kStepX = 
 // the option list: its row 640 x 58 at (60, 150) (p_Group_0_v > p_GroupItem_*); the divider: the line 703 x 5 at
 // (739, 150) turned 90 degrees, colour 80FFFFFF; the grid's panel 960 x 702 at (731, 150), 66000000, its focus tint
 // 1CE98A31 while the grid has the focus (p_FighterSelectSimple_cos_h)
-constexpr float kListX = 60, kListY = 150, kListW = 640;
+constexpr float kListX = 60, kListY = 150, kListW = 640, kListStep = 70;
 constexpr float kLineX = 739, kLineY = 150, kLineLen = 703, kLineW = 5;
 constexpr float kPanelX = 731, kPanelY = 150, kPanelW = 960, kPanelH = 702;
-constexpr const char* kListLabel = "Replay Outfit Settings";
+constexpr float kLineLenStage = 706, kPanelHStage = 710;   // Stage Settings' own panel and divider (c_StageSelect)
+constexpr int kListRows = 2;                                // the option rows: Replay Outfit Settings, Stage Settings
+const char* const kListLabels[kListRows] = { "Replay Outfit Settings", "Stage Settings" };
+// Stage Settings' page (c_StageSelect > p_StageSelectSimple_0_h, read 05/11): the banner 776 x 194 at (760, 184), its name
+// centred on (1356, 359); the grid 3 columns of 252 x 63 cells, 262 x 73 apart from (760, 404), 6 rows shown; its scroll
+// bar 6 x 430 at (1546, 404)
+constexpr float kBannerX = 760, kBannerY = 184, kBannerW = 776, kBannerH = 194, kStageNameX = 1356, kStageNameY = 359;
+constexpr float kSGridX = 760, kSGridY = 404, kSCellW = 252, kSCellH = 63, kSStepX = 262, kSStepY = 73;
+constexpr float kSBarX = 1546, kSBarY = 404, kSBarW = 6, kSBarH = 430;
+constexpr int kSCols = 3, kSVisRows = 6, kSCells = kSCols * kSVisRows;
+constexpr float kFontStageName = 32, kFontStageCell = 24, kSMark = 14;
 // the character's page: its rows (p_Spin_*) 740 x 58, 70 apart from (156, 210); in a row, the label's left middle at
 // (23, 29), the value's centre at (524, 29), the arrows' centres at (348, 29) and (700, 29); label font 25, value 23
 constexpr float kRowX = 156, kRowY = 210, kRowW = 740, kRowH = 58, kRowStep = 70, kRowMatH = 280;
@@ -124,12 +134,16 @@ constexpr uint32_t kColDarkenRow = 0x33000000, kColDarkenOff = 0x80000000;
 // the option row while the grid has the focus (the game's p_GroupItem: SELECT, no blue bar, dark material, its marker)
 constexpr uint32_t kColListMatDecided = 0xE61A1A1A, kColListDefaultDecided = 0x1AFFFFFF, kColListTextDecided = 0xFFF1F1F1;
 constexpr uint32_t kColRowBar = 0xFFD76407, kColRowMarker = 0xFFF0F0F0;   // the blue bar, the marker (the template's is clear)
+constexpr uint32_t kColListMatPlain = 0x05FFFFFF, kColListDefaultPlain = 0x33FFFFFF;   // a plain option row (the game's DEFAULT)
+// the stage grid: the focused cell's blue frame, the chosen cell's yellow corner, the scroll bar (the game's colours)
+constexpr uint32_t kColStageFocus = 0xFFFF8C28, kColStageMark = 0xFF00E6FF, kColScrollTrack = 0x0DCCCCCC, kColScrollThumb = 0xFFF0A040;
 // Draw order: the GUI sorts its elements by Priority (child order only breaks ties): the model and the grid's panel
 // under the cells and rows, pictures and arrows over them, texts on top
 constexpr int kPrioPanel = 1, kPrioModel = 1, kPrioFrame = 2, kPrioImage = 3, kPrioText = 4;
 constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (the cells' pictures are 4:3)
 const char* const kDescGrid = "Set which outfit each character will appear in during replays.";
 const char* const kDescPage = "Set which outfit and color this character will appear in during replays.";
+const char* const kDescStage = "Set which stage is shown during replays.";
 const char* const kRowTemplateAgent = "Resident_Cmn_CertifiedMatch";
 const char* const kArrowTemplateAgent = "StartMenuUI";
 
@@ -160,8 +174,10 @@ Choices g_choices;
 std::map<int, Choice> g_last_on;                  // per character, the outfit it had before being turned Off
 int g_cursor = 0, g_top_row = 0;                  // the focused cell (catalog index), the first grid row shown
 // The page's level, as on Battle Settings > Other: the option row (the grid shown dimmed), the grid, a character's page
-enum Level { kLevelList = 0, kLevelGrid = 1, kLevelPage = 2 };
+// (the stage grid, the second option row's, has the same place as the faces grid)
+enum Level { kLevelList = 0, kLevelGrid = 1, kLevelPage = 2, kLevelStage = 3 };
 std::atomic<int> g_level{ kLevelList };           // the hooks read it
+int g_list_row = 0;                               // the focused option row (0 outfits, 1 stage)
 int g_row = 0;                                    // the character's page's focused row
 bool g_header_hidden = false;                     // the tab bar's pieces hidden for the character's page
 std::string g_desc_game, g_desc_ours;             // the bottom line: the game's text, ours while it shows
@@ -176,6 +192,13 @@ uint32_t g_enter_frame = 0;
 int64_t g_cp_lefttop = -1;                        // via.gui.ControlPoint.LeftTop
 bool g_no_arrows_logged = false;
 std::map<int, void*> g_faces;                     // fighter -> portrait TextureResourceHolder (one reference held)
+// The stages: the cells after Default, their pictures (stage id -> holder; kDefaultTex: the Default cell's), the choice
+struct StageEntry { int id = 0; int sort = 0; bool named = false; uint8_t guid[16] = {}; };
+std::vector<StageEntry> g_stages;
+constexpr int kDefaultTex = -1;
+std::map<int, void*> g_stage_tex;
+StageChoice g_stage;
+int g_stage_cursor = 0, g_stage_top = 0;          // the focused cell (0 = Default), the first grid row shown
 
 // ---- the page's copies, made inside the tab hook (R19) ----
 // Plain controls of the tab bar's screen (no UIParts), the game's row and its plain text, the banner's two arrows
@@ -195,16 +218,24 @@ const std::vector<Copy>& copies() {
     v.push_back({ "e_ro_gfocus", kRect });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cbg", i), kRect });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cimg", i), kImage });
+    v.push_back({ "e_ro_sfocus", kRect });         // the stage grid: the focus frame (under its cell), cells, banner
+    for (int i = 0; i < kSCells; ++i) v.push_back({ cname("simg", i), kImage });
+    v.push_back({ "e_ro_sbanner", kImage });
+    v.push_back({ "e_ro_smark", kRect });          // the chosen stage's corner mark, the scroll bar
+    v.push_back({ "e_ro_sbarbg", kRect });
+    v.push_back({ "e_ro_sbar", kRect });
     v.push_back({ "e_ro_model", kImage });         // the 3D preview: the capture room's render target
     v.push_back({ "e_ro_divider", kLine });
-    v.push_back({ "e_ro_lrow", kRow });            // the option row
+    for (int r = 0; r < kListRows; ++r) v.push_back({ cname("lrow", r), kRow });   // the option rows
     for (int r = 0; r < kRows; ++r) v.push_back({ cname("row", r), kRow });
     for (int r = 0; r < kRows; ++r) { v.push_back({ cname("arl", r), kLeftArrow }); v.push_back({ cname("arr", r), kRightArrow }); }
-    v.push_back({ "e_ro_llbl", kLabel });
+    for (int r = 0; r < kListRows; ++r) v.push_back({ cname("llbl", r), kLabel });
     for (int r = 0; r < kRows; ++r) v.push_back({ cname("rlbl", r), kLabel });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cname", i), kText });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("con", i), kText });
     v.push_back({ "e_ro_name", kText });
+    v.push_back({ "e_ro_sname", kText });          // the banner's stage name, the Default cell's label
+    v.push_back({ "e_ro_sdeflbl", kText });
     return v;
 }
 
@@ -394,12 +425,101 @@ void build_catalog() {
 
 void load_choices() {
     Choices c;
+    StageChoice st;
     const std::string text = read_file(kFile);
-    if (!text.empty() && !from_json(text, c)) logf("replay tab: %s unreadable, starting from Default", kFile);
+    if (!text.empty() && !from_json(text, c, &st)) logf("replay tab: %s unreadable, starting from Default", kFile);
     g_choices = c;
+    g_stage = st;
 }
 void save_choices() {
-    if (!write_file(kFile, to_json(g_choices))) logf("replay tab: could not write %s", kFile);
+    if (!write_file(kFile, to_json(g_choices, g_stage))) logf("replay tab: could not write %s", kFile);
+}
+
+// ---- the stages ----
+// The stages the page offers, the one place to change when it offers more: for now exactly the list of Battle Settings'
+// Stage Settings, the game's own: app.helper.hGUI.GetStageSelectStageIdList(false, false, false), the list
+// app.UIPartsStageSelectSimple fills its grid from (21 stages, Training Room included, no Random, read 05/11). Without it,
+// the same list rebuilt from the stage table (TableDataManager.GetStages(): the records selectable in Stage Settings,
+// not Battle Hub's, the Random entry left out, in SortIndex order: the same 21, same order). Each one's name: the stage
+// message table's (StageMessageUserDataDict[id].RecordData.StageName.GUID), shown by its message id.
+std::vector<StageEntry> stage_ids_from_table(Obj* tm);
+std::vector<StageEntry> stage_list() {
+    std::vector<StageEntry> out;
+    auto* tm = api().get_managed_singleton("app.TableDataManager");
+    if (TD* hg = api().tdb()->find_type("app.helper.hGUI")) {
+        if (Method* m = method_of(hg, "GetStageSelectStageIdList", 3)) {
+            Obj* ids = call_obj(m, nullptr, { arg_bool(false), arg_bool(false), arg_bool(false) });
+            for (int i = 0, n = list_count(ids); i < n; ++i) {
+                auto r = call(ids, "get_Item", { arg_i32(i) });   // List<UInt32>: the value itself
+                if (r.exception_thrown) { out.clear(); break; }
+                StageEntry s;
+                s.id = static_cast<int>(r.dword);
+                s.sort = i;
+                out.push_back(s);
+            }
+        }
+    }
+    if (out.empty()) out = stage_ids_from_table(tm);
+    Obj* names = tm ? get_obj(tm, "StageMessageUserDataDict") : nullptr;
+    TD* ntd = names ? names->get_type_definition() : nullptr;
+    Method* m_has = ntd ? method_of(ntd, "ContainsKey", 1) : nullptr;
+    Method* m_item = ntd ? method_of(ntd, "get_Item", 1) : nullptr;
+    for (StageEntry& e : out) {
+        if (!m_has || !m_item) break;
+        auto has = call(m_has, names, { arg_i32(e.id) });
+        if (has.exception_thrown || !(has.byte & 1)) continue;
+        Obj* holder = call_obj(m_item, names, { arg_i32(e.id) });
+        Obj* rec = holder ? get_obj(holder, "RecordData") : nullptr;
+        Obj* msg = rec ? get_obj(rec, "StageName") : nullptr;
+        void* g = msg ? field_ptr(msg, "GUID") : nullptr;
+        if (g) { std::memcpy(e.guid, g, 16); e.named = true; }
+    }
+    return out;
+}
+std::vector<StageEntry> stage_ids_from_table(Obj* tm) {
+    std::vector<StageEntry> out;
+    Obj* en = tm ? call_obj(tm, "GetStages") : nullptr;
+    Obj* it = en ? call_obj(en, "GetEnumerator") : nullptr;
+    TD* itd = it ? it->get_type_definition() : nullptr;
+    Method* m_next = itd ? method_of(itd, "MoveNext", 0) : nullptr;
+    Method* m_cur = itd ? method_of(itd, "get_Current", 0) : nullptr;
+    if (!m_next || !m_cur) { logf("replay tab: the stage table could not be read (GetStages)"); return out; }
+    it->add_ref();                                  // held while it is walked (no other reference to it)
+    struct Release { Obj* o; ~Release() { o->release(); } } hold{ it };
+    for (int guard = 0; guard < 500; ++guard) {
+        auto r = call(m_next, it);
+        if (r.exception_thrown || !(r.byte & 1)) break;
+        Obj* rec = call_obj(m_cur, it);
+        uint32_t id = 0;
+        int32_t sort = 0;
+        bool select = false, hub = false;
+        if (!rec || !get_u32(rec, "ManageId", id) || !get_bool(rec, "IsStageSelect", select)) continue;
+        get_bool(rec, "IsBattleHub", hub);
+        get_i32(rec, "SortIndex", sort);
+        if (!select || hub || id == 999999) continue;   // app.UIPartsStageSelectSimple.STAGE_ID_RANDOM
+        StageEntry e;
+        e.id = static_cast<int>(id);
+        e.sort = sort;
+        out.push_back(e);
+    }
+    std::stable_sort(out.begin(), out.end(), [](const StageEntry& a, const StageEntry& b) { return a.sort < b.sort; });
+    return out;
+}
+// The pictures: loaded once per session (the core holds them loading; drawn once ready)
+void load_stage_pictures() {
+    auto load = [](int key, const std::string& path) {
+        if (g_stage_tex.count(key)) return;
+        void* h = nullptr;
+        g_stage_tex[key] = (A()->ui_texture_load(C(), path.c_str(), &h) == SF6CORE_OK) ? h : nullptr;
+    };
+    load(kDefaultTex, kStageDefaultImage);
+    for (const StageEntry& e : g_stages) load(e.id, stage_image_path(e.id));
+}
+// The cell of the stage choice (0: Default; a forced stage no longer listed: Default)
+int stage_cell_of_choice() {
+    if (!g_stage.forced) return 0;
+    for (size_t i = 0; i < g_stages.size(); ++i) if (g_stages[i].id == g_stage.id) return static_cast<int>(i) + 1;
+    return 0;
 }
 
 // The portraits: loaded once per session (the core holds them loading; drawn once ready)
@@ -422,13 +542,17 @@ void load_faces() {
 // Product/GUI/menu/ui91000/ui91060/RTT_MatchingFighterSetting.rtex (Battle Settings' preview texture): a holder of that
 // render target shown on one of our texture copies shows the model. Never CaptureRoomParamBase.ChangeMainCamera: called
 // from the Replays menu it left the main menu's rendering broken (05/11).
-// A change of fighter / outfit / colour: the room given back, and asked again only once it is really gone (no
+// A colour change only: the room's fighter is recoloured in place, CaptureRoomFighter.UpdateFighterColor(colour), the
+// way the game's own page previews a colour (moving over its colour boxes, the room's controller and fighter stay the same
+// objects, state 6, its ColorId field untouched; the call recolours that same fighter at once: read 05/11). A colour the
+// fighter has no data for (IsExistColorData false) falls back to a new room.
+// A change of fighter / outfit: the room given back, and asked again only once it is really gone (no
 // type-5 controller left, about 6 frames), after the choice held still for kSettle frames. Asked in the frame it was given
 // back (as the game's own SetupCaptureRoom does), the old room's controller was reused while its deactivation was still
 // under way: the new fighter loaded right (Luke VisualId 1, folder esf002v01, Outfit 2's meshes esf002_002_*) but the
 // page kept showing Outfit 1, the render target no longer refreshed by the room's camera (Wael 05/11; the same outfit
 // asked in a fresh room drew right). Shown only once the room's fighter is the one asked (fighter, VisualId = the costume
-// number, colour: true of every outfit seen, game and Slots Loader) and ready (CurrentState 6) for kShowAfter frames;
+// number, colour as loaded: true of every outfit seen, game and Slots Loader) and ready (CurrentState 6) for kShowAfter frames;
 // nothing meanwhile and whenever anything fails (kTries failures: no model for the rest of the session). Given
 // back when the character's page goes (back to the grid, tab back, another tab, the screen closed) and when the character
 // is Off: no room nor fighter left behind.
@@ -444,7 +568,9 @@ struct Want { int fid = 0, cos = 0, col = 0; bool operator==(const Want& o) cons
 bool g_off = false;                               // given up for the session (types missing, or kTries failures)
 bool g_ready_types = false;
 Method *m_request = nullptr, *m_deactivate = nullptr, *m_activate = nullptr, *m_list_add = nullptr, *m_list_ctor = nullptr;
+Method *m_recolor = nullptr, *m_has_color = nullptr;   // CaptureRoomFighter.UpdateFighterColor / IsExistColorData
 TD *t_list = nullptr, *t_req = nullptr, *t_ctrl = nullptr, *t_obs = nullptr;
+int g_color_now = 0;                              // the colour the room's fighter shows (loaded, then recoloured)
 Obj* g_rtt = nullptr;                             // RenderTargetTextureResourceHolder, held for the session
 Want g_want, g_asked;                             // what the page shows; what the room was asked for
 uint32_t g_want_since = 0, g_asked_at = 0, g_ready_since = 0, g_poll_at = 0;
@@ -470,6 +596,10 @@ bool types() {
     if (!m_activate && t_ctrl) m_activate = method_of(t_ctrl, "Activate", 3);
     m_list_add = t_list ? method_of(t_list, "Add", 1) : nullptr;
     m_list_ctor = t_list ? t_list->find_method(".ctor(System.Int32)") : nullptr;
+    if (TD* t_f = tdb->find_type("app.worldtour.CaptureRoomFighter")) {   // optional: without them, a colour change reloads
+        m_recolor = method_of(t_f, "UpdateFighterColor", 1);
+        m_has_color = method_of(t_f, "IsExistColorData", 1);
+    }
     g_ready_types = t_obs && t_ctrl && t_req && t_list && m_request && m_deactivate && m_activate && m_list_add && m_list_ctor;
     if (!g_ready_types) {
         g_off = true;
@@ -584,6 +714,7 @@ bool ask(const Want& w) {
     g_req = req;
     g_room = true;
     g_asked = w;
+    g_color_now = w.col;
     g_asked_at = g_frame;
     g_activated = false;
     g_ready = false;
@@ -598,13 +729,27 @@ void want(int fid, int cos, int col) {
     if (!(w == g_want)) { g_want = w; g_want_since = g_frame; }
 }
 
-// The room's fighter: the one asked, and how far it is; `model` = its model's first mesh (for the log)
-bool fighter_state(Obj* ctrl, int* fid, int* col, int* vis, int* state, std::string* model) {
+// The room's fighter (app.worldtour.CaptureRoomFighter), nullptr while there is none
+Obj* room_fighter(Obj* ctrl) {
     Obj* oc = ctrl ? get_obj(ctrl, "ObjectCtrl") : nullptr;
     Obj* mo = oc ? get_obj(oc, "ManageObjects") : nullptr;
-    if (list_count(mo) < 1) return false;
+    if (list_count(mo) < 1) return nullptr;
     Obj* f = list_item(mo, 0);
-    if (!alive(f)) return false;
+    return alive(f) ? f : nullptr;
+}
+// The fighter recoloured in place (the game's way); false: not possible (no method, no data for that colour)
+bool recolor(int col) {
+    Obj* f = (m_recolor && m_has_color && g_ctrl && alive(g_ctrl)) ? room_fighter(g_ctrl) : nullptr;
+    if (!f) return false;
+    auto has = call(m_has_color, f, { arg_i32(col) });
+    if (has.exception_thrown || !(has.byte & 1)) return false;
+    return !call(m_recolor, f, { arg_i32(col) }).exception_thrown;
+}
+
+// The room's fighter: the one asked, and how far it is; `model` = its model's first mesh (for the log)
+bool fighter_state(Obj* ctrl, int* fid, int* col, int* vis, int* state, std::string* model) {
+    Obj* f = room_fighter(ctrl);
+    if (!f) return false;
     get_i32(f, "<FighterId>k__BackingField", *fid);
     get_i32(f, "<ColorId>k__BackingField", *col);
     get_i32(f, "<VisualId>k__BackingField", *vis);
@@ -618,9 +763,23 @@ bool fighter_state(Obj* ctrl, int* fid, int* col, int* vis, int* state, std::str
 void frame() {
     if (g_off || !types()) return;
     if (!g_want.fid) { give_back("no fighter"); drained(); return; }
-    // ask again once the choice held still, and only once the room given back is gone
-    if ((!g_room || !(g_asked == g_want)) && g_frame - g_want_since >= kSettle) {
-        if (g_room) give_back("another fighter / outfit / colour");
+    // a colour change only, the room ready: the same fighter recoloured at once (no reload); otherwise (another fighter or
+    // outfit, or a colour that cannot be applied in place) ask again once the choice held still and the room given back
+    // is gone
+    const bool same_outfit = g_room && g_asked.fid == g_want.fid && g_asked.cos == g_want.cos;
+    if (same_outfit && g_ready && g_color_now != g_want.col) {
+        if (recolor(g_want.col)) {
+            logf("replay tab: 3D preview recoloured in place: fighter %d costume %d colour %d -> %d", g_want.fid, g_want.cos, g_color_now,
+                 g_want.col);
+            g_color_now = g_want.col;
+        } else {
+            logf("replay tab: 3D preview: colour %d not applicable in place: a new room", g_want.col);
+            g_asked.col = -1;                     // makes the room be asked again below
+        }
+    }
+    const bool reload = !g_room || g_asked.fid != g_want.fid || g_asked.cos != g_want.cos || g_asked.col < 0;
+    if (reload && g_frame - g_want_since >= kSettle) {
+        if (g_room) give_back("another fighter / outfit");
         if (!drained()) return;
         if (!ask(g_want)) {
             if (++g_fails >= kTries) { g_off = true; logf("replay tab: 3D preview off for the session (%d failed requests)", g_fails); }
@@ -652,7 +811,8 @@ void frame() {
     int fid = 0, col = -1, vis = -1, state = -1;
     std::string model;
     const bool has = fighter_state(g_ctrl, &fid, &col, &vis, &state, &model);
-    const bool now = has && fid == g_asked.fid && vis == g_asked.cos && col == g_asked.col && state == kStateReady && g_activated;
+    const bool now = has && fid == g_asked.fid && vis == g_asked.cos && (col == g_asked.col || g_asked.col < 0) && state == kStateReady &&
+                     g_activated;
     if (now && !g_ready) {
         if (!g_ready_since) g_ready_since = g_frame;
         if (g_frame - g_ready_since >= kShowAfter) {
@@ -674,7 +834,9 @@ void frame() {
     }
 }
 // The model shows exactly what the page wants
-bool showing() { return !g_off && g_ready && g_asked == g_want; }
+bool showing() {
+    return !g_off && g_ready && g_asked.fid == g_want.fid && g_asked.cos == g_want.cos && g_asked.col >= 0 && g_color_now == g_want.col;
+}
 void stop(const char* why) {
     give_back(why);
     g_want = Want{};
@@ -769,9 +931,9 @@ Choice row_step(const Fighter& f, const Choice& cur, int row, int dir) {
         if (l != g_last_on.end() && outfit_index(f, l->second) >= 0) return l->second;
         return cycle_outfit(f, Choice{}, 1);
     }
-    if (row == 1) {                                // the outfit; Default is the Off of row 0, skipped here
-        Choice n = cycle_outfit(f, cur, dir);
-        if (!n.forced) n = cycle_outfit(f, n, dir);
+    if (row == 1) {                                // the outfit, its colour back to 01; Default is the Off of row 0, skipped
+        Choice n = cycle_outfit(f, cur, dir, false);
+        if (!n.forced) n = cycle_outfit(f, n, dir, false);
         return n;
     }
     return cur.forced ? cycle_color(f, cur, dir) : cur;   // the colour
@@ -789,9 +951,36 @@ void input() {
     const bool esc = k_esc.press(k.esc), tab = k_tab.press(k.tab), ok = k_ok.press(k.ok);
     const Fighter* f = focused_fighter();
     const int level = g_level.load();
-    if (level == kLevelList) {                     // the option row: Confirm into the grid, Back to Search
+    if (level == kLevelList) {                     // the option rows: Up / Down (wrapping), Confirm into its grid, Back to Search
         if (esc || tab) { g_ours.store(false); g_leaving = true; return; }   // (the page's input comes back once released)
-        if (ok && f) { g_level.store(kLevelGrid); g_dirty = true; }
+        if (k_up.step(k.up)) { g_list_row = (g_list_row + kListRows - 1) % kListRows; g_dirty = true; }
+        if (k_down.step(k.down)) { g_list_row = (g_list_row + 1) % kListRows; g_dirty = true; }
+        if (ok && g_list_row == 0 && f) { g_level.store(kLevelGrid); g_dirty = true; }
+        if (ok && g_list_row == 1) { g_level.store(kLevelStage); g_stage_cursor = stage_cell_of_choice(); g_dirty = true; }
+        return;
+    }
+    if (level == kLevelStage) {                    // the stage grid: Confirm picks the focused cell and stays (the game's)
+        if (esc) { g_level.store(kLevelList); g_dirty = true; return; }
+        const int n = static_cast<int>(g_stages.size()) + 1;
+        const int before = g_stage_cursor;
+        if (k_up.step(k.up)) g_stage_cursor = grid_move(g_stage_cursor, 0, -1, n, kSCols);
+        if (k_down.step(k.down)) g_stage_cursor = grid_move(g_stage_cursor, 0, 1, n, kSCols);
+        if (k_left.step(k.left)) g_stage_cursor = grid_move(g_stage_cursor, -1, 0, n, kSCols);
+        if (k_right.step(k.right)) g_stage_cursor = grid_move(g_stage_cursor, 1, 0, n, kSCols);
+        if (g_stage_cursor != before) g_dirty = true;
+        if (ok) {
+            StageChoice next;
+            if (g_stage_cursor > 0 && g_stage_cursor <= static_cast<int>(g_stages.size())) {
+                next.forced = true;
+                next.id = g_stages[static_cast<size_t>(g_stage_cursor - 1)].id;
+            }
+            if (!(next == g_stage)) {
+                g_stage = next;
+                save_choices();
+                logf("replay tab: stage -> %s", next.forced ? std::to_string(next.id).c_str() : "Default");
+            }
+            g_dirty = true;
+        }
         return;
     }
     if (level == kLevelPage) {                     // the character's page (Confirm and the tab keys: nothing, as the game's)
@@ -1095,29 +1284,36 @@ void put_row(void* title, int r, const char* label, const std::string& value, bo
     }
 }
 
-// The option row, the divider and the grid's panel (on: the option row or the grid is up; grid: the grid has the focus).
-// The row: selected (the game's SELECT look) while it has the focus; while the grid has it, the game's p_GroupItem stays
-// SELECT with its blue bar hidden, its material dark, its bevel shown, its small marker (e_focus_bar), its text light
-void render_list(void* title, bool on, bool grid) {
-    void* row = copy_of(title, "e_ro_lrow");
-    if (row) {
-        if (on) {
-            style_row(row, kListW, false);
-            row_state(row, "SELECT");
-            place(row, kListX, kListY);
-            auto el = [row](const char* n) { return A()->ui_find_cached(row, n); };
-            if (void* bar = el("e_rect_bar")) { A()->ui_set_color(C(), bar, kColRowBar); set_vis(bar, !grid); }
-            if (void* mk = el("e_focus_bar")) { A()->ui_set_color(C(), mk, kColRowMarker); set_vis(mk, true); }
-            if (void* m = el("e_mat_bg")) A()->ui_set_color(C(), m, grid ? kColListMatDecided : kColText);
-            if (void* d = el("e_scale9grid_default")) {
-                if (grid) A()->ui_set_color(C(), d, kColListDefaultDecided);
-                set_vis(d, grid);
+// The option rows, the divider and the grid's panel (on: the option rows' level or one of their grids is up; row: the
+// focused / entered row; entered: its grid has the focus; stage: the right side is the stage page, whose panel and
+// divider are a little longer). A row's look, as the game's Other list: the focused row selected (SELECT: blue bar,
+// light material, its marker); the row whose grid has the focus "entered" (the game's p_GroupItem stays SELECT with its
+// blue bar hidden, its material dark, its bevel shown, its small marker, its text light); the other rows plain (DEFAULT,
+// darkened 20 %). Every piece written each time: the copies keep what was written to them.
+void render_list(void* title, bool on, int focus, bool entered, bool stage) {
+    for (int r = 0; r < kListRows; ++r) {
+        void* row = copy_of(title, cname("lrow", r));
+        const float y = kListY + r * kListStep;
+        const bool sel = r == focus && !entered, ent = r == focus && entered;
+        if (row) {
+            if (on) {
+                style_row(row, kListW, false);
+                row_state(row, sel || ent ? "SELECT" : "DEFAULT");
+                place(row, kListX, y);
+                auto el = [row](const char* n) { return A()->ui_find_cached(row, n); };
+                if (void* bar = el("e_rect_bar")) { A()->ui_set_color(C(), bar, kColRowBar); set_vis(bar, sel); }
+                if (void* mk = el("e_focus_bar")) { A()->ui_set_color(C(), mk, kColRowMarker); set_vis(mk, sel || ent); }
+                if (void* m = el("e_mat_bg")) A()->ui_set_color(C(), m, ent ? kColListMatDecided : sel ? kColText : kColListMatPlain);
+                if (void* d = el("e_scale9grid_default")) {
+                    A()->ui_set_color(C(), d, ent ? kColListDefaultDecided : kColListDefaultPlain);
+                    set_vis(d, !sel);
+                }
+                row_darken(row, sel || ent, false);
             }
-            set_vis(el("e_darken"), false);
+            show(row, on);
         }
-        show(row, on);
+        put_label(title, cname("llbl", r), kListLabels[r], kListX, y, ent ? kColListTextDecided : sel ? kColRowTextSel : kColRowTextDim, on);
     }
-    put_label(title, "e_ro_llbl", kListLabel, kListX, kListY, grid ? kColListTextDecided : kColRowTextSel, on);
     // the divider: the header's line turned 90 degrees about its left end (the game's divider is that same line turned)
     if (void* l = copy_of(title, "e_ro_divider")) {
         if (on) {
@@ -1129,13 +1325,96 @@ void render_list(void* title, bool on, bool grid) {
                 A()->obj_invoke(C(), l, "set_Rotation(via.vec3)", &a, 1, nullptr);
             }
             place(l, kLineX, kLineY);
-            resize(l, kLineLen, kLineW);
+            resize(l, stage ? kLineLenStage : kLineLen, kLineW);
             A()->ui_set_color(C(), l, kColLine);
         }
         show(l, on);
     }
-    put_box(title, "e_ro_gpanel", kPanelX, kPanelY, kPanelW, kPanelH, kColPanel, on, kPrioPanel);
-    put_box(title, "e_ro_gfocus", kPanelX, kPanelY, kPanelW, kPanelH, kColPanelFocus, on && grid, kPrioPanel);
+    const float ph = stage ? kPanelHStage : kPanelH;
+    put_box(title, "e_ro_gpanel", kPanelX, kPanelY, kPanelW, ph, kColPanel, on, kPrioPanel);
+    put_box(title, "e_ro_gfocus", kPanelX, kPanelY, kPanelW, ph, kColPanelFocus, on && entered, kPrioPanel);
+}
+
+// A centred text copy (the banner's stage name, the Default cell's label): the title's display font, its middle on (x, y);
+// `guid`: the game's message shown by its id (the player's language), otherwise `text`
+void put_center_text(void* title, const char* name, const char* text, const uint8_t* guid, float x, float y, float w, float font,
+                     uint32_t col, bool on) {
+    void* c = copy_of(title, name);
+    if (!c) return;
+    if (on) {
+        if (g_styled.insert(reinterpret_cast<uintptr_t>(c)).second) {
+            style_row_text(c, kCenterCenter, w, font);
+            set_priority(c, kPrioText);
+        }
+        if (guid) A()->ui_set_message_id(C(), c, guid);
+        else A()->ui_set_text(C(), c, text);
+        A()->ui_set_color(C(), c, col);
+        place(c, x, y);
+    }
+    show(c, on);
+}
+// A stage cell's (or the banner's) picture: the whole texture (4:1, the game's own thumbnail and banner)
+void put_stage_picture(void* title, const std::string& name, int key, float x, float y, float w, float h, uint32_t col, bool on) {
+    void* c = copy_of(title, name);
+    if (!c) return;
+    style_box(c, kPrioImage);
+    auto it = g_stage_tex.find(key);
+    void* holder = it != g_stage_tex.end() ? it->second : nullptr;
+    const bool ready = on && holder && A()->ui_texture_ready(holder) == 1;
+    if (ready) {
+        A()->ui_set_texture_rect(C(), c, holder, 0.0f, 0.0f, 1.0f, 1.0f);
+        A()->ui_set_color(C(), c, col);
+        A()->ui_set_position(C(), c, x, y, 0);
+        A()->ui_set_size(C(), c, w, h);
+    } else if (on && holder) {
+        g_dirty = true;                            // drawn again once its picture has loaded
+    }
+    show(c, ready);
+}
+
+// The stage page (on: shown; grid: its grid has the focus): the banner of the focused cell (of the chosen one while the
+// option row has the focus), the grid of 3 columns (Default first, then the stages), dimmed behind the option row, the
+// focused cell framed, the chosen one marked in its corner, the scroll bar
+void render_stage(void* title, bool on, bool grid) {
+    const int n = on ? static_cast<int>(g_stages.size()) + 1 : 0;
+    const int chosen = stage_cell_of_choice();
+    const int shown = grid ? g_stage_cursor : chosen;
+    const int rows = (n + kSCols - 1) / kSCols;
+    if (on) g_stage_top = window_top(g_stage_top, shown / kSCols, rows, kSVisRows);
+    const uint32_t pic = grid ? kColText : kColTextDim;
+    for (int i = 0; i < kSCells; ++i) {
+        const int idx = g_stage_top * kSCols + i;
+        const bool cell = idx < n;
+        const float x = kSGridX + (i % kSCols) * kSStepX, y = kSGridY + (i / kSCols) * kSStepY;
+        const int key = idx == 0 ? kDefaultTex : cell ? g_stages[static_cast<size_t>(idx - 1)].id : 0;
+        put_stage_picture(title, cname("simg", i), key, x, y, kSCellW, kSCellH, pic, cell);
+    }
+    // the Default cell's label, over its picture while it is in view
+    const int def_vis = 0 - g_stage_top * kSCols;
+    const bool def_on = on && def_vis >= 0 && def_vis < kSCells;
+    put_center_text(title, "e_ro_sdeflbl", "DEFAULT", nullptr, kSGridX + kSCellW / 2, kSGridY + kSCellH / 2, kSCellW, kFontStageCell,
+                    grid ? kColText : kColTextDim, def_on);
+    // the focus frame (behind the focused cell), the chosen cell's corner mark
+    const int fv = g_stage_cursor - g_stage_top * kSCols;
+    const bool f_on = on && grid && fv >= 0 && fv < kSCells;
+    put_box(title, "e_ro_sfocus", kSGridX + (fv % kSCols) * kSStepX - 4, kSGridY + (fv / kSCols) * kSStepY - 4, kSCellW + 8, kSCellH + 8,
+            kColStageFocus, f_on, kPrioFrame);
+    const int cv = chosen - g_stage_top * kSCols;
+    const bool c_on = on && cv >= 0 && cv < kSCells;
+    put_box(title, "e_ro_smark", kSGridX + (cv % kSCols) * kSStepX, kSGridY + (cv / kSCols) * kSStepY, kSMark, kSMark, kColStageMark,
+            c_on, kPrioText);
+    // the banner: picture and name
+    const int bkey = shown == 0 ? kDefaultTex : shown <= static_cast<int>(g_stages.size()) ? g_stages[static_cast<size_t>(shown - 1)].id : 0;
+    put_stage_picture(title, "e_ro_sbanner", bkey, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
+    const StageEntry* se = shown > 0 && shown <= static_cast<int>(g_stages.size()) ? &g_stages[static_cast<size_t>(shown - 1)] : nullptr;
+    const std::string fallback = se ? "Stage " + std::to_string(se->id) : "Default";
+    put_center_text(title, "e_ro_sname", fallback.c_str(), se && se->named ? se->guid : nullptr, kStageNameX, kStageNameY, 420,
+                    kFontStageName, kColText, on);
+    // the scroll bar: its track and its thumb (rows shown / rows)
+    put_box(title, "e_ro_sbarbg", kSBarX, kSBarY, kSBarW, kSBarH, kColScrollTrack, on && rows > kSVisRows, kPrioFrame);
+    const float thumb = rows > kSVisRows ? kSBarH * kSVisRows / rows : kSBarH;
+    const float ty = rows > kSVisRows ? kSBarY + (kSBarH - thumb) * g_stage_top / (rows - kSVisRows) : kSBarY;
+    put_box(title, "e_ro_sbar", kSBarX, ty, kSBarW, thumb, kColScrollThumb, on && rows > kSVisRows, kPrioImage);
 }
 
 // The character's page: the tab bar gives way to the name (the bar's items, guides, lower line and background, the
@@ -1240,10 +1519,14 @@ void render(Obj* main) {
     g_drawn_at = g_frame;
     const int level = g_level.load();
     const Fighter* f = level == kLevelPage ? focused_fighter() : nullptr;
+    // the right side: the stage page with the second option row focused or its grid up, the faces grid otherwise
+    const bool stage = level == kLevelStage || (level == kLevelList && g_list_row == 1);
+    const int row = level == kLevelStage ? 1 : level == kLevelGrid ? 0 : g_list_row;
     header(main, f != nullptr);
-    set_desc(f ? kDescPage : kDescGrid);
-    render_list(title, f == nullptr, level == kLevelGrid);
-    render_grid(title, f == nullptr, level == kLevelGrid);
+    set_desc(f ? kDescPage : stage ? kDescStage : kDescGrid);
+    render_list(title, f == nullptr, row, level == kLevelGrid || level == kLevelStage, stage);
+    render_grid(title, f == nullptr && !stage, level == kLevelGrid);
+    render_stage(title, f == nullptr && stage, level == kLevelStage);
     render_page(title, f);
     g_copies_shown = true;
     if (!g_place_logged && g_frame - g_enter_frame >= 3) {
@@ -1262,15 +1545,19 @@ void enter(Obj* main) {
     g_enter_frame = g_frame;
     g_place_logged = false;
     g_level.store(kLevelList);
+    g_list_row = 0;                               // the first option row, as the game's tab opens
     g_dirty = true;
     build_catalog();                              // each time: the NSFW setting may have changed
     load_faces();
     load_choices();
+    g_stages = stage_list();                      // each time: the stage list may grow (stage_list())
+    load_stage_pictures();
     hide_page(false);
     prime_keys();
     g_cursor = std::max(0, std::min(g_cursor, static_cast<int>(g_cat.size()) - 1));
     void* title = find(main, "c_title");
-    logf("replay tab: entered (%zu forced in the file; rows %d, arrows %d)", g_choices.size(),
+    logf("replay tab: entered (%zu forced in the file, stage %s; %zu stages; rows %d, arrows %d)", g_choices.size(),
+         g_stage.forced ? std::to_string(g_stage.id).c_str() : "Default", g_stages.size(),
          title && copy_of(title, cname("row", 0)) ? 1 : 0, title && copy_of(title, cname("arl", 0)) ? 1 : 0);
 }
 

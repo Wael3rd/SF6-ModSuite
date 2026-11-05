@@ -106,12 +106,22 @@ inline const RegSlot* slot_of(const std::vector<RegSlot>& reg, int fid, int cost
 struct Forced { int costume = -1, color = 0; std::string mod_id; };
 
 // false: not a file of this format (the caller keeps what it had)
-inline bool parse_outfits(const std::string& text, std::map<int, Forced>& out) {
+// `stage` (when given): "stage":{"mode":"forced","id":N} -> N (StageDesc.StageId), -1 = the replay's own stage
+inline bool parse_outfits(const std::string& text, std::map<int, Forced>& out, int* stage = nullptr) {
     Json j;
     std::string t = text;
     if (t.compare(0, 3, "\xEF\xBB\xBF") == 0) t.erase(0, 3);
     if (!json_parse(t, j) || j.kind != Json::Object) return false;
     out.clear();
+    if (stage) {
+        *stage = -1;
+        if (const Json* st = j.get("stage"); st && st->kind == Json::Object) {
+            const Json* mode = st->get("mode");
+            const Json* id = st->get("id");
+            if (mode && mode->kind == Json::String && mode->s == "forced" && id && id->kind == Json::Number && id->num >= 0)
+                *stage = static_cast<int>(id->num);
+        }
+    }
     const Json* fs = j.get("fighters");
     if (!fs || fs->kind != Json::Object) return true;
     for (auto& [k, v] : fs->obj) {
