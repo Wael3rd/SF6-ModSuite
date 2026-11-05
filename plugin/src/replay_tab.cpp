@@ -335,19 +335,21 @@ void load_faces() {
 // Product/GUI/menu/ui91000/ui91060/RTT_MatchingFighterSetting.rtex (Battle Settings' preview texture): a holder of that
 // render target shown on one of our texture copies shows the model. Never CaptureRoomParamBase.ChangeMainCamera: called
 // from the Replays menu it left the main menu's rendering broken (05/11).
-// A change of fighter / outfit / colour: the room given back and asked again (as the game does), after the choice held
-// still for kPreviewSettle frames. Shown only once the room's fighter is the one asked, ready (CurrentState 6) for
-// kPreviewShowAfter frames; the 2D portrait meanwhile and whenever anything fails (kPreviewTries requests without a
-// model: the portrait for the rest of the session). Given back when the page goes (tab back, another tab, the screen
-// closed): no room nor fighter left behind.
+// A change of fighter / outfit / colour: the room given back, and asked again only once it is really gone (no
+// type-5 controller left, about 6 frames), after the choice held still for kSettle frames. Asked in the frame it was given
+// back (as the game's own SetupCaptureRoom does), the old room's controller was reused while its deactivation was still
+// under way: the new fighter loaded right (Luke VisualId 1, folder esf002v01, Outfit 2's meshes esf002_002_*) but the
+// page kept showing Outfit 1, the render target no longer refreshed by the room's camera (Wael 05/11; the same outfit
+// asked in a fresh room drew right). Shown only once the room's fighter is the one asked (fighter, VisualId = the costume
+// number, colour: true of every outfit seen, game and Slots Loader) and ready (CurrentState 6) for kShowAfter frames; the
+// 2D portrait meanwhile and whenever anything fails (kTries failures: the portrait for the rest of the session). Given
+// back when the page goes (tab back, another tab, the screen closed) and when a character is Off: no room nor fighter
+// left behind.
 namespace preview {
 constexpr int kRoomType = 5;                      // app.worldtour.CaptureRoomObserver.CaptureRoomType.BattleSettingFighter
 constexpr int kStateReady = 6;                    // app.worldtour.CaptureRoomFighter.State when drawn in Battle Settings
 constexpr uint32_t kSettle = 15, kShowAfter = 8, kTimeout = 600, kPollEvery = 5;
-// The room given back lives on a frame or two: its fighter (same character, maybe the same colour) is not the one asked.
-// A fighter counts only kFresh frames after the request, and wearing the costume asked (its VisualId, the costume number
-// for every outfit seen on 05/11) or, failing that, kVisualWait frames after it.
-constexpr uint32_t kFresh = 20, kVisualWait = 150;
+constexpr uint32_t kDrainMax = 300;               // frames a given-back room may take to go before we ask anyway (logged)
 constexpr int kTries = 3;
 const char* const kRtt = "Product/GUI/menu/ui91000/ui91060/RTT_MatchingFighterSetting.rtex";
 
@@ -360,6 +362,8 @@ Obj* g_rtt = nullptr;                             // RenderTargetTextureResource
 Want g_want, g_asked;                             // what the page shows; what the room was asked for
 uint32_t g_want_since = 0, g_asked_at = 0, g_ready_since = 0, g_poll_at = 0;
 bool g_room = false;                              // a room of ours is asked or up
+bool g_draining = false;                          // a room given back, not gone yet: no new request meanwhile
+uint32_t g_drain_since = 0;
 bool g_activated = false, g_ready = false;
 Obj* g_ctrl = nullptr;                            // the room's controller once found (checked alive before each use)
 Obj *g_list = nullptr, *g_req = nullptr;          // our request objects, held until the next request
@@ -434,7 +438,26 @@ void give_back(const char* why) {
         if (empty) empty->release();
     }
     drop_request_objects();
+    g_draining = true;
+    g_drain_since = g_frame;
     logf("replay tab: 3D preview room given back (%s)", why);
+}
+// The room given back is gone (no type-5 controller left); polled every kPollEvery frames
+bool drained() {
+    if (!g_draining) return true;
+    if (g_frame - g_poll_at < kPollEvery) return false;
+    g_poll_at = g_frame;
+    if (!find_controller()) {
+        g_draining = false;
+        logf("replay tab: 3D preview room gone, %u frames after it was given back", g_frame - g_drain_since);
+        return true;
+    }
+    if (g_frame - g_drain_since > kDrainMax) {
+        g_draining = false;
+        logf("replay tab: 3D preview: the room given back is still there after %u frames: asked again anyway", kDrainMax);
+        return true;
+    }
+    return false;
 }
 // RequestLoadCaptureRoom(5, [RequestFighterData], null, "")
 bool ask(const Want& w) {
@@ -488,8 +511,8 @@ void want(int fid, int cos, int col) {
     if (!(w == g_want)) { g_want = w; g_want_since = g_frame; }
 }
 
-// The room's fighter: the one asked, and how far it is
-bool fighter_state(Obj* ctrl, int* fid, int* col, int* vis, int* state) {
+// The room's fighter: the one asked, and how far it is; `model` = its model's first mesh (for the log)
+bool fighter_state(Obj* ctrl, int* fid, int* col, int* vis, int* state, std::string* model) {
     Obj* oc = ctrl ? get_obj(ctrl, "ObjectCtrl") : nullptr;
     Obj* mo = oc ? get_obj(oc, "ManageObjects") : nullptr;
     if (list_count(mo) < 1) return false;
@@ -499,16 +522,19 @@ bool fighter_state(Obj* ctrl, int* fid, int* col, int* vis, int* state) {
     get_i32(f, "<ColorId>k__BackingField", *col);
     get_i32(f, "<VisualId>k__BackingField", *vis);
     get_i32(f, "CurrentState", *state);
+    model->clear();
+    if (Obj* fp = get_obj(f, "FighterFolderPaths"); fp && list_count(fp) > 0) *model = str(list_item(fp, 0));
     return true;
 }
 
 // Every frame while the page is up: the room follows the wanted fighter
 void frame() {
     if (g_off || !types()) return;
-    if (!g_want.fid) { give_back("no fighter"); return; }
-    // ask again once the choice held still
+    if (!g_want.fid) { give_back("no fighter"); drained(); return; }
+    // ask again once the choice held still, and only once the room given back is gone
     if ((!g_room || !(g_asked == g_want)) && g_frame - g_want_since >= kSettle) {
         if (g_room) give_back("another fighter / outfit / colour");
+        if (!drained()) return;
         if (!ask(g_want)) {
             if (++g_fails >= kTries) { g_off = true; logf("replay tab: 3D preview off for the session (%d failed requests)", g_fails); }
             g_want_since = g_frame;               // tried again after kSettle
@@ -537,24 +563,25 @@ void frame() {
         if (empty) empty->release();
     }
     int fid = 0, col = -1, vis = -1, state = -1;
-    const bool has = fighter_state(g_ctrl, &fid, &col, &vis, &state);
-    const uint32_t since = g_frame - g_asked_at;
-    const bool fresh = since >= kFresh && (vis == g_asked.cos || since >= kVisualWait);
-    const bool now = has && fresh && fid == g_asked.fid && col == g_asked.col && state == kStateReady && g_activated;
+    std::string model;
+    const bool has = fighter_state(g_ctrl, &fid, &col, &vis, &state, &model);
+    const bool now = has && fid == g_asked.fid && vis == g_asked.cos && col == g_asked.col && state == kStateReady && g_activated;
     if (now && !g_ready) {
         if (!g_ready_since) g_ready_since = g_frame;
         if (g_frame - g_ready_since >= kShowAfter) {
             g_ready = true;
             g_fails = 0;
-            logf("replay tab: 3D preview ready: fighter %d visual %d colour %d, %u frames after the request", fid, vis, col, g_frame - g_asked_at);
+            logf("replay tab: 3D preview ready: fighter %d visual %d colour %d, model %s, %u frames after the request", fid, vis, col,
+                 model.c_str(), g_frame - g_asked_at);
         }
     } else if (!now) {
         g_ready_since = 0;
         if (g_ready) logf("replay tab: 3D preview lost its model (fighter %d state %d)", fid, state);
         g_ready = false;
-        if (g_frame - g_asked_at > kTimeout && has && state != kStateReady) {
-            logf("replay tab: 3D preview: the fighter stays in state %d", state);
-            give_back("model not ready");
+        if (g_frame - g_asked_at > kTimeout && has) {
+            logf("replay tab: 3D preview: no right model %u frames after the request (fighter %d visual %d colour %d state %d, model "
+                 "%s)", kTimeout, fid, vis, col, state, model.c_str());
+            give_back("model not right");
             if (++g_fails >= kTries) { g_off = true; logf("replay tab: 3D preview off for the session (%d failures)", g_fails); }
         }
     }
