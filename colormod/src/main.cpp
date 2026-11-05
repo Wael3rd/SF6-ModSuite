@@ -19,6 +19,7 @@
 #include "dialogs/locale.hpp"
 #include "engine/decide.hpp"
 #include "engine/live.hpp"
+#include "../include/sf6colormod_entries.h"
 #include "screens/rows.hpp"
 #include "screens/dipanel.hpp"
 #include "screens/dipanel_mode.hpp"
@@ -56,6 +57,21 @@ extern "C" __declspec(dllexport) int SF6ColorMod_DiPanelActive(int side) {
 // guide carries its entry after ours, our Esc guard also holds while its popup mode is on: SF6Slots_PopupGuard). Without
 // bit 2 its popup mode stays off (it borrows the same rows). Cheap, any thread, no game call.
 extern "C" __declspec(dllexport) int SF6ColorMod_PanelCaps() { return 1 | 2; }
+
+// Other mods (the Slots Loader's Replays > Settings tab): our RW / MC entries, and what a fighter wears at their request,
+// over the player's own choices (never changed). The contract: include/sf6colormod_entries.h.
+extern "C" __declspec(dllexport) int SF6ColorMod_EntriesVersion() {
+    try { return engine::decide::entries_version(); } catch (...) { return 0; }
+}
+extern "C" __declspec(dllexport) int SF6ColorMod_Entries(int fighter, int costume, SF6CMEntry* out, int cap) {
+    try { return engine::decide::entries_export(fighter, costume, out, cap); } catch (...) { return 0; }
+}
+extern "C" __declspec(dllexport) int SF6ColorMod_Request(int scope, int fighter, int costume, const char* id, void* battle) {
+    try { return engine::decide::request(scope, fighter, costume, id, battle); } catch (...) { return 0; }
+}
+extern "C" __declspec(dllexport) void SF6ColorMod_ClearRequests(int scope) {
+    try { engine::decide::clear_requests(scope); } catch (...) {}
+}
 
 namespace {
 

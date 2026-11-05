@@ -22,6 +22,8 @@
 #include <string>
 #include <utility>
 
+#include "../../include/sf6colormod_entries.h"
+
 namespace engine::decide {
 
 bool install();                  // hooks, catalogue, state.json; false = types missing, the feature stays off
@@ -56,5 +58,11 @@ std::string status();
 // the player's own side (1 / 2) from the battle description: online our session member, offline the first fighter on
 // a pad; 1 when unknown. The light fight mode gives it the effect data both players share.
 int own_side();
+
+// ---- other mods (include/sf6colormod_entries.h: the exports of main.cpp) ----
+int entries_version();                                                     // SF6CM_ENTRIES_VERSION while active()
+int entries_export(int fighter, int costume, SF6CMEntry* out, int cap);   // the catalogue's entries (labels, ids)
+int request(int scope, int fighter, int costume, const char* id, void* battle);  // 1 taken
+void clear_requests(int scope);
 
 }  // namespace engine::decide
