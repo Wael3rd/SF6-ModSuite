@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.19.9 (2026-11-05) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.4 | fix: Opponent Outfit Settings for a fighter with extra outfits; fixes from ZZtaii's Slotsloader fork (1.10.6 - 1.10.9) |
+| SF6 Color Mod | 0.23.3 | unchanged |
+| SF6 Native Core | 0.9.5 | unchanged |
+| SF6 Recording Manager | 2.2.6 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.3, then install Slots Loader 1.16.4. Color Mod
+0.23.3, Native Core 0.9.5 and Recording Manager 2.2.6 are the same files as in 1.19.8: keep them. With the all-in-one
+package, replace 1.19.8 with 1.19.9. The costume pak is not rebuilt at the first launch ("Up to date"): the loader
+fixes below apply at the next rebuild, when a mod is added, changed or removed.
+
+### SF6 Slots Loader 1.16.4
+- Fix: Opponent Outfit Settings stayed empty for a fighter with extra outfits. In Battle Settings > Other > Opponent
+  Outfit Settings, a fighter with more than 6 outfits counting the slots (Cammy, for example) opened an empty screen
+  and Esc did nothing: the game writes one summary line per outfit and has 6. The summary now shows the fighter's
+  first 6 outfits; every outfit stays selectable and keeps its colours. The idea comes from ZZtaii's Slotsloader fork
+  (MIT); it is done in the native plugin (no Lua). The plugin checks the method it hooks once per game version (well
+  under a second, cached in `SF6_CostumeSlots_data\codecheck.txt`).
+- Fixes from ZZtaii's Slotsloader fork (1.10.6 - 1.10.9), thanks to ZZtaii:
+  - an extra outfit whose mod ships its own colour list no longer shows the original outfit's colours;
+  - with replacements installed by the "PAK method" (Fluffy without REFramework's loose file loader, or the
+    Slotsloader Manager): an extra outfit without a scene of its own is no longer left out ("slot scene missing"), and
+    when such a replacement covers Ryu's Outfit 1 colours (Sakura as Ryu), colour files of mods made before a game
+    update are still brought up to date (Ingrid's extra outfits could never finish loading);
+  - an extra outfit no longer hides a replacement: a file the outfit shares outside its own folder (a Drive Tech
+    mesh, for example) that a replacement also installed in the game folder is left to the replacement, and
+    installing, changing or removing that replacement rebuilds the costumes at the next launch;
+  - an extra outfit carrying another fighter's colour files ("Female Ryu C1") no longer crashes the game.
+- Other installs are unchanged: no rebuild at the first launch ("Up to date"); these fixes apply at the next rebuild
+  (when a mod is added, changed or removed).
+- For the Slotsloader Manager: `outfits.json` now says `"loose_files_kept": true` (`docs/MANAGER_CONTRACT.md`).
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
 ## 1.19.8 (2026-11-05) — SF6 Mod Suite
 
 | Package | Version | |
