@@ -891,6 +891,61 @@ int main(int argc, char** argv) {
         check(ls.size() == 1 && ls[0].find(": On") != std::string::npos && ls[0].find("jiggle") != std::string::npos, "lines: a toggle, \"name: On\"");
     }
 
+    // which outfit a model wears: M. Bison's Wesker, a mod replacing only his body: esf026/006/01, the rest of Outfit 1 kept
+    {
+        const std::string hair = R"JSON({"id": "hair0001", "name": "Krauser Hair", "folder": "a", "mode": "toggle", "apply": "live"})JSON";
+        const std::string file = R"JSON({"kind": "mesh", "target": "product/model/esf/esf026/001/02/esf026_001_02.mesh", "path": "PREFIXrto/hair0001/02/esf026_001_02.mesh"})JSON";
+        auto with_prefix = [&](std::string prefix) {
+            std::string f = file;
+            f.replace(f.find("PREFIX"), 6, prefix);
+            return f;
+        };
+        const std::string head = R"JSON({"format": "sf6-costume-options-1", "generated": "t", "loader": "t", "pak": "p", "layout": "one", "mods": [)JSON";
+        // the add-on on the game outfit it was made for: the outfit without options is the mod alone in its sub-folder
+        const std::string on_game = head + R"JSON({"key": "esf026/game outfit 1", "name": "Outfit 1", "source": "x", "defaults_from": "loader", "groups": [{"name": "Hair", "options": [)JSON" +
+            hair + R"JSON(]}]}], "slots": [{"fighter": 26, "fighter_dir": "esf026", "costume_no": 0, "folder": "001", "game": true, "name": "Outfit 1", "label": "Outfit 1",
+              "mod": "esf026/game outfit 1", "defaults": [], "options": {"hair0001": [)JSON" + with_prefix("product/model/esf/esf026/001/") + R"JSON(]}}]})JSON";
+        Manifest g; std::string e;
+        check(parse_manifest(on_game, g, e), "identity: a manifest with a game outfit's options");
+        const std::vector<std::string> outfit1 = { "product/model/esf/esf026/001/01/esf026_001_01.mesh", "product/model/esf/esf026/001/02/esf026_001_02.mesh" };
+        const std::vector<std::string> wesker = { "product/model/esf/esf026/006/01/esf026_006_01.mesh", "product/model/esf/esf026/001/02/esf026_001_02.mesh" };
+        const std::vector<std::string> wesker_late = { "product/model/esf/esf026/001/02/esf026_001_02.mesh", "product/model/esf/esf026/006/01/esf026_006_01.mesh" };
+        const std::vector<std::string> outfit1_hair = { "product/model/esf/esf026/001/01/esf026_001_01.mesh", "product/model/esf/esf026/001/rto/hair0001/02/esf026_001_02.mesh" };
+        const std::vector<std::string> outfit2 = { "product/model/esf/esf026/002/01/esf026_002_01.mesh" };
+        check(g.slot_of_paths(wesker) == &g.slots[0], "identity: without the registry the Wesker body is taken for Outfit 1 (the bug)");
+        const std::string reg = R"JSON({"version": 1, "slots": [
+            {"mod_id": "a99b", "fighter": 26, "fighter_dir": "esf026", "original_costume_no": 0, "original_folder": "001", "new_costume_no": 5, "new_folder": "006"},
+            {"mod_id": "c1", "fighter": 26, "fighter_dir": "esf026", "original_costume_no": 0, "original_folder": "001", "new_costume_no": 6, "new_folder": "007"},
+            {"mod_id": "c1", "fighter": 26, "fighter_dir": "esf026", "new_costume_no": 6, "new_folder": "007"},
+            {"mod_id": "same", "fighter": 26, "fighter_dir": "esf026", "new_costume_no": 0, "new_folder": "001"},
+            {"mod_id": "broken"}]})JSON";
+        check(note_outfit_folders(g, reg) == 2 && g.plain_outfits[0] == "product/model/esf/esf026/006/", "identity: our outfits without options, once each, not a listed slot's");
+        check(g.slot_of_paths(wesker) == nullptr, "identity: the Wesker body has no options");
+        check(g.slot_of_paths(wesker_late) == nullptr, "identity: whichever part comes first");
+        check(g.slot_of_paths(outfit1) == &g.slots[0], "identity: Outfit 1 is still Outfit 1");
+        check(g.slot_of_paths(outfit1_hair) == &g.slots[0], "identity: Outfit 1 wearing its option still is");
+        check(g.slot_of_paths(outfit2) == nullptr, "identity: another game outfit has none");
+        Manifest keep = g;
+        check(note_outfit_folders(keep, "not json") == 0 && keep.plain_outfits == g.plain_outfits, "identity: an unreadable registry changes nothing");
+        check(note_outfit_folders(keep, "") == 0, "identity: no registry");
+        // what is written for a model: nothing for Outfit 1 unless it wears it: its slot is found, its key is its own
+        check(g.slot_of_paths(wesker) != g.slot_of(26, 0) && g.slot_of(26, 5) == nullptr, "identity: costume 5 has no slot, the menus by costume number agree");
+
+        // the same mod with the hair in its sub-folder (grouped): Outfit I's own options, Outfit 1 none
+        const std::string grouped = head + R"JSON({"key": "esf026/wesker", "name": "Wesker", "source": "x", "defaults_from": "loader", "groups": [{"name": "Hair", "options": [)JSON" +
+            hair + R"JSON(]}]}], "slots": [{"fighter": 26, "fighter_dir": "esf026", "costume_no": 5, "folder": "006", "name": "Outfit I", "label": "Wesker",
+              "mod": "esf026/wesker", "defaults": [], "options": {"hair0001": [)JSON" + with_prefix("product/model/esf/esf026/006/") + R"JSON(]}}]})JSON";
+        Manifest w2;
+        check(parse_manifest(grouped, w2, e), "identity: a manifest with the grouped mod");
+        const std::string reg2 = R"JSON({"slots": [{"fighter_dir": "esf026", "new_folder": "006"}, {"fighter_dir": "esf026", "new_folder": "007"}]})JSON";
+        check(note_outfit_folders(w2, reg2) == 1 && w2.plain_outfits[0] == "product/model/esf/esf026/007/", "identity: its own folder is a slot, not a plain outfit");
+        check(w2.slot_of_paths(wesker) == &w2.slots[0] && w2.slot_of_paths(wesker_late) == &w2.slots[0], "identity: grouped, Outfit I wears its own slot");
+        check(w2.slots[0].mod == "esf026/wesker", "identity: grouped, saved under its own key");
+        check(w2.slot_of_paths(outfit1) == nullptr && w2.slot_of(26, 0) == nullptr, "identity: grouped, Outfit 1 has none");
+        const std::vector<std::string> swapped = { "product/model/esf/esf026/006/rto/hair0001/02/esf026_001_02.mesh", "product/model/esf/esf026/000/00/esf026_000_00.mesh" };
+        check(w2.slot_of_paths(swapped) == &w2.slots[0], "identity: grouped, wearing its option still is");
+    }
+
     int rc = 0;
     if (argc > 1) rc = real_manifest(argv[1]);
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }

@@ -43,6 +43,7 @@ namespace {
 
 const char* kManifest = "reframework/data/SF6_Costumes_Data/costume_options.json";
 const char* kOutfits  = "reframework/data/SF6_Costumes_Data/outfits.json";
+const char* kRegistry = "reframework/data/SF6_Costumes_Data/registry.json";
 const char* kChoices  = "reframework/data/SF6_CostumeSlots_data/costume_choices.json";
 
 Manifest g_m;
@@ -1849,6 +1850,8 @@ void init() {
     std::string pak;
     if (json_parse(read_file(kOutfits), oj)) pak = oj.get("pak") ? oj.get("pak")->as_str() : "";
     if (pak != g_m.pak) { logf("rto: costume_options.json names %s, the costume pak is %s: stale, not used", g_m.pak.c_str(), pak.c_str()); g_m = Manifest{}; return; }
+    // our outfits without options: a model wearing one has none, whatever game outfit's files it keeps (slot_of_paths)
+    logf("rto: %zu outfits of ours have no options", note_outfit_folders(g_m, read_file(kRegistry, 16u << 20)));
     if (parse_choices(read_file(kChoices), g_c)) {
         std::vector<std::string> notes;
         sanitize(g_c, g_m, notes);
