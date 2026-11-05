@@ -1644,6 +1644,8 @@ void install_hooks() {
     hook_all(tdb->find_type("app.menu.UIFlowTitle"), "onDestroy", pre_title_end, nullptr);
     // Only with NSFW outfits installed: a fighter's outfit list, without them while they are hidden
     if (g_nsfw_slots) hook_all(tdb->find_type("app.InventoryManager.CostumeInventory"), "GetCostumeNoList", pre_costume_list, post_costume_list);
+    // Opponent Outfit Settings: the summary of a fighter with more outfits than its labels (opp_summary.cpp)
+    oppsum::install_hooks();
 }
 
 bool busy() {

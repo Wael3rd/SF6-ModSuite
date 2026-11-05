@@ -74,6 +74,7 @@ enum Event : uint32_t {
     EV_RTO_MODEL     = 1u << 11,  // a fighter's model was built (runtime costume options, rto.cpp)
     EV_POPUP         = 1u << 12,  // the Training pause menu's character popup built or updated (rto_select.cpp)
     EV_FIGHTER_LOAD  = 1u << 13,  // the game asked for fighters' files or builds fighters from a description (costumes.cpp)
+    EV_OPP_SUMMARY   = 1u << 14,  // Opponent Outfit Settings' summary drawn with a shorter outfit list (opp_summary.cpp)
     EV_DIAG          = 1u << 31,  // a method watched for the log was called
 };
 // Methods watched for the log only: which of them the game calls, and when
@@ -180,6 +181,12 @@ namespace fsname {
     void install_hooks();             // first frame (needs the core's ui_clone_control)
     bool busy();
     void tick(uint32_t events);
+}
+// opp_summary.cpp: Battle Settings > Other > Opponent Outfit Settings, a fighter with more outfits than the summary's labels
+namespace oppsum {
+    void install_hooks();             // from costumes::install_hooks (with slots only); starts the hook's code check (R18)
+    bool busy();                      // the code check's verdict not acted on yet, or a list length to put back
+    void tick(uint32_t events);       // installs the hook after the check; puts back a length a draw that threw left
 }
 namespace stages {
     void init();

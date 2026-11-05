@@ -24,6 +24,7 @@ when it is done:
 | stage select shown / hidden, focus or preview changed (`app.menu.UIFlowStageSelect.Param`) | the variant's name between UP / DOWN hints, its preview, each stage's thumbnail in the list (core 0.8.1+) |
 | UP / DOWN on the stage select agent (`app.UIAgent.InputUp` / `InputDown`) | next / previous variant, `state.json` for the loader |
 | VS screen activated or rewritten (`app.esports.VSInfoOffline`) | the variant's name and image |
+| Opponent Outfit Settings' summary drawn (`app.UIFlowOtherMatchingFighterSetting.UIParam.UpdateCosColorTextList`, pre and post) | at once in the hook: the outfit list shortened for the draw, put back after it (below) |
 
 Without stage mods, the stage hooks are not installed; without costume slots, the costume ones are not. A
 fight triggers none of these events: during a fight the plugin reads nothing but its own memory.
@@ -116,6 +117,26 @@ DLC checks makes every outfit valid: every slot is shown then.
 `build.bat` at the root of the repository builds it with the rest, into `build\SF6_CostumeSlotsNative.dll`.
 Copy it into `reframework\plugins\` **with the game closed**. Headers: REFramework plugin API v1.5.8
 (`include/reframework`), `/std:c++20 /EHa /W4`.
+
+## Opponent Outfit Settings with extra outfits
+
+Battle Settings > Other > Opponent Outfit Settings > a fighter: under the colour grid, the page sums up each outfit
+("Outfit 1: 1", the colours turned on). The game draws that summary (`UpdateCosColorTextList`) with one label per entry
+of the page's outfit list, into the summary's widgets: 6 of them, as many as a fighter of the game has outfits. A
+fighter with more outfits (our slots: Cammy with 15 slots has 20) made it write the 6 widgets, then throw: the page never
+showed, the screen stayed empty and Esc did nothing. While the summary is drawn, and only for such a fighter, the list's
+length is the number of widgets; the full length is put back as soon as the method returns (the method only reads the
+list). The summary shows the fighter's first 6 outfits (the game's own first); every outfit stays in the list for the rest
+of the page (outfit, colours, save). Idea from ZZtaii's Slotsloader fork (MIT, `SlotsloaderOpponentOutfitSummary.lua`),
+done here without Lua.
+
+- One hook (pre and post), installed once a check over every method of the game found no other method entering its code
+  (R18): on a thread of its own at the first start of a game version, then read from
+  `SF6_CostumeSlots_data\codecheck.txt`. With slots only.
+- The two writes (the length, the length back) go through the core's guarded field write; a draw that threw before its end
+  is put back by the next draw or two frames later.
+- Log: `[F9] Opponent Outfit Settings: 20 outfits, 6 summary labels: the summary shows the first 6 ...` (when the fighter
+  or its counts change), and the hook's line (`installed`, or `REFUSED (R18)`).
 
 ## Known limits
 

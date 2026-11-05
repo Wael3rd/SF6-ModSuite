@@ -37,6 +37,7 @@ enum Id : int {
     HkVsActivate,
     HkVsSetDispInfo,
     HkVsSetTexture,
+    HkOppSummaryDraw,   // Opponent Outfit Settings' summary (opp_summary.cpp), pre and post
     kTopCount,
     // sub-parts of OnLateUpdate (shown, not added again)
     CostumesTick = kTopCount,

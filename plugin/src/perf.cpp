@@ -32,7 +32,7 @@ constexpr double kSlowOursMs  = 2.0;
 
 const char* const kNames[] = {
     "OnLateUpdate",
-    "HkCosHolderCtor", "HkCosMenuCreatedObject", "HkCosMenuShowedObject", "HkCosMenuHidObject", "HkCosMenuOnEnd", "HkCosFlowStart", "HkCosFlowOnDestroy", "HkCosUI10501Start", "HkCosUI10501End", "HkCosTitleOnDestroy", "HkStgShown_GotObject", "HkStgShown_BeforeShowObject", "HkStgShown_ShowedObject", "HkStgHidden_BeforeHideObject", "HkStgHidden_OnEnd", "HkStgDirty_SelectionChangedWithArgs_List", "HkStgDirty_SetPreview", "HkStgDirty_ChangePreview", "HkAgentInputUp", "HkAgentInputDown", "HkVsActivate", "HkVsSetDispInfo", "HkVsSetTexture",
+    "HkCosHolderCtor", "HkCosMenuCreatedObject", "HkCosMenuShowedObject", "HkCosMenuHidObject", "HkCosMenuOnEnd", "HkCosFlowStart", "HkCosFlowOnDestroy", "HkCosUI10501Start", "HkCosUI10501End", "HkCosTitleOnDestroy", "HkStgShown_GotObject", "HkStgShown_BeforeShowObject", "HkStgShown_ShowedObject", "HkStgHidden_BeforeHideObject", "HkStgHidden_OnEnd", "HkStgDirty_SelectionChangedWithArgs_List", "HkStgDirty_SetPreview", "HkStgDirty_ChangePreview", "HkAgentInputUp", "HkAgentInputDown", "HkVsActivate", "HkVsSetDispInfo", "HkVsSetTexture", "HkOppSummaryDraw",
     "CostumesTick", "StagesTick", "StateWrite",
     "RtoTick", "RtoWatch", "RtoVs", "RtoVsScan", "RtoSelect", "RtoPreview", "RtoWalk", "RtoPass", "RtoWant", "RtoBind", "RtoPopup", "RtoKeys", "RtoGuide", "RtoMem", "StgScreen", "StgStrip", "StgStripScan", "StgCheck", "StgVs", "FsNameTick",
 };
