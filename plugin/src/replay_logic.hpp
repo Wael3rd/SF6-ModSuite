@@ -24,8 +24,9 @@ constexpr const char* kFile = "reframework/data/SF6_CostumeSlots_data/replay_out
 
 struct Outfit {
     int costume = 0;                  // FighterDesc.Costume
-    std::string mod_id;               // registry.json mod_id of an extra outfit, "" for a game outfit
+    std::string mod_id;               // registry.json mod_id of an extra outfit ("" for a game outfit, or when unknown)
     std::string name;                 // what the row shows ("Outfit 2", "Aloha Ryu")
+    bool extra = false;               // one of the Slots Loader's outfits
     std::vector<int> colors;          // the colours that exist for it (FighterDesc.Color), ascending
 };
 
@@ -53,7 +54,7 @@ inline void sort_outfits(std::vector<Outfit>& v) {
     auto lower = [](std::string s) { for (auto& c : s) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a'); return s; };
     v.erase(std::remove_if(v.begin(), v.end(), [](const Outfit& o) { return o.colors.empty(); }), v.end());
     std::stable_sort(v.begin(), v.end(), [&](const Outfit& a, const Outfit& b) {
-        const bool ea = !a.mod_id.empty(), eb = !b.mod_id.empty();
+        const bool ea = a.extra, eb = b.extra;
         if (ea != eb) return !ea;
         if (!ea) return a.costume < b.costume;
         const std::string la = lower(a.name), lb = lower(b.name);

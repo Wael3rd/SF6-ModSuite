@@ -18,11 +18,12 @@ static Fighter ryu() {
     f.fid = 1;
     f.name = "Ryu";
     f.outfits = {
-        { 9, "abc123", "zeta Ryu", { 0, 1, 2 } },
-        { 1, "", "Outfit 2", { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 } },
-        { 0, "", "Outfit 1", { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 200, 201 } },
-        { 5, "def456", "Aloha Ryu", { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 } },
-        { 7, "nocol", "No colours", {} },
+        { 9, "abc123", "zeta Ryu", true, { 0, 1, 2 } },
+        { 1, "", "Outfit 2", false, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 } },
+        { 0, "", "Outfit 1", false, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 200, 201 } },
+        { 5, "def456", "Aloha Ryu", true, { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 } },
+        { 7, "nocol", "No colours", true, {} },
+        { 6, "", "Beta (no mod id)", true, { 0, 1 } },
     };
     sort_outfits(f.outfits);
     return f;
@@ -30,9 +31,10 @@ static Fighter ryu() {
 
 int main() {
     const Fighter f = ryu();
-    check(f.outfits.size() == 4, "an outfit without colours is dropped");
+    check(f.outfits.size() == 5, "an outfit without colours is dropped");
     check(f.outfits[0].costume == 0 && f.outfits[1].costume == 1, "game outfits first, by costume number");
-    check(f.outfits[2].name == "Aloha Ryu" && f.outfits[3].name == "zeta Ryu", "then extra outfits by name, case-insensitive");
+    check(f.outfits[2].name == "Aloha Ryu" && f.outfits[3].name == "Beta (no mod id)" && f.outfits[4].name == "zeta Ryu",
+          "then extra outfits by name, case-insensitive");
 
     // outfit cycling
     Choice c;
@@ -48,13 +50,15 @@ int main() {
     c = cycle_outfit(f, c, +1);
     check(c.costume == 5 && c.mod_id == "def456" && c.color == 5, "Aloha Ryu keeps colour 5");
     c = cycle_outfit(f, c, +1);
+    check(c.costume == 6 && c.mod_id.empty() && c.color == 0, "an extra outfit without a mod id: by its number, no colour 5");
+    c = cycle_outfit(f, c, +1);
     check(c.costume == 9 && c.mod_id == "abc123" && c.color == 0, "zeta Ryu has no colour 5: colour 0");
     c = cycle_outfit(f, c, +1);
     check(!c.forced && row_text(f, c) == "Default", "Right from the last outfit: back to Default");
     c = cycle_outfit(f, c, -1);
     check(c.forced && c.costume == 9 && c.mod_id == "abc123", "Left from Default: the last outfit");
     c = cycle_outfit(f, c, -1);
-    check(c.costume == 5 && c.mod_id == "def456", "Left again: the previous outfit");
+    check(c.costume == 6, "Left again: the previous outfit");
     Fighter empty;
     empty.fid = 99;
     check(!cycle_outfit(empty, Choice{}, +1).forced, "a fighter without outfits stays Default");

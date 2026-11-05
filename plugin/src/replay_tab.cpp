@@ -20,8 +20,12 @@
 //     space). They live and die with the screen's tree (R35: found again by name every frame, every write through the
 //     core). Text, place, font, colour and visibility from LateUpdateBehavior (R1).
 //   - Input: read natively while the game window has the focus (keys by scancode, so any keyboard layout: W A S D
-//     places and the arrows; via.hid.GamePad's merged device: d-pad, left stick, X / Square), never hooked; the game's
-//     own reading is off on the hidden page (BlockInput).
+//     places and the arrows; via.hid.GamePad's merged device: d-pad, left stick, X / Square), never hooked. The
+//     screen's whole input goes through the page's agent (its BlockInput also stops the tab bar's A / E and Esc: seen
+//     05/11), so Back is ours too: the tab-back key (Q place, the game's default), Esc, pad L1 or B go back to Search,
+//     and the page gets its input back only once that key is released (the game never sees the press).
+//   - The tab items' look is their via.gui PlayState: c_item_05 is DISABLE as the game leaves it, DEFAULT shown,
+//     SELECT while ours (c_item_04 DEFAULT meanwhile, SELECT again when we leave).
 // Gate: nothing but one core registry read every 15 frames while the Replays screen is not up.
 #include "slots.hpp"
 #include "slots_ui.hpp"
@@ -50,7 +54,6 @@ constexpr const char* kTabLabel = "Replay Outfits";
 constexpr float kXName = 170, kXValue = 560, kYHead = 150, kYRow0 = 200, kDy = 37, kYHelp = 200 + kRows * 37 + 18;
 constexpr float kFontRow = 28, kFontHead = 30, kFontHelp = 24;
 constexpr uint32_t kColText = 0xFFFFFFFF, kColDim = 0xFFC8C8C8, kColFocus = 0xFF40D0FF;   // via.Color raw (R low byte)
-const char* const kFocusParts[] = { "e_scale9grid_focus", "e_scale9grid_focus_line", "e_scale9grid_focus_line0" };
 
 const SF6CoreAPI* A() { return ui::core(); }
 SF6CoreClient* C() { return ui::client(); }
@@ -61,6 +64,7 @@ std::atomic<uintptr_t> g_main_addr{ 0 };         // its main control (frame)
 std::atomic<int> g_tab{ -1 };                     // the game's tab as the frame last read it
 std::atomic<bool> g_ours{ false };
 std::atomic<bool> g_enter{ false }, g_leave{ false };
+bool g_leaving = false;                           // Back pressed on our page: the page waits for the key's release
 std::atomic<int> g_refused{ 0 };
 std::atomic<int> g_copy_status{ 1000 };
 std::atomic<uint32_t> g_swallowed{ 0 };
@@ -81,6 +85,7 @@ std::set<uintptr_t> g_styled;
 int g_status_logged = 1000;
 bool g_place_logged = false;
 uint32_t g_enter_frame = 0;
+std::string g_back_hint = "L1";                   // the bar's tab-back guide text (the game's icon of the key)
 
 std::string copy_name(const char* what, int i) {
     char b[48];
@@ -191,7 +196,8 @@ void build_catalog() {
                 Outfit o;
                 o.costume = cos;
                 auto m = mod_of.find({ fid, cos });
-                o.mod_id = m != mod_of.end() && !m->second.empty() ? m->second : "slot-" + std::to_string(fid) + "-" + std::to_string(cos);
+                o.extra = true;
+                if (m != mod_of.end()) o.mod_id = m->second;            // none known: the file names the slot by its number
                 auto l = label_of.find({ fid, cos });
                 const Json* nm = e.get("name");
                 o.name = l != label_of.end() && !l->second.empty() ? l->second : nm ? nm->as_str() : "Outfit " + std::to_string(cos);
@@ -265,10 +271,10 @@ struct Rep {
     }
     void prime(bool now) { held = now; next = g_frame + 1000000; }   // a key held at entry acts only once released
 };
-Rep k_up, k_down, k_left, k_right, k_color;
+Rep k_up, k_down, k_left, k_right, k_color, k_back;
 Method* m_pad_merged = nullptr;
 Method* m_pad_button = nullptr;
-uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_x = 64;    // via.hid.GamePadButton, read at init
+uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_x = 64, b_l1 = 256, b_b = 128;   // via.hid.GamePadButton
 uint32_t b_sup = 0, b_sdown = 0, b_sleft = 0, b_sright = 0;
 
 bool focused() {
@@ -290,7 +296,7 @@ uint32_t pad_buttons() {
     auto r = call(m_pad_button, dev);
     return r.exception_thrown ? 0u : r.dword;
 }
-struct Keys { bool up, down, left, right, color; };
+struct Keys { bool up, down, left, right, color, back; };
 Keys read_keys() {
     Keys k{};
     if (focused()) {
@@ -299,6 +305,7 @@ Keys read_keys() {
         k.left = vk_down(VK_LEFT) || sc_down(0x1E);
         k.right = vk_down(VK_RIGHT) || sc_down(0x20);
         k.color = sc_down(0x13);                   // R (its place on a QWERTY keyboard)
+        k.back = vk_down(VK_ESCAPE) || sc_down(0x10);   // Esc, the tab-back key (Q's place: A on AZERTY)
     }
     const uint32_t b = pad_buttons();
     k.up = k.up || (b & b_up) || (b_sup && (b & b_sup));
@@ -306,19 +313,25 @@ Keys read_keys() {
     k.left = k.left || (b & b_left) || (b_sleft && (b & b_sleft));
     k.right = k.right || (b & b_right) || (b_sright && (b & b_sright));
     k.color = k.color || (b & b_x);
+    k.back = k.back || (b & b_l1) || (b & b_b);
     return k;
 }
 void prime_keys() {
     const Keys k = read_keys();
-    k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right); k_color.prime(k.color);
+    k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right); k_color.prime(k.color); k_back.prime(k.back);
 }
 void input() {
-    if (g_cat.empty()) return;
     const Keys k = read_keys();
+    if (k_back.step(k.back)) {                     // back to Search (the page's input comes back once released)
+        g_ours.store(false);
+        g_leaving = true;
+        return;
+    }
     const int n = static_cast<int>(g_cat.size());
     if (k_up.step(k.up)) g_cursor = move_cursor(g_cursor, -1, n);
     if (k_down.step(k.down)) g_cursor = move_cursor(g_cursor, 1, n);
     g_cursor = std::max(0, std::min(g_cursor, n - 1));
+    if (g_cat.empty()) return;
     const Fighter& f = g_cat[static_cast<size_t>(g_cursor)];
     auto it = g_choices.find(f.fid);
     const Choice cur = it != g_choices.end() ? it->second : Choice{};
@@ -341,11 +354,15 @@ bool actual_visible(Obj* ctrl) {
 void* find(void* root, const char* name) { return root ? A()->ui_find_cached(root, name) : nullptr; }
 void set_vis(void* c, bool on) { if (c) A()->ui_set_visible(C(), c, on ? 1 : 0); }
 
-void set_focus_parts(void* item, bool on) {
-    for (const char* p : kFocusParts) set_vis(item ? A()->ui_find_child(item, p, 1) : nullptr, on);
+// A tab item's look (via.gui PlayState: DEFAULT, SELECT, DISABLE), written when it differs
+void set_state(void* item, const char* st) {
+    if (!item) return;
+    if (str(call_obj(static_cast<Obj*>(item), "get_PlayState")) == st) return;
+    SF6CoreArg a{}; a.type = SF6CORE_ARG_STR; a.v.s = st;
+    A()->obj_invoke(C(), item, "set_PlayState(System.String)", &a, 1, nullptr);
 }
 
-// The tab bar: c_item_05 shown with our label (its mouse hit area hidden: the game's list has 5 items), focused while
+// The tab bar: c_item_05 shown with our label (its mouse hit area hidden: the game's list has 5 items), selected while
 // ours; the bar's right guide moved past it, once per screen build
 void tab_bar(Obj* main) {
     void* item5 = find(main, "c_item_05");
@@ -354,8 +371,8 @@ void tab_bar(Obj* main) {
     if (void* t = A()->ui_find_child(item5, "e_text_menu", 1)) A()->ui_set_text(C(), t, kTabLabel);
     set_vis(A()->ui_find_child(item5, "e_hit_mouse", 1), false);
     set_vis(A()->ui_find_child(item5, "c_batch", 1), false);
-    set_focus_parts(item5, g_ours.load());
-    if (g_ours.load()) set_focus_parts(find(main, "c_item_04"), false);
+    set_state(item5, g_ours.load() ? "SELECT" : "DEFAULT");
+    if (g_ours.load()) set_state(find(main, "c_item_04"), "DEFAULT");
     if (!g_guide_moved) {
         g_guide_moved = true;
         Obj* guide = static_cast<Obj*>(find(main, "p_InputGuide_R_s_dUITabR"));
@@ -439,8 +456,7 @@ void render(Obj* main) {
     const int n = static_cast<int>(g_cat.size());
     g_top_row = window_top(g_top_row, g_cursor, n, kRows);
     char head[96];
-    std::snprintf(head, sizeof head, "Outfits in replays   %s%d / %d%s", g_top_row > 0 ? "\xE2\x96\xB2 " : "", n ? g_cursor + 1 : 0, n,
-                  g_top_row + kRows < n ? " \xE2\x96\xBC" : "");
+    std::snprintf(head, sizeof head, "Outfits in replays   %d / %d", n ? g_cursor + 1 : 0, n);   // the title font has no triangle
     put(title, "e_text_ro_head", n ? head : "No character found", kXName, kYHead, kFontHead, kColText);
     for (int r = 0; r < kRows; ++r) {
         const int i = g_top_row + r;
@@ -454,13 +470,12 @@ void render(Obj* main) {
         auto it = g_choices.find(f.fid);
         const Choice c = it != g_choices.end() ? it->second : Choice{};
         const bool foc = i == g_cursor;
-        put(title, copy_name("name", r), (foc ? "\xE2\x96\xB7 " : "    ") + f.name, kXName, y, kFontRow, foc ? kColFocus : kColText);
-        std::string v = row_text(f, c);
-        if (foc) v = "\xE2\x97\x81  " + v + "  \xE2\x96\xB7";   // the game's own row arrows
-        put(title, copy_name("value", r), v, kXValue, y, kFontRow, foc ? kColFocus : (c.forced ? kColText : kColDim));
+        // the focused row in the focus colour only: the title font draws no triangle, and '<' opens a text tag
+        put(title, copy_name("name", r), f.name, kXName, y, kFontRow, foc ? kColFocus : kColText);
+        put(title, copy_name("value", r), row_text(f, c), kXValue, y, kFontRow, foc ? kColFocus : (c.forced ? kColText : kColDim));
     }
-    put(title, "e_text_ro_help", "Up / Down: character     Left / Right: outfit     R / Square (X): colour     Saved at once",
-        kXName, kYHelp, kFontHelp, kColDim);
+    put(title, "e_text_ro_help", "Up / Down: character     Left / Right: outfit     R / Square (X): colour     " + g_back_hint +
+        " / Esc: back     Saved at once", kXName, kYHelp, kFontHelp, kColDim);
     g_copies_shown = true;
     if (!g_place_logged && g_frame - g_enter_frame == 3) {
         g_place_logged = true;
@@ -475,26 +490,32 @@ void render(Obj* main) {
 
 void enter(Obj* main) {
     g_enter_frame = g_frame;
+    if (void* g = find(main, "p_InputGuide_L_s_dUITabL")) {
+        if (Obj* t = static_cast<Obj*>(A()->ui_find_child(g, "e_text_0", 1))) {
+            const std::string m = str(call_obj(t, "get_Message"));
+            if (!m.empty()) g_back_hint = m;
+        }
+    }
     g_place_logged = false;
     build_catalog();                              // each time: the NSFW setting may have changed
     load_choices();
     hide_page(false);
     prime_keys();
     g_cursor = std::max(0, std::min(g_cursor, static_cast<int>(g_cat.size()) - 1));
-    logf("replay tab: entered (%zu forced in the file)", g_choices.size());
-    (void)main;
+    logf("replay tab: entered (%zu forced in the file, back key shown as %s)", g_choices.size(), g_back_hint.c_str());
 }
 
 void leave(Obj* main, const char* why) {
     restore_page();
     hide_copies(main);
-    if (main) set_focus_parts(find(main, "c_item_04"), true);
-    if (main) set_focus_parts(find(main, "c_item_05"), false);
+    if (main) set_state(find(main, "c_item_04"), "SELECT");
+    if (main) set_state(find(main, "c_item_05"), "DEFAULT");
     g_ours.store(false);
     logf("replay tab: left (%s)", why);
 }
 
 void down() {                                      // the screen went: nothing of ours left behind
+    g_leaving = false;
     if (g_ours.load() || !g_hidden.empty()) leave(nullptr, "the Replays screen closed");
     g_enter.store(false);
     g_leave.store(false);
@@ -530,6 +551,7 @@ void init() {
     if (TD* btn = api().tdb()->find_type("via.hid.GamePadButton")) {
         auto bit = [&](const char* f, uint32_t fb) { auto* x = btn->find_field(f); return x ? static_cast<uint32_t>(x->get_data<int32_t>(nullptr)) : fb; };
         b_up = bit("LUp", 1); b_down = bit("LDown", 2); b_left = bit("LLeft", 4); b_right = bit("LRight", 8); b_x = bit("RLeft", 64);
+        b_l1 = bit("LTrigTop", 256); b_b = bit("RRight", 128);
         b_sup = bit("EmuLup", 0); b_sdown = bit("EmuLdown", 0); b_sleft = bit("EmuLleft", 0); b_sright = bit("EmuLright", 0);
     }
     g_ok = true;
@@ -573,6 +595,11 @@ void tick() {
     }
     if (g_enter.exchange(false) && g_ours.load()) enter(main);
     if (g_leave.exchange(false)) leave(main, "tab back");
+    if (g_leaving) {
+        hide_copies(main);
+        const Keys k = read_keys();
+        if (!k.back) { g_leaving = false; leave(main, "back key"); }
+    }
     tab_bar(main);
     if (g_ours.load()) {
         if (g_frame % 30 == 0 && g_hidden.empty()) hide_page(true);   // the page's agents were not up yet at entry
@@ -588,7 +615,7 @@ void tick() {
 void frame() {
     if (!g_init) { g_init = true; try { init(); } catch (...) { logf("replay tab: EXCEPTION at init"); } }
     if (!g_ok) return;
-    if (!g_up && !g_ours.load() && (g_frame % kPollEvery) != 0) return;
+    if (!g_up && !g_ours.load() && !g_leaving && (g_frame % kPollEvery) != 0) return;
     try {
         tick();
     } catch (const std::exception& e) {
