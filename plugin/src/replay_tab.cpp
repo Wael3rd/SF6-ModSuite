@@ -37,6 +37,8 @@
 //     grid from the rows, to Search from the grid; the page gets its input back only once that key is released.
 //   - The tab items' look is their via.gui PlayState: c_item_05 is DISABLE as the game leaves it, DEFAULT shown,
 //     SELECT while ours (c_item_04 DEFAULT meanwhile, SELECT again when we leave).
+//   - The focused character in 3D, as the game's own page shows it: Battle Settings' fighter capture room, borrowed
+//     while our page is up (namespace preview below); its render target on a texture copy, the 2D portrait meanwhile.
 // Gate: nothing but one core registry read every 15 frames while the Replays screen is not up.
 #include "slots.hpp"
 #include "slots_ui.hpp"
@@ -65,6 +67,11 @@ constexpr int kCols = 4, kVisRows = 8, kCells = kCols * kVisRows, kPanelRows = 3
 constexpr float kGridX = 760, kGridY = 184, kCellW = 160, kCellH = 72, kStepX = 168, kStepY = 80;
 constexpr float kRowX = 60, kRowY = 250, kRowW = 640, kRowH = 58, kRowStep = 70;
 constexpr float kBigX = 200, kBigY = 500, kBigW = 400, kBigH = 300;
+// the 3D preview: the middle of the render target (16:9, the fighter stands in its middle), drawn below the rows
+// (read on Battle Settings' page, which draws the whole target at 2304 x 1296 centred on 1437, 605: Luke spans u 0.32 -
+// 0.54, v 0.21 - 0.82; a tall fighter's head reaches v 0.05)
+constexpr float kModelX = 130, kModelY = 452, kModelW = 520, kModelH = 500;
+constexpr double kModelU = 0.18, kModelV = 0.05, kModelUW = 0.50, kModelVH = 0.85;
 constexpr float kFontCell = 24, kFontRow = 30, kFontName = 44, kFontHelp = 24;
 // via.Color raw (R in the low byte)
 constexpr uint32_t kColText = 0xFFFFFFFF, kColDim = 0xFF8C8C8C, kColFocus = 0xFF40D0FF, kColOn = 0xFFFFB040;
@@ -104,6 +111,8 @@ bool g_edit = false;                              // the focused character's row
 int g_row = 0;                                    // the focused row while editing
 bool g_copies_shown = false, g_dirty = true;
 uint32_t g_drawn_at = 0;
+uintptr_t g_model_tex = 0;                        // the model copy given the render target (address)
+bool g_model_shown = false;
 std::set<uintptr_t> g_styled;
 int g_status_logged = 1000;
 bool g_place_logged = false;
@@ -132,6 +141,7 @@ const std::vector<Copy>& copies() {
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cbg", i), kRect });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cimg", i), kImage });
     v.push_back({ "e_ro_bigimg", kImage });
+    v.push_back({ "e_ro_model", kImage });         // the 3D preview: the capture room's render target
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("cname", i), kText });
     for (int i = 0; i < kCells; ++i) v.push_back({ cname("con", i), kText });
     for (int r = 0; r < kPanelRows; ++r) { v.push_back({ cname("rlbl", r), kText }); v.push_back({ cname("rval", r), kText }); }
@@ -315,6 +325,242 @@ void load_faces() {
         else g_faces[f.fid] = nullptr;
     }
 }
+
+// ---- the 3D preview: Battle Settings' fighter capture room, borrowed while our page is up ----
+// The CFN scene's app.worldtour.CaptureRoomObserver has the capture room scenes of every kind registered, Battle Settings'
+// fighter room included (type 5, product/content/gui/CaptureRoom/CaptureRoom_BattleSettingFighter). The way the game's
+// UIPartsBattleSettingFighterCapture shows a fighter (its SetupCaptureRoom / ResetCapture, read 05/11):
+// DeactivateCaptureRoom(5, "") then RequestLoadCaptureRoom(5, [RequestFighterData(fighter, costume, colour, near)], null,
+// ""); once the room's controller is set up, controller.Activate("", false, false). The room's camera draws into
+// Product/GUI/menu/ui91000/ui91060/RTT_MatchingFighterSetting.rtex (Battle Settings' preview texture): a holder of that
+// render target shown on one of our texture copies shows the model. Never CaptureRoomParamBase.ChangeMainCamera: called
+// from the Replays menu it left the main menu's rendering broken (05/11).
+// A change of fighter / outfit / colour: the room given back and asked again (as the game does), after the choice held
+// still for kPreviewSettle frames. Shown only once the room's fighter is the one asked, ready (CurrentState 6) for
+// kPreviewShowAfter frames; the 2D portrait meanwhile and whenever anything fails (kPreviewTries requests without a
+// model: the portrait for the rest of the session). Given back when the page goes (tab back, another tab, the screen
+// closed): no room nor fighter left behind.
+namespace preview {
+constexpr int kRoomType = 5;                      // app.worldtour.CaptureRoomObserver.CaptureRoomType.BattleSettingFighter
+constexpr int kStateReady = 6;                    // app.worldtour.CaptureRoomFighter.State when drawn in Battle Settings
+constexpr uint32_t kSettle = 15, kShowAfter = 8, kTimeout = 600, kPollEvery = 5;
+constexpr int kTries = 3;
+const char* const kRtt = "Product/GUI/menu/ui91000/ui91060/RTT_MatchingFighterSetting.rtex";
+
+struct Want { int fid = 0, cos = 0, col = 0; bool operator==(const Want& o) const { return fid == o.fid && cos == o.cos && col == o.col; } };
+bool g_off = false;                               // given up for the session (types missing, or kTries failures)
+bool g_ready_types = false;
+Method *m_request = nullptr, *m_deactivate = nullptr, *m_activate = nullptr, *m_list_add = nullptr, *m_list_ctor = nullptr;
+TD *t_list = nullptr, *t_req = nullptr, *t_ctrl = nullptr, *t_obs = nullptr;
+Obj* g_rtt = nullptr;                             // RenderTargetTextureResourceHolder, held for the session
+Want g_want, g_asked;                             // what the page shows; what the room was asked for
+uint32_t g_want_since = 0, g_asked_at = 0, g_ready_since = 0, g_poll_at = 0;
+bool g_room = false;                              // a room of ours is asked or up
+bool g_activated = false, g_ready = false;
+Obj* g_ctrl = nullptr;                            // the room's controller once found (checked alive before each use)
+Obj *g_list = nullptr, *g_req = nullptr;          // our request objects, held until the next request
+int g_fails = 0;
+uint32_t g_requests = 0;
+
+bool types() {
+    if (g_ready_types) return true;
+    auto* tdb = api().tdb();
+    t_obs = tdb->find_type("app.worldtour.CaptureRoomObserver");
+    t_ctrl = tdb->find_type("app.worldtour.CaptureRoomController");
+    t_req = tdb->find_type("app.worldtour.CaptureRoomObserver.RequestFighterData");
+    t_list = tdb->find_type("System.Collections.Generic.List`1<app.worldtour.CaptureRoomObserver.RequestObjDataBase>");
+    m_request = t_obs ? method_of(t_obs, "RequestLoadCaptureRoom", 4) : nullptr;
+    m_deactivate = t_obs ? method_of(t_obs, "DeactivateCaptureRoom", 2) : nullptr;
+    m_activate = t_ctrl ? t_ctrl->find_method("Activate(System.String, System.Boolean, System.Boolean)") : nullptr;
+    if (!m_activate && t_ctrl) m_activate = method_of(t_ctrl, "Activate", 3);
+    m_list_add = t_list ? method_of(t_list, "Add", 1) : nullptr;
+    m_list_ctor = t_list ? t_list->find_method(".ctor(System.Int32)") : nullptr;
+    g_ready_types = t_obs && t_ctrl && t_req && t_list && m_request && m_deactivate && m_activate && m_list_add && m_list_ctor;
+    if (!g_ready_types) {
+        g_off = true;
+        logf("replay tab: 3D preview off (capture room types or methods missing: observer %d controller %d request %d list %d, "
+             "methods %d %d %d %d %d)", t_obs != nullptr, t_ctrl != nullptr, t_req != nullptr, t_list != nullptr, m_request != nullptr,
+             m_deactivate != nullptr, m_activate != nullptr, m_list_add != nullptr, m_list_ctor != nullptr);
+    }
+    return g_ready_types;
+}
+
+Obj* observer() {
+    Obj* list = find_components(t_obs);
+    return list_count(list) > 0 ? list_item(list, 0) : nullptr;
+}
+Obj* find_controller() {
+    Obj* list = find_components(t_ctrl);
+    for (int i = 0, n = list_count(list); i < n; ++i) {
+        Obj* c = list_item(list, i);
+        int32_t t = -1;
+        if (c && get_i32(c, "<RoomType>k__BackingField", t) && t == kRoomType) return c;
+    }
+    return nullptr;
+}
+Obj* rtt() {
+    if (g_rtt) return g_rtt;
+    auto* rm = api().resource_manager();
+    auto* res = rm ? rm->create_resource("via.render.RenderTargetTextureResource", kRtt) : nullptr;
+    if (!res) return nullptr;
+    res->add_ref();
+    auto fn = api().sdk()->resource->create_holder;
+    Obj* h = fn ? reinterpret_cast<Obj*>(fn(reinterpret_cast<REFrameworkResourceHandle>(res), "via.render.RenderTargetTextureResourceHolder")) : nullptr;
+    res->release();
+    if (h) h->add_ref();
+    g_rtt = h;
+    return g_rtt;
+}
+
+void drop_request_objects() {
+    if (g_req) { g_req->release(); g_req = nullptr; }
+    if (g_list) { g_list->release(); g_list = nullptr; }
+}
+// DeactivateCaptureRoom(5, ""): the room and its fighter go
+void give_back(const char* why) {
+    if (!g_room) return;
+    g_room = false;
+    g_ready = false;
+    g_activated = false;
+    g_ctrl = nullptr;
+    if (Obj* obs = observer()) {
+        Obj* empty = new_string("");
+        if (empty) empty->add_ref();
+        call(m_deactivate, obs, { arg_i32(kRoomType), arg_obj(empty) });
+        if (empty) empty->release();
+    }
+    drop_request_objects();
+    logf("replay tab: 3D preview room given back (%s)", why);
+}
+// RequestLoadCaptureRoom(5, [RequestFighterData], null, "")
+bool ask(const Want& w) {
+    Obj* obs = observer();
+    if (!obs) return false;
+    Obj* list = t_list->create_instance(0);
+    if (!list) list = t_list->create_instance(1);
+    bool owned = false;                           // a copy from the core comes with our reference already
+    if (!list) {
+        // a copy of an existing list of that type (a capture controller's), given its own array by .ctor(Int32)
+        Obj* cl = find_components(t_ctrl);
+        for (int i = 0, n = list_count(cl); i < n && !list; ++i)
+            if (Obj* src = get_obj(list_item(cl, i), "RequestObjDatas")) { list = ui::clone(src); owned = list != nullptr; }
+    }
+    Obj* req = t_req->create_instance(1);
+    if (!list || !req) {
+        if (list && owned) list->release();
+        logf("replay tab: 3D preview: request objects not made (list %p, request %p)", (void*)list, (void*)req);
+        return false;
+    }
+    if (!owned) list->add_ref();
+    req->add_ref();
+    call(m_list_ctor, list, { arg_i32(4) });
+    set_i32(req, "FighterID", w.fid);
+    set_i32(req, "CostumeID", w.cos);
+    set_i32(req, "ColorId", w.col);
+    set_bool(req, "IsNear", false);
+    call(m_list_add, list, { arg_obj(req) });
+    if (list_count(list) != 1) { req->release(); list->release(); logf("replay tab: 3D preview: request list refused the fighter"); return false; }
+    Obj* empty = new_string("");
+    if (empty) empty->add_ref();
+    const auto r = call(m_request, obs, { arg_i32(kRoomType), arg_obj(list), nullptr, arg_obj(empty) });
+    if (empty) empty->release();
+    if (r.exception_thrown) { req->release(); list->release(); logf("replay tab: 3D preview: the request threw"); return false; }
+    drop_request_objects();
+    g_list = list;
+    g_req = req;
+    g_room = true;
+    g_asked = w;
+    g_asked_at = g_frame;
+    g_activated = false;
+    g_ready = false;
+    g_ctrl = nullptr;
+    ++g_requests;
+    return true;
+}
+
+// The page shows this fighter in this outfit (fid 0: nothing)
+void want(int fid, int cos, int col) {
+    Want w{ fid, cos, col };
+    if (!(w == g_want)) { g_want = w; g_want_since = g_frame; }
+}
+
+// The room's fighter: the one asked, and how far it is
+bool fighter_state(Obj* ctrl, int* fid, int* col, int* vis, int* state) {
+    Obj* oc = ctrl ? get_obj(ctrl, "ObjectCtrl") : nullptr;
+    Obj* mo = oc ? get_obj(oc, "ManageObjects") : nullptr;
+    if (list_count(mo) < 1) return false;
+    Obj* f = list_item(mo, 0);
+    if (!alive(f)) return false;
+    get_i32(f, "<FighterId>k__BackingField", *fid);
+    get_i32(f, "<ColorId>k__BackingField", *col);
+    get_i32(f, "<VisualId>k__BackingField", *vis);
+    get_i32(f, "CurrentState", *state);
+    return true;
+}
+
+// Every frame while the page is up: the room follows the wanted fighter
+void frame() {
+    if (g_off || !types()) return;
+    if (!g_want.fid) { give_back("no fighter"); return; }
+    // ask again once the choice held still
+    if ((!g_room || !(g_asked == g_want)) && g_frame - g_want_since >= kSettle) {
+        if (g_room) give_back("another fighter / outfit / colour");
+        if (!ask(g_want)) {
+            if (++g_fails >= kTries) { g_off = true; logf("replay tab: 3D preview off for the session (%d failed requests)", g_fails); }
+            g_want_since = g_frame;               // tried again after kSettle
+            return;
+        }
+        logf("replay tab: 3D preview asked: fighter %d costume %d colour %d (request %u)", g_want.fid, g_want.cos, g_want.col, g_requests);
+    }
+    if (!g_room) return;
+    if (g_ctrl && !alive(g_ctrl)) g_ctrl = nullptr;
+    if (!g_ctrl && (g_frame - g_poll_at >= kPollEvery)) { g_poll_at = g_frame; g_ctrl = find_controller(); }
+    if (!g_ctrl) {
+        if (g_frame - g_asked_at > kTimeout) {
+            logf("replay tab: 3D preview: no room %u frames after the request", kTimeout);
+            give_back("no room");
+            if (++g_fails >= kTries) { g_off = true; logf("replay tab: 3D preview off for the session (%d failures)", g_fails); }
+        }
+        return;
+    }
+    bool setup = false;
+    get_bool(g_ctrl, "<IsSetUpEnd>k__BackingField", setup);
+    if (setup && !g_activated) {
+        g_activated = true;
+        Obj* empty = new_string("");
+        if (empty) empty->add_ref();
+        call(m_activate, g_ctrl, { arg_obj(empty), arg_bool(false), arg_bool(false) });
+        if (empty) empty->release();
+    }
+    int fid = 0, col = -1, vis = -1, state = -1;
+    const bool has = fighter_state(g_ctrl, &fid, &col, &vis, &state);
+    const bool now = has && fid == g_asked.fid && col == g_asked.col && state == kStateReady && g_activated;
+    if (now && !g_ready) {
+        if (!g_ready_since) g_ready_since = g_frame;
+        if (g_frame - g_ready_since >= kShowAfter) {
+            g_ready = true;
+            g_fails = 0;
+            logf("replay tab: 3D preview ready: fighter %d visual %d colour %d, %u frames after the request", fid, vis, col, g_frame - g_asked_at);
+        }
+    } else if (!now) {
+        g_ready_since = 0;
+        if (g_ready) logf("replay tab: 3D preview lost its model (fighter %d state %d)", fid, state);
+        g_ready = false;
+        if (g_frame - g_asked_at > kTimeout && has && state != kStateReady) {
+            logf("replay tab: 3D preview: the fighter stays in state %d", state);
+            give_back("model not ready");
+            if (++g_fails >= kTries) { g_off = true; logf("replay tab: 3D preview off for the session (%d failures)", g_fails); }
+        }
+    }
+}
+// The model shows exactly what the page wants
+bool showing() { return !g_off && g_ready && g_asked == g_want; }
+void stop(const char* why) {
+    give_back(why);
+    g_want = Want{};
+    g_ready_since = 0;
+}
+}  // namespace preview
 
 // ---- input ----
 struct Rep {
@@ -589,6 +835,33 @@ void put_image(void* title, const std::string& name, int fid, float x, float y, 
     }
     show(c, ready);
 }
+void put_model(void* title, bool on) {
+    void* c = copy_of(title, "e_ro_model");
+    if (!c) return;
+    style_box(c, kPrioImage);
+    if (on && g_model_tex != reinterpret_cast<uintptr_t>(c)) {
+        Obj* h = preview::rtt();
+        if (!h) on = false;
+        else {
+            SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = h;
+            A()->obj_invoke(C(), c, "setTexture(via.render.TextureResourceHolder)", &a, 1, nullptr);
+            SF6CoreArg t{}; t.type = SF6CORE_ARG_I64; t.v.i = 1;
+            A()->obj_invoke(C(), c, "set_UVType(via.gui.UVValueType)", &t, 1, nullptr);
+            auto setf = [&](const char* sig, double v) { SF6CoreArg f{}; f.type = SF6CORE_ARG_F64; f.v.f = v; A()->obj_invoke(C(), c, sig, &f, 1, nullptr); };
+            setf("set_UVU(System.Single)", kModelU);
+            setf("set_UVV(System.Single)", kModelV);
+            setf("set_UVW(System.Single)", kModelUW);
+            setf("set_UVH(System.Single)", kModelVH);
+            g_model_tex = reinterpret_cast<uintptr_t>(c);
+        }
+    }
+    if (on) {
+        A()->ui_set_color(C(), c, kColText);
+        A()->ui_set_position(C(), c, kModelX, kModelY, 0);
+        A()->ui_set_size(C(), c, kModelW, kModelH);
+    }
+    show(c, on);
+}
 void put_text(void* title, const std::string& name, const std::string& text, float x, float y, float font, uint32_t col, bool on = true) {
     void* c = copy_of(title, name);
     if (!c) return;
@@ -656,7 +929,11 @@ void render(Obj* main) {
     }
     put_box(title, "e_ro_rfocus", kRowX - 3, kRowY + g_row * kRowStep - 3, kRowW + 6, kRowH + 6, kColBorder, g_edit && f != nullptr,
             kPrioBorder);
-    put_image(title, "e_ro_bigimg", f ? f->fid : 0, kBigX, kBigY, kBigW, kBigH, f != nullptr);
+    if (f) preview::want(f->fid, c.forced ? c.costume : 0, c.forced ? c.color : 0);   // Default: the base outfit
+    const bool model = f && preview::showing();
+    g_model_shown = model;
+    put_model(title, model);
+    put_image(title, "e_ro_bigimg", f ? f->fid : 0, kBigX, kBigY, kBigW, kBigH, f != nullptr && !model);
     const std::string help = g_edit ? "Up / Down: setting     Left / Right: change     R / Square (X): colour     F / Esc: done"
                                     : "F: edit     Arrows: character     R / Square (X): colour     " + g_back_hint + " / Esc: back";
     put_text(title, "e_ro_help", help, kRowX + 20, 960, kFontHelp, kColDim);
@@ -694,6 +971,7 @@ void enter(Obj* main) {
 }
 
 void leave(Obj* main, const char* why) {
+    preview::stop(why);
     restore_page();
     hide_copies(main);
     if (main) set_state(find(main, "c_item_04"), "SELECT");
@@ -705,6 +983,7 @@ void leave(Obj* main, const char* why) {
 
 void down() {                                      // the screen went: nothing of ours left behind
     g_leaving = false;
+    preview::stop("the Replays screen closed");
     if (g_ours.load() || !g_hidden.empty()) leave(nullptr, "the Replays screen closed");
     g_enter.store(false);
     g_leave.store(false);
@@ -715,6 +994,7 @@ void down() {                                      // the screen went: nothing o
     g_main_seen = 0;
     g_copies_shown = false;
     g_styled.clear();
+    g_model_tex = 0;
 }
 
 void init() {
@@ -770,6 +1050,7 @@ void tick() {
         g_styled.clear();
         g_copies_shown = false;
         g_dirty = true;
+        g_model_tex = 0;
     }
     int32_t sel = -1;
     if (Obj* ti = get_obj(agent, "_TabItem")) {
@@ -797,7 +1078,9 @@ void tick() {
     if (g_ours.load()) {
         if (g_frame % 30 == 0 && g_hidden.empty()) hide_page(true);   // the page's agents were not up yet at entry
         input();
-        render(main);
+        render(main);                             // sets the wanted model
+        preview::frame();
+        if (preview::showing() != g_model_shown) g_dirty = true;
     } else {
         hide_copies(main);
     }
