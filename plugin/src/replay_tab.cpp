@@ -64,6 +64,7 @@ std::atomic<bool> g_enter{ false }, g_leave{ false };
 std::atomic<int> g_refused{ 0 };
 std::atomic<int> g_copy_status{ 1000 };
 std::atomic<uint32_t> g_swallowed{ 0 };
+std::atomic<uint32_t> g_leave_frame{ 0 };
 thread_local bool tl_skipped = false;
 
 // ---- frame state ----
@@ -122,10 +123,11 @@ int decide(void* self, int dir, uint32_t flag) {
     if (!top || reinterpret_cast<uintptr_t>(self) != top || g_closing.load(std::memory_order_relaxed)) return kCall;
     const bool acts = (flag & kActFlags) != 0;
     if (g_ours.load(std::memory_order_acquire)) {
-        if (acts && dir < 0) { g_ours.store(false); g_leave.store(true); }
+        if (acts && dir < 0) { g_ours.store(false); g_leave.store(true); g_leave_frame.store(g_frame); }
         g_swallowed.fetch_add(1);
         return kSkip;                                   // our tab: the game's list stays on Search
     }
+    if (dir < 0 && g_leave_frame.load() == g_frame) return kSkip;   // the same press seen again (InputTab + InputTabBack)
     if (dir > 0 && acts && g_tab.load(std::memory_order_acquire) == kSearch) {
         bool ok = false;
         try { ok = make_copies(); } catch (...) { ++g_refused; g_copy_status.store(-2000); }
@@ -336,11 +338,6 @@ bool actual_visible(Obj* ctrl) {
     const bool v = ctrl && call_bool(ctrl, "get_ActualVisible", {}, &ok);
     return ok && v;
 }
-bool visible(Obj* ctrl) {
-    bool ok = false;
-    const bool v = ctrl && call_bool(ctrl, "get_Visible", {}, &ok);
-    return ok && v;
-}
 void* find(void* root, const char* name) { return root ? A()->ui_find_cached(root, name) : nullptr; }
 void set_vis(void* c, bool on) { if (c) A()->ui_set_visible(C(), c, on ? 1 : 0); }
 
@@ -380,7 +377,7 @@ void tab_bar(Obj* main) {
 }
 
 // The Search page's agents: every visible CFN* agent but the hub and the tab bar's
-void hide_page() {
+void hide_page(bool quiet) {
     g_hidden.clear();
     TD* td = api().tdb()->find_type("app.UIAgent");
     Obj* list = find_components(td);
@@ -397,7 +394,7 @@ void hide_page() {
     }
     std::string names;
     for (auto& s : g_hidden) names += (names.empty() ? "" : ", ") + s;
-    logf("replay tab: page hidden: %s", names.empty() ? "(no agent found)" : names.c_str());
+    if (!quiet || !names.empty()) logf("replay tab: page hidden: %s", names.empty() ? "(no agent found)" : names.c_str());
 }
 void restore_page() {
     for (const std::string& nm : g_hidden) {
@@ -481,7 +478,7 @@ void enter(Obj* main) {
     g_place_logged = false;
     build_catalog();                              // each time: the NSFW setting may have changed
     load_choices();
-    hide_page();
+    hide_page(false);
     prime_keys();
     g_cursor = std::max(0, std::min(g_cursor, static_cast<int>(g_cat.size()) - 1));
     logf("replay tab: entered (%zu forced in the file)", g_choices.size());
@@ -578,7 +575,7 @@ void tick() {
     if (g_leave.exchange(false)) leave(main, "tab back");
     tab_bar(main);
     if (g_ours.load()) {
-        if (g_frame % 30 == 0 && g_hidden.empty()) hide_page();   // the page's agents were not up yet at entry
+        if (g_frame % 30 == 0 && g_hidden.empty()) hide_page(true);   // the page's agents were not up yet at entry
         input();
         render(main);
     } else {
