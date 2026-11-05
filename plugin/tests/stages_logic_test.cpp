@@ -176,6 +176,19 @@ static void test_banner_name() {
     check(!banner_name("").right && banner_name("").text.empty(), "no name");
 }
 
+static void test_vs_stage() {
+    std::printf("the VS screen\n");
+    const Choice served = { { 0, "tile" }, { 70000, "banner" } };
+    const std::map<uint32_t, std::string> names = { { 0, "Training Room" }, { 70000, "Dhalsimer Temple" } };
+    check(vs_stage(served, names, "Training Room", -1) == 0, "the game's name stands for a served stage");
+    check(vs_stage(served, names, "Dhalsimer Temple", 0) == 70000, "the name first (the stage on screen, not the one last set up)");
+    check(vs_stage(served, names, "Genbu Temple", -1) == -1, "a stage nothing is served for: the game's own");
+    check(vs_stage(served, names, "Genbu Temple", 20000) == -1, "the same when it is the stage set up");
+    check(vs_stage(served, names, "training room!", 0) == 0, "a name read differently: the stage set up, if served");
+    check(vs_stage({}, names, "Training Room", 0) == -1, "nothing served: the game's own");
+    check(vs_stage({ { 0, "" } }, names, "Training Room", 0) == -1, "an empty key is its own look");
+}
+
 static void test_preview() {
     std::printf("the variation key previews, Confirm chooses\n");
     // entries: 0 Genbu (2 variations), 1 Training Room (3 variations); Training Room chosen with its variation 2
@@ -269,6 +282,7 @@ int main() {
     test_cycle_keys();
     test_chosen_mark();
     test_banner_name();
+    test_vs_stage();
     test_preview();
     test_ticks();
     test_codecheck();

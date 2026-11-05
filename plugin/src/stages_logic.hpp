@@ -227,6 +227,22 @@ inline BannerName banner_name(const std::string& name) {
     return { name.substr(0, end) + "...", true };
 }
 
+// ---- the VS screen ---------------------------------------------------------------------------------------------------------
+// Which stage's entry it must show: the stage the game's own name on it stands for, among those the loader serves a variant of
+// (whoever chose the stage: the opponent's is served this PC's choice for it too); else the stage last set up, if it is
+// served (a name read differently); -1: nothing served for it, the game's own name and picture are right.
+inline int vs_stage(const Choice& served, const std::map<uint32_t, std::string>& names, const std::string& shown, int played) {
+    for (auto& [id, key] : served) {
+        auto n = names.find(id);
+        if (!key.empty() && n != names.end() && !n->second.empty() && n->second == shown) return static_cast<int>(id);
+    }
+    if (played >= 0) {
+        auto it = served.find(static_cast<uint32_t>(played));
+        if (it != served.end() && !it->second.empty()) return played;
+    }
+    return -1;
+}
+
 // ---- the variation key ---------------------------------------------------------------------------------------------------
 // One press of the pad's X button shows the focused stage's next variation (Wael 05/11; LT / RT are gone). The game's
 // input id of that button in Battle Settings: app.InputAssign.Digital.Id UIOpponentCosSettingToggleEXDXColors (341,

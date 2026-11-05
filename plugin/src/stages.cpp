@@ -74,7 +74,10 @@ struct Vs {
     uint32_t cap = 0;                     // hard end of the window
     uint32_t next = 0;
     Obj* text = nullptr; Obj* tex = nullptr; uintptr_t comp = 0;
+    std::string written, log;             // the name last written on it; the last line logged
+    int stage = -1;                       // the stage it was written for
 } g_vs;
+std::atomic<int32_t> g_played{ -1 };      // the stage last set up: a replay's, an online battle's, the classic screen's
 
 std::unordered_set<std::string> g_ours;   // every text written here: never the game's own name
 
@@ -155,6 +158,7 @@ void save_state(int apply_menu = stagelogic::kClassic, const char* why = nullptr
     { int64_t pt = perf::begin(); if (!write_file(kState, o)) logf("stages: cannot write state.json"); perf::end(perf::StateWrite, pt); }
     if (apply_menu < 0 || g_state.active == g_applied) return;
     g_applied = g_state.active;
+    post(EV_STAGE_GRID);                                   // the frame loads its pictures ahead of the VS screen
     std::string what;
     for (auto& [id, key] : g_applied) what += (what.empty() ? "" : ", ") + std::to_string(id) + " -> " + key;
     int r = -1;
@@ -398,6 +402,7 @@ void screen_hidden() {
     g_stage_agent.store(0);
     g_pending.store(0);
     // the VS screen comes next: its image starts loading now
+    if (g_scr.decided != UINT32_MAX) g_played.store(static_cast<int32_t>(g_scr.decided));
     if (g_scr.decided != UINT32_MAX && selected_index(g_scr.decided)) preload_previews(g_scr.decided);
 }
 
@@ -427,8 +432,11 @@ void screen_work(bool input) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// VS screen (VSInfoOffline): stage name c_bg/e_text_stagename, stage image c_bg/e_texture_bg
+// VS screen (VSInfoOffline, every match's: offline, online, replays): stage name c_bg/e_text_stagename, stage image
+// c_bg/e_texture_bg. It shows what the loader serves, whichever menu chose it (g_applied: stages_logic.hpp vs_stage).
 // ---------------------------------------------------------------------------------------------
+const std::string& vanilla_name(uint32_t id);
+const Variant* variant_of(uint32_t base, const std::string& key);
 
 Obj* find_child(Obj* ctrl, const char* name, int depth) {
     if (!ctrl || depth > 8) return nullptr;
@@ -442,25 +450,57 @@ Obj* find_child(Obj* ctrl, const char* name, int depth) {
 // false while something is left to show (control not found yet, image loading)
 bool vs_work() {
     perf::Scope ps(perf::StgVs);
-    uint32_t stage = g_scr.decided;
-    int idx = stage != UINT32_MAX ? selected_index(stage) : 0;
-    if (idx == 0) return true;
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    if (g_applied.empty()) return true;                    // nothing served: the game's own name and picture
     uintptr_t comp = g_vs_comp.load();
     if (!g_vs.text || comp != g_vs.comp || !alive(g_vs.text)) {
         g_vs.comp = comp;
-        Obj* agent = find_agent("VSInfoOffline");
+        // the screen's agent: the component's own GameObject, else by its usual name
+        Obj* c = reinterpret_cast<Obj*>(comp);
+        Obj* go = comp && alive(c) ? call_obj(c, "get_GameObject") : nullptr;
+        const std::string go_name = go ? str(call_obj(go, "get_Name")) : std::string();
+        Obj* agent = go_name.empty() ? nullptr : find_agent(go_name.c_str());
+        if (!agent) agent = find_agent("VSInfoOffline");
         Obj* cm = agent ? call_obj(agent, "get_ControlMain") : nullptr;
         Obj* bg = cm ? find_child(cm, "c_bg", 0) : nullptr;
         g_vs.text = bg ? find_child(bg, "e_text_stagename", 0) : nullptr;
         g_vs.tex = bg ? find_child(bg, "e_texture_bg", 0) : nullptr;
-        if (!g_vs.text) return false;
+        g_vs.written.clear();
+        g_vs.stage = -1;
+        if (!g_vs.text) {
+            const std::string l = "VS screen: no stage name found (agent " + (go_name.empty() ? std::string("VSInfoOffline") : go_name) + (agent ? ", found)" : ", not found)");
+            if (l != g_vs.log) { g_vs.log = l; logf("stages: %s", l.c_str()); }
+            return false;
+        }
     }
-    const Variant& v = g_variants[stage][static_cast<size_t>(idx - 1)];
-    set_text(g_vs.text, display_name(stage, v));
-    if (g_vs.tex && !v.preview.empty()) {
-        Obj* h = preview_holder(v.preview);
+    // the stage on it: the game's own name, until we wrote over it
+    const std::string shown = str(call_obj(g_vs.text, "get_Message"));
+    if (shown.empty()) return false;                       // not written yet
+    if (shown != g_vs.written || g_vs.stage < 0) {
+        std::map<uint32_t, std::string> names;
+        for (auto& [id, key] : g_applied) names[id] = vanilla_name(id);
+        g_vs.stage = stagelogic::vs_stage(g_applied, names, shown, g_played.load());
+        g_vs.written.clear();
+    }
+    const auto served = g_vs.stage >= 0 ? g_applied.find(static_cast<uint32_t>(g_vs.stage)) : g_applied.end();
+    const Variant* v = served != g_applied.end() ? variant_of(served->first, served->second) : nullptr;
+    const std::string l = "VS screen: the game's '" + shown + "', stage " + std::to_string(g_vs.stage) + ": " + (v ? v->name : std::string("nothing served for it"));
+    if (!v) {
+        if (l != g_vs.log) { g_vs.log = l; logf("stages: %s", l.c_str()); }
+        return true;
+    }
+    // its name as the menus' banner: a tile's, a variation's one name line
+    const std::string name = v->tile ? v->name : stagelogic::variation_label(vanilla_name(served->first), v->name, v->bundle);
+    set_text(g_vs.text, name);
+    g_vs.written = name;
+    if (g_vs.tex && !v->preview.empty()) {
+        Obj* h = preview_holder(v->preview);
         if (!h) return false;
         set_texture(g_vs.tex, h);
+    }
+    if (g_vs.log.rfind("VS screen: shows", 0) != 0 || g_vs.log.find(name) == std::string::npos) {
+        g_vs.log = "VS screen: shows " + name;
+        logf("stages: %s (stage %d)", g_vs.log.c_str(), g_vs.stage);
     }
     return true;
 }
@@ -1173,6 +1213,7 @@ void post_battle_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long lon
     try {
         Obj* desc = reinterpret_cast<Obj*>(d);
         Obj* stage = d && alive(desc) ? obj_field(desc, f_desc_stage) : nullptr;
+        if (stage) g_played.store(i32_field(stage, f_stage_id, -1));
         serve_menu(sl::kBattle, stage ? i32_field(stage, f_stage_id, -1) : -1,
                    "an online battle is set up: on this PC only, the opponent and the server keep the vanilla id");
     } catch (...) { logf("stages: EXCEPTION serving Battle Settings' choice"); }
@@ -1210,6 +1251,7 @@ void post_replay_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long lon
                 logf("stages: replay played on stage %d (recorded on %d; width, position and inputs unchanged)", want, was);
             }
         }
+        if (stage) g_played.store(i32_field(stage, f_stage_id, -1));   // after the forced stage's write above
         save_state(sl::kReplay, "a replay is set up");
     } catch (...) {
         logf("stages: EXCEPTION at the replay's description");
@@ -2116,11 +2158,32 @@ bool busy() {
     return (g_scr.active && (g_scr.need || g_scr.settle > 0 || g_strip.until != 0)) || g_vs.until != 0 || g_scr.check_until != 0;
 }
 
+// The pictures the VS screen may need, loaded ahead (a picture takes a second to be usable, the screen is up by then): what
+// the loader serves, each menu's choices, and the tiles of a menu on Random (its pick is made when the battle is set up).
+void preload_choices() {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    static stagelogic::State s_seen;
+    bool same = s_seen.active == g_state.active;
+    for (int m = 0; same && m < stagelogic::kMenus; ++m) same = s_seen.menu[m] == g_state.menu[m] && s_seen.random[m] == g_state.random[m];
+    if (same) return;
+    s_seen = g_state;
+    auto load = [](uint32_t id, const std::string& key) {
+        const Variant* v = key.empty() ? nullptr : variant_of(id, key);
+        if (v && !v->preview.empty()) preview_holder(v->preview);
+    };
+    for (auto& [id, key] : g_state.active) load(id, key);
+    for (int m = 0; m < stagelogic::kMenus; ++m) {
+        for (auto& [id, key] : g_state.menu[m]) load(id, key);
+        if (g_state.random[m]) for (auto& t : g_tiles) load(t.base, t.key);
+    }
+}
+
 void tick(uint32_t ev) {
     if (!g_variant_count) {
         if (g_hint_replay_at) replay_hint_frame();
         return;
     }
+    preload_choices();
     if (g_check_started && !g_hooks_done && g_check.done()) install_grid_hooks();
     grid_tick(ev);
     // The game calls BeforeHideObject while it sets the screen up, next to ShowedObject, and coming
