@@ -17,6 +17,7 @@
 #include "pak.hpp"
 #include "patch.hpp"          // texture_mip_check, shared with the costume loader
 #include "preview_tex.hpp"
+#include "stage_classify.hpp"
 #include "stage_loader.hpp"
 #include "stage_log.hpp"
 
@@ -25,8 +26,9 @@ namespace {
 const char* STAGE_MARKER = STAGE_SLOTS_MARKER;
 const char* COSTUME_MARKER = COSTUME_SLOTS_MARKER;
 // Part of the fingerprint: bump it when the pak layout, the preview conversion or the checks of the
-// mods' files change. 5: GUI files kept out of the redirection.
-const char* FORMAT_VERSION = "stageslots-6";
+// mods' files change. 5: GUI files kept out of the redirection. 7: tile / variation guess and banner source in the table,
+// previews from the mod's own menu pictures first.
+const char* FORMAT_VERSION = "stageslots-7";
 // The game's menu pictures (stage select image and thumbnail, arcade images, their prefabs...)
 const char* GUI_PREFIX = "natives/stm/product/gui/";
 const char* TEX_SUFFIX = ".tex.241101895";
@@ -244,9 +246,10 @@ uint32_t stage_id_of(const std::string& ess) {
     return (uint32_t)atoi(ess.substr(3, 4).c_str()) * 100 + (uint32_t)atoi(ess.substr(8, 2).c_str());
 }
 
-// gui: the paths of the index under GUI_PREFIX, by hash (a pak entry has no path of its own)
+// gui: the paths of the index under GUI_PREFIX, by hash (a pak entry has no path of its own); paths: every path, by hash
+// (lower case: the tile / variation guess of a pak's entries)
 bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std::string>& out,
-                      std::unordered_map<uint64_t, std::string>& gui) {
+                      std::unordered_map<uint64_t, std::string>& gui, std::unordered_map<uint64_t, std::string>& paths) {
     std::vector<uint8_t> data;
     if (!read_file(path, data)) return false;
     std::string text(data.begin(), data.end());
@@ -261,6 +264,7 @@ bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std
         if (line.empty() || !ess_code_in(line, code)) continue;
         const uint64_t h = pak_path_hash(std::string_view(line));
         out[h] = code;
+        paths[h] = lower_a(line);
         if (lower_a(line).compare(0, strlen(GUI_PREFIX), GUI_PREFIX) == 0) gui[h] = line;
     }
     return !out.empty();
@@ -501,6 +505,9 @@ bool load_table(const std::wstring& path, std::string& fingerprint, size_t& pak_
             v.source = f[7];
             if (f.size() >= 9) v.bundle = f[8];
             if (f.size() >= 10) v.has_thumb = f[9] == "1";
+            if (f.size() >= 11) v.tile_auto = f[10] == "tile";
+            if (f.size() >= 12) v.reason_auto = f[11];
+            if (f.size() >= 13) v.banner = f[12];
             by_key[v.key] = out.size();
             out.push_back(v);
         } else if (f[0] == "R" && f.size() >= 4) {
@@ -512,13 +519,55 @@ bool load_table(const std::wstring& path, std::string& fingerprint, size_t& pak_
     return !fingerprint.empty();
 }
 
-bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, size_t pak_entries, const std::vector<StageVariant>& vars) {
+// variants.tsv: the build's result (the mod's own names, the automatic tile / variation guess)
+bool save_table(const std::wstring& data_dir, const std::string& fingerprint, size_t pak_entries, const std::vector<StageVariant>& vars) {
     std::string tsv = "#fingerprint\t" + fingerprint + "\n#pak\t" + std::to_string(pak_entries) + "\n";
     for (auto& v : vars) {
         tsv += "V\t" + v.key + "\t" + std::to_string(v.stage_id) + "\t" + v.ess + "\t" + (v.has_preview ? "1" : "0") + "\t" +
-               tsv_clean(v.name) + "\t" + tsv_clean(v.author) + "\t" + tsv_clean(v.source) + "\t" + tsv_clean(v.bundle) + "\t" + (v.has_thumb ? "1" : "0") + "\n";
+               tsv_clean(v.mod_name.empty() ? v.name : v.mod_name) + "\t" + tsv_clean(v.author) + "\t" + tsv_clean(v.source) + "\t" +
+               tsv_clean(v.bundle) + "\t" + (v.has_thumb ? "1" : "0") + "\t" + (v.tile_auto ? "tile" : "variation") + "\t" +
+               tsv_clean(v.reason_auto) + "\t" + tsv_clean(v.banner) + "\n";
         for (auto& r : v.redirects) tsv += "R\t" + v.key + "\t" + hex16(r.first) + "\t" + hex16(r.second) + "\n";
     }
+    return write_text(data_dir + L"\\loader\\variants.tsv", tsv);
+}
+
+// stage_slots.ini on the variants (tile / variation, name): the automatic guess unless a section names the variant. The
+// template is written when the file does not exist.
+void apply_overrides(const std::wstring& mods_dir, std::vector<StageVariant>& vars) {
+    const std::wstring ini = mods_dir + L"\\stage_slots.ini";
+    std::vector<uint8_t> data;
+    if (!read_file(ini, data)) {
+        if (write_text(ini, kStageOverridesTemplate)) slog("  wrote stage_slots.ini (template: tile / variation and names per mod)");
+    }
+    std::vector<std::string> bad;
+    const auto list = parse_stage_overrides(std::string(data.begin(), data.end()), &bad);
+    for (auto& b : bad) slog("  stage_slots.ini: line not understood, ignored: %s", b.c_str());
+    int tiles = 0, changed = 0;
+    for (auto& v : vars) {
+        if (!v.mod_name.empty()) { v.name = v.mod_name; v.mod_name.clear(); }
+        v.tile = v.tile_auto;
+        v.kind_reason = v.reason_auto;
+        if (const StageOverride* o = find_stage_override(list, v.key, v.name, v.source)) {
+            if (!o->kind.empty() && (o->kind == "tile") != v.tile_auto) {
+                v.tile = o->kind == "tile";
+                v.kind_reason = "stage_slots.ini [" + o->section + "] (guess: " + (v.tile_auto ? "tile, " : "variation, ") + v.reason_auto + ")";
+                ++changed;
+            }
+            if (!o->name.empty() && o->name != v.name) {
+                v.mod_name = v.name;
+                v.name = o->name;
+                ++changed;
+            }
+        }
+        tiles += v.tile ? 1 : 0;
+    }
+    slog("  %d tile(s), %zu variation(s)%s", tiles, vars.size() - tiles,
+         changed ? (", " + std::to_string(changed) + " change(s) from stage_slots.ini").c_str() : "");
+}
+
+// registry.json: what the plugin shows (stage_slots.ini applied). Written only when its text changes.
+bool save_registry(const std::wstring& data_dir, const std::string& fingerprint, const std::vector<StageVariant>& vars) {
     std::map<uint32_t, std::vector<const StageVariant*>> by_stage;
     for (auto& v : vars) by_stage[v.stage_id].push_back(&v);
     std::string js = "{\n  \"version\": 1,\n  \"fingerprint\": \"" + fingerprint + "\",\n  \"stages\": [";
@@ -534,14 +583,17 @@ bool save_outputs(const std::wstring& data_dir, const std::string& fingerprint, 
                   json_escape(v->author) + "\", \"bundle\": \"" + json_escape(v->bundle) + "\", \"source\": \"" + json_escape(v->source) + "\", \"preview\": \"" +
                   (v->has_preview ? stage_preview_resource(v->key) : std::string()) + "\", \"thumb\": \"" +
                   (v->has_thumb ? stage_thumb_resource(v->key) : std::string()) + "\", \"files\": " +
-                  std::to_string(v->redirects.size()) + " }";
+                  std::to_string(v->redirects.size()) + ", \"kind\": \"" + (v->tile ? "tile" : "variation") +
+                  "\", \"kind_reason\": \"" + json_escape(v->kind_reason) + "\", \"banner\": \"" + json_escape(v->banner) +
+                  "\", \"mod_name\": \"" + json_escape(v->mod_name) + "\" }";
         }
         js += "\n    ] }";
     }
     js += "\n  ]\n}\n";
-    bool ok = write_text(data_dir + L"\\loader\\variants.tsv", tsv);
-    ok = write_text(data_dir + L"\\registry.json", js) && ok;
-    return ok;
+    const std::wstring path = data_dir + L"\\registry.json";
+    std::vector<uint8_t> old;
+    if (read_file(path, old) && std::string(old.begin(), old.end()) == js) return true;
+    return write_text(path, js);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -616,14 +668,16 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
                                            && stage_paks[0].entries == saved_entries);
             if (pak_ok) {
                 out = std::move(saved);
+                apply_overrides(mods_dir, out);
+                if (!save_registry(data_dir, fp, out)) slog("ERROR: cannot write the registry");
                 slog("up to date: %zu variant(s), %.1f ms", out.size(), ms());
                 return;
             }
         }
     }
 
-    std::unordered_map<uint64_t, std::string> index, gui_index;
-    if (!load_stage_index(index_path, index, gui_index)) {
+    std::unordered_map<uint64_t, std::string> index, gui_index, index_paths;
+    if (!load_stage_index(index_path, index, gui_index, index_paths)) {
         slog("ERROR: %s missing or empty: stage mods cannot be recognised", narrow(index_path).c_str());
         return;
     }
@@ -688,33 +742,82 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
             v.key = "s" + hex16(fnv64(opt.rel + "|" + ess)).substr(0, 12);
             std::vector<size_t> all = idx;
             all.insert(all.end(), shared.begin(), shared.end());
+            std::vector<std::string> kind_paths;
             for (size_t i : all) {
                 const OptFile& f = opt.files[i];
                 uint64_t moved = pak_path_hash(std::string_view("natives/stm/_stageslots/" + v.key + "/" + hex16(f.hash)));
                 writer.add_raw(moved, f.data, f.attrib, f.dsize);
                 v.redirects.push_back({ f.hash, moved });
+                auto ip = index_paths.find(f.hash);
+                if (!f.path.empty()) kind_paths.push_back(lower_a(f.path));
+                else if (ip != index_paths.end()) kind_paths.push_back(ip->second);
             }
-            if (!opt.screenshot.empty()) {
-                std::vector<uint8_t> tex;
-                std::string err;
-                if (make_stage_preview_tex(lp(opt.screenshot), tex, err)) {
-                    std::string p = "natives/stm/_stageslots/" + v.key + "/preview" + TEX_SUFFIX;
-                    writer.add_uncompressed(pak_path_hash(std::string_view(p)), std::move(tex));
+            const StageKind kind = classify_stage_variant(ess, kind_paths, shared.size());
+            v.tile_auto = kind.tile;
+            v.reason_auto = kind.reason;
+            // Its menu pictures: the mod's own (tex_StageImage / tex_StageThumb of the stage, the streaming copy first: the
+            // base file of a streaming texture lacks its largest levels), else cut from its screenshot (below), else none
+            // (the plugin shows the vanilla stage's picture and the variant's name).
+            auto own_picture = [&](const char* what, bool thumb, std::vector<uint8_t>& out_tex) {
+                for (const char* root : { "natives/stm/streaming/product/", "natives/stm/product/" }) {
+                    const std::string p = std::string(root) + "gui/data/area_image/ess/" + ess + "/" + what + ess + "_im" + TEX_SUFFIX;
+                    const uint64_t h = pak_path_hash(std::string_view(p));
+                    for (auto& f : opt.files) {
+                        if (f.hash != h) continue;
+                        const int comp = int(f.attrib & 0xFF);
+                        std::vector<uint8_t> plain = comp ? pak_decompress(f.data, comp, f.dsize) : f.data;
+                        std::string err;
+                        if (make_stage_tex_from_game_tex(plain, thumb, out_tex, err)) return true;
+                        slog("  %s: its %s%s cannot be used (%s)", opt.rel.c_str(), root + 11, what, err.c_str());
+                    }
+                }
+                return false;
+            };
+            {
+                std::vector<uint8_t> tex, thumb;
+                const bool own_img = own_picture("tex_stageimage_", false, tex);
+                bool own_thumb = own_picture("tex_stagethumb_", true, thumb);
+                if (!own_thumb && own_img) {   // the thumbnail cut from the mod's own picture
+                    own_thumb = own_picture("tex_stageimage_", true, thumb);
+                }
+                if (own_img) {
+                    writer.add_uncompressed(pak_path_hash(std::string_view("natives/stm/_stageslots/" + v.key + "/preview" + TEX_SUFFIX)), std::move(tex));
                     v.has_preview = true;
-                } else {
-                    slog("  %s: no preview (%s)", opt.rel.c_str(), err.c_str());
                 }
-                std::vector<uint8_t> thumb;
-                if (make_stage_thumb_tex(lp(opt.screenshot), thumb, err)) {
-                    std::string p = "natives/stm/_stageslots/" + v.key + "/thumb" + TEX_SUFFIX;
-                    writer.add_uncompressed(pak_path_hash(std::string_view(p)), std::move(thumb));
+                if (own_thumb) {
+                    writer.add_uncompressed(pak_path_hash(std::string_view("natives/stm/_stageslots/" + v.key + "/thumb" + TEX_SUFFIX)), std::move(thumb));
                     v.has_thumb = true;
-                } else {
-                    slog("  %s: no thumb (%s)", opt.rel.c_str(), err.c_str());
                 }
+                if (own_img || own_thumb) v.banner = "mod";
             }
-            slog("  variant %s: \"%s\" -> %s (stage %u), %zu files (%zu of the stage)%s", v.key.c_str(), v.name.c_str(),
-                 ess.c_str(), v.stage_id, all.size(), idx.size(), v.has_preview ? (v.has_thumb ? ", preview+thumb" : ", preview") : "");
+            if (!opt.screenshot.empty() && !(v.has_preview && v.has_thumb)) {
+                std::string err;
+                bool made = false;
+                if (!v.has_preview) {
+                    std::vector<uint8_t> tex;
+                    if (make_stage_preview_tex(lp(opt.screenshot), tex, err)) {
+                        std::string p = "natives/stm/_stageslots/" + v.key + "/preview" + TEX_SUFFIX;
+                        writer.add_uncompressed(pak_path_hash(std::string_view(p)), std::move(tex));
+                        v.has_preview = made = true;
+                    } else {
+                        slog("  %s: no preview (%s)", opt.rel.c_str(), err.c_str());
+                    }
+                }
+                if (!v.has_thumb) {
+                    std::vector<uint8_t> thumb;
+                    if (make_stage_thumb_tex(lp(opt.screenshot), thumb, err)) {
+                        std::string p = "natives/stm/_stageslots/" + v.key + "/thumb" + TEX_SUFFIX;
+                        writer.add_uncompressed(pak_path_hash(std::string_view(p)), std::move(thumb));
+                        v.has_thumb = made = true;
+                    } else {
+                        slog("  %s: no thumb (%s)", opt.rel.c_str(), err.c_str());
+                    }
+                }
+                if (made && v.banner.empty()) v.banner = "screenshot";
+            }
+            slog("  variant %s: \"%s\" -> %s (stage %u), %zu files (%zu of the stage)%s%s, %s (%s)", v.key.c_str(), v.name.c_str(),
+                 ess.c_str(), v.stage_id, all.size(), idx.size(), v.has_preview ? (v.has_thumb ? ", preview+thumb" : ", preview") : "",
+                 v.banner.empty() ? "" : (" from " + v.banner).c_str(), v.tile_auto ? "TILE" : "variation", v.reason_auto.c_str());
             std::vector<size_t> kept = gui_shared;
             if (auto g = gui_by_ess.find(ess); g != gui_by_ess.end()) kept.insert(kept.begin(), g->second.begin(), g->second.end());
             if (!kept.empty()) {
@@ -764,7 +867,9 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
         slog("  wrote %s (%zu entries)", narrow(leaf(target_path)).c_str(), writer.entry_count());
         pak_entries = writer.entry_count();
     }
-    if (!save_outputs(data_dir, fp, pak_entries, vars)) slog("ERROR: cannot write the registry");
+    if (!save_table(data_dir, fp, pak_entries, vars)) slog("ERROR: cannot write the table");
+    apply_overrides(mods_dir, vars);
+    if (!save_registry(data_dir, fp, vars)) slog("ERROR: cannot write the registry");
     out = std::move(vars);
     slog("built: %zu variant(s) from %zu option(s), %.1f ms", out.size(), options.size(), ms());
 }

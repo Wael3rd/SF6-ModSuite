@@ -14,8 +14,10 @@
 // below the costume pak.
 //
 // Outputs, in reframework\data\SF6_StageSlots_Data:
-//   registry.json        the variants per stage, for the Lua script (names, preview textures)
+//   registry.json        the variants per stage, for the native plugin (names, kind tile / variation, preview textures)
 //   loader\variants.tsv  the same with every file redirection, reloaded when nothing changed
+// Input: reframework\stage_mods\stage_slots.ini, the user's corrections of the tile / variation guess and of names
+// (written as a commented template when missing), applied at every start without rebuilding the pak.
 
 struct StageVariant {
     std::string key;            // stable id: selection state, pak folder
@@ -28,6 +30,14 @@ struct StageVariant {
     bool has_preview = false;
     bool has_thumb = false;
     std::vector<std::pair<uint64_t, uint64_t>> redirects;   // vanilla hash -> hash in our pak
+    // What it is (stage_classify.hpp): guessed from its files when the pak is built, kept in variants.tsv...
+    bool tile_auto = false;
+    std::string reason_auto;
+    std::string banner;         // where its preview / thumbnail come from: "mod" (its own menu pictures), "screenshot", ""
+    // ...then reframework\stage_mods\stage_slots.ini applied at every start (registry.json only)
+    bool tile = false;
+    std::string kind_reason;
+    std::string mod_name;       // the mod's own name when stage_slots.ini renamed it, else ""
 };
 
 // Scans the mods, rebuilds the stage pak when they changed, fills `out` either way.

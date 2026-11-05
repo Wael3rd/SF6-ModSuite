@@ -69,7 +69,7 @@ echo === common + costume loader ===
 cl %CF% /c /Fo%O%\core\ %C%\third_party\zstddeclib.c %C%\third_party\miniz.c %C%\pak.cpp %C%\archive.cpp %C%\fighter_names.cpp %CO%\patch.cpp %CO%\structural_scene.cpp %CO%\structural_msg.cpp %CO%\vanilla_inventory.cpp %CO%\loader_core.cpp
 if errorlevel 1 goto :failed
 echo === stage slots ===
-cl %CF% /c /Fo%O%\stage\ %ST%\stage_log.cpp %ST%\stage_loader.cpp %ST%\preview_tex.cpp %ST%\stage_redirect.cpp
+cl %CF% /c /Fo%O%\stage\ %ST%\stage_log.cpp %ST%\stage_loader.cpp %ST%\stage_classify.cpp %ST%\preview_tex.cpp %ST%\stage_redirect.cpp
 if errorlevel 1 goto :failed
 set PAK=%O%\core\zstddeclib.obj %O%\core\miniz.obj %O%\core\pak.obj
 set CORE=%PAK% %O%\core\archive.obj %O%\core\fighter_names.obj %O%\core\patch.obj %O%\core\structural_scene.obj %O%\core\structural_msg.obj %O%\core\vanilla_inventory.obj %O%\core\loader_core.obj
@@ -77,7 +77,7 @@ set CORE=%PAK% %O%\core\archive.obj %O%\core\fighter_names.obj %O%\core\patch.ob
 echo === amd_ags_x64.dll (costume slots + stage slots) ===
 cl %CF% /c /Fo%O%\proxy\ proxy\slots_proxy.cpp
 if errorlevel 1 goto :failed
-link /nologo /DLL /INCREMENTAL:NO /MACHINE:X64 /OUT:%B%\amd_ags_x64.dll %O%\proxy\slots_proxy.obj %CORE% %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\preview_tex.obj %O%\stage\stage_redirect.obj %B%\archive_deps.lib %SYSLIBS%
+link /nologo /DLL /INCREMENTAL:NO /MACHINE:X64 /OUT:%B%\amd_ags_x64.dll %O%\proxy\slots_proxy.obj %CORE% %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\stage_classify.obj %O%\stage\preview_tex.obj %O%\stage\stage_redirect.obj %B%\archive_deps.lib %SYSLIBS%
 if errorlevel 1 goto :failed
 
 echo === costumes_only\amd_ags_x64.dll ===
@@ -101,7 +101,7 @@ cl %CF% /Fo%O%\tools\ stages\tools\stagepak.cpp %PAK% /Fe%B%\stagepak.exe %LK%
 if errorlevel 1 goto :failed
 cl %CF% /Fo%O%\tools\ stages\tools\textest.cpp %O%\stage\preview_tex.obj /Fe%B%\textest.exe %LK%
 if errorlevel 1 goto :failed
-cl %CF% /Fo%O%\tools\ stages\tools\stagetest.cpp %PAK% %O%\core\archive.obj %O%\core\patch.obj %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\preview_tex.obj /Fe%B%\stagetest.exe %LK% %B%\archive_deps.lib %SYSLIBS%
+cl %CF% /Fo%O%\tools\ stages\tools\stagetest.cpp %PAK% %O%\core\archive.obj %O%\core\patch.obj %O%\stage\stage_log.obj %O%\stage\stage_loader.obj %O%\stage\stage_classify.obj %O%\stage\preview_tex.obj /Fe%B%\stagetest.exe %LK% %B%\archive_deps.lib %SYSLIBS%
 if errorlevel 1 goto :failed
 
 if /i "%1"=="loader" goto :done_one
@@ -110,7 +110,7 @@ echo === SF6_CostumeSlotsNative.dll (REFramework plugin, API 1.5.8: costume and 
 if not exist %O%\plugin mkdir %O%\plugin
 rem SLOTS_LEGACY_UI_FALLBACK: compiles the direct implementations so the plugin
 rem works without sf6core_native.dll.  Remove when the core becomes mandatory.
-cl /nologo /MP /std:c++20 /EHa /O2 /W4 /LD /DSLOTS_LEGACY_UI_FALLBACK /I plugin\include /I core\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\json.cpp plugin\src\costumes.cpp plugin\src\rto_data.cpp plugin\src\rto.cpp plugin\src\rto_menu.cpp plugin\src\rto_select.cpp plugin\src\rto_camera.cpp plugin\src\nsfw_option.cpp plugin\src\fs_name.cpp plugin\src\opp_summary.cpp plugin\src\stages.cpp plugin\src\main.cpp plugin\src\slots_ui.cpp plugin\src\slots_ui_legacy.cpp plugin\src\perf.cpp plugin\src\wjournal.cpp plugin\src\replay_outfits.cpp plugin\src\replay_tab.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
+cl /nologo /MP /std:c++20 /EHa /O2 /W4 /LD /DSLOTS_LEGACY_UI_FALLBACK /I plugin\include /I core\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\json.cpp plugin\src\costumes.cpp plugin\src\rto_data.cpp plugin\src\rto.cpp plugin\src\rto_menu.cpp plugin\src\rto_select.cpp plugin\src\rto_camera.cpp plugin\src\nsfw_option.cpp plugin\src\fs_name.cpp plugin\src\opp_summary.cpp plugin\src\stages.cpp plugin\src\codecheck.cpp plugin\src\main.cpp plugin\src\slots_ui.cpp plugin\src\slots_ui_legacy.cpp plugin\src\perf.cpp plugin\src\wjournal.cpp plugin\src\replay_outfits.cpp plugin\src\replay_tab.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
 if errorlevel 1 goto :failed
 
 if /i "%1"=="plugin" goto :done_one

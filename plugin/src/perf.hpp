@@ -38,6 +38,8 @@ enum Id : int {
     HkVsSetDispInfo,
     HkVsSetTexture,
     HkOppSummaryDraw,   // Opponent Outfit Settings' summary (opp_summary.cpp), pre and post
+    HkStgGrid,          // stages: the stage grids' hooks (UIPartsStageSelectSimple, its list, its keys), all of them
+    HkStgApply,         // stages: a menu's choice served (online battle set up, Training's stage, a replay)
     kTopCount,
     // sub-parts of OnLateUpdate (shown, not added again)
     CostumesTick = kTopCount,
@@ -62,6 +64,7 @@ enum Id : int {
     StgStripScan,       // stages: the strip's cells looked for (strip_scan), inside StgStrip
     StgCheck,           // stages: the stage select's visibility check (find_agent)
     StgVs,              // stages: the VS screen's stage name and image (vs_work)
+    StgGrid,            // stages: a stage grid's tiles, names, pictures and keys (grid_work)
     FsNameTick,         // fsname::tick
     kCount
 };
