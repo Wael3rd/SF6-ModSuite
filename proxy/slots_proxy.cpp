@@ -38,6 +38,14 @@ static wchar_t g_chain_path[MAX_PATH];
 static wchar_t g_dll_dir[MAX_PATH];
 #ifndef SLOTS_NO_STAGES
 static std::vector<StageVariant> g_stage_variants;     // read by the watcher for the whole session
+
+// For the native plugin (SF6_CostumeSlotsNative.dll, plugin/src/stages.cpp): the stage selection of a menu applied at once,
+// when a battle, a training stage or a replay is set up (stage_redirect.hpp). Found with GetProcAddress; an older proxy
+// without it leaves the plugin on state.json alone.
+extern "C" __declspec(dllexport) int SF6StageSlots_Apply(const char* state_json) {
+    __try { return stage_slots_apply(state_json); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
 #endif
 
 // Appends one line to the loader log (same file as loader_core), so a chained module is visible

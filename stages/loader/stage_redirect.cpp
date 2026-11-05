@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <utility>
@@ -23,7 +24,14 @@ wchar_t g_state_path[MAX_PATH];
 wchar_t g_debug_path[MAX_PATH];
 wchar_t g_perf_path[MAX_PATH];
 wchar_t g_hook_off_path[MAX_PATH];
-bool g_forced_off = false;                          // watcher thread only
+bool g_forced_off = false;                          // under g_mx
+// The selection is published by the watcher (state.json changed) and by stage_slots_apply (the plugin, on the game's
+// threads): both under g_mx, as is everything about the hook's entry (installed, armed).
+std::mutex g_mx;
+bool g_hooked = false, g_gave_up = false;           // under g_mx
+std::string g_last_state;                           // the selection text last published (under g_mx)
+std::vector<std::wstring> g_last_traces;
+bool g_published = false;
 const std::vector<StageVariant>* g_variants = nullptr;
 ULONGLONG g_start_tick = 0;
 
@@ -85,7 +93,7 @@ struct alignas(64) Hot {
 };
 Hot g_hot;
 
-std::vector<std::unique_ptr<Active>> g_all_active;  // watcher thread only
+std::vector<std::unique_ptr<Active>> g_all_active;  // under g_mx
 
 // ---------------------------------------------------------------------------------------------
 // Optional measurements. reframework\data\SF6_StageSlots_Data\perf_on.txt present: every 5 s the
@@ -349,7 +357,7 @@ bool exchange_entry(uint64_t expected, uint64_t desired) {
     return ok;
 }
 
-// Watcher thread only. Threads already in the relay, trampoline or detour finish normally: none of
+// Under g_mx. Threads already in the relay, trampoline or detour finish normally: none of
 // that memory, nor any published selection block, is ever released.
 void set_armed(bool on) {
     if (!g_entry || g_pinned || g_armed == on) return;
@@ -444,6 +452,14 @@ std::vector<std::pair<uint32_t, std::string>> parse_state(const std::string& js)
     return out;
 }
 
+// The "selected" object of a state text, as published (what the detour serves): the rest of the file (the plugin's
+// choices per menu) changes nothing here.
+std::string selection_text(const std::string& js) {
+    std::string out;
+    for (auto& [id, key] : parse_state(js)) out += std::to_string(id) + "=" + key + ";";
+    return out;
+}
+
 std::vector<std::wstring> read_traces() {
     std::vector<std::wstring> out;
     std::string text;
@@ -465,6 +481,11 @@ std::vector<std::wstring> read_traces() {
 }
 
 void publish(const std::string& state, const std::vector<std::wstring>& traces) {
+    const std::string sel = selection_text(state);
+    if (g_published && sel == g_last_state && traces == g_last_traces) return;
+    g_published = true;
+    g_last_state = sel;
+    g_last_traces = traces;
     auto a = std::make_unique<Active>();
     a->traces = traces;
     for (auto& [id, key] : parse_state(state)) {
@@ -613,6 +634,20 @@ bool read_state(std::string& out) {
     return any && depth == 0;
 }
 
+// Under g_mx: the hook follows the selection (installed once the start delay is over). Returns how long the watcher
+// should wait for the delay to end, INFINITE when nothing is waited for.
+DWORD follow_selection() {
+    DWORD wait = INFINITE;
+    const bool selected = g_hot.active.load() != nullptr;
+    if (!g_hooked && !g_gave_up && selected) {
+        ULONGLONG since = GetTickCount64() - g_start_tick;
+        if (since >= HOOK_DELAY_MS) { g_hooked = install_hook(); g_gave_up = !g_hooked; }
+        else wait = static_cast<DWORD>(HOOK_DELAY_MS - since);
+    }
+    if (g_hooked) set_armed(selected && !g_forced_off);
+    return wait;
+}
+
 const DWORD STATE_RETRY_MS = 50;
 const int STATE_RETRIES = 40;                          // 2 s, then the previous selection stays
 
@@ -620,7 +655,7 @@ const int STATE_RETRIES = 40;                          // 2 s, then the previous
 // until the hook delay ends when a variant is selected and nothing is hooked yet.
 DWORD WINAPI watcher(LPVOID) {
     FILETIME st_last{}, dbg_last{};
-    bool st_seen = false, dbg_seen = false, first = true, hooked = false, gave_up = false;
+    bool st_seen = false, dbg_seen = false, first = true;
     int retries = 0;
     wchar_t dir[MAX_PATH];
     wcscpy_s(dir, g_state_path);
@@ -634,6 +669,7 @@ DWORD WINAPI watcher(LPVOID) {
                        (st_now && CompareFileTime(&st_ft, &st_last) != 0) ||
                        (dbg_now && CompareFileTime(&dbg_ft, &dbg_last) != 0);
         bool retry = false;
+        std::unique_lock<std::mutex> lk(g_mx);
         if (changed) {
             std::string state;
             const bool whole = !st_now || read_state(state);
@@ -650,13 +686,6 @@ DWORD WINAPI watcher(LPVOID) {
                 retries = 0;
             }
         }
-        DWORD wait = INFINITE;
-        const bool selected = g_hot.active.load() != nullptr;
-        if (!hooked && !gave_up && selected) {
-            ULONGLONG since = GetTickCount64() - g_start_tick;
-            if (since >= HOOK_DELAY_MS) { hooked = install_hook(); gave_up = !hooked; }
-            else wait = static_cast<DWORD>(HOOK_DELAY_MS - since);
-        }
         // hook_off.txt (test switch): the hook stays disarmed while it exists, whatever the selection, so its cost
         // can be compared in one session (files a stage streams later then come from the original stage)
         const bool forced_off = GetFileAttributesW(g_hook_off_path) != INVALID_FILE_ATTRIBUTES;
@@ -664,8 +693,9 @@ DWORD WINAPI watcher(LPVOID) {
             g_forced_off = forced_off;
             slog("hook_off.txt %s", forced_off ? "present: hook kept disarmed" : "gone: hook follows the selection");
         }
-        if (hooked) set_armed(selected && !forced_off);
+        DWORD wait = follow_selection();
         const DWORD perf_wait = perf_poll();
+        lk.unlock();
         if (perf_wait < wait) wait = perf_wait;
         if (retry) {
             Sleep(STATE_RETRY_MS < wait ? STATE_RETRY_MS : wait);
@@ -678,6 +708,18 @@ DWORD WINAPI watcher(LPVOID) {
 }
 
 } // namespace
+
+int stage_slots_apply(const char* state_json) {
+    if (!g_variants || !state_json) return 0;
+    try {
+        std::lock_guard<std::mutex> lk(g_mx);
+        publish(std::string(state_json), g_last_traces);
+        follow_selection();
+        return g_hot.active.load() ? 2 : 1;
+    } catch (...) {
+        return 0;
+    }
+}
 
 void stage_slots_start(const wchar_t* game_dir, const std::vector<StageVariant>* variants) {
     g_start_tick = GetTickCount64();
