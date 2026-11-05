@@ -6,7 +6,7 @@
 //   {"version":1,"fighters":{"<fighter id>":{"mode":"forced","costume":<FighterDesc.Costume>,
 //                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>,
 //                                            "colormod":"<a Color Mod entry's id: its file path; colour 1 then>"}},
-//    "stage":{"mode":"forced","id":<StageDesc.StageId>}}
+//    "stage":{"mode":"forced","id":<StageDesc.StageId: a vanilla stage>,"entry":"<a stage slot's key: tile / variation>"}}
 // No entry = Default (the replay's own outfit); no "stage" = the replay's own stage.
 #pragma once
 
@@ -62,8 +62,9 @@ using Choices = std::map<int, Choice>;   // fighter id -> forced choice (Default
 
 struct StageChoice {
     bool forced = false;              // false = Default (the replay's recorded stage)
-    int id = 0;                       // StageDesc.StageId (the game's stage table ManageId)
-    bool operator==(const StageChoice& o) const { return forced == o.forced && (!forced || id == o.id); }
+    int id = 0;                       // StageDesc.StageId (the game's stage table ManageId): always a vanilla stage
+    std::string entry;                // a stage slot of that stage (stages.hpp key: a tile or a variation), "" its own look
+    bool operator==(const StageChoice& o) const { return forced == o.forced && (!forced || (id == o.id && entry == o.entry)); }
 };
 
 // The outfit list of a fighter: game outfits first in costume order, then extra outfits by name (case-insensitive),
@@ -181,7 +182,11 @@ inline std::string to_json(const Choices& cs, const StageChoice& stage = {}) {
         o += "}";
     }
     o += first ? "}" : "\n    }";
-    if (stage.forced) o += ",\n    \"stage\": {\"mode\": \"forced\", \"id\": " + std::to_string(stage.id) + "}";
+    if (stage.forced) {
+        o += ",\n    \"stage\": {\"mode\": \"forced\", \"id\": " + std::to_string(stage.id);
+        if (!stage.entry.empty()) o += ", \"entry\": \"" + json_escape(stage.entry) + "\"";
+        o += "}";
+    }
     o += "\n}\n";
     return o;
 }
@@ -203,6 +208,7 @@ inline bool from_json(const std::string& text, Choices& out, StageChoice* stage 
         if (mode && mode->as_str() == "forced" && id && id->kind == Json::Number && id->as_int(-1) >= 0) {
             stage->forced = true;
             stage->id = static_cast<int>(id->as_int());
+            if (const Json* en = st->get("entry"); en && en->kind == Json::String) stage->entry = en->as_str();
         }
     }
     for (const auto& [key, e] : fs->obj) {

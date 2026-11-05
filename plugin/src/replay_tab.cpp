@@ -18,7 +18,11 @@
 //       nothing there, as on the game's page;
 //   - Stage Settings, as the game's: the banner of the focused (or chosen) stage with its name, a 3-column grid with its
 //     scroll bar, "Default" first (the replay's own stage), the chosen cell marked; Confirm picks the focused cell and
-//     stays, Esc goes back to the rows. The list: stage_list(), Battle Settings' own.
+//     stays, Esc goes back to the rows. The list: stage_list(), Battle Settings' own, with the stage slots as Battle
+//     Settings shows them (stages.hpp): the tiles as cells of their own after the game's stages, a stage's variations
+//     cycled on its cell with the child-tab keys (LT / RT), the label in the banner. The choice is the replay menu's own
+//     (stages::choose(kReplay), never Battle Settings' nor Training's): the replay keeps a vanilla stage id, the stage
+//     slots serve the chosen tile / variation when the replay's description is set up.
 // Not taken: the game's "Game Settings" summary on the right (not wanted), its T / R shortcuts.
 // The game picks the colours with a grid of colour boxes (several at once); a choice here is one colour, hence the
 // third row. On = the outfit a replay's fighter of that character wears (replay_logic.hpp; the playback override,
@@ -73,6 +77,8 @@
 #include "replay_logic.hpp"
 #include "replay_tab.hpp"
 #include "colormod_link.hpp"
+#include "stages.hpp"
+#include "stages_logic.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -200,11 +206,22 @@ uint32_t g_enter_frame = 0;
 int64_t g_cp_lefttop = -1;                        // via.gui.ControlPoint.LeftTop
 bool g_no_arrows_logged = false;
 std::map<int, void*> g_faces;                     // fighter -> portrait TextureResourceHolder (one reference held)
-// The stages: the cells after Default, their pictures (stage id -> holder; kDefaultTex: the Default cell's), the choice
-struct StageEntry { int id = 0; int sort = 0; bool named = false; uint8_t guid[16] = {}; };
+// The stages: the cells after Default (the game's stages, then the stage slots' tiles), each stage's variations (cycled on
+// its cell), the pictures (path -> holder), the choice
+struct StageVar { std::string key, name, banner; };
+struct StageEntry {
+    int id = 0;                                   // the vanilla stage id (a tile's too: the game only ever holds vanilla ids)
+    std::string key;                              // "" a stage of the game, else a tile's key (stages.hpp)
+    int sort = 0;
+    bool named = false; uint8_t guid[16] = {};    // a stage of the game: its name (the game's message, shown by its id)
+    std::string name;                             // a tile's name; a stage's name as text (for the variations' label)
+    std::string banner;                           // the cell's and the banner's 4:1 picture
+};
 std::vector<StageEntry> g_stages;
-constexpr int kDefaultTex = -1;
-std::map<int, void*> g_stage_tex;
+std::map<int, std::vector<StageVar>> g_stage_vars;   // vanilla stage id -> its variations (stages.hpp)
+std::map<int, int> g_stage_cycle;                 // vanilla stage id -> the variation its cell shows (0 = its own look)
+bool g_stage_slots = false;                       // the stage slots have tiles or variations here
+std::map<std::string, void*> g_stage_tex;         // picture path -> TextureResourceHolder (one reference held)
 StageChoice g_stage;
 int g_stage_cursor = 0, g_stage_top = 0;          // the focused cell (0 = Default), the first grid row shown
 
@@ -491,6 +508,35 @@ std::vector<StageEntry> stage_list() {
         void* g = msg ? field_ptr(msg, "GUID") : nullptr;
         if (g) { std::memcpy(e.guid, g, 16); e.named = true; }
     }
+    for (StageEntry& e : out) e.banner = stage_image_path(e.id);
+    // the stage slots (stages.hpp), as Battle Settings' grid shows them: the tiles of a stage the list holds as cells of
+    // their own after the game's stages (their order), the variations on their stage's cell (g_stage_vars)
+    g_stage_vars.clear();
+    std::set<int> held;
+    for (const StageEntry& e : out) held.insert(e.id);
+    size_t tiles = 0, vars = 0;
+    for (const stages::Entry& e : stages::entries()) {
+        const int base = static_cast<int>(e.base_id);
+        if (e.kind == stages::Entry::Vanilla) {
+            for (StageEntry& s : out) if (s.id == base && s.key.empty()) s.name = e.name;
+            continue;
+        }
+        if (!held.count(base) || e.key.empty()) continue;
+        if (e.kind == stages::Entry::Tile) {
+            StageEntry t;
+            t.id = base;
+            t.key = e.key;
+            t.sort = 100000 + static_cast<int>(tiles++);
+            t.name = e.name;
+            t.banner = e.banner.empty() ? stage_image_path(base) : e.banner;
+            out.push_back(t);
+        } else {
+            g_stage_vars[base].push_back({ e.key, e.name, e.banner.empty() ? stage_image_path(base) : e.banner });
+            ++vars;
+        }
+    }
+    g_stage_slots = tiles + vars > 0;
+    if (g_stage_slots) logf("replay tab: stage slots: %zu tile(s), %zu variation(s) on %zu stage(s)", tiles, vars, g_stage_vars.size());
     return out;
 }
 std::vector<StageEntry> stage_ids_from_table(Obj* tm) {
@@ -524,19 +570,70 @@ std::vector<StageEntry> stage_ids_from_table(Obj* tm) {
 }
 // The pictures: loaded once per session (the core holds them loading; drawn once ready)
 void load_stage_pictures() {
-    auto load = [](int key, const std::string& path) {
-        if (g_stage_tex.count(key)) return;
+    auto load = [](const std::string& path) {
+        if (path.empty() || g_stage_tex.count(path)) return;
         void* h = nullptr;
-        g_stage_tex[key] = (A()->ui_texture_load(C(), path.c_str(), &h) == SF6CORE_OK) ? h : nullptr;
+        g_stage_tex[path] = (A()->ui_texture_load(C(), path.c_str(), &h) == SF6CORE_OK) ? h : nullptr;
     };
-    load(kDefaultTex, kStageDefaultImage);
-    for (const StageEntry& e : g_stages) load(e.id, stage_image_path(e.id));
+    load(kStageDefaultImage);
+    for (const StageEntry& e : g_stages) load(e.banner);
+    for (auto& [id, vars] : g_stage_vars) for (const StageVar& v : vars) load(v.banner);
 }
-// The cell of the stage choice (0: Default; a forced stage no longer listed: Default)
+// A stage's variation by key: 1-based position in its cycle, 0 = none (its own look, or not one of its variations)
+int variation_index(int id, const std::string& key) {
+    auto it = g_stage_vars.find(id);
+    if (key.empty() || it == g_stage_vars.end()) return 0;
+    for (size_t i = 0; i < it->second.size(); ++i) if (it->second[i].key == key) return static_cast<int>(i) + 1;
+    return 0;
+}
+// The cell of the stage choice (0: Default; a tile: its cell; a variation or the stage's own look: the stage's cell; a
+// forced stage no longer listed: Default)
 int stage_cell_of_choice() {
     if (!g_stage.forced) return 0;
-    for (size_t i = 0; i < g_stages.size(); ++i) if (g_stages[i].id == g_stage.id) return static_cast<int>(i) + 1;
-    return 0;
+    int own = 0;
+    for (size_t i = 0; i < g_stages.size(); ++i) {
+        const StageEntry& s = g_stages[i];
+        if (s.id != g_stage.id) continue;
+        if (!s.key.empty() && s.key == g_stage.entry) return static_cast<int>(i) + 1;
+        if (s.key.empty() && !own) own = static_cast<int>(i) + 1;
+    }
+    return own;
+}
+// The cells show the choice: its stage's cell cycled to the chosen variation, the others on their own look
+void stage_cycle_from_choice() {
+    g_stage_cycle.clear();
+    if (g_stage.forced) if (const int v = variation_index(g_stage.id, g_stage.entry)) g_stage_cycle[g_stage.id] = v;
+}
+// What a cell shows: its picture and, on a stage's cell, the variation it is cycled to (nullptr: its own look)
+struct StageLook { std::string pic; const StageVar* var = nullptr; };
+StageLook stage_look(int cell) {
+    StageLook l;
+    if (cell <= 0 || cell > static_cast<int>(g_stages.size())) { l.pic = kStageDefaultImage; return l; }
+    const StageEntry& s = g_stages[static_cast<size_t>(cell - 1)];
+    l.pic = s.banner;
+    if (!s.key.empty()) return l;
+    auto it = g_stage_vars.find(s.id);
+    auto c = g_stage_cycle.find(s.id);
+    if (it != g_stage_vars.end() && c != g_stage_cycle.end() && c->second > 0 && c->second <= static_cast<int>(it->second.size())) {
+        l.var = &it->second[static_cast<size_t>(c->second - 1)];
+        l.pic = l.var->banner;
+    }
+    return l;
+}
+// The stage slots serve the replay menu's own choice (stages::choose(kReplay), never Battle Settings' nor Training's):
+// at most the forced stage's tile / variation, nothing for Default (the replay's own stage on its own look). The replay
+// itself keeps a vanilla stage id (replay_outfits.cpp writes it; stages::choose_replay_stage says the same to the stage
+// slots); the stage slots serve the chosen files when the replay's description is set up. Only with stage slots.
+void sync_stage_slots() {
+    if (!g_stage_slots) return;
+    std::set<int> bases;
+    for (const StageEntry& s : g_stages) bases.insert(s.id);
+    for (int id : bases) {
+        const std::string want = g_stage.forced && g_stage.id == id ? g_stage.entry : std::string();
+        if (stages::chosen(stages::kReplay, static_cast<uint32_t>(id)) != want && !stages::choose(stages::kReplay, static_cast<uint32_t>(id), want))
+            logf("replay tab: the stage slots refused %s for stage %d", want.c_str(), id);
+    }
+    stages::choose_replay_stage(g_stage.forced ? g_stage.id : -1);
 }
 
 // The portraits: loaded once per session (the core holds them loading; drawn once ready)
@@ -898,10 +995,12 @@ struct Rep {
     }
     void prime(bool now) { held = now; next = g_frame + 1000000; }   // a key held at entry acts only once released
 };
-Rep k_up, k_down, k_left, k_right, k_esc, k_tab, k_ok;
+Rep k_up, k_down, k_left, k_right, k_esc, k_tab, k_ok, k_lt, k_rt;
 Method* m_pad_merged = nullptr;
 Method* m_pad_button = nullptr;
 uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_l1 = 256, b_b = 128, b_a = 32;   // via.hid.GamePadButton
+uint32_t b_lt = 0, b_rt = 0;                      // LTrigBottom / RTrigBottom: the child-tab keys on a pad
+int vk_lt = 0, vk_rt = 0;                         // the child-tab keys on the keyboard (the game's symbols' letters), 0 unknown
 uint32_t b_sup = 0, b_sdown = 0, b_sleft = 0, b_sright = 0;
 
 bool focused() {
@@ -923,7 +1022,7 @@ uint32_t pad_buttons() {
     auto r = call(m_pad_button, dev);
     return r.exception_thrown ? 0u : r.dword;
 }
-struct Keys { bool up, down, left, right, esc, tab, ok; };   // esc: Back; tab: the tab-back key
+struct Keys { bool up, down, left, right, esc, tab, ok, lt, rt; };   // esc: Back; tab: the tab-back key; lt / rt: child tabs
 Keys read_keys() {
     Keys k{};
     if (focused()) {
@@ -934,6 +1033,8 @@ Keys read_keys() {
         k.esc = vk_down(VK_ESCAPE);
         k.tab = sc_down(0x10);                     // the tab-back key (Q's place: A on AZERTY)
         k.ok = vk_down(VK_RETURN) || sc_down(0x21);     // Enter, F (the game's Confirm)
+        k.lt = vk_lt && vk_down(vk_lt);
+        k.rt = vk_rt && vk_down(vk_rt);
     }
     const uint32_t b = pad_buttons();
     k.up = k.up || (b & b_up) || (b_sup && (b & b_sup));
@@ -943,12 +1044,14 @@ Keys read_keys() {
     k.esc = k.esc || (b & b_b);
     k.tab = k.tab || (b & b_l1);
     k.ok = k.ok || (b & b_a);
+    k.lt = k.lt || (b_lt && (b & b_lt));
+    k.rt = k.rt || (b_rt && (b & b_rt));
     return k;
 }
 void prime_keys() {
     const Keys k = read_keys();
     k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right);
-    k_esc.prime(k.esc); k_tab.prime(k.tab); k_ok.prime(k.ok);
+    k_esc.prime(k.esc); k_tab.prime(k.tab); k_ok.prime(k.ok); k_lt.prime(k.lt); k_rt.prime(k.rt);
 }
 
 const Fighter* focused_fighter() {
@@ -983,6 +1086,45 @@ void apply_choice(const Fighter& f, const Choice& cur, const Choice& next) {
     logf("replay tab: %s -> %s", f.name.c_str(), row_text(f, next).c_str());
 }
 
+// The child-tab keys (app.InputAssign.Digital.Id 75 / 76, LT / RT): their symbols for the label (the device in use) and
+// their keyboard keys (the letter of the keyboard symbol, "<ICON KeyW>" -> W), from app.InputGuideManager.GetSymbolText as
+// stages.cpp's grids show them. Learned when the stage grid opens (the device or the bindings may have changed).
+std::string g_sym_lt, g_sym_rt;
+std::string key_symbol(int id, int mode) {
+    auto* gm = api().get_managed_singleton("app.InputGuideManager");
+    Method* m = gm ? method_of(gm->get_type_definition(),
+                               "GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)", 4)
+                   : nullptr;
+    return m ? str(call_obj(m, gm, { arg_i32(id), arg_i32(mode), arg_i32(0), arg_i32(0) })) : std::string();
+}
+int symbol_vk(const std::string& sym) {           // "<ICON KeyW>" -> 'W'; another key (or none) -> 0
+    const std::string tag = "<ICON Key";
+    const size_t at = sym.find(tag);
+    if (at == std::string::npos) return 0;
+    const size_t end = sym.find('>', at);
+    const std::string k = end == std::string::npos ? std::string() : sym.substr(at + tag.size(), end - at - tag.size());
+    if (k.size() != 1) return 0;
+    const char c = static_cast<char>(toupper(static_cast<unsigned char>(k[0])));
+    return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ? c : 0;
+}
+void learn_cycle_keys() {
+    constexpr int kModeKeyboard = 2;
+    int mode = kModeKeyboard;
+    if (auto* gm = api().get_managed_singleton("app.InputGuideManager"))
+        if (Obj* modes = get_obj(gm, "_Modes")) {
+            auto r = call(modes, "get_Item", { arg_i32(0) });
+            if (!r.exception_thrown && static_cast<int32_t>(r.dword) > 0) mode = static_cast<int32_t>(r.dword);
+        }
+    const int l = stagelogic::key_left_id(stagelogic::kKeysChildTab), r = stagelogic::key_right_id(stagelogic::kKeysChildTab);
+    g_sym_lt = key_symbol(l, mode);
+    g_sym_rt = key_symbol(r, mode);
+    vk_lt = symbol_vk(key_symbol(l, kModeKeyboard));
+    vk_rt = symbol_vk(key_symbol(r, kModeKeyboard));
+    if (g_stage_slots)
+        logf("replay tab: stage variation keys %s / %s (keyboard %c / %c, pad LT / RT bits %u / %u)", g_sym_lt.c_str(), g_sym_rt.c_str(),
+             vk_lt ? vk_lt : '-', vk_rt ? vk_rt : '-', b_lt, b_rt);
+}
+
 void input() {
     const Keys k = read_keys();
     const bool esc = k_esc.press(k.esc), tab = k_tab.press(k.tab), ok = k_ok.press(k.ok);
@@ -993,7 +1135,13 @@ void input() {
         if (k_up.step(k.up)) { g_list_row = (g_list_row + kListRows - 1) % kListRows; g_dirty = true; }
         if (k_down.step(k.down)) { g_list_row = (g_list_row + 1) % kListRows; g_dirty = true; }
         if (ok && g_list_row == 0 && f) { g_level.store(kLevelGrid); g_dirty = true; }
-        if (ok && g_list_row == 1) { g_level.store(kLevelStage); g_stage_cursor = stage_cell_of_choice(); g_dirty = true; }
+        if (ok && g_list_row == 1) {
+            g_level.store(kLevelStage);
+            g_stage_cursor = stage_cell_of_choice();
+            stage_cycle_from_choice();
+            learn_cycle_keys();
+            g_dirty = true;
+        }
         return;
     }
     if (level == kLevelStage) {                    // the stage grid: Confirm picks the focused cell and stays (the game's)
@@ -1005,16 +1153,31 @@ void input() {
         if (k_left.step(k.left)) g_stage_cursor = grid_move(g_stage_cursor, -1, 0, n, kSCols);
         if (k_right.step(k.right)) g_stage_cursor = grid_move(g_stage_cursor, 1, 0, n, kSCols);
         if (g_stage_cursor != before) g_dirty = true;
+        // LT / RT: the focused stage's variations (its own look, then each one, wrapping), as Battle Settings' grid
+        const int step = (k_rt.step(k.rt) ? 1 : 0) - (k_lt.step(k.lt) ? 1 : 0);
+        if (step && g_stage_cursor > 0 && g_stage_cursor <= static_cast<int>(g_stages.size())) {
+            const StageEntry& s = g_stages[static_cast<size_t>(g_stage_cursor - 1)];
+            auto it = g_stage_vars.find(s.id);
+            if (s.key.empty() && it != g_stage_vars.end() && !it->second.empty()) {
+                g_stage_cycle[s.id] = stagelogic::cycle(g_stage_cycle[s.id], static_cast<int>(it->second.size()), step);
+                g_dirty = true;
+            }
+        }
         if (ok) {
             StageChoice next;
             if (g_stage_cursor > 0 && g_stage_cursor <= static_cast<int>(g_stages.size())) {
+                const StageEntry& s = g_stages[static_cast<size_t>(g_stage_cursor - 1)];
                 next.forced = true;
-                next.id = g_stages[static_cast<size_t>(g_stage_cursor - 1)].id;
+                next.id = s.id;
+                if (!s.key.empty()) next.entry = s.key;                         // a tile
+                else if (const StageVar* v = stage_look(g_stage_cursor).var) next.entry = v->key;   // the variation shown
             }
             if (!(next == g_stage)) {
                 g_stage = next;
                 save_choices();
-                logf("replay tab: stage -> %s", next.forced ? std::to_string(next.id).c_str() : "Default");
+                sync_stage_slots();
+                logf("replay tab: stage -> %s%s", next.forced ? std::to_string(next.id).c_str() : "Default",
+                     next.entry.empty() ? "" : (" (" + next.entry + ")").c_str());
             }
             g_dirty = true;
         }
@@ -1390,12 +1553,13 @@ void put_center_text(void* title, const char* name, const char* text, const uint
     }
     show(c, on);
 }
-// A stage cell's (or the banner's) picture: the whole texture (4:1, the game's own thumbnail and banner)
-void put_stage_picture(void* title, const std::string& name, int key, float x, float y, float w, float h, uint32_t col, bool on) {
+// A stage cell's (or the banner's) picture: the whole texture (4:1, the game's own thumbnail and banner, a stage slot's own)
+void put_stage_picture(void* title, const std::string& name, const std::string& path, float x, float y, float w, float h, uint32_t col,
+                       bool on) {
     void* c = copy_of(title, name);
     if (!c) return;
     style_box(c, kPrioImage);
-    auto it = g_stage_tex.find(key);
+    auto it = g_stage_tex.find(path);
     void* holder = it != g_stage_tex.end() ? it->second : nullptr;
     const bool ready = on && holder && A()->ui_texture_ready(holder) == 1;
     if (ready) {
@@ -1423,8 +1587,7 @@ void render_stage(void* title, bool on, bool grid) {
         const int idx = g_stage_top * kSCols + i;
         const bool cell = idx < n;
         const float x = kSGridX + (i % kSCols) * kSStepX, y = kSGridY + (i / kSCols) * kSStepY;
-        const int key = idx == 0 ? kDefaultTex : cell ? g_stages[static_cast<size_t>(idx - 1)].id : 0;
-        put_stage_picture(title, cname("simg", i), key, x, y, kSCellW, kSCellH, pic, cell);
+        put_stage_picture(title, cname("simg", i), cell ? stage_look(idx).pic : std::string(), x, y, kSCellW, kSCellH, pic, cell);
     }
     // the Default cell's label, over its picture while it is in view
     const int def_vis = 0 - g_stage_top * kSCols;
@@ -1440,13 +1603,18 @@ void render_stage(void* title, bool on, bool grid) {
     const bool c_on = on && cv >= 0 && cv < kSCells;
     put_box(title, "e_ro_smark", kSGridX + (cv % kSCols) * kSStepX, kSGridY + (cv / kSCols) * kSStepY, kSMark, kSMark, kColStageMark,
             c_on, kPrioText);
-    // the banner: picture and name
-    const int bkey = shown == 0 ? kDefaultTex : shown <= static_cast<int>(g_stages.size()) ? g_stages[static_cast<size_t>(shown - 1)].id : 0;
-    put_stage_picture(title, "e_ro_sbanner", bkey, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
+    // the banner: picture and name (a tile: its name; a stage with variations: Battle Settings' label, the cycle keys'
+    // symbols around "stage · variation"; else the game's name by its message id)
+    const StageLook bl = stage_look(shown);
+    put_stage_picture(title, "e_ro_sbanner", bl.pic, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
     const StageEntry* se = shown > 0 && shown <= static_cast<int>(g_stages.size()) ? &g_stages[static_cast<size_t>(shown - 1)] : nullptr;
-    const std::string fallback = se ? "Stage " + std::to_string(se->id) : "Default";
-    put_center_text(title, "e_ro_sname", fallback.c_str(), se && se->named ? se->guid : nullptr, kStageNameX, kStageNameY, 420,
-                    kFontStageName, kColText, on);
+    std::string label = se ? (se->name.empty() ? "Stage " + std::to_string(se->id) : se->name) : "Default";
+    const bool cycles = se && se->key.empty() && g_stage_vars.count(se->id);
+    if (cycles)
+        label = stagelogic::cycle_label(grid ? g_sym_lt : std::string(), se->name.empty() ? "Stage " + std::to_string(se->id) : se->name,
+                                        bl.var ? bl.var->name : std::string(), grid ? g_sym_rt : std::string());
+    const bool by_id = se && se->key.empty() && !cycles && se->named;
+    put_center_text(title, "e_ro_sname", label.c_str(), by_id ? se->guid : nullptr, kStageNameX, kStageNameY, 520, kFontStageName, kColText, on);
     // the scroll bar: its track and its thumb (rows shown / rows)
     put_box(title, "e_ro_sbarbg", kSBarX, kSBarY, kSBarW, kSBarH, kColScrollTrack, on && rows > kSVisRows, kPrioFrame);
     const float thumb = rows > kSVisRows ? kSBarH * kSVisRows / rows : kSBarH;
@@ -1589,6 +1757,8 @@ void enter(Obj* main) {
     load_choices();
     g_stages = stage_list();                      // each time: the stage list may grow (stage_list())
     load_stage_pictures();
+    sync_stage_slots();                           // the stage slots' replay choice: the file's (edited by hand, another PC)
+    stage_cycle_from_choice();
     hide_page(false);
     prime_keys();
     g_cursor = std::max(0, std::min(g_cursor, static_cast<int>(g_cat.size()) - 1));
@@ -1654,6 +1824,7 @@ void init() {
         auto bit = [&](const char* f, uint32_t fb) { auto* x = btn->find_field(f); return x ? static_cast<uint32_t>(x->get_data<int32_t>(nullptr)) : fb; };
         b_up = bit("LUp", 1); b_down = bit("LDown", 2); b_left = bit("LLeft", 4); b_right = bit("LRight", 8);
         b_l1 = bit("LTrigTop", 256); b_b = bit("RRight", 128); b_a = bit("RDown", 32);
+        b_lt = bit("LTrigBottom", 0); b_rt = bit("RTrigBottom", 0);
         b_sup = bit("EmuLup", 0); b_sdown = bit("EmuLdown", 0); b_sleft = bit("EmuLleft", 0); b_sright = bit("EmuLright", 0);
     }
     if (TD* cp = api().tdb()->find_type("via.gui.ControlPoint"))

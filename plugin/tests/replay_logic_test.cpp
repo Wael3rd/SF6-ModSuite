@@ -164,6 +164,17 @@ int main() {
           "a forced stage with no forced fighter");
     check(from_json("{\"version\":1,\"fighters\":{},\"stage\":{\"mode\":\"auto\",\"id\":3}}", back3, &st_back) && !st_back.forced,
           "a stage entry that is not forced: Default");
+    check(st_back.entry.empty() && from_json(with_stage, back3, &st_back) && st_back.entry.empty(),
+          "an older file (no \"entry\"): the stage's own look");
+    StageChoice tile;
+    tile.forced = true; tile.id = 0; tile.entry = "suzaku_castle";
+    const std::string with_tile = to_json(cs, tile);
+    check(from_json(with_tile, back3, &st_back) && st_back == tile && st_back.entry == "suzaku_castle",
+          "a stage slot (tile / variation) survives the round trip, by its key");
+    check(with_tile.find("\"stage\": {\"mode\": \"forced\", \"id\": 0, \"entry\": \"suzaku_castle\"}") != std::string::npos,
+          "the stage slot as written");
+    StageChoice tile2 = tile; tile2.entry.clear();
+    check(!(tile2 == tile), "a stage slot is another choice than the vanilla look of its stage");
     check(stage_image_path(40000) == "Product/GUI/data/Area_Image/ess/ess0400_00/tex_StageImage_ess0400_00_IM.tex" &&
           stage_image_path(400000) == "Product/GUI/data/Area_Image/ess/ess4000_00/tex_StageImage_ess4000_00_IM.tex" &&
           stage_image_path(0) == "Product/GUI/data/Area_Image/ess/ess0000_00/tex_StageImage_ess0000_00_IM.tex",
