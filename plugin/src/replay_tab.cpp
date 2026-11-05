@@ -1827,7 +1827,7 @@ void render_summary(void* title, bool on, const char* heading, const std::vector
     put_stage_picture(title, "e_ro_sumpic", pic, sum_x(kSumPicX), sum_y(pic_y), kSumPicW * kSumScale, kSumPicH * kSumScale, kColText,
                       on && !pic.empty());
 }
-// The chosen stage as the summary names it: a tile, its name; a variation, "stage · variation"; a stage of the game, its
+// The chosen stage as the summary names it: a tile, its name; a variation, the banner's one name line; a stage of the game, its
 // name by the game's message; Default (or a stage no longer listed), the Default cell's picture and "Default"
 void stage_summary(std::string& pic, std::string& name, const uint8_t*& guid) {
     guid = nullptr;
@@ -1841,7 +1841,7 @@ void stage_summary(std::string& pic, std::string& name, const uint8_t*& guid) {
     if (const int v = variation_index(e.id, g_stage.entry)) {
         const StageVar& var = g_stage_vars[e.id][static_cast<size_t>(v - 1)];
         pic = var.banner;
-        name = stagelogic::cycle_label(std::string(), stage, var.name, std::string());
+        name = stagelogic::variation_label(stage, var.name, var.bundle);   // the banner's one name line
         return;
     }
     if (e.named) guid = e.guid;
