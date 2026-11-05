@@ -5,7 +5,8 @@
 // a UI update is unfinished), attached to c_main and found again by name every frame (no reference kept on it: R19 /
 // R35). Shown only while c_main plays its "DEFAULT2" state: the logo is fully displayed and PRESS ANY BUTTON blinks
 // (seen live: "DEFAULT" during the logo animation and around the demo video). Entering DEFAULT2 starts a short
-// entrance (white flash, scale down, white to green); any other state hides it. The flow's own Select state hooks
+// entrance (white flash, scale down, white to green); it stays through SELECT and FADE_OUT (a button was pressed: the
+// logo stays during the loading); any other state hides it. The flow's own Select state hooks
 // were tried first and never fired. Every return to the title makes a new flow, so the copy is made again when
 // missing; it dies with the title GUI.
 //
@@ -35,6 +36,9 @@ constexpr int32_t     kPriority      = 10;                 // the movie texture 
 constexpr uint32_t    kGreenRgba     = 0xFF00D40Eu;        // the Drive gauge's full green (c_gauge00: R 14 G 212 B 0)
 constexpr uint32_t    kWhiteRgba     = 0xFFFFFFFFu;
 constexpr const char* kShownState    = "DEFAULT2";         // c_main's play state once the logo is complete
+constexpr const char* kKeepStates[]  = { "SELECT", "FADE_OUT" }; // after a button press (SELECT for a few frames, then
+                                                         // FADE_OUT): PRESS ANY BUTTON goes, the logo stays
+                                                         // during the loading: the line stays too (no new entrance)
 // entrance (frames counted from c_main entering kShownState)
 constexpr float       kScaleStart    = 1.25f;              // frame 0
 constexpr int         kScaleFrames   = 8;                  // ease-out down to 1.0
@@ -121,12 +125,13 @@ void anim_at(int f, uint32_t* rgba, float* scale) {
     }
 }
 
-// c_main of the flow's GUI: flow.FlowParam.CtrlCMain.get_Component().get_View().get_Child()
-void* find_c_main(void* flow) {
+// c_main of the flow's GUI: flow.FlowParam.CtrlCMain.get_Component().get_View().get_Child(); *out_view = the View
+void* find_c_main(void* flow, void** out_view) {
     void* param = read_field_ref(s_sdk, flow, "FlowParam");
     void* ctrl = param ? read_field_ref(s_sdk, param, "CtrlCMain") : nullptr;
     void* gui = call0(ctrl, "get_Component");
     void* view = call0(gui, "get_View");
+    *out_view = view;
     if (!view) return nullptr;
     void* c = call0(view, "get_Child");
     if (c) {
@@ -183,7 +188,8 @@ void configure_new(void* copy, void* tmpl) {
 void tick_inner(void* flow) {
     using namespace tcfg;
     const SF6CoreAPI* api = sf6core_api_ptr();
-    void* cmain = find_c_main(flow);
+    void* view = nullptr;
+    void* cmain = find_c_main(flow, &view);
     if (!cmain) { g_prev_sel = false; g_shown = false; return; }
     char st[32] = "";
     void* ps = call0(cmain, "get_PlayState");
@@ -192,10 +198,13 @@ void tick_inner(void* flow) {
     if (!g_first_logged) { g_first_logged = true; core_log(SF6CORE_LOG_INFO, nullptr, "[title] title seen (c_main state \"%s\")", st); }
     if (sel && !g_prev_sel) { g_enter_tick.store(g_ticks.load()); g_last_rgba = -1; g_last_scale_q = -1; g_create_tries = 0; }
     g_prev_sel = sel;
-    if (!sel && !g_shown) return;                                    // nothing to hide, nothing to show
-    void* copy = api->ui_find_child(cmain, kCopyName, 0);
+    bool after_press = false;
+    for (const char* k : kKeepStates) after_press = after_press || strcmp(st, k) == 0;
+    const bool keep = sel || (g_shown && after_press);
+    if (!keep && !g_shown) return;                                   // nothing to hide, nothing to show
+    void* copy = api->ui_find_child(view, kCopyName, 0);
 
-    if (!sel) {
+    if (!keep) {
         if (copy) api->ui_set_visible(g_client, copy, 0);
         g_shown = false;
         return;
@@ -205,7 +214,9 @@ void tick_inner(void* flow) {
         ++g_create_tries;
         void* tmpl = api->ui_find_child(cmain, kTemplateName, 0);
         if (!tmpl) return;
-        if (api->ui_clone_control(g_client, tmpl, cmain, kCopyName, &copy) != SF6CORE_OK || !copy) {
+        // attached to the View, not to c_main: c_main's state clips (FADE_OUT after a button press) fade the copy
+        // with the template it was made from (R31), while the logo stays on screen
+        if (api->ui_clone_control(g_client, tmpl, view, kCopyName, &copy) != SF6CORE_OK || !copy) {
             if (!g_warned && g_create_tries >= kMaxCreateTries) {
                 g_warned = true;
                 core_log(SF6CORE_LOG_WARN, nullptr, "[title] the OVERDRIVE EDITION line could not be created");
@@ -216,6 +227,7 @@ void tick_inner(void* flow) {
         core_log(SF6CORE_LOG_INFO, nullptr, "[title] OVERDRIVE EDITION line created (font slot %d, size %.0fx%.0f, at %.0f,%.0f)",
                  (int)kFontSlot, kFontW, kFontH, kPosX, kPosY);
     }
+    if (!sel) g_last_rgba = -1;                                      // FADE_OUT: written again every frame
     const int f = (int)(g_ticks.load() - g_enter_tick.load());
     uint32_t rgba;
     float sc;
