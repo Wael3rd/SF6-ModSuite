@@ -79,6 +79,7 @@
 #include "replay_logic.hpp"
 #include "replay_tab.hpp"
 #include "colormod_link.hpp"
+#include "rto.hpp"
 #include "stages.hpp"
 #include "stages_logic.hpp"
 
@@ -227,6 +228,8 @@ constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle ba
 const char* const kDescGrid = "Set which outfit each character will appear in during replays.";
 const char* const kDescPage = "Set which outfit and color this character will appear in during replays.";
 const char* const kDescStage = "Set which stage is shown during replays.";
+const char* const kOptionsHint = "Costume options";   // the guide bar's entry, as on Edit Character
+const char* const kOptionsName = "Costume Options";   // the summary's heading
 const char* const kRowTemplateAgent = "Resident_Cmn_CertifiedMatch";
 const char* const kArrowTemplateAgent = "StartMenuUI";
 
@@ -254,6 +257,7 @@ bool g_guide_moved = false;
 std::vector<std::string> g_hidden;                // agents hidden for our page (names, found again to restore)
 std::vector<Fighter> g_cat;
 Choices g_choices;
+OptionStore g_options;                            // the costume options saved per fighter and outfit, for replays
 std::map<int, Choice> g_last_on;                  // per character, the outfit it had before being turned Off
 int g_cursor = 0, g_top_row = 0;                  // the focused cell (catalog index), the first grid row shown
 // The page's level, as on Battle Settings > Other: the option row (the grid shown dimmed), the grid, a character's page
@@ -262,6 +266,7 @@ enum Level { kLevelList = 0, kLevelGrid = 1, kLevelPage = 2, kLevelStage = 3 };
 std::atomic<int> g_level{ kLevelList };           // the hooks read it
 int g_list_row = 0;                               // the focused option row (0 outfits, 1 stage)
 int g_row = 0;                                    // the character's page's focused row
+bool g_options_open = false;                      // the Costume Options menu was up (input waits for its keys' release)
 bool g_header_hidden = false;                     // the tab bar's pieces hidden for the character's page
 std::string g_desc_game, g_desc_ours;             // the bottom line: the game's text, ours while it shows
 bool g_copies_shown = false, g_dirty = true;
@@ -561,13 +566,15 @@ void build_catalog() {
 void load_choices() {
     Choices c;
     StageChoice st;
+    OptionStore op;
     const std::string text = read_file(kFile);
-    if (!text.empty() && !from_json(text, c, &st)) logf("replay tab: %s unreadable, starting from Default", kFile);
+    if (!text.empty() && !from_json(text, c, &st, &op)) logf("replay tab: %s unreadable, starting from Default", kFile);
     g_choices = c;
     g_stage = st;
+    g_options = op;
 }
 void save_choices() {
-    if (!write_file(kFile, to_json(g_choices, g_stage))) logf("replay tab: could not write %s", kFile);
+    if (!write_file(kFile, to_json(g_choices, g_stage, g_options))) logf("replay tab: could not write %s", kFile);
 }
 
 // ---- the stages ----
@@ -1170,7 +1177,7 @@ Keys read_keys() {
     k.esc = k.esc || (b & b_b);
     k.tab = k.tab || (b & b_l1);
     k.ok = k.ok || (b & b_a);
-    k.var = g_stage_slots && stages::variation_key_down();   // the pad's X / its keyboard key (stages.hpp)
+    k.var = stages::replay_key_down();             // the pad's X / its keyboard key (stages.hpp)
     return k;
 }
 void prime_keys() {
@@ -1187,6 +1194,27 @@ const Fighter* focused_fighter() {
 Choice choice_of(const Fighter& f) {
     auto it = g_choices.find(f.fid);
     return it != g_choices.end() ? it->second : Choice{};
+}
+// The options of the outfit the character's page shows: its slot when the fighter is On and that outfit has options, what is
+// saved for it (nullptr: nothing, its defaults)
+const rto::Slot* options_slot(const Fighter& f, const Choice& c) { return c.forced ? rto::outfit_slot(f.fid, c.costume) : nullptr; }
+const std::vector<std::string>* saved_options(const rto::Slot* s) {
+    if (!s) return nullptr;
+    auto fi = g_options.find(s->fighter);
+    if (fi == g_options.end()) return nullptr;
+    auto oi = fi->second.find(s->mod);
+    return oi != fi->second.end() ? &oi->second : nullptr;
+}
+// The options menu changed them (nullptr: Restore defaults): saved here, per outfit; never the player's own
+void options_changed(const rto::Slot* s, const std::vector<std::string>* ids) {
+    if (!s) return;
+    if (ids) g_options[s->fighter][s->mod] = *ids;
+    else if (auto fi = g_options.find(s->fighter); fi != g_options.end()) {
+        fi->second.erase(s->mod);
+        if (fi->second.empty()) g_options.erase(fi);
+    }
+    save_choices();
+    g_dirty = true;
 }
 // A row's Left / Right on the focused character (Outfit Settings On / Off, Costume, Color)
 Choice row_step(const Fighter& f, const Choice& cur, int row, int dir) {
@@ -1212,6 +1240,9 @@ void apply_choice(const Fighter& f, const Choice& cur, const Choice& next) {
 }
 
 void input() {
+    // the options menu is up: its window has the keys; closed: a key still held (its Back, its Confirm) acts only once released
+    if (rto::menu::active()) { g_options_open = true; return; }
+    if (g_options_open) { g_options_open = false; prime_keys(); g_dirty = true; return; }
     const Keys k = read_keys();
     const bool esc = k_esc.press(k.esc), tab = k_tab.press(k.tab), ok = k_ok.press(k.ok);
     const Fighter* f = focused_fighter();
@@ -1277,9 +1308,16 @@ void input() {
         }
         return;
     }
-    if (level == kLevelPage) {                     // the character's page (Confirm and the tab keys: nothing, as the game's)
+    if (level == kLevelPage) {                     // the character's page (the tab keys: nothing, as the game's)
         if (esc || !f) { g_level.store(kLevelGrid); g_dirty = true; return; }   // back to the grid
         const Choice cur = choice_of(*f);
+        // the Costume Options: the fighter On and its outfit with options: the guide bar's entry, one press of its key (R on a
+        // keyboard, the pad's X) opens the same menu as Edit Character's
+        const bool var_press = k_var.press(k.var);
+        if (const rto::Slot* slot = options_slot(*f, cur)) {
+            stages::replay_guide_hint(kOptionsHint);
+            if (var_press && rto::menu::open_replay(slot, saved_options(slot), options_changed)) { g_options_open = true; return; }
+        }
         const int rows = cur.forced ? kRows : 1;   // Off: the rows below are disabled, the focus stays on the first
         if (k_up.step(k.up)) { g_row = (g_row + rows - 1) % rows; g_dirty = true; }
         if (k_down.step(k.down)) { g_row = (g_row + 1) % rows; g_dirty = true; }
@@ -2096,15 +2134,28 @@ void render_page(void* title, const Fighter* f) {
     const char* labels[kRows] = { "Outfit Settings", "Costume", "Color" };
     const std::string values[kRows] = { c.forced ? "On" : "Off", oi >= 0 ? fit(f->outfits[static_cast<size_t>(oi)].name) : "-",
                                         shown.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], shown) : "-" };
+    const rto::Slot* slot = on ? options_slot(*f, c) : nullptr;
+    const std::vector<std::string>* saved = saved_options(slot);
     for (int r = 0; r < kRows; ++r) put_row(title, r, labels[r], values[r], on, r == g_row, r > 0 && !c.forced);
     // the summary: "Outfit Settings (Replay)", the three settings (Off: the outfit and colour are the replay's own)
     if (on) {
         const std::string costume = c.forced && oi >= 0 ? cut_utf8(f->outfits[static_cast<size_t>(oi)].name, kSumLineMax) : "Default";
         const std::string color = c.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], c) : "Default";
-        render_summary(title, true, kSumTitlePage, { { SumKind::Name, labels[0] }, { SumKind::Line, values[0] },
-                                                     { SumKind::Name, labels[1] }, { SumKind::Line, costume },
-                                                     { SumKind::Name, labels[2] }, { SumKind::Line, color } });
+        std::vector<SumItem> items = { { SumKind::Name, labels[0] }, { SumKind::Line, values[0] },
+                                       { SumKind::Name, labels[1] }, { SumKind::Line, costume },
+                                       { SumKind::Name, labels[2] }, { SumKind::Line, color } };
+        // one line per option not at its default (nothing when all are)
+        if (slot) {
+            const std::vector<std::string> lines = rto::option_lines(rto::manifest(), *slot, rto::forced_options(rto::manifest(), *slot, saved));
+            if (!lines.empty()) items.push_back({ SumKind::Name, kOptionsName });
+            for (size_t i = 0; i < lines.size() && static_cast<int>(items.size()) < kSumTexts; ++i)
+                items.push_back({ SumKind::Line, cut_utf8(lines[i], kSumLineMax) });
+        }
+        render_summary(title, true, kSumTitlePage, items);
     }
+    // the preview wears this choice live, not the player's own (rto.hpp); the page left, or Off: back to what it was
+    if (on && c.forced) rto::replay_preview(slot, saved);
+    else rto::replay_preview_end();
     // Off: no model at all, the room given back; On: the model once it shows the choice, nothing meanwhile
     const bool forced = on && c.forced;
     preview::want(forced ? f->fid : 0, forced ? c.costume : 0, forced ? c.color : 0, forced ? c.colormod : std::string());
@@ -2169,6 +2220,9 @@ void enter(Obj* main) {
 }
 
 void leave(Obj* main, const char* why) {
+    rto::menu::replay_close(why);
+    rto::replay_preview_end();
+    g_options_open = false;
     preview::stop(why);
     restore_page();
     hide_copies(main);
@@ -2183,6 +2237,9 @@ void leave(Obj* main, const char* why) {
 
 void down() {                                      // the screen went: nothing of ours left behind
     g_leaving = false;
+    rto::menu::replay_close("the Replays screen closed");
+    rto::replay_preview_end();
+    g_options_open = false;
     preview::stop("the Replays screen closed");
     if (g_ours.load() || !g_hidden.empty()) leave(nullptr, "the Replays screen closed");
     restore_desc();                                // the guide outlives the screen (resident)
@@ -2246,6 +2303,7 @@ void tick() {
     if (!g_up) {
         logf("replay tab: Replays screen up");
         colormod::clear(SF6CM_SCOPE_REPLAY);      // a replay played from here is over (the Color Mod drops them too)
+        rto::replay_wear_clear();                 // its costume options too: the player's own choices again
     }
     g_up = true;
     g_top_addr.store(reinterpret_cast<uintptr_t>(agent), std::memory_order_release);

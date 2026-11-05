@@ -265,6 +265,42 @@ int main() {
         check(sl[3] == sl[2] + kSumPicGap && sl[4] == sl[3] + kSumPicH + kSumLineAfterPic, "summary layout: the stage's name under its picture");
     }
 
+    // the costume options saved per fighter and outfit (replay_options.hpp)
+    {
+        Choices fc;
+        Choice bison; bison.forced = true; bison.costume = 0; bison.color = 2;
+        fc[26] = bison;
+        OptionStore op;
+        op[26]["esf026/game outfit 1"] = { "wesker01" };
+        op[26]["esf026/other outfit"] = { "a1", "b2" };
+        op[30]["esf030/game outfit 1"] = { "body0001" };       // C. Viper set to Off: its options stay
+        const std::string t = to_json(fc, StageChoice{}, op);
+        Choices fb; OptionStore ob; StageChoice sb;
+        check(from_json(t, fb, &sb, &ob), "options: the file parses");
+        check(fb.size() == 1 && fb[26] == bison, "options: only the forced fighter is forced");
+        check(ob == op, "options: both outfits of a fighter and an Off fighter's survive the file");
+        check(t.find("\"30\": {\"mode\": \"off\", \"options\"") != std::string::npos, "options: an Off fighter is written \"off\"");
+        Choices fo; OptionStore oo;
+        check(from_json("{\"version\":1,\"fighters\":{\"2\":{\"mode\":\"forced\",\"costume\":1,\"color\":0}}}", fo, nullptr, &oo) &&
+              fo.size() == 1 && oo.empty(), "options: a file from before them still loads, none saved");
+        Choices fn;
+        check(from_json(t, fn) && fn.size() == 1, "options: a caller not asking for them reads the same choices");
+        check(to_json(fc) == to_json(fc, StageChoice{}, OptionStore{}), "options: none saved, the file is as before");
+        check(to_json(fc).find("options") == std::string::npos, "options: none saved, no key");
+        check(from_json("{\"version\":1,\"fighters\":{\"7\":{\"mode\":\"off\",\"options\":{\"m\":[\"a\",3,\"\"],\"n\":\"x\"}}}}", fo, nullptr, &oo) &&
+              fo.empty() && oo.size() == 1 && oo[7].size() == 1 && oo[7]["m"] == std::vector<std::string>{ "a" },
+              "options: what is not a list of ids is left out");
+        // an outfit change on the page: the choice changes, what is saved for the outfits does not depend on it
+        Fighter two; two.fid = 26; two.name = "M. Bison";
+        two.outfits = { { 0, "", "Outfit 1", false, { 0, 1 } }, { 1, "", "Outfit 2", false, { 0, 1 } } };
+        fc[26] = cycle_outfit(two, fc[26], +1, false);
+        check(fc[26].costume == 1 && to_json(fc, StageChoice{}, op).find("wesker01") != std::string::npos,
+              "options: another outfit chosen, the first one's kept");
+        fc.erase(26);
+        Choices fd; OptionStore od;
+        check(from_json(to_json(fc, StageChoice{}, op), fd, nullptr, &od) && fd.empty() && od == op, "options: the fighter set to Off keeps them");
+    }
+
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;
 }

@@ -824,6 +824,73 @@ int main(int argc, char** argv) {
         check(w.find("\"select_options_button\": \"R1\"") != std::string::npos, "settings: the written text");
     }
 
+    // Replays > Settings: a replay's forced options, over the player's own choices, which only ever get read
+    {
+        Choices own;
+        own.mods[s.mod][0].changed = true;
+        own.mods[s.mod][0].ids = { "base0001", "skin0002", "drss0001", "bdya0001", "bdyb0001" };   // the player's P1
+        own.mods[s.mod][1].changed = true;
+        own.mods[s.mod][1].ids = { "base0001", "skin0001", "drss0002", "bdya0001", "bdyb0001" };   // the player's P2
+        const std::string own_file = write_choices(own, m);
+
+        check(same_set(forced_options(m, s, nullptr), chosen_of(m, s, Choices{}, 0)), "forced: nothing saved, the outfit's defaults");
+        std::vector<std::string> saved = { "base0001", "skin0001", "drss0002", "bdya0001", "bdyb0002", "gone0001" };
+        const auto fo = forced_options(m, s, &saved);
+        check(has(fo, "drss0002") && has(fo, "bdyb0002") && !has(fo, "drss0001"), "forced: the set saved");
+        check(!has(fo, "gone0001"), "forced: an option the manifest no longer has is left out");
+
+        ForcedFighter ff;
+        ff.costume = 5;
+        ff.by_mod[s.mod] = saved;
+        // both sides of a mirror match wear the fighter's set, whichever side; the player's own otherwise
+        check(same_set(worn_options(m, s, own, 0, &ff), fo) && same_set(worn_options(m, s, own, 1, &ff), fo), "worn: a forced fighter's set on both sides");
+        check(same_set(worn_options(m, s, own, 0, nullptr), chosen_of(m, s, own, 0)), "worn: not forced, the player's P1");
+        check(same_set(worn_options(m, s, own, 1, nullptr), chosen_of(m, s, own, 1)), "worn: not forced, the player's P2");
+        ForcedFighter other;
+        other.costume = 5;
+        other.by_mod["esf028/another outfit"] = saved;
+        check(same_set(worn_options(m, s, own, 0, &other), chosen_of(m, s, Choices{}, 0)),
+              "worn: forced with nothing saved for this outfit: its defaults, not the player's");
+
+        // that replay only: the table, as the game would drive it
+        ReplayWear w;
+        const uintptr_t kMap = 0x1000, kNext = 0x2000;
+        check(!w.any() && w.find(28) == nullptr, "replay: nothing forced at first");
+        w.set({ { 28, ff } }, kMap, 100);
+        check(w.any() && w.find(28) != nullptr && w.find(1) == nullptr, "replay: a forced fighter, the others not");
+        check(!w.update(0, 150, 3600) && w.any() && !w.ran(), "replay: not running yet, still there (its files asked for meanwhile)");
+        check(!w.update(kMap, 160, 3600) && w.ran(), "replay: seen running");
+        check(!w.update(0, 170, 3600) && w.any(), "replay: no flow at all says nothing (between two steps)");
+        check(!w.update(kMap, 1000000, 3600) && w.any(), "replay: as long as it runs, however long");
+        check(w.update(kNext, 1000001, 3600) && !w.any() && w.find(28) == nullptr, "replay: another flow runs: over");
+        check(same_set(worn_options(m, s, own, 0, w.find(s.fighter)), chosen_of(m, s, own, 0)), "replay: over, the fighter wears the player's own again");
+        w.set({ { 28, ff } }, kMap, 200);
+        check(!w.update(0, 200 + 3600, 3600) && w.any(), "replay: never ran, kept for its timeout");
+        check(w.update(0, 200 + 3601, 3600) && !w.any(), "replay: never ran: dropped after it");
+        w.set({ { 28, ff } }, kMap, 300);
+        w.set({ { 1, ff } }, kNext, 301);
+        check(w.find(28) == nullptr && w.find(1) != nullptr, "replay: the next replay's replace the last one's");
+        w.clear();
+        check(!w.any(), "replay: cleared");
+        w.set({ { 28, ff } }, 0, 400);
+        check(!w.any(), "replay: no flow map named: nothing");
+        check(write_choices(own, m) == own_file, "the player's own choices are exactly as before");
+
+        // the summary's lines: what is not at its default, the menu's words
+        check(option_lines(m, s, forced_options(m, s, nullptr)).empty(), "lines: all at their defaults, none");
+        std::vector<std::string> ch = forced_options(m, s, nullptr);
+        choose(m, s, ch, 2, "drss0002");
+        auto ls = option_lines(m, s, ch);
+        check(ls.size() == 1 && ls[0] == "3! Dress: fishnet", "lines: a pick, \"group: option\"");
+        choose(m, s, ch, 2, "");
+        ls = option_lines(m, s, ch);
+        check(ls.size() == 1 && ls[0] == "3! Dress: None", "lines: a pick turned off");
+        ch = forced_options(m, s, nullptr);
+        toggle(m, s, ch, "jigl0001", true);
+        ls = option_lines(m, s, ch);
+        check(ls.size() == 1 && ls[0].find(": On") != std::string::npos && ls[0].find("jiggle") != std::string::npos, "lines: a toggle, \"name: On\"");
+    }
+
     int rc = 0;
     if (argc > 1) rc = real_manifest(argv[1]);
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }

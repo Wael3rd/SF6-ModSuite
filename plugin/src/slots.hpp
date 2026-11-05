@@ -75,6 +75,7 @@ enum Event : uint32_t {
     EV_POPUP         = 1u << 12,  // the Training pause menu's character popup built or updated (rto_select.cpp)
     EV_FIGHTER_LOAD  = 1u << 13,  // the game asked for fighters' files or builds fighters from a description (costumes.cpp)
     EV_OPP_SUMMARY   = 1u << 14,  // Opponent Outfit Settings' summary drawn with a shorter outfit list (opp_summary.cpp)
+    EV_RTO_REPLAY    = 1u << 16,  // Replays > Settings: a replay's forced options set, or its preview on (rto.cpp)
     EV_STAGE_GRID    = 1u << 15,  // a stage grid built, refreshed, focused, decided or a cycle key pressed (stages.cpp)
     EV_DIAG          = 1u << 31,  // a method watched for the log was called
 };

@@ -31,6 +31,18 @@ void tick(uint32_t events);
 int migrate_former(int fighter, int costume_no, bool* game = nullptr);
 void migration_done();                // after load_state: the choices file is written once
 
+// ---- Replays > Settings (replay_tab.cpp, replay_outfits.cpp): options for replays only ----
+// Over the player's own choices, which are only read: costume_choices.json is never written from here, and when these end
+// every model is back on them by itself (nothing to restore).
+// The character page's preview (the capture room's fighter), until replay_preview_end: `slot` wears `saved` (nullptr: its
+// defaults), any other outfit its defaults. Called at each draw of the page: a change re-applies, the same state nothing.
+void replay_preview(const Slot* slot, const std::vector<std::string>* saved);
+void replay_preview_end();
+// A replay's forced fighters (any thread: the setupDesc hook; `battle`: its flow map, compared only): their files are asked
+// for now, and until that replay is over they wear their set on whichever side they play (mirror matches too)
+void replay_wear_set(std::map<int, ForcedFighter> fighters, uintptr_t battle);
+void replay_wear_clear();
+
 // ---- shared with rto_menu.cpp ----
 bool on();                            // a valid manifest is loaded
 bool nsfw_options();                  // the manifest has NSFW options (costumes.cpp then reads display_nsfw)
@@ -86,6 +98,12 @@ int side();                           // the player side the menu edits (0 P1, 1
 bool busy();
 // fs_visible: Fighter Settings (Battle Settings > character) is on screen
 void tick(bool fs_visible);
+// The same menu for Replays > Settings' character page: no player side, the changes given to `on_change` (the outfit, the
+// set to save; nullptr: Restore defaults) and never to the player's choices. `saved`: what is saved for this outfit
+// (nullptr: nothing). false: not opened (no option service, a window open or just closed).
+using ReplayChange = void (*)(const Slot* slot, const std::vector<std::string>* saved);
+bool open_replay(const Slot* slot, const std::vector<std::string>* saved, ReplayChange on_change);
+void replay_close(const char* why);   // open_replay's menu, if it is up
 // The game's keyboard key of its UI tab action (next: UITabR, the keyboard twin of R1; else UITabL): its virtual key,
 // and its glyph ("<ICON KeyE>" on an AZERTY keyboard)
 int tab_key(bool next, std::string* sym);

@@ -1543,6 +1543,7 @@ struct Hint {
     bool lost_logged = false;
 } g_hint;
 uint32_t g_hint_replay_at = 0;                          // the frame the replay picker last asked for it (0 never)
+std::string g_hint_replay_label = "Stage Variation";    // ...and its label
 
 // c_guideBtn's item template and its entries (texts e_text_0_g_* / e_text_0_d_*)
 Obj* bar_template(Obj* btn, std::vector<Obj*>* entries) {
@@ -1861,7 +1862,13 @@ void grid_frame() {
     const bool grid_want = sl::variation_hint(g_grid.focused, tile, nvar, !sym.empty());
     const bool replay_want = replay_asks && !sym.empty();
     const char* why = !on ? "no stage grid on screen" : !g_grid.focused ? "the grid has not the focus" : tile ? "a tile" : "no variation";
-    hint_frame(grid_want || replay_want, sl::variation_hint_text(sym), why);
+    hint_frame(grid_want || replay_want, grid_want ? sl::variation_hint_text(sym) : sl::guide_hint_text(sym, g_hint_replay_label), why);
+}
+// No stage slots here: only the entry Replays > Settings asks for
+void replay_hint_frame() {
+    const bool asks = g_hint_replay_at && g_frame - g_hint_replay_at <= 1;
+    const std::string sym = asks ? symbol_of(sl::kVariationKeyId, guide_mode_now()) : std::string();
+    hint_frame(asks && !sym.empty(), sl::guide_hint_text(sym, g_hint_replay_label), "not asked");
 }
 
 void grid_tick(uint32_t ev) {
@@ -2056,11 +2063,15 @@ int32_t replay_stage() { return g_replay_stage.load(); }
 
 bool variation_key_down() { return g_variant_count && variation_key_now(); }
 
-void replay_variation_hint() {
-    if (!g_variant_count) return;
+bool replay_key_down() { return variation_key_now(); }
+void replay_guide_hint(const char* label) {
     const bool asked = g_hint_replay_at && g_frame - g_hint_replay_at <= 2;
     g_hint_replay_at = g_frame;
+    g_hint_replay_label = label;
     if (!asked) post(EV_STAGE_GRID);                     // the stages' frame runs while it is asked (busy)
+}
+void replay_variation_hint() {
+    if (g_variant_count) replay_guide_hint("Stage Variation");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2099,14 +2110,17 @@ void install_hooks() {
 }
 
 bool busy() {
-    if (!g_variant_count) return false;
+    if (!g_variant_count) return g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2);
     if ((g_check_started && !g_hooks_done) || g_grid.until != 0 || g_decided.pending || g_cycle_pending.load() != 0) return true;
     if (g_grid.on_screen || g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2)) return true;   // the key, the hint
     return (g_scr.active && (g_scr.need || g_scr.settle > 0 || g_strip.until != 0)) || g_vs.until != 0 || g_scr.check_until != 0;
 }
 
 void tick(uint32_t ev) {
-    if (!g_variant_count) return;
+    if (!g_variant_count) {
+        if (g_hint_replay_at) replay_hint_frame();
+        return;
+    }
     if (g_check_started && !g_hooks_done && g_check.done()) install_grid_hooks();
     grid_tick(ev);
     // The game calls BeforeHideObject while it sets the screen up, next to ShowedObject, and coming

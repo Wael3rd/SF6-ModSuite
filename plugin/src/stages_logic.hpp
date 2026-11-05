@@ -238,6 +238,7 @@ inline bool variation_hint(bool grid_focused, bool focused_is_tile, int variatio
     return grid_focused && !focused_is_tile && variations > 0 && have_symbol;
 }
 inline std::string variation_hint_text(const std::string& symbol) { return symbol + " Stage Variation"; }
+inline std::string guide_hint_text(const std::string& symbol, const std::string& label) { return symbol + " " + label; }
 
 // The keyboard key of a game symbol: the game names keys by their QWERTY place ("<ICON KeyR>"; menus read scan codes:
 // "W" moves up on an AZERTY keyboard too), so the letter's QWERTY scan code; 0 when the symbol names no letter or digit.

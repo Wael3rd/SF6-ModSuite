@@ -65,5 +65,9 @@ bool variation_key_down();
 // template after its entries), for the replay picker: call it every frame its stage grid has the focus on a stage with
 // variations (game thread); it goes away when the calls stop.
 void replay_variation_hint();
+// The same key and the same entry for another use of Replays > Settings (its character page's Costume options), with or
+// without stage slots: the key held down now; "<key> <label>" in the guide bar, called every frame it is wanted.
+bool replay_key_down();
+void replay_guide_hint(const char* label);
 
 }  // namespace slots::stages

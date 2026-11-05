@@ -1124,6 +1124,30 @@ The tab stores a Color Mod entry as `"color": 1, "colormod": "<entry file path>"
 replay's `setupDesc` every forced fighter is asked for (its entry, or the game colours), replacing the previous replay's
 requests.
 
+## Costume options for Replays > Settings (`plugin/src/replay_tab.cpp`, `rto_menu.cpp`, `replay_options.hpp`)
+
+On the Replays > Settings character page, when the fighter is On and its outfit has options: the guide bar shows
+"`<key>` Costume options" (the same key as the stage variation: `app.InputAssign.Digital.Id` 341, R on a keyboard, X on a
+pad; `stages::replay_guide_hint`, a copy of the bar's item template), and one press opens **the same menu as Edit
+Character's** (`rto::menu::open_replay`: the same pages, rows and Restore defaults in the game's `OptionDialog`, which
+`app.UIFlowOptionBGDialog.Start` creates on demand). Only the Player side row is left out and the title has no side: the
+choice belongs to the fighter.
+
+- **Saved** in `replay_outfits.json`, under the fighter, per outfit (its mod key; a slot has its own):
+  `"options": {"esf026/game outfit 1": ["<option id>", ...]}`. An outfit not named wears its defaults. A fighter set to Off
+  keeps them: `{"mode": "off", "options": {...}}`, not forced, nothing worn. Files from before load as they are.
+- **Preview**: the capture room's fighter wears the page's choice (`rto::replay_preview`), not the player's, followed like
+  Battle Settings' preview while the page is up.
+- **In a replay**: the `ReplayFlowMap.setupDesc` post-hook tells the runtime options each forced fighter's outfit and sets
+  (`rto::replay_wear_set`, with the replay's flow map). Their files are asked for at once (`warm_replay`), then again at the
+  fighters' load, before the game builds them. Each fighter and VS model of a forced fighter wears its set (`worn_by`), by
+  fighter so on whichever side, mirror matches included. A forced fighter with nothing saved for its outfit wears that
+  outfit's defaults, not the player's choices: what the page's preview showed.
+- **The player's own choices are never written**: `costume_choices.json` and `g_c` are only read here, so there is nothing
+  to restore. When the replay is over (`ReplayWear`: another flow runs, the Replays screen is back, a select screen, Battle
+  Settings, the next replay) the same lookup falls back to them; the choices' version bump makes a model still up re-apply.
+- **Summary panel**, character page: under the three settings, one line per option not at its default (`option_lines`).
+
 ## Not covered yet
 
 - Lot B limits: a model the game rebuilds in a fight without one of the two events (round reload, replay seek...) is

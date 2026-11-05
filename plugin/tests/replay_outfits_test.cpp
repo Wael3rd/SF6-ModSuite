@@ -91,6 +91,18 @@ int main() {
           cmf[1].colormod == "..\\color_mods\\Ryu\\MANUALCOLORS_01\\esf001_009_cmd_001.user.2" && cmf[1].color == 1,
           "a Color Mod entry is read (its id; worn on colour 1, its carrier)");
     int stage = 7;
+    {
+        std::map<int, Forced> fo;
+        check(parse_outfits("{\"version\":1,\"fighters\":{\"26\":{\"mode\":\"forced\",\"costume\":0,\"color\":0,"
+                            "\"options\":{\"esf026/game outfit 1\":[\"wesker01\"],\"esf026/x\":[]}},"
+                            "\"30\":{\"mode\":\"off\",\"options\":{\"esf030/game outfit 1\":[\"body0001\"]}}}}", fo) &&
+              fo.size() == 1 && fo.count(26), "a fighter set to Off is not forced, whatever options it keeps");
+        check(fo[26].options.size() == 2 && fo[26].options["esf026/game outfit 1"] == std::vector<std::string>{ "wesker01" },
+              "a forced fighter's costume options are read, per outfit");
+        std::map<int, Forced> fn;
+        check(parse_outfits("{\"version\":1,\"fighters\":{\"2\":{\"mode\":\"forced\",\"costume\":1,\"color\":0}}}", fn) && fn[2].options.empty(),
+              "a file from before them: no options");
+    }
     check(parse_outfits("{\"version\":1,\"fighters\":{},\"stage\":{\"mode\":\"forced\",\"id\":40000}}", none, &stage) && stage == 40000,
           "a forced stage is read");
     check(parse_outfits("{\"version\":1,\"fighters\":{}}", none, &stage) && stage == -1, "no stage entry: the replay's own stage");

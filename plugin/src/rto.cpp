@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
+#include <mutex>
 #include <set>
 #include <unordered_map>
 
@@ -794,11 +795,60 @@ bool scan_bindings(const Model& md, MeshComp& mc, const std::string& pt, uint32_
     return true;
 }
 
+// ---- Replays > Settings: what a model wears instead of the player's choices (rto.hpp), which are only read here ----
+bool g_rp_on = false, g_rp_saved = false;   // the character page's preview: its outfit, what is saved for it
+const Slot* g_rp_slot = nullptr;
+std::vector<std::string> g_rp_ids;
+std::mutex g_rw_mx;                         // the replay's forced fighters: set from the setupDesc hook (any thread)
+ReplayWear g_rw;
+std::atomic<bool> g_rw_live{ false };       // g_rw holds some
+std::atomic<bool> g_rw_wait{ false };       // ...and its replay has not been seen running yet
+uint32_t g_rw_checked = 0, g_rw_set_at = 0;
+// A replay never seen running: kept 10 minutes, so that a whole replay wears them even if its flow map were not the one
+// the game reports (the other ends: the Replays screen back, a select screen, Battle Settings, the next replay); looked for
+// each 30 frames for a minute only (no per-frame work in a fight), then at each use
+constexpr uint64_t kRwTimeout = 60 * 60 * 10;
+constexpr uint32_t kRwLook = 60 * 60;
+uintptr_t running_flow_map() {              // bFlowManager.m_flow_work._FlowMap, compared only (the Color Mod's)
+    Obj* bfm = reinterpret_cast<Obj*>(api().get_managed_singleton("app.bFlowManager"));
+    Obj* work = alive(bfm) ? get_obj(bfm, "m_flow_work") : nullptr;
+    return reinterpret_cast<uintptr_t>(work ? get_obj(work, "_FlowMap") : nullptr);
+}
+// At each use, never per frame in a fight: seen running, or over (the models then go back to the player's choices)
+void rw_update() {
+    if (g_rw_checked == g_frame || !g_rw_live.load(std::memory_order_acquire)) return;
+    g_rw_checked = g_frame;
+    const uintptr_t running = running_flow_map();
+    std::lock_guard lk(g_rw_mx);
+    if (g_rw.update(running, g_frame, kRwTimeout)) {
+        g_rw_live.store(false);
+        g_rw_wait.store(false);
+        ++g_ver;
+        logf("rto: the replay's forced options are over: the player's own choices again");
+    } else if (g_rw.ran() && g_rw_wait.exchange(false)) {
+        logf("rto: the replay's flow is running: its forced options last as long as it does");
+    }
+}
+// What this model wears on `side`. md nullptr: the fighters of a load (warm_load).
+std::vector<std::string> worn_by(const Model* md, const Slot& s, int side) {
+    if (md == &g_models[0]) {
+        if (g_rp_on) return forced_options(g_m, s, g_rp_saved && &s == g_rp_slot ? &g_rp_ids : nullptr);
+        return chosen_of(g_m, s, g_c, side);
+    }
+    const bool fighter = !md || md == &g_models[1] || md == &g_models[2] || vs_model(*md);
+    if (fighter && g_rw_live.load(std::memory_order_acquire)) {
+        rw_update();
+        std::lock_guard lk(g_rw_mx);
+        return worn_options(g_m, s, g_c, side, g_rw.find(s.fighter));
+    }
+    return chosen_of(g_m, s, g_c, side);
+}
+
 void pass(Model& md) {
     perf::Scope ps(perf::RtoPass);
     const Slot& s = *md.slot;
     const int64_t pw = perf::begin();
-    const auto chosen = chosen_of(g_m, s, g_c, md.side);
+    const auto chosen = worn_by(&md, s, md.side);
     const auto want = desired(g_m, s, chosen);
     perf::end(perf::RtoWant, pw);
     for (auto& [t, w] : want) if (!w.orig) if (auto it = g_res.find(w.path); it != g_res.end()) it->second.used = g_frame;
@@ -1456,7 +1506,7 @@ void warm_load() {
         const Slot* s = g_m.slot_of(f.fid, f.cos);
         if (!s) continue;
         size_t mine = 0;
-        for (auto& [t, w] : desired(g_m, *s, chosen_of(g_m, *s, g_c, f.side))) {
+        for (auto& [t, w] : desired(g_m, *s, worn_by(nullptr, *s, f.side))) {
             if (w.orig || w.path.empty() || !swappable(w.kind) || !g_warm_load.insert(w.path).second) continue;
             if (!g_res.count(w.path)) ++fresh;
             files.push_back({ w.path, w.kind });
@@ -1471,6 +1521,33 @@ void warm_load() {
     for (auto& f : files) res_get(f.first, f.second, false);
     logf("rto: %zu files of the fighters' options asked for ahead (%s, %s; %zu not loaded yet): %s", added, why,
          g_watch_until ? "fighters watch on" : "before the fighters watch", fresh, who.c_str());
+}
+// A replay's forced fighters: their files asked for as soon as its description is set up, well before the game builds them
+// (the fighters' load asks again, warm_load: only what is missing), kept with that load's until the fighters wear them
+void warm_replay() {
+    std::map<int, ForcedFighter> fs;
+    {
+        std::lock_guard lk(g_rw_mx);
+        fs = g_rw.fighters();
+    }
+    size_t added = 0, fresh = 0;
+    std::vector<std::pair<std::string, std::string>> files;     // path, kind
+    for (auto& [fid, ff] : fs) {
+        const Slot* s = g_m.slot_of(fid, ff.costume);
+        if (!s) continue;
+        auto it = ff.by_mod.find(s->mod);
+        for (auto& [t, w] : desired(g_m, *s, forced_options(g_m, *s, it != ff.by_mod.end() ? &it->second : nullptr))) {
+            if (w.orig || w.path.empty() || !swappable(w.kind) || !g_warm_load.insert(w.path).second) continue;
+            if (!g_res.count(w.path)) ++fresh;
+            files.push_back({ w.path, w.kind });
+            ++added;
+        }
+    }
+    logf("rto: a replay's %zu forced fighter(s): %zu files of their options asked for ahead (%zu not loaded yet)", fs.size(), added, fresh);
+    if (!added) return;
+    g_warm_load_at = g_frame;
+    if (fresh) mem_mark("a replay's forced options: " + std::to_string(fresh) + " new files asked for ahead");
+    for (auto& f : files) res_get(f.first, f.second, false);
 }
 void vs_open(uint32_t frames, const char* why) {
     if (!g_vs_until) {
@@ -1647,6 +1724,56 @@ void fighters_hold_end(const char* why) {
     if (g_watch_until < g_frame + 600) g_watch_until = g_frame + 600;
     scan_window();
 }
+void replay_preview(const Slot* slot, const std::vector<std::string>* saved) {
+    if (!on()) return;
+    const bool has_saved = saved != nullptr;
+    if (g_rp_on && g_rp_slot == slot && g_rp_saved == has_saved && (!has_saved || g_rp_ids == *saved)) return;
+    if (!g_rp_on) {
+        logf("rto: Replays > Settings: its preview is followed");
+        reset(g_models[0]);
+        g_crf = nullptr;
+        g_prev_next = 0;
+        post(EV_RTO_REPLAY);                      // rto::tick runs from now on (busy)
+    }
+    g_rp_on = true;
+    g_rp_slot = slot;
+    g_rp_saved = has_saved;
+    g_rp_ids = has_saved ? *saved : std::vector<std::string>{};
+    ++g_ver;
+    g_prev_next = 0;
+}
+void replay_preview_end() {
+    if (!g_rp_on) return;
+    g_rp_on = false;
+    g_rp_slot = nullptr;
+    g_rp_ids.clear();
+    logf("rto: Replays > Settings: its preview is no longer followed");
+    reset(g_models[0]);
+    g_crf = nullptr;
+    ++g_ver;
+    warm_preview(nullptr);                        // its batch given back at once (warm_preview's res_gc)
+    res_gc(kGcQuick, "Replays > Settings' preview closed");
+}
+void replay_wear_set(std::map<int, ForcedFighter> fighters, uintptr_t battle) {
+    if (!on()) return;
+    {
+        std::lock_guard lk(g_rw_mx);
+        g_rw.set(std::move(fighters), battle, g_frame);
+        g_rw_live.store(g_rw.any(), std::memory_order_release);
+        g_rw_wait.store(g_rw.any());
+        g_rw_set_at = g_frame;
+    }
+    post(EV_RTO_REPLAY);
+}
+void replay_wear_clear() {
+    if (!g_rw_live.load(std::memory_order_acquire)) return;
+    std::lock_guard lk(g_rw_mx);
+    g_rw.clear();
+    g_rw_live.store(false);
+    g_rw_wait.store(false);
+    ++g_ver;
+    logf("rto: the replay's forced options dropped: the player's own choices again");
+}
 int training_menu_state() { return menu_state_now(); }
 uint32_t fighter_built_at(int side) { return side == 0 || side == 1 ? g_fighter_at[side] : 0; }
 uint32_t model_builds() { return g_model_noisy ? 0 : g_builds.load(std::memory_order_relaxed); }
@@ -1790,7 +1917,7 @@ void install_hooks() {
 
 bool busy() {
     if (!on()) return false;
-    if (g_bs || g_select || g_watch_until || g_vs_until || menu::busy() || select::popup_busy()) return true;
+    if (g_bs || g_select || g_watch_until || g_vs_until || menu::busy() || select::popup_busy() || g_rp_on || g_rw_wait.load()) return true;
     return !g_mem.empty() || !g_warm_load.empty();      // a "5 s later" memory line to write, a load's files to let go
 }
 
@@ -1807,6 +1934,15 @@ void tick(uint32_t ev) {
             logf("rto: NSFW options %s", g_m.show_nsfw ? "shown" : "hidden");
             choices_changed();
         }
+        if (ev & EV_RTO_REPLAY) { if (g_rw_live.load(std::memory_order_acquire)) warm_replay(); }
+        if (g_rw_wait.load() && g_frame % 30 == 0) {            // only until its replay is seen running
+            rw_update();
+            if (g_rw_wait.load() && g_frame - g_rw_set_at > kRwLook) {
+                g_rw_wait.store(false);
+                logf("rto: the replay's flow map was not seen running in a minute: its forced options kept (at most 10 minutes)");
+            }
+        }
+        if (ev & (EV_SELECT_START | EV_MENU_OPEN)) replay_wear_clear();   // another screen's fighters: that replay is over
         if (ev & EV_SELECT_START) {
             select::leave_all("character select started");   // a visit whose end was missed: its panels let go
             vs_close("character select started");
@@ -1875,7 +2011,7 @@ void tick(uint32_t ev) {
         {
             perf::Scope ps(perf::RtoPreview);
             menu::tick(fs);
-            if (g_bs || menu::active()) preview_tick();
+            if (g_bs || menu::active() || g_rp_on) preview_tick();
         }
         if (g_watch_until) { perf::Scope ps(perf::RtoWatch); watch_tick(); }
         if (g_vs_until) { perf::Scope ps(perf::RtoVs); vs_tick(); }

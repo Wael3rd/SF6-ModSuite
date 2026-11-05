@@ -10,10 +10,12 @@
 //     (replay_outfits.hpp plan()), so the game asks for that outfit's files and builds the fighter from it itself, the way
 //     it does for an outfit picked on a select screen. The replay's own data (ReplayInfo) is never written. Never in a
 //     live battle (IsNetwork, or no replay being played). A forced fighter's Color Mod entry (RW / MC, on colour 1) or
-//     its game colour is asked of the Color Mod for this replay (colormod_link.hpp); the forced stage is written too.
+//     its game colour is asked of the Color Mod for this replay (colormod_link.hpp); the forced stage is written too. Its
+//     costume options are told to the runtime options (rto.hpp, the player's own choices stay as they are).
 #include "slots.hpp"
 #include "replay_outfits.hpp"
 #include "colormod_link.hpp"
+#include "rto.hpp"
 
 #include <ctime>
 #include <mutex>
@@ -270,6 +272,19 @@ void dress_replay(Obj* map) {
             line += ", P" + std::to_string(i + 1) + " Color Mod: " + (w.colormod.empty() ? std::string("game colours") : w.colormod) +
                     (ok ? "" : " (no Color Mod)");
     }
+    // The costume options: a forced fighter wears what is saved for its outfit, or that outfit's defaults, over the player's
+    // own choices (never written), by fighter so on whichever side it plays, for this replay only (its flow map, as the Color
+    // Mod's requests); their files are asked for now, before the game asks for the fighters'.
+    std::map<int, rto::ForcedFighter> forced_opts;
+    for (size_t i = 0; i < ds.size(); ++i) {
+        const Wear& w = wear[i];
+        if (!w.forced) continue;
+        rto::ForcedFighter& ff = forced_opts[recorded[i].fid];
+        ff.costume = w.costume;
+        if (auto f = g_forced.find(recorded[i].fid); f != g_forced.end()) ff.by_mod = f->second.options;
+    }
+    if (forced_opts.empty()) rto::replay_wear_clear();
+    else rto::replay_wear_set(std::move(forced_opts), reinterpret_cast<uintptr_t>(map));
     // The stage: the description's StageDesc.StageId (the replay's ReplayInfo.StageId is left as recorded); the game loads
     // the stage of the description. Only the stage's look changes: every battle stage is as wide as the others.
     if (g_stage >= 0) {

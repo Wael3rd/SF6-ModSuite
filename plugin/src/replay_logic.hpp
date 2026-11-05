@@ -7,16 +7,19 @@
 //                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>,
 //                                            "colormod":"<a Color Mod entry's id: its file path; colour 1 then>"}},
 //    "stage":{"mode":"forced","id":<StageDesc.StageId: a vanilla stage>,"entry":"<a stage slot's key: tile / variation>"}}
-// No entry = Default (the replay's own outfit); no "stage" = the replay's own stage.
+// No entry = Default (the replay's own outfit); no "stage" = the replay's own stage. A fighter's costume options:
+// replay_options.hpp ("options" under its entry; "mode":"off" keeps them while it is not forced).
 #pragma once
 
 #include "json.hpp"
+#include "replay_options.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -59,6 +62,7 @@ struct Choice {
 };
 
 using Choices = std::map<int, Choice>;   // fighter id -> forced choice (Default fighters are absent)
+using OptionStore = std::map<int, OutfitOptions>;   // fighter id -> its outfits' costume options, On or Off (replay_options.hpp)
 
 struct StageChoice {
     bool forced = false;              // false = Default (the replay's recorded stage)
@@ -235,17 +239,28 @@ inline std::vector<float> summary_layout(const std::vector<SumKind>& kinds) {
 }
 
 // ---- the file ------------------------------------------------------------------------------------------------------------
-inline std::string to_json(const Choices& cs, const StageChoice& stage = {}) {
+inline std::string to_json(const Choices& cs, const StageChoice& stage = {}, const OptionStore& options = {}) {
     std::string o = "{\n    \"version\": 1,\n    \"fighters\": {";
     bool first = true;
-    for (const auto& [fid, c] : cs) {
-        if (!c.forced) continue;
+    std::set<int> fids;
+    for (const auto& [fid, c] : cs) if (c.forced) fids.insert(fid);
+    for (const auto& [fid, opts] : options) if (!opts.empty()) fids.insert(fid);
+    for (int fid : fids) {
         o += first ? "\n" : ",\n";
         first = false;
-        o += "        \"" + std::to_string(fid) + "\": {\"mode\": \"forced\", \"costume\": " + std::to_string(c.costume);
-        if (!c.mod_id.empty()) o += ", \"mod_id\": \"" + json_escape(c.mod_id) + "\"";
-        o += ", \"color\": " + std::to_string(c.color);
-        if (!c.colormod.empty()) o += ", \"colormod\": \"" + json_escape(c.colormod) + "\"";
+        o += "        \"" + std::to_string(fid) + "\": {";
+        auto ci = cs.find(fid);
+        if (ci != cs.end() && ci->second.forced) {
+            const Choice& c = ci->second;
+            o += "\"mode\": \"forced\", \"costume\": " + std::to_string(c.costume);
+            if (!c.mod_id.empty()) o += ", \"mod_id\": \"" + json_escape(c.mod_id) + "\"";
+            o += ", \"color\": " + std::to_string(c.color);
+            if (!c.colormod.empty()) o += ", \"colormod\": \"" + json_escape(c.colormod) + "\"";
+        } else {
+            o += "\"mode\": \"off\"";                  // Off: only its options, kept for when it is On again
+        }
+        auto oi = options.find(fid);
+        if (oi != options.end() && !oi->second.empty()) o += ", " + outfit_options_json(oi->second);
         o += "}";
     }
     o += first ? "}" : "\n    }";
@@ -259,10 +274,12 @@ inline std::string to_json(const Choices& cs, const StageChoice& stage = {}) {
 }
 
 // false: not a file of this format (out left empty). Entries that are not "forced" or lack a costume are skipped.
-// `stage` (when given): the forced stage, Default when absent or not "forced".
-inline bool from_json(const std::string& text, Choices& out, StageChoice* stage = nullptr) {
+// `stage` (when given): the forced stage, Default when absent or not "forced". `options` (when given): every fighter's
+// costume options, whatever its mode.
+inline bool from_json(const std::string& text, Choices& out, StageChoice* stage = nullptr, OptionStore* options = nullptr) {
     out.clear();
     if (stage) *stage = StageChoice{};
+    if (options) options->clear();
     Json j;
     if (!json_parse(text, j) || j.kind != Json::Object) return false;
     const Json* v = j.get("version");
@@ -280,12 +297,17 @@ inline bool from_json(const std::string& text, Choices& out, StageChoice* stage 
     }
     for (const auto& [key, e] : fs->obj) {
         if (e.kind != Json::Object) continue;
-        const Json* mode = e.get("mode");
-        const Json* cos = e.get("costume");
-        if (!mode || mode->as_str() != "forced" || !cos || cos->kind != Json::Number) continue;
         char* end = nullptr;
         const long fid = std::strtol(key.c_str(), &end, 10);
         if (!end || *end || fid <= 0) continue;
+        if (options) {
+            OutfitOptions oo;
+            parse_outfit_options(e, oo);
+            if (!oo.empty()) (*options)[static_cast<int>(fid)] = std::move(oo);
+        }
+        const Json* mode = e.get("mode");
+        const Json* cos = e.get("costume");
+        if (!mode || mode->as_str() != "forced" || !cos || cos->kind != Json::Number) continue;
         Choice c;
         c.forced = true;
         c.costume = static_cast<int>(cos->as_int());

@@ -125,6 +125,7 @@ static void test_cycle_keys() {
     check(!variation_hint(false, false, 2, true), "no hint: the grid has not the focus");
     check(!variation_hint(true, false, 2, false), "no hint: no key symbol");
     check(variation_hint_text("<ICON KeyR>") == "<ICON KeyR> Stage Variation", "hint text: the game's icon, then the label");
+    check(guide_hint_text("<ICON KeyR>", "Costume options") == "<ICON KeyR> Costume options", "hint text: another entry on the same key");
     // the keyboard key of a symbol (QWERTY places)
     check(qwerty_scan("<ICON KeyR>") == 0x13 && qwerty_scan("<ICON KeyT>") == 0x14 && qwerty_scan("<ICON KeyA>") == 0x1E &&
           qwerty_scan("<ICON KeyM>") == 0x32 && qwerty_scan("<ICON Key1>") == 0x02 && qwerty_scan("<ICON Key0>") == 0x0B,
