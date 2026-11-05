@@ -3,11 +3,12 @@
 // - state.json: what the loader serves ("selected", read by stages/loader/stage_redirect.cpp, must stay first and flat) and
 //   the choice of each menu ("menus": classic stage select, Battle Settings, Training, replays).
 // - The stage grids (app.UIPartsStageSelectSimple): where the tiles go in the game's list and which entry each grid index is.
-// - The cycle of variations on a vanilla entry, its label, and which pair of keys a menu leaves free.
+// - The cycle of variations on a vanilla entry, its one-line label, the variation key and its guide bar hint, the chosen mark.
 #pragma once
 
 #include "json.hpp"
 
+#include <cctype>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -129,28 +130,60 @@ inline int cycle(int current, int count, int step) {
     return ((current + step) % n + n) % n;
 }
 
-// "<L> Training Room · Red <R>" (the variation's name), "<L> Training Room <R>" (vanilla look: the keys say it cycles).
-// No key symbols (none free): the names alone.
-inline std::string cycle_label(const std::string& left, const std::string& stage, const std::string& variation,
-                               const std::string& right) {
-    std::string mid = variation.empty() ? stage : stage + " \xC2\xB7 " + variation;   // U+00B7 middle dot
-    if (left.empty() || right.empty()) return mid;
-    return left + " " + mid + " " + right;
+inline std::string norm_name(std::string s) {
+    for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    const char* blank = " \x09";
+    const size_t a = s.find_first_not_of(blank), b = s.find_last_not_of(blank);
+    return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+}
+// The one name line of the banner for a variation (Wael 05/11: never two names side by side): the variation's own name
+// ("Dhalsimer Temple Banner", "Training Room Red"); a variation named like its stage (a lighting pack: "Dhalsimer
+// Temple") shows its bundle ("Stage Lighting Overhaul"), as the classic Stage Select and the VS screen do; no variation:
+// the stage's name.
+inline std::string variation_label(const std::string& stage, const std::string& variation, const std::string& bundle) {
+    if (variation.empty()) return stage;
+    if (!bundle.empty() && norm_name(variation) == norm_name(stage)) return bundle;
+    return variation;
 }
 
-// ---- keys ----------------------------------------------------------------------------------------------------------------
-// The pair of keys a menu cycles variations with: LT / RT (UIChildTabL / R) unless the screen uses them (its input
-// delegates handle EventChildTabBack / Next) or turns them off (DisableSystemInputFlags ChildTab); then LB / RB
-// (UITabL / R) on the same conditions; else none (the menu still has its tiles).
-enum Keys : int { kKeysChildTab = 0, kKeysTab = 1, kKeysNone = 2 };
-inline Keys pick_keys(bool childtab_taken, bool childtab_off, bool tab_taken, bool tab_off) {
-    if (!childtab_taken && !childtab_off) return kKeysChildTab;
-    if (!tab_taken && !tab_off) return kKeysTab;
-    return kKeysNone;
+// ---- the variation key ---------------------------------------------------------------------------------------------------
+// One press of the pad's X button shows the focused stage's next variation (Wael 05/11; LT / RT are gone). The game's
+// input id of that button in Battle Settings: app.InputAssign.Digital.Id UIOpponentCosSettingToggleEXDXColors (341,
+// Opponent Outfit Settings' "EX/DX Colors On/Off"): its symbol is the bar's icon, its keyboard binding the key read.
+constexpr int kVariationKeyId = 341;
+// The guide bar's "<key> Stage Variation": only while the stage grid has the focus, on a stage's own entry (not a tile)
+// that has variations, and with a key symbol to show.
+inline bool variation_hint(bool grid_focused, bool focused_is_tile, int variations, bool have_symbol) {
+    return grid_focused && !focused_is_tile && variations > 0 && have_symbol;
 }
-inline const char* keys_name(int k) { return k == kKeysChildTab ? "LT / RT (child tab)" : k == kKeysTab ? "LB / RB (tab)" : "none"; }
-// app.InputAssign.Digital.Id of each pair (the symbols of the label)
-inline int key_left_id(int k)  { return k == kKeysChildTab ? 75 : k == kKeysTab ? 73 : -1; }
-inline int key_right_id(int k) { return k == kKeysChildTab ? 76 : k == kKeysTab ? 74 : -1; }
+inline std::string variation_hint_text(const std::string& symbol) { return symbol + " Stage Variation"; }
+
+// The keyboard key of a game symbol: the game names keys by their QWERTY place ("<ICON KeyR>"; menus read scan codes:
+// "W" moves up on an AZERTY keyboard too), so the letter's QWERTY scan code; 0 when the symbol names no letter or digit.
+inline unsigned qwerty_scan(const std::string& symbol) {
+    const std::string tag = "<ICON Key";
+    const size_t at = symbol.find(tag);
+    if (at == std::string::npos || at + tag.size() + 1 >= symbol.size() || symbol[at + tag.size() + 1] != '>') return 0;
+    const char c = static_cast<char>(toupper(static_cast<unsigned char>(symbol[at + tag.size()])));
+    static const char* rows[] = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
+    static const unsigned base[] = { 0x10, 0x1E, 0x2C };
+    for (int r = 0; r < 3; ++r)
+        for (const char* k = rows[r]; *k; ++k)
+            if (*k == c) return base[r] + static_cast<unsigned>(k - rows[r]);
+    if (c >= '1' && c <= '9') return 0x02 + static_cast<unsigned>(c - '1');
+    if (c == '0') return 0x0B;
+    return 0;
+}
+
+// ---- the chosen mark -----------------------------------------------------------------------------------------------------
+// The game marks one cell: SetSelectIndex(i) puts the corner mark on the cell whose ListIndex is i, i =
+// ConvertStageIdToGridIndex(the decided id), which stages.cpp answers with the chosen entry (entry_index). Decide first
+// compares that index with the focused one and does nothing when they match ("already chosen"): during Decide the index
+// must be the one of the choice from BEFORE it, else confirming a tile over its own stage (or the stage after one of its
+// tiles) was taken for "already chosen" and the mark moved only with the next refresh (Wael 05/11: "only after the
+// cursor moves"). True when the game goes on with the Decide (marks the focused entry at once).
+inline bool decide_marks_now(const std::vector<Slot>& slots, uint32_t base, const std::string& before, int focused) {
+    return entry_index(slots, base, before) != focused;
+}
 
 }  // namespace slots::stagelogic

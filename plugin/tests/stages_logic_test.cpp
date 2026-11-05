@@ -1,4 +1,5 @@
-// Unit test of plugin/src/stages_logic.hpp (state.json, the stage grids' tiles, the variation cycle, the keys) and
+// Unit test of plugin/src/stages_logic.hpp (state.json, the stage grids' tiles, the variation cycle, label, key and hint,
+// the chosen mark) and
 // plugin/src/codecheck.hpp (the R18 cache of several methods).
 // Build and run: build_stages_logic_test.bat (prints "all ok" and exits 0 when every check passes).
 #define _CRT_SECURE_NO_WARNINGS
@@ -104,19 +105,53 @@ static void test_grid() {
 }
 
 static void test_cycle_keys() {
-    std::printf("variations and keys\n");
+    std::printf("variations, the variation key and its hint\n");
     check(cycle(0, 7, 1) == 1 && cycle(7, 7, 1) == 0 && cycle(0, 7, -1) == 7, "cycle wraps over the vanilla look and the variations");
     check(cycle(0, 0, 1) == 0, "no variation: the vanilla look");
-    check(cycle_label("<ICON KeyQ>", "Training Room", "Red", "<ICON KeyE>") == "<ICON KeyQ> Training Room \xC2\xB7 Red <ICON KeyE>",
-          "label: stage, middle dot, variation between the keys");
-    check(cycle_label("<L>", "Training Room", "", "<R>") == "<L> Training Room <R>", "label of the vanilla look");
-    check(cycle_label("", "Training Room", "Red", "") == "Training Room \xC2\xB7 Red", "no keys: the names alone");
-    check(pick_keys(false, false, false, false) == kKeysChildTab, "LT / RT when free");
-    check(pick_keys(true, false, false, false) == kKeysTab, "LB / RB when the screen uses LT / RT");
-    check(pick_keys(false, true, false, false) == kKeysTab, "LB / RB when LT / RT are switched off");
-    check(pick_keys(true, false, true, false) == kKeysNone && pick_keys(true, false, false, true) == kKeysNone, "none when both are taken");
-    check(key_left_id(kKeysChildTab) == 75 && key_right_id(kKeysChildTab) == 76 && key_left_id(kKeysTab) == 73 && key_left_id(kKeysNone) == -1,
-          "the digital ids of the symbols (UIChildTabL/R 75/76, UITabL/R 73/74)");
+    check(cycle(0, 1, 1) == 1 && cycle(1, 1, 1) == 0, "one key press: next variation, wrapping to the vanilla look");
+    // one name line, never "stage · variation"
+    check(variation_label("Dhalsimer Temple", "Dhalsimer Temple Banner", "") == "Dhalsimer Temple Banner", "label: the variation's own name");
+    check(variation_label("Dhalsimer Temple", "dhalsimer temple ", "Stage Lighting Overhaul") == "Stage Lighting Overhaul",
+          "label: a variation named like its stage shows its bundle");
+    check(variation_label("Dhalsimer Temple", "Dhalsimer Temple", "") == "Dhalsimer Temple", "label: no bundle, the name");
+    check(variation_label("Training Room", "", "x") == "Training Room", "label: the vanilla look, the stage's name");
+    check(variation_label("Training Room", "Training Room Red", "Stage Lighting Overhaul").find("\xC2\xB7") == std::string::npos,
+          "label: no middle dot, one name");
+    // the hint
+    check(kVariationKeyId == 341, "the key: UIOpponentCosSettingToggleEXDXColors (341)");
+    check(variation_hint(true, false, 2, true), "hint: focused stage with variations");
+    check(!variation_hint(true, false, 0, true), "no hint: a stage without variations");
+    check(!variation_hint(true, true, 0, true) && !variation_hint(true, true, 3, true), "no hint: a tile");
+    check(!variation_hint(false, false, 2, true), "no hint: the grid has not the focus");
+    check(!variation_hint(true, false, 2, false), "no hint: no key symbol");
+    check(variation_hint_text("<ICON KeyR>") == "<ICON KeyR> Stage Variation", "hint text: the game's icon, then the label");
+    // the keyboard key of a symbol (QWERTY places)
+    check(qwerty_scan("<ICON KeyR>") == 0x13 && qwerty_scan("<ICON KeyT>") == 0x14 && qwerty_scan("<ICON KeyA>") == 0x1E &&
+          qwerty_scan("<ICON KeyM>") == 0x32 && qwerty_scan("<ICON Key1>") == 0x02 && qwerty_scan("<ICON Key0>") == 0x0B,
+          "scan codes of letters and digits");
+    check(qwerty_scan("<ICON KeyEsc>") == 0 && qwerty_scan("<ICON BtnL>") == 0 && qwerty_scan("") == 0, "no letter: no key");
+}
+
+static void test_chosen_mark() {
+    std::printf("the chosen mark\n");
+    std::vector<uint32_t> list = { 40000, 70000, 0, 999999 };
+    std::vector<TileRef> tiles = { { 0, "tA" }, { 0, "tB" } };
+    size_t pos = 0;
+    std::vector<uint32_t> ins;
+    auto slots = plan_slots(list, tiles, pos, ins);   // 0:40000 1:70000 2:0 3:tA 4:tB 5:Random
+    check(slots.size() == 6 && slots[3].key == "tA" && slots[4].key == "tB", "grid: Training Room, then its two tiles");
+    // the game marks the cell ConvertStageIdToGridIndex answers: one entry, never every entry of the stage
+    check(entry_index(slots, 0, "tB") == 4 && entry_index(slots, 0, "") == 2 && entry_index(slots, 0, "variation") == 2,
+          "the mark: the chosen tile only, else the stage's own entry");
+    int marked = 0;
+    for (int i = 0; i < static_cast<int>(slots.size()); ++i) marked += i == entry_index(slots, 0, "tB") ? 1 : 0;
+    check(marked == 1, "one marked entry among the stage's entries");
+    // Decide compares with the choice from before it
+    check(decide_marks_now(slots, 0, "", 4), "a tile confirmed over its own stage: marked at once");
+    check(decide_marks_now(slots, 0, "tA", 4), "another tile of the same stage: marked at once");
+    check(decide_marks_now(slots, 0, "tB", 2), "the stage's own entry after one of its tiles: marked at once");
+    check(!decide_marks_now(slots, 0, "tB", 4), "the tile chosen again: already chosen (nothing to do)");
+    check(!decide_marks_now(slots, 0, "", 2), "the stage chosen again: already chosen");
 }
 
 static void test_codecheck() {
@@ -154,6 +189,7 @@ int main() {
     test_state();
     test_grid();
     test_cycle_keys();
+    test_chosen_mark();
     test_codecheck();
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;

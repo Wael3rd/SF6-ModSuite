@@ -17,6 +17,8 @@
 //   stages::choose(stages::kReplay, e.base_id, e.key);   // e from the list; key "" = the vanilla look
 //   stages::choose_replay_stage(base_id);            // optional: play the next replays on another vanilla stage
 //   stages::chosen(stages::kReplay, base_id);        // the key chosen for a stage ("" vanilla)
+//   if (stages::variation_key_down()) ...            // the variation key (edge-detect it: one press, one step)
+//   stages::replay_variation_hint();                 // each frame the focused stage has variations
 // Banner and thumbnail are texture resource paths for slots::ui::tex_load (wait for tex_ready, about 60 frames, before
 // handing one to the GUI: a texture still loading crashed the game). They are always set (a variant without its own
 // pictures gets its stage's).
@@ -36,6 +38,7 @@ struct Entry {
     std::string key;              // "" for a vanilla stage, else the variant's key (registry.json)
     Kind kind = Vanilla;
     std::string name;             // display name (a variation: its own name; the stage's is that of its Vanilla entry)
+    std::string bundle;           // the variant's pack ("Stage Lighting Overhaul"; stagelogic::variation_label), "" none
     std::string banner;           // 4:1 picture (2048x512), texture resource path
     std::string thumb;            // 1:2 picture (128x256)
     bool has_own_picture = false; // banner / thumb are the variant's own, not its stage's
@@ -54,5 +57,13 @@ bool choose(int menu, uint32_t base_id, const std::string& key);
 // id changes: width, position and the inputs are the recorded ones.
 void choose_replay_stage(int32_t base_id);
 int32_t replay_stage();
+// The variation key: the game's binding of the pad's X button (app.InputAssign.Digital.Id 341, Opponent Outfit Settings'
+// "EX/DX Colors On/Off": its keyboard key at its QWERTY place, else the merged pad's X), held down now. False while the game
+// window is not in front. Game thread. One press = the next variation, wrapping (stagelogic::cycle(c, n, 1)).
+bool variation_key_down();
+// The guide bar's "<key> Stage Variation" (the game's icon for that key, then the label: a copy of the bar's own item
+// template after its entries), for the replay picker: call it every frame its stage grid has the focus on a stage with
+// variations (game thread); it goes away when the calls stop.
+void replay_variation_hint();
 
 }  // namespace slots::stages
