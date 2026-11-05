@@ -117,8 +117,11 @@ const char* const kListLabels[kListRows] = { "Replay Outfit Settings", "Stage Se
 // bar 6 x 430 at (1546, 404)
 constexpr float kBannerX = 760, kBannerY = 184, kBannerW = 776, kBannerH = 194, kStageNameX = 1356, kStageNameY = 359;
 // the name, as the game's e_text_stage (read 05/11, probe p14): its region 361 x 46 (centred 180 from the banner's right
-// edge), shrunk to fit, font slot 6, 30 (raster 60), its colour, no shadow: a black glow, blur 20, strength 3
+// edge), font slot 6, 30 (raster 60), its colour, no shadow: a black glow, blur 20, strength 3. Never squeezed: a longer name
+// is right-aligned, its region then the banner's width (stages_logic.hpp banner_name)
 constexpr float kStageNameW = 361, kStageNameH = 46, kStageNameRaster = 60, kStageNameGlowBlur = 20, kStageNameGlow = 3;
+constexpr float kStageNameRightW = stagelogic::kNameMaxW + 10;
+constexpr int64_t kRightCenter = 6;                // via.gui.ControlPoint / PageAlignment: the text's right middle
 constexpr int64_t kStageNameFontSlot = 6;
 constexpr uint32_t kColStageName = 0xFFFFF3FA, kColStageNameGlow = 0xFF000000;
 // The stage grid and its panel as the game draws them (c_StageSelect, read 05/11, probes p13, p14, g47), every piece on the
@@ -1758,16 +1761,15 @@ void put_center_text(void* title, const char* name, const char* text, const uint
     }
     show(c, on);
 }
-// The banner's name, once per copy, as the game's (kStageName*): its region (a longer name is shrunk to fit), font, no shadow,
-// its black glow. Value types go by address (via.Color, via.Size), as the core's own set_Position.
+// The banner's name, once per copy, as the game's (kStageName*): its font, no shrinking, no shadow, its black glow. Value
+// types go by address (via.Color, via.Size), as the core's own set_Position.
 std::set<uintptr_t> g_shadowed;
 void banner_name_style(void* c) {
     if (!c || !g_shadowed.insert(reinterpret_cast<uintptr_t>(c)).second) return;
-    A()->ui_set_region_size(C(), c, kStageNameW, kStageNameH);
     set_enum(c, "set_FontSlot(via.gui.FontSlot)", kStageNameFontSlot);
     float raster[2] = { kStageNameRaster, kStageNameRaster };
     set_value(c, "set_RasterSize(via.Size)", raster);
-    set_enum(c, "set_AutoRegionFit(System.Boolean)", 1);
+    set_enum(c, "set_AutoRegionFit(System.Boolean)", 0);
     set_enum(c, "set_Bold(System.Boolean)", 0);
     set_enum(c, "set_ShadowEnable(System.Boolean)", 0);
     set_enum(c, "set_GlowEnable(System.Boolean)", 1);
@@ -1864,9 +1866,17 @@ void render_stage(void* title, bool on, bool grid) {
     // the banner: the focused cell's picture and name (the chosen cell's while the option row has the focus), every frame
     // from cell_name / stage_look: one source, one writer mode (text)
     put_stage_picture(title, "e_ro_sbanner", stage_look(shown).pic, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
-    put_center_text(title, "e_ro_sname", cell_name(shown).c_str(), nullptr, kStageNameX, kStageNameY, kStageNameW, kFontStageName,
-                    kColStageName, on);
-    if (on) banner_name_style(copy_of(title, "e_ro_sname"));
+    // its name: never squeezed. All written in one go, before the frame draws: right from the first frame.
+    const stagelogic::BannerName bname = stagelogic::banner_name(cell_name(shown));
+    put_center_text(title, "e_ro_sname", bname.text.c_str(), nullptr, bname.right ? kStageNameX + stagelogic::kNameRightFromCentre : kStageNameX,
+                    kStageNameY, kStageNameW, kFontStageName, kColStageName, on);
+    if (void* c = on ? copy_of(title, "e_ro_sname") : nullptr) {
+        banner_name_style(c);
+        const int64_t point = bname.right ? kRightCenter : kCenterCenter;
+        set_enum(c, "set_ControlPoint(via.gui.ControlPoint)", point);
+        set_enum(c, "set_PageAlignment(via.gui.PageAlignment)", point);
+        A()->ui_set_region_size(C(), c, bname.right ? kStageNameRightW : kStageNameW, kStageNameH);
+    }
     // the scroll bar: its track and its thumb (rows shown / rows)
     put_box(title, "e_ro_sbarbg", kSBarX, kSBarY, kSBarW, kSBarH, kColScrollTrack, on && rows > kSVisRows, kPrioFrame);
     const float thumb = rows > kSVisRows ? kSBarH * kSVisRows / rows : kSBarH;

@@ -181,6 +181,52 @@ inline std::string variation_label(const std::string& stage, const std::string& 
     return variation;
 }
 
+// ---- the banner's name: never squeezed (Wael 05/11) ------------------------------------------------------------------------
+// A name that fits stays where the game puts it (centred, 180 from the banner's right edge, its region 361 wide). A longer one
+// is right-aligned 10 from that edge and runs left over the picture at full size; only one wider than the banner is cut with
+// "...". Decided from the text alone, before it is written, so the first frame is already right (a drawn width is only known
+// a frame later). Its width: the advances of the game's name font (slot 6, 30), within 2 % on the names measured: "The Macho
+// Ring" 187 (read, DisplaySize), "Training Room" 169, "SIRN Training Room" 233, "Suzaku Castle Over Training Room" 412
+// (screenshots). The fit limit stays under 361 by that error: such a name right-aligned moves by a few units only.
+constexpr float kNameFitW = 355, kNameMaxW = 756;  // the banner's 776 less 10 on each side
+constexpr float kNameRightFromCentre = 170;        // the right-aligned edge (1526) from the centred place (1356)
+inline float name_advance(unsigned char c) {
+    if (c == ' ') return 7.5f;
+    if (c == 'M' || c == 'W' || c == 'm' || c == 'w') return 20;
+    if (c == 'i' || c == 'j' || c == 'l' || c == 'I' || c == '.' || c == ',' || c == '\'' || c == ':' || c == ';' || c == '!' || c == '|') return 7;
+    if (c == '(' || c == ')' || c == '-' || c == '/' || c == '[' || c == ']') return 9;
+    if (c == 'f' || c == 't' || c == 'r') return 10;
+    if (c >= '0' && c <= '9') return 14;
+    if (c >= 'A' && c <= 'Z') return 15.5f;
+    if (c < 0x80) return 14.5f;
+    return 0;
+}
+inline float name_width(const std::string& s) {
+    float w = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) w += name_advance(c);
+        else if ((c & 0xC0) != 0x80) w += c >= 0xE0 ? 30.0f : 15.5f;   // a character's first byte: CJK and the like are square
+    }
+    return w;
+}
+struct BannerName { std::string text; bool right = false; };
+inline BannerName banner_name(const std::string& name) {
+    const float w = name_width(name);
+    if (w <= kNameFitW) return { name, false };
+    if (w <= kNameMaxW) return { name, true };
+    const float room = kNameMaxW - name_width("...");
+    size_t end = 0;
+    for (size_t i = 0; i < name.size();) {             // whole characters only
+        size_t n = 1;
+        while (i + n < name.size() && (static_cast<unsigned char>(name[i + n]) & 0xC0) == 0x80) ++n;
+        if (name_width(name.substr(0, i + n)) > room) break;
+        i += n;
+        end = i;
+    }
+    return { name.substr(0, end) + "...", true };
+}
+
 // ---- the variation key ---------------------------------------------------------------------------------------------------
 // One press of the pad's X button shows the focused stage's next variation (Wael 05/11; LT / RT are gone). The game's
 // input id of that button in Battle Settings: app.InputAssign.Digital.Id UIOpponentCosSettingToggleEXDXColors (341,

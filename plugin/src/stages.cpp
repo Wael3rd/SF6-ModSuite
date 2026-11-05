@@ -781,6 +781,7 @@ struct GridState {
     std::vector<sl::Slot> slots;       // its entries once the tiles are in (empty: none inserted)
     sl::Preview preview;               // the variation key's preview on the focused entry (stages_logic.hpp)
     uint32_t decided_seen = UINT32_MAX;// the game's decided stage as last seen (Random or not)
+    int name_right = -1;               // the preview's name: 0 at the game's place, 1 right-aligned, -1 not set for this grid
     bool on_screen = false;            // shown (looked at every frame while it lives: the variation key, the hint)
     bool focused = false;              // its cells have the focus
     int focus_log = -1;                // the focus check's last logged answer
@@ -1282,6 +1283,32 @@ bool show_pic(Obj* tex, const Look& l) {
 
 const char* const kNoCellText = "<no cell text>";   // not a control name
 
+// The preview's name (the game's e_text_stage: AutoRegionFit 1 of its own, read 05/11, probe p14: it squeezed a long name;
+// off here, Wael 05/11): at the game's place, or right-aligned with a region as wide as the banner. That place is read while
+// the text holds it, the probe's values until then.
+struct NamePlace { float x = 208, y = 78, z = 0, w = 361, h = 46; } g_name_place;
+constexpr int64_t kNameCentre = 5, kNameRight = 6;     // via.gui.ControlPoint / PageAlignment
+void name_layout(Obj* text, bool right) {
+    if (g_grid.name_right == (right ? 1 : 0)) return;
+    const SF6CoreAPI* a = slots::ui::core();
+    if (!a) return;
+    SF6CoreClient* cl = slots::ui::client();
+    const Ret rc = call(text, "get_ControlPoint");
+    if (!rc.exception_thrown && static_cast<int64_t>(rc.dword) == kNameCentre) {
+        float p[3] = {}, rs[2] = {};
+        const Ret rp = call(text, "get_Position"), rr = call(text, "get_RegionSize");
+        if (!rp.exception_thrown) { std::memcpy(p, rp.bytes.data(), sizeof p); g_name_place.x = p[0]; g_name_place.y = p[1]; g_name_place.z = p[2]; }
+        if (!rr.exception_thrown) { std::memcpy(rs, rr.bytes.data(), sizeof rs); if (rs[0] > 0 && rs[1] > 0) { g_name_place.w = rs[0]; g_name_place.h = rs[1]; } }
+    }
+    SF6CoreArg v{}; v.type = SF6CORE_ARG_I64; v.v.i = 0;
+    a->obj_invoke(cl, text, "set_AutoRegionFit(System.Boolean)", &v, 1, nullptr);
+    v.v.i = right ? kNameRight : kNameCentre;
+    a->obj_invoke(cl, text, "set_ControlPoint(via.gui.ControlPoint)", &v, 1, nullptr);
+    a->obj_invoke(cl, text, "set_PageAlignment(via.gui.PageAlignment)", &v, 1, nullptr);
+    a->ui_set_region_size(cl, text, right ? sl::kNameMaxW + 10 : g_name_place.w, g_name_place.h);
+    a->ui_set_position(cl, text, right ? g_name_place.x + sl::kNameRightFromCentre : g_name_place.x, g_name_place.y, g_name_place.z);
+    g_grid.name_right = right ? 1 : 0;
+}
 // Random Stage Settings: an entry of a stage with tiles shows its own tick (its c_check's StatePattern, which the game
 // sets from the shared id: SetupRandomCheck)
 void random_tick(Obj* item, const sl::Slot& s) {
@@ -1342,12 +1369,16 @@ bool grid_work() {
         const Look l = look_of(s, shown_var(grid, focus), g_grid.preview_pic == 2);
         if (g_grid.preview_pic) done = show_pic(ptex, l) && done;
         const int nvar = s.tile ? 0 : static_cast<int>(variations_of(s.base).size());
-        // one name line in the game's own text (its font and glow; AutoRegionFit 1, region 361 x 46: a long name is shrunk to
-        // the banner, read 05/11, probe p14): a tile's name, a variation's (stages_logic.hpp variation_label), the stage's own
-        // name back on its vanilla look
+        // one name line in the game's own text (its font and glow): a tile's name, a variation's (stages_logic.hpp
+        // variation_label), the stage's own name back on its vanilla look; never squeezed (banner_name, name_layout): place
+        // and text written together, right from the first frame
         std::string name = l.name;
         if (!s.tile && nvar > 0) name = sl::variation_label(vanilla_name(s.base), l.v ? l.v->name : std::string(), l.v ? l.v->bundle : std::string());
-        if (ptext && !name.empty() && (s.tile || nvar > 0)) set_text(ptext, name);
+        if (ptext && !name.empty()) {
+            const sl::BannerName bn = sl::banner_name(name);
+            name_layout(ptext, bn.right);
+            if (s.tile || nvar > 0 || bn.text != name) set_text(ptext, bn.text);
+        }
     }
 
     // the cells: each item of the pool shows list[ListIndex]; in Random Stage Settings each entry of a stage with tiles its
@@ -1806,6 +1837,10 @@ void grid_frame() {
                 }
             }
         }
+        // off screen: its name back at the game's place (the same text may come back with a stage of the game's)
+        if (grid && !on && g_grid.name_right == 1)
+            if (Obj* prv = obj_field(grid, f_preview))
+                if (Obj* ptext = get_obj(prv, "mTextStageName")) name_layout(ptext, false);
         g_grid.on_screen = on;
         if (on && (focus ? 1 : 0) != g_grid.focus_log) {
             g_grid.focus_log = focus ? 1 : 0;

@@ -154,6 +154,27 @@ static void test_chosen_mark() {
     check(!decide_marks_now(slots, 0, "", 2), "the stage chosen again: already chosen");
 }
 
+static void test_banner_name() {
+    std::printf("the banner's name: never squeezed\n");
+    auto near = [](float w, float real) { return w > real * 0.98f && w < real * 1.02f; };
+    check(near(name_width("The Macho Ring"), 187) && near(name_width("Training Room"), 169) && near(name_width("SIRN Training Room"), 233) &&
+          near(name_width("Suzaku Castle Over Training Room"), 412), "the width estimate against the names measured");
+    check(!banner_name("Training Room").right && banner_name("Training Room").text == "Training Room", "a name that fits: the game's place");
+    check(!banner_name("Aokigahara (no NPC, fixed)").right, "the longest name that fits today");
+    auto s = banner_name("Suzaku Castle Over Training Room");
+    check(s.right && s.text == "Suzaku Castle Over Training Room", "a longer one: right-aligned, whole");
+    s = banner_name("Black Training stage Mod-2943-1-1759553342");
+    check(s.right && s.text == "Black Training stage Mod-2943-1-1759553342", "the longest today: right-aligned, whole");
+    const std::string longest(80, 'a');
+    s = banner_name(longest);
+    check(s.right && s.text.size() > 3 && s.text.compare(s.text.size() - 3, 3, "...") == 0 && name_width(s.text) <= kNameMaxW,
+          "wider than the banner: cut with ...");
+    check(name_width(s.text) > kNameMaxW - 20, "and cut no shorter than it must be");
+    s = banner_name("\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82");
+    check(s.right && s.text.size() == 39, "13 square characters: right-aligned, whole characters");
+    check(!banner_name("").right && banner_name("").text.empty(), "no name");
+}
+
 static void test_preview() {
     std::printf("the variation key previews, Confirm chooses\n");
     // entries: 0 Genbu (2 variations), 1 Training Room (3 variations); Training Room chosen with its variation 2
@@ -246,6 +267,7 @@ int main() {
     test_grid();
     test_cycle_keys();
     test_chosen_mark();
+    test_banner_name();
     test_preview();
     test_ticks();
     test_codecheck();
