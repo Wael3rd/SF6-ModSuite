@@ -52,8 +52,8 @@ contract `N - 1` unless this page says otherwise.
 
 Everything of contract 1, and:
 
-5. **Manager mode** (`common/manager_mode.hpp`): when the Slotsloader Manager installed this loader, the loader and the
-   plugin behave as the Manager's own Slotsloader fork 1.10.4 did. The loader knows it from
+6. **Manager mode** (`common/manager_mode.hpp`): when the Slotsloader Manager installed this loader, the loader and the
+   plugin behave as the Manager's own Slotsloader fork (1.10.9) does. The loader knows it from
    `reframework/data/SF6_Costumes_Data/manager_installs.json` (written by the Manager since 1.0.9): an enabled mod of
    that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk. Installed any
    other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the plugin is not listed at its size and
@@ -62,15 +62,35 @@ Everything of contract 1, and:
      no other patch paks as outfits (they are still read as the game's files);
    - one outfit per variant of a modular mod (`variants.json`'s `"runtime_options"` is `"off"`), each switched by
      `variant_choices.json`; no in-game costume options;
+   - more than three add-ons of one outfit, each a complete outfit (its own body mesh) naming it in `AddonFor` and all
+     replacing the same files, are one variant each ("main + add-on"), however many there are (fork 1.10.5, MIT; Ingrid
+     C1 Barefoot Stockings v2: the main and five outfits); other add-on sets keep the limit of three ("too many to
+     combine": the main alone);
    - no NSFW detection by keywords;
    - character-swap repairs (ported from fork 1.10.4, MIT, `costumes/loader/swap_repairs.cpp`) while the Manager's
-     setting is on: an empty `swap_repairs.txt` in `SF6_Costumes_Data`; turning it on or off rebuilds the pak;
+     setting is on: an empty `swap_repairs.txt` in `SF6_Costumes_Data` (Manager 1.0.17 writes it whenever it installs
+     or reapplies the loader); turning it on or off rebuilds the pak;
    - plugin: slots made from Outfit 1 or DriveTech are always shown, and the owned-outfit check is off while the
      Manager's opt-out marker is in `reframework/data/SF6_CostumeSlots_data` (`plugin/src/manager_marker.hpp`).
    A change of mode rebuilds the costume pak once.
 
+   The fork's other loader fixes of 1.10.6 - 1.10.9 (a scene or colour file read from its turned-off entry, an outfit's
+   own colour list, donor colour files following the slot, promise 5) and its Opponent Outfit Settings summary (done
+   in the plugin, no Lua script; with or without SF6 Native Core) apply in every mode, Manager mode included.
+
 What the Manager must keep doing for Manager mode: write `manager_installs.json` (with the loader's own files and
 sizes), `swap_repairs.txt` and its opt-out marker where it does now.
+
+### What the Manager checks in the install (Manager 1.0.17, and 1.0.18 as of 2026-11-05)
+
+| The Manager | This loader |
+|---|---|
+| accepts a package whose plugin component's `modinfo.ini` has `SlotsloaderContract=` ≥ 2 (`KnownContract`) | `2` in the Slots Loader and all-in-one packages |
+| counts the loader as installed and rebuilding (`Rebuilds`, `ToolStatus`): `amd_ags_x64.dll` over 200 KB, `amd_ags_x64_real.dll`, the plugin, `SF6_Costumes_Data\loader` | the package ships all four |
+| recognises the costume pak by `natives/stm/sf6_costume_slots.marker` without the stage marker; one entry = placeholder | the stage slots have a pak of their own; placeholders as described in contract 1 |
+| refuses to replace what the pak writes for itself: `esf.scn.20`, `fightercostumeuserdata.user.2`, `fightercostumemessage.msg.21`, `version_update/ver_NN_NNNN/esf.scn.20` (`IsSlotTable`), `charparam/esf/esfNNN/*.scn.20`, the model folders of `registry.json`'s `slots` (`fighter_dir`, `new_folder`) | exactly these; anything else in the pak is an outfit's copy of a shared path, left to a loose file (promise 5) |
+| trusts the pak to leave loose files alone (`KeepsLooseFiles`): the installed version ≥ 1.10.9, else `outfits.json`'s `"loose_files_kept": true` | every Slots Loader from 1.16.4 does, and writes the key; the Manager refuses the older ones (contract 1) anyway |
+| reads `outfits.json`, `variants.json`, `registry.json`, the run lines of `SF6_CostumeLoader.log` (history) | unchanged formats |
 
 ### Not in contract 2
 

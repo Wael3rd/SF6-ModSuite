@@ -9364,7 +9364,22 @@ static void finalize_units(ScanOutputs& o) {
             worn = variants[best];
         }
         if (g_rto_layout != RtoLayout::Off && build_addon_options(j, adds, variants, worn, o)) continue;
-        if (adds.size() > 3 && !separate) {
+        // One outfit per variant (Manager mode): complete add-ons that all replace the same files (each its own copy
+        // of the body mesh, pick one) cannot be combined, so each is one variant, however many there are (Ingrid C1
+        // Barefoot Stockings v2: "Main Files" + five whole-body overrides naming it in AddonFor). From ZZtaii's
+        // Slotsloader fork (1.10.5), MIT. Other add-on sets keep the limit of three.
+        bool alternatives = g_rto_layout == RtoLayout::Off && adds.size() > 3 && !separate;
+        for (size_t x = 0; x < adds.size() && alternatives; ++x) {
+            if (!complete_addon_of.count(adds[x])) alternatives = false;
+            for (size_t y = x + 1; y < adds.size() && alternatives; ++y)
+                if (!units_overlap(g_units[adds[x]], g_units[adds[y]])) alternatives = false;
+        }
+        if (alternatives) {
+            variants.clear();
+            for (auto a : adds) variants.push_back({a});
+            printf("\n  %s: %zu add-ons that each replace the same files: one variant each\n", unit_label(b).c_str(), adds.size());
+        }
+        if (adds.size() > 3 && !separate && !alternatives) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());
             continue;

@@ -284,6 +284,7 @@ static std::string row_of(const std::string& game, bool* unbroken) {
 }
 
 static std::string g_build, g_row_game, g_base_pak;
+static bool g_manager_suite = false;   // --row-manager: every run in Manager mode (common/manager_mode.hpp)
 
 static void run_loader(const char* which, const std::string& build = {}) {   // "costume" or "stage"
     const std::string& b = build.empty() ? g_build : build;
@@ -412,6 +413,53 @@ static void write_rows(const std::string& path, const std::vector<std::pair<uint
     w.write(path.c_str());
 }
 
+// A zip of stored (uncompressed) entries, names with '/'
+static uint32_t crc32_of(const std::vector<uint8_t>& d) {
+    uint32_t c = 0xFFFFFFFFu;
+    for (uint8_t b : d) {
+        c ^= b;
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+    }
+    return ~c;
+}
+static void write_stored_zip(const std::string& path, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& entries) {
+    std::vector<uint8_t> out, cd;
+    auto u16 = [](std::vector<uint8_t>& v, uint32_t x) { v.push_back(uint8_t(x)); v.push_back(uint8_t(x >> 8)); };
+    auto u32 = [](std::vector<uint8_t>& v, uint32_t x) { for (int i = 0; i < 4; i++) v.push_back(uint8_t(x >> (8 * i))); };
+    for (auto& [name, data] : entries) {
+        const uint32_t crc = crc32_of(data), size = (uint32_t)data.size(), at = (uint32_t)out.size();
+        u32(out, 0x04034b50); u16(out, 20); u16(out, 0); u16(out, 0); u16(out, 0); u16(out, 0x21);   // stored, 1980-01-01
+        u32(out, crc); u32(out, size); u32(out, size); u16(out, (uint32_t)name.size()); u16(out, 0);
+        out.insert(out.end(), name.begin(), name.end());
+        out.insert(out.end(), data.begin(), data.end());
+        u32(cd, 0x02014b50); u16(cd, 20); u16(cd, 20); u16(cd, 0); u16(cd, 0); u16(cd, 0); u16(cd, 0x21);
+        u32(cd, crc); u32(cd, size); u32(cd, size); u16(cd, (uint32_t)name.size()); u16(cd, 0); u16(cd, 0); u16(cd, 0);
+        u16(cd, 0); u32(cd, 0); u32(cd, at);
+        cd.insert(cd.end(), name.begin(), name.end());
+    }
+    const uint32_t cd_at = (uint32_t)out.size();
+    out.insert(out.end(), cd.begin(), cd.end());
+    u32(out, 0x06054b50); u16(out, 0); u16(out, 0); u16(out, (uint32_t)entries.size()); u16(out, (uint32_t)entries.size());
+    u32(out, (uint32_t)cd.size()); u32(out, cd_at); u16(out, 0);
+    put_bin(path, out);
+}
+
+// Manager mode on (the Slotsloader Manager's manager_installs.json lists the plugin at its size on disk, as when it
+// installed the loader) or off (neither file)
+static void set_manager_mode(bool on) {
+    const std::string plugin = g_row_game + "\\reframework\\plugins\\SF6_CostumeSlotsNative.dll";
+    const std::string list = g_row_game + "\\reframework\\data\\SF6_Costumes_Data\\manager_installs.json";
+    if (!on) { DeleteFileA(list.c_str()); DeleteFileA(plugin.c_str()); return; }
+    const std::string fake(4321, 'P');
+    put(plugin, fake);
+    put(list, "{\n  \"format\": \"sf6-manager-installs-1\",\n  \"generated\": \"2026-11-05T00:00:00Z\",\n"
+              "  \"manager\": \"Slotsloader Manager 1.0.18\",\n  \"mods\": [\n    {\n      \"id\": \"test\",\n"
+              "      \"name\": \"SF6 Slots Loader\",\n      \"installed_utc\": \"2026-11-05T00:00:00Z\",\n      \"enabled\": true,\n"
+              "      \"files\": [\n        { \"path\": \"amd_ags_x64.dll\", \"sha256\": \"\", \"size\": 1 },\n"
+              "        { \"path\": \"reframework/plugins/SF6_CostumeSlotsNative.dll\", \"sha256\": \"\", \"size\": "
+              + std::to_string(fake.size()) + " }\n      ],\n      \"paks\": []\n    }\n  ]\n}\n");
+}
+
 static int run_row_test(const char* build, const char* work, const char* game, const char* mod_archive,
                         const char* previous) {
     g_build = build; g_work = work; g_base_pak = std::string(game) + "\\re_chunk_000.pak";
@@ -437,9 +485,15 @@ static int run_row_test(const char* build, const char* work, const char* game, c
     auto foreign = [&](int n) { make_pak(g_row_game + "\\" + pak_name(n), PatchPakKind::Mod, 2); };
     auto drop = [&](int n) { DeleteFileA((g_row_game + "\\" + pak_name(n)).c_str()); };
 
+    if (g_manager_suite) {
+        printf("Manager mode: every run below as installed by the Slotsloader Manager (manager_installs.json)\n");
+        set_manager_mode(true);
+    }
+
     printf("[7] costume loader: a mod pak appears above ours, then goes away\n");
     foreign(1);
     run_loader("costume");  expect_row("foreign 001, loader run", "1M 2C");
+    expect_said("costume", "Manager mode: installed by the Slotsloader Manager", g_manager_suite);
     foreign(3);
     run_loader("costume");  expect_row("foreign 003 added, loader run", "1M 2c 3M 4C");
     run_loader("costume");  expect_row("loader run again (up to date)", "1M 2c 3M 4C");
@@ -864,12 +918,19 @@ static int run_row_test(const char* build, const char* work, const char* game, c
             put_bin(dir + win(m2), m);
         }
         run_loader("costume");  expect_row("overrides added", "1M 2S 3C");
-        expect_said("costume", "Fixture Main: 5 add-ons as runtime options");
+        if (!g_manager_suite) {
+            expect_said("costume", "Fixture Main: 5 add-ons as runtime options");
+        } else {   // one sub-folder of separate mods (user_grouped): the combined outfits only, one per add-on (case 24)
+            expect_said("costume", "Fixture Main: 5 add-ons that each replace the same files: one variant each");
+            expect_said("costume", "Fixture Main: put with its add-on(s) in one sub-folder, only the combined outfit is made");
+            for (int k = 1; k <= 5; k++)
+                expect_said("costume", ("  variant: Fixture Main + Option " + std::to_string(k)).c_str());
+        }
         expect_said("costume", "too many to combine", false);
         remove_tree(oroot.substr(0, oroot.size() - 1));
     }
 
-    if (previous) {
+    if (previous && !g_manager_suite) {
         printf("[23] an install built by the previous build: this one says Up to date; built afresh, the same pak byte for byte\n");
         remove_tree(mroot.substr(0, mroot.size() - 1));
         DeleteFileA(registry.c_str());
@@ -885,17 +946,92 @@ static int run_row_test(const char* build, const char* work, const char* game, c
         check(has(slurp(data_dir + "\\outfits.json"), "\"loose_files_kept\": true"), "this build says loose_files_kept");
     }
 
+    printf("[24] Manager mode (one outfit per variant): a main and five add-ons that each replace its body mesh, in one "
+           "archive (fork 1.10.5)\n");
+    {
+        if (!g_manager_suite) set_manager_mode(true);
+        const auto s2 = game_bytes(c2_scene);
+        std::string body_m, body_d, hair_m, hair_d;
+        body_of(s2, "esf001/002/01/", body_m, body_d);
+        for (int part = 2; part <= 9 && hair_m.empty(); part++) {
+            char pp[32];
+            snprintf(pp, sizeof pp, "esf001/002/%02d/", part);
+            body_of(s2, pp, hair_m, hair_d);
+        }
+        auto body = game_bytes(body_m), hair = game_bytes(hair_m);
+        const auto mdf = game_bytes(body_d);
+        check(!body.empty() && !mdf.empty() && !hair.empty(),
+              "Ryu's Outfit 2 body mesh, its material file and another part's mesh read from the game");
+        if (!body.empty()) body.back() ^= 0x22;
+        if (!hair.empty()) hair.back() ^= 0x22;
+        auto changed = [](std::vector<uint8_t> d, int k) { if (d.size() > 1) d[d.size() - 2] ^= uint8_t(k); return d; };
+        const std::string over = g_row_game + "\\reframework\\costume_mods\\Ryu\\ZZ Overrides.zip";
+        const std::string mixed = g_row_game + "\\reframework\\costume_mods\\Ryu\\ZZ Mixed.zip";
+        std::vector<std::pair<std::string, std::vector<uint8_t>>> z = {
+            {"00 Main/modinfo.ini", bytes_of("name=Fixture Main\r\n")}, {"00 Main/" + body_m, body}, {"00 Main/" + body_d, mdf}};
+        for (int k = 1; k <= 5; k++) {
+            const std::string dir = "0" + std::to_string(k) + " Option " + std::to_string(k) + "/";
+            z.push_back({dir + "modinfo.ini", bytes_of("name=Option " + std::to_string(k) + "\r\nAddonFor=Fixture Main\r\n")});
+            z.push_back({dir + body_m, changed(body, k)});
+        }
+        write_stored_zip(over, z);
+        // Control: four add-ons that do not all replace the same files (two of the body, two of another part)
+        const auto mbody = changed(body, 0x40), mhair = changed(hair, 0x40);
+        z = {{"00 Main/modinfo.ini", bytes_of("name=Mixed Main\r\n")}, {"00 Main/" + body_m, mbody}, {"00 Main/" + body_d, mdf},
+             {"00 Main/" + hair_m, mhair}};
+        for (int k = 1; k <= 4; k++) {
+            const std::string dir = "0" + std::to_string(k) + " Mixed " + std::to_string(k) + "/";
+            z.push_back({dir + "modinfo.ini", bytes_of("name=Mixed " + std::to_string(k) + "\r\nAddonFor=Mixed Main\r\n")});
+            z.push_back({dir + (k <= 2 ? body_m : hair_m), changed(k <= 2 ? mbody : mhair, k)});
+        }
+        write_stored_zip(mixed, z);
+        run_loader("costume");  expect_row("Manager mode, both archives added", "1M 2S 3C");
+        expect_said("costume", "Manager mode: installed by the Slotsloader Manager");
+        expect_said("costume", "runtime options: off (Manager mode: one outfit per variant)");
+        expect_said("costume", "Fixture Main: 5 add-ons that each replace the same files: one variant each");
+        for (int k = 1; k <= 5; k++)
+            expect_said("costume", ("  variant: Fixture Main + Option " + std::to_string(k)).c_str());
+        expect_said("costume", "Fixture Main: 5 add-ons, too many to combine", false);
+        expect_said("costume", "Mixed Main: 4 add-ons, too many to combine; the base alone is installed");
+        expect_said("costume", "  variant: Mixed Main +", false);
+        expect_said("costume", "slots checked, 0 left out");
+        const std::string vj = slurp(data_dir + "\\variants.json");
+        check(has(vj, "\"runtime_options\": \"off\""), "variants.json: runtime options off");
+        int own = has(vj, "{\"label\": \"Fixture Main\", \"enabled\": true, \"slot\": \"Outfit ") ? 1 : 0;
+        for (int k = 1; k <= 5; k++)
+            if (has(vj, ("{\"label\": \"Fixture Main + Option " + std::to_string(k) + "\", \"enabled\": true, \"slot\": \"Outfit ").c_str()))
+                own++;
+        check(own == 6, "variants.json: the main and main + each add-on, each with its outfit");
+        check(has(vj, "{\"label\": \"Mixed Main\", \"enabled\": true, \"slot\": \"Outfit ") && !has(vj, "\"Mixed Main +"),
+              "variants.json: Mixed Main alone");
+        run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+        if (!g_manager_suite) {   // installed any other way: runtime options, as before (case 22)
+            set_manager_mode(false);
+            run_loader("costume");  expect_row("not the Manager's install any more", "1M 2S 3C");
+            expect_said("costume", "Up to date (fingerprint match", false);   // a change of mode rebuilds
+            expect_said("costume", "Manager mode: installed by the Slotsloader Manager", false);
+            expect_said("costume", "runtime options: on (one outfit per modular mod)");
+            expect_said("costume", "that each replace the same files: one variant each", false);
+            expect_said("costume", "too many to combine", false);
+        }
+        DeleteFileA(over.c_str());
+        DeleteFileA(mixed.c_str());
+    }
+
     printf("\n%d checks, %d failed\n", g_checks, g_fail);
     printf(g_fail ? "FAIL\n" : "PASS\n");
     return g_fail ? 1 : 0;
 }
 
 int main(int argc, char** argv) {
-    if (argc >= 6 && std::string(argv[1]) == "--row")
+    if (argc >= 6 && (std::string(argv[1]) == "--row" || std::string(argv[1]) == "--row-manager")) {
+        g_manager_suite = std::string(argv[1]) == "--row-manager";
         return run_row_test(argv[2], argv[3], argv[4], argv[5], argc >= 7 ? argv[6] : nullptr);
+    }
     if (argc >= 3 && argv[1][0] != '-') return run_clean_tests(argv[1], argv[2]);
     printf("usage: slots_clean_test <SF6_SlotsClean.exe> <work dir>\n"
            "       slots_clean_test --row <build dir> <work dir> <game dir (read only)> <costume mod archive>"
-           " [<previous build dir>]\n");
+           " [<previous build dir>]\n"
+           "       slots_clean_test --row-manager <build dir> <work dir> <game dir (read only)> <costume mod archive>\n");
     return 2;
 }

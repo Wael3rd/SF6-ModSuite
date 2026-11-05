@@ -49,3 +49,13 @@ a `dlc\test.pak` holding rows with zeros over the hash, as a mod manager's PAK m
 `stagetest.exe`) adds case 23: an install built by the previous build is Up to date for this one, and this one built from
 scratch makes the same pak byte for byte (the archive given must not be a case a fix changes). The executables must be
 moved there, not copied, on a PC where Smart App Control is on.
+
+Case 24 (after 23) checks fork 1.10.5 in Manager mode (`docs/MANAGER_CONTRACT.md`, promise 6: the Slotsloader Manager's
+`manager_installs.json` lists a stand-in plugin at its size, as when the Manager installed the loader). Two archives
+(stored zips the test writes): a main and five add-ons naming it in `AddonFor`, each a copy of the main's body mesh: the
+main and five "main + add-on" outfits, each its own row in `variants.json`; a main with four add-ons, two of its body and
+two of another part: "too many to combine", the main alone. Then the list is removed: runtime options again, rebuilt.
+
+`slots_clean_test.exe --row-manager <build dir> <scratch folder> <game folder> <costume mod archive>` runs cases 7-22 and
+24 with Manager mode on from the start (the first run must say so): the fork's fixes of cases 16-21 must hold there too.
+Case 22 then gives the five combined outfits only (one sub-folder of separate mods: the main alone is not made).

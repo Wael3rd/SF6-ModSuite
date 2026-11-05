@@ -8,6 +8,11 @@
   plugin behave as the Manager's own Slotsloader fork did: outfits from `costume_mods` only, one outfit per variant,
   no NSFW keywords, character-swap repairs on the Manager's setting (ported from fork 1.10.4, MIT), Outfit 1 and
   DriveTech slots always shown, the Manager's owned-outfit opt-out. Installed any other way, nothing changes.
+- Manager mode, from ZZtaii's Slotsloader fork 1.10.5 (MIT), thanks to ZZtaii: a mod whose options are more than three
+  complete outfits naming its main files in `AddonFor`, all replacing the same files (each its own body mesh: Ingrid C1
+  Barefoot Stockings v2), gave the main files alone ("too many to combine"); each option is now an outfit ("main +
+  option"), however many there are. Other add-on sets keep the limit of three. Installed any other way, these options
+  stay runtime options of one outfit, as in 1.16.4.
 - `SlotsloaderContract=2` in `modinfo.ini` and `variants.json`.
 
 ## 1.19.9 (2026-11-05) — SF6 Mod Suite
