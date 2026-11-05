@@ -28,6 +28,9 @@ constexpr int32_t     kFontSlot      = 6;                  // the bold display f
 constexpr float       kPosX = 960.0f, kPosY = 812.0f, kPosZ = 0.0f;
 constexpr float       kFontW = 76.0f, kFontH = 76.0f;
 constexpr float       kRegionW = 1600.0f, kRegionH = 130.0f;
+constexpr float       kRasterW = 152.0f, kRasterH = 152.0f; // glyph raster size: the template's is its own 24 px, so a
+                                                         // 76 px line drawn from it was blurry; 2x the font size
+                                                         // stays sharp under the 1.25 flash scale and at 4K
 constexpr int32_t     kPriority      = 10;                 // the movie texture and the others have 0
 constexpr uint32_t    kGreenRgba     = 0xFF00D40Eu;        // the Drive gauge's full green (c_gauge00: R 14 G 212 B 0)
 constexpr uint32_t    kWhiteRgba     = 0xFFFFFFFFu;
@@ -141,9 +144,32 @@ void invoke_i64(void* obj, const char* sig, int64_t v) {
     sf6core_api_ptr()->obj_invoke(g_client, obj, sig, &a, 1, nullptr);
 }
 
-void configure_new(void* copy) {
+// via.Size {w, h} of a Text (RasterSize / FontSize), or {-1, -1}
+void get_size(void* text, const char* getter, float* w, float* h) {
+    *w = *h = -1.0f;
+    auto mh = text ? find_method_on(s_sdk, text, getter) : nullptr;
+    RawInvokeRet r;
+    if (mh && invoke_c(s_sdk, mh, text, nullptr, 0, &r) && !r.exception_thrown) { *w = ((float*)r.bytes)[0]; *h = ((float*)r.bytes)[1]; }
+}
+
+// set_RasterSize(via.Size): the size the glyphs are drawn at before they are scaled to the font size
+bool set_raster(void* text, float w, float h) {
+    auto mh = text ? find_method_on(s_sdk, text, "set_RasterSize") : nullptr;
+    if (!mh) return false;
+    float sz[2] = { w, h };
+    void* args[] = { (void*)sz };          // a value type is passed by address (as in display.cpp)
+    RawInvokeRet r;
+    return invoke_c(s_sdk, mh, text, args, 1, &r) && !r.exception_thrown;
+}
+
+void configure_new(void* copy, void* tmpl) {
     using namespace tcfg;
     const SF6CoreAPI* api = sf6core_api_ptr();
+    float tw, th, cw, ch;
+    get_size(tmpl, "get_RasterSize", &tw, &th);
+    const bool raster_ok = set_raster(copy, kRasterW, kRasterH);
+    get_size(copy, "get_RasterSize", &cw, &ch);
+    core_log(SF6CORE_LOG_INFO, nullptr, "[title] raster size: template %.0fx%.0f, line %.0fx%.0f (%s)", tw, th, cw, ch, raster_ok ? "set" : "set failed");
     invoke_i64(copy, "set_FontSlot(via.gui.FontSlot)", kFontSlot);
     invoke_i64(copy, "set_Priority(System.UInt16)", kPriority);
     api->ui_set_text(g_client, copy, kText);
@@ -186,7 +212,7 @@ void tick_inner(void* flow) {
             }
             return;
         }
-        configure_new(copy);
+        configure_new(copy, tmpl);
         core_log(SF6CORE_LOG_INFO, nullptr, "[title] OVERDRIVE EDITION line created (font slot %d, size %.0fx%.0f, at %.0f,%.0f)",
                  (int)kFontSlot, kFontW, kFontH, kPosX, kPosY);
     }
