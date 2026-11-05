@@ -39,7 +39,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.4";
+static constexpr const char* CORE_VERSION = "0.9.5";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success

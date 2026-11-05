@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.19.8 (2026-11-05) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.3 | unchanged |
+| SF6 Color Mod | 0.23.3 | unchanged |
+| SF6 Native Core | 0.9.5 | Confirm on the pause menu's spin rows (`on_confirm`) |
+| SF6 Recording Manager | 2.2.6 | drill details dialog, Markdown descriptions |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Native Core 0.9.4 and SF6 Recording Manager 2.2.5, then install
+Native Core 0.9.5 and Recording Manager 2.2.6 (install both: Recording Manager 2.2.6 needs Native Core 0.9.5). Slots
+Loader 1.16.3 and Color Mod 0.23.3 are the same files as in 1.19.7: keep them. With the all-in-one package, replace
+1.19.7 with 1.19.8. The costume pak is not rebuilt.
+
+### SF6 Recording Manager 2.2.6
+- New: drill details. On the Manager page, Confirm (F, or a pad's A) on the Drill row opens the drill's details in the
+  game's image dialog:
+  - the drill's name, and a box at the top left: "<Character> - <Author> - <Source>" (Source is Local, Community, or
+    DrillCodes for a Community drill imported from drillcodes.com), with "N SLOTS SAVED" under it;
+  - the saved slots, 10 per page (A / E or Q / E, L1 / R1 to change page);
+  - the full description, scrolled with Up / Down, the stick, the d-pad or the mouse wheel, with a scroll bar;
+  - Open drill and Cancel (Esc never opens the drill).
+- T (pad Y) in the dialog edits the drill's description in the game's text dialog (`/n` = line break, 1000 characters).
+- Light Markdown in descriptions, drawn in the dialog: `# heading`, `**emphasis**`, and the colours `{violet}`,
+  `{magenta}`, `{purple}` and `{blue}`, closed by `{/}`. R (pad X) shows the help. Elsewhere the text is shown
+  without the markup.
+- The Drill row's hints read "[T] Edit Drill Name" and "[F] See Details". Its help line scrolls only when it is too
+  long to fit.
+- Fix: the slot names on Record / Replay were not redrawn right after Open drill.
+- Translated in the 14 languages.
+
+### SF6 Native Core 0.9.5
+- New: Confirm on spin rows. A client of the pause menu (the Recording Manager's Drill row) now gets the Confirm input
+  (F, a pad's A) on its spin rows through a new `on_confirm` callback, appended to the pause-menu callbacks: older
+  clients keep working unchanged. Details in `core/docs/PAUSE_MENU.md`.
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
 ## 1.19.7 (2026-11-02) — SF6 Mod Suite
 
 | Package | Version | |

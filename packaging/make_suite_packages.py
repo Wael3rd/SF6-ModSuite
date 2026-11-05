@@ -29,7 +29,7 @@ CRLF = chr(13) + chr(10)
 sys.path.insert(0, HERE)
 from make_fluffy_package import CHARACTERS      # the 32 character folders of costume_mods, reused for color_mods
 CRSM = os.path.join(REPO, "crsm")
-CRSM_MIN_CORE = "0.8.0"       # the Native Core's training pause-menu service (pm_*), needed by the Recording Manager
+CRSM_MIN_CORE = "0.9.5"       # 0.9.5: on_confirm (Confirm on spin rows, the drill details dialog); 0.8.0: the Native Core's training pause-menu service (pm_*), needed by the Recording Manager
 CRSM_OWNERS = ("community", "files", "replay", "reversal", "record", "ui")
 CRSM_CONFIG_REL = "crsm/package/config.json"
 G_CRSM_CONFIG = "reframework/data/SF6_Community_data/config.json"

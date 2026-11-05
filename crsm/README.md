@@ -3,7 +3,7 @@
 30 recording slots per character in Training (1-8 are the game's own, 9-30 are extra), drills, slot names, a reversal
 picker and Community sharing of drills, all in the game's training pause menu (Recording Settings > Manager / Record
 / Replay). One native REFramework plugin, `reframework/plugins/SF6_CRSMNative.dll`, client of the SF6 Native Core
-(0.8.0 or newer: its training pause-menu service, [core/docs/PAUSE_MENU.md](../core/docs/PAUSE_MENU.md)). No Lua
+(0.9.5 or newer: Confirm on spin rows, plus its training pause-menu service, [core/docs/PAUSE_MENU.md](../core/docs/PAUSE_MENU.md)). No Lua
 script. Release package: `SF6_CRSM_<version>.zip`; its `README.txt` ([package/README.txt](package/README.txt)) is the
 user guide.
 
