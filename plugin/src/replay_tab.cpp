@@ -943,11 +943,13 @@ void render(Obj* main) {
     }
     put_box(title, "e_ro_rfocus", kRowX - 3, kRowY + g_row * kRowStep - 3, kRowW + 6, kRowH + 6, kColBorder, g_edit && f != nullptr,
             kPrioBorder);
-    if (f) preview::want(f->fid, c.forced ? c.costume : 0, c.forced ? c.color : 0);   // Default: the base outfit
-    const bool model = f && preview::showing();
+    // Off (Default): no preview at all, the room given back; On: the model, the portrait while it loads
+    const bool forced = f != nullptr && c.forced;
+    preview::want(forced ? f->fid : 0, forced ? c.costume : 0, forced ? c.color : 0);
+    const bool model = forced && preview::showing();
     g_model_shown = model;
     put_model(title, model);
-    put_image(title, "e_ro_bigimg", f ? f->fid : 0, kBigX, kBigY, kBigW, kBigH, f != nullptr && !model);
+    put_image(title, "e_ro_bigimg", f ? f->fid : 0, kBigX, kBigY, kBigW, kBigH, forced && !model);
     const std::string help = g_edit ? "Up / Down: setting     Left / Right: change     R / Square (X): colour     F / Esc: done"
                                     : "F: edit     Arrows: character     R / Square (X): colour     " + g_back_hint + " / Esc: back";
     put_text(title, "e_ro_help", help, kRowX + 20, 960, kFontHelp, kColDim);
