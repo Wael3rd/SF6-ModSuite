@@ -14,7 +14,7 @@ game's UI directly.
   reads it (the Color Mod's Drive squares).
 - **Training pause menu**: clients' pages (a sub-page of a primary tab's strip) with buttons and spins, answered by one
   engine for every client, with key-guide hints, see `docs/PAUSE_MENU.md`.
-- **Title screen line**: a green "OVERDRIVE EDITION" under the STREET FIGHTER logo of the title screen (`title.cpp`): a copy of the title's (c) CAPCOM text, shown from the Select state with a short white-flash entrance; every value is a constant at the top of `title.cpp`. An empty `reframework/data/sf6core/title_off.txt` turns it off.
+- **Title screen line**: a "OVERDRIVE EDITION" line, in the white of the logo, under the STREET FIGHTER logo of the title screen (`title.cpp`): a copy of the title's (c) CAPCOM text, shown from the Select state with a short scale-down entrance; every value is a constant at the top of `title.cpp`. An empty `reframework/data/sf6core/title_off.txt` turns it off.
 - **Fault isolation**: a client that faults is skipped after five consecutive faults (circuit breaker), the others keep running.
 - A small **Lua bridge** (`SF6Core` in REFramework's Lua state) for scripts and diagnostics.
 - A log: `reframework/data/sf6core/sf6core.log` (one previous log kept as `sf6core.old.log` past 8 MB).

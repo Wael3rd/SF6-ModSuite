@@ -1,11 +1,11 @@
-// title.cpp -- "OVERDRIVE EDITION", a green line under the STREET FIGHTER logo of the title screen.
+// title.cpp -- "OVERDRIVE EDITION", a line in the logo's white under the STREET FIGHTER logo of the title screen.
 //
 // A copy of the title's static (c) CAPCOM text (e_text_copyright, a child of the Panel c_main of
 // app.menu.UIFlowTitle's GUI), made inside a post-hook of app.menu.UIFlowTitle.update (R19: a duplicate made outside
 // a UI update is unfinished), attached to c_main and found again by name every frame (no reference kept on it: R19 /
 // R35). Shown only while c_main plays its "DEFAULT2" state: the logo is fully displayed and PRESS ANY BUTTON blinks
 // (seen live: "DEFAULT" during the logo animation and around the demo video). Entering DEFAULT2 starts a short
-// entrance (white flash, scale down, white to green); it stays through SELECT and FADE_OUT (a button was pressed: the
+// entrance (scale down, from pure white to the logo's white); it stays through SELECT and FADE_OUT (a button was pressed: the
 // logo stays during the loading); any other state hides it. The flow's own Select state hooks
 // were tried first and never fired. Every return to the title makes a new flow, so the copy is made again when
 // missing; it dies with the title GUI.
@@ -33,7 +33,7 @@ constexpr float       kRasterW = 152.0f, kRasterH = 152.0f; // glyph raster size
                                                          // 76 px line drawn from it was blurry; 2x the font size
                                                          // stays sharp under the 1.25 flash scale and at 4K
 constexpr int32_t     kPriority      = 10;                 // the movie texture and the others have 0
-constexpr uint32_t    kGreenRgba     = 0xFF00D40Eu;        // the Drive gauge's full green (c_gauge00: R 14 G 212 B 0)
+constexpr uint32_t    kLineRgba      = 0xFFEBEBECu;        // the STREET FIGHTER logo's white, read on a screenshot: R 236 G 235 B 235
 constexpr uint32_t    kWhiteRgba     = 0xFFFFFFFFu;
 constexpr const char* kShownState    = "DEFAULT2";         // c_main's play state once the logo is complete
 constexpr const char* kKeepStates[]  = { "SELECT", "FADE_OUT" }; // after a button press (SELECT for a few frames, then
@@ -43,8 +43,8 @@ constexpr const char* kKeepStates[]  = { "SELECT", "FADE_OUT" }; // after a butt
 constexpr float       kScaleStart    = 1.25f;              // frame 0
 constexpr int         kScaleFrames   = 8;                  // ease-out down to 1.0
 constexpr int         kColorStart    = 8;                  // the white holds while the scale comes down
-constexpr int         kColorFrames   = 16;                 // white -> green, ease-out
-constexpr bool        kSecondFlash   = true;               // a faint second flash
+constexpr int         kColorFrames   = 16;                 // white -> the line's colour, ease-out
+constexpr bool        kSecondFlash   = false;              // a faint second flash (was for the green; on white it would not show)
 constexpr int         kFlash2Gap     = 10;                 // frames after the colour ends
 constexpr int         kFlash2Frames  = 6;                  // toward white and back
 constexpr float       kFlash2Amount  = 0.5f;               // 50% toward white at the peak
@@ -113,14 +113,14 @@ void anim_at(int f, uint32_t* rgba, float* scale) {
     *scale = f >= kScaleFrames ? 1.0f : 1.0f + (kScaleStart - 1.0f) * (1.0f - ease_out((float)f / (float)kScaleFrames));
     if (f < kColorStart) { *rgba = kWhiteRgba; return; }
     const int c = f - kColorStart;
-    if (c < kColorFrames) { *rgba = lerp_rgba(kWhiteRgba, kGreenRgba, ease_out((float)c / (float)kColorFrames)); return; }
-    *rgba = kGreenRgba;
+    if (c < kColorFrames) { *rgba = lerp_rgba(kWhiteRgba, kLineRgba, ease_out((float)c / (float)kColorFrames)); return; }
+    *rgba = kLineRgba;
     if (kSecondFlash) {
         const int g = c - kColorFrames - kFlash2Gap;
         if (g >= 0 && g < kFlash2Frames) {
             const float x = (float)g / (float)kFlash2Frames;          // triangle: up then down
             const float tri = x < 0.5f ? x * 2.0f : (1.0f - x) * 2.0f;
-            *rgba = lerp_rgba(kGreenRgba, kWhiteRgba, kFlash2Amount * tri);
+            *rgba = lerp_rgba(kLineRgba, kWhiteRgba, kFlash2Amount * tri);
         }
     }
 }
