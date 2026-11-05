@@ -91,6 +91,43 @@ int main() {
     check(row_text(f, gone) == "Default" && outfit_index(f, gone) == -1, "an outfit no longer listed shows Default");
     check(cycle_outfit(f, gone, +1).costume == 0, "Right from a vanished outfit: the first outfit");
 
+    // the Color Mod's entries (RW / MC): after the game colours, each one on colour 1, with its own label
+    Fighter g;
+    g.fid = 1;
+    Outfit vag;
+    vag.costume = 8; vag.mod_id = "8cd9"; vag.extra = true; vag.name = "Vagrant Ryu"; vag.colors = { 0, 1, 2 };
+    vag.cm = { { "..\\color_mods\\Ryu\\Pack\\esf001_009_cmd_003.user.2", "RW 1" },
+               { "..\\color_mods\\Ryu\\MANUALCOLORS_01\\esf001_009_cmd_001.user.2", "MC 1" } };
+    g.outfits = { vag };
+    Choice v = cycle_outfit(g, Choice{}, +1);
+    v.color = 2;
+    v = cycle_color(g, v, +1);
+    check(v.color == 1 && v.colormod == vag.cm[0].id && row_text(g, v) == "Vagrant Ryu - Color RW 1",
+          "after the last game colour: the first Color Mod entry, on colour 1, with its label");
+    v = cycle_color(g, v, +1);
+    check(v.colormod == vag.cm[1].id && choice_color_label(g.outfits[0], v) == "MC 1", "then the next entry (MC 1)");
+    v = cycle_color(g, v, +1);
+    check(v.color == 0 && v.colormod.empty(), "then back to the first game colour");
+    v = cycle_color(g, v, -1);
+    check(v.colormod == vag.cm[1].id, "backwards from the first game colour: the last entry");
+    Choice v1 = v; v1.colormod.clear();
+    check(!(v1 == v), "an entry is another choice than the game colour 02");
+    Choice gone_cm = v; gone_cm.colormod = "removed";
+    check(choice_color_label(g.outfits[0], gone_cm) == "02", "an entry the Color Mod no longer lists: shown as worn, 02");
+    check(cycle_outfit(g, v, +1, false).colormod.empty(), "a costume change: back to 01, no entry");
+    Fighter h = g;
+    h.outfits[0].colors = { 0, 2 };
+    Choice w = cycle_outfit(h, Choice{}, +1);
+    w = cycle_color(h, cycle_color(h, w, +1), +1);
+    check(w.color == 0 && w.colormod.empty(), "an outfit without colour 1 offers no entry (it is their carrier)");
+    Choices cmf;
+    cmf[1] = v;
+    Choices cmb;
+    const std::string cmt = to_json(cmf);
+    check(from_json(cmt, cmb) && cmb[1] == v && cmb[1].color == 1, "a Color Mod entry survives the file (its id, colour 1)");
+    check(cmt.find("\"colormod\": \"..\\\\color_mods\\\\Ryu\\\\MANUALCOLORS_01\\\\esf001_009_cmd_001.user.2\"") != std::string::npos,
+          "the entry is written by its file path (escaped)");
+
     // file round trip
     Choices cs;
     cs[1] = cycle_outfit(f, Choice{}, +1);
