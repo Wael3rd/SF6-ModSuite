@@ -780,7 +780,6 @@ struct GridState {
     int menu = -1;                     // sl::kBattle / sl::kTraining
     std::vector<sl::Slot> slots;       // its entries once the tiles are in (empty: none inserted)
     sl::Preview preview;               // the variation key's preview on the focused entry (stages_logic.hpp)
-    bool name_fit = false;             // the preview's name text set to fit its region (once per grid)
     uint32_t decided_seen = UINT32_MAX;// the game's decided stage as last seen (Random or not)
     bool on_screen = false;            // shown (looked at every frame while it lives: the variation key, the hint)
     bool focused = false;              // its cells have the focus
@@ -1283,22 +1282,6 @@ bool show_pic(Obj* tex, const Look& l) {
 
 const char* const kNoCellText = "<no cell text>";   // not a control name
 
-// The preview's name (the game's own text, centred on the banner's lower right): a long tile name is squeezed into the
-// room it has, AutoRegionFit as the game's other fitted texts, its region no wider than twice its distance to the banner's
-// right edge (it is centred 180 units from it: 1356 against 1536, read 05/11)
-constexpr float kNameMaxW = 340;
-void fit_name(Obj* text) {
-    const SF6CoreAPI* a = slots::ui::core();
-    if (!a || !text) return;
-    SF6CoreArg on{}; on.type = SF6CORE_ARG_I64; on.v.i = 1;
-    a->obj_invoke(slots::ui::client(), text, "set_AutoRegionFit(System.Boolean)", &on, 1, nullptr);
-    float rs[2] = {};
-    const Ret r = call(text, "get_RegionSize");
-    if (!r.exception_thrown) std::memcpy(rs, r.bytes.data(), sizeof rs);
-    if (std::isfinite(rs[0]) && std::isfinite(rs[1]) && rs[1] > 0 && (rs[0] <= 0 || rs[0] > kNameMaxW))
-        a->ui_set_region_size(slots::ui::client(), text, kNameMaxW, rs[1]);
-    logf("stages: grid (%s): the preview's name fits its region (was %.0f x %.0f, at most %.0f wide)", sl::menu_key(g_grid.menu), rs[0], rs[1], kNameMaxW);
-}
 // Random Stage Settings: an entry of a stage with tiles shows its own tick (its c_check's StatePattern, which the game
 // sets from the shared id: SetupRandomCheck)
 void random_tick(Obj* item, const sl::Slot& s) {
@@ -1358,13 +1341,10 @@ bool grid_work() {
         }
         const Look l = look_of(s, shown_var(grid, focus), g_grid.preview_pic == 2);
         if (g_grid.preview_pic) done = show_pic(ptex, l) && done;
-        if (ptext && !g_grid.name_fit) {                       // a long name is squeezed into the banner, as the game does
-            g_grid.name_fit = true;
-            fit_name(ptext);
-        }
         const int nvar = s.tile ? 0 : static_cast<int>(variations_of(s.base).size());
-        // one name line in the game's own text (its font and shadow): a tile's name, a variation's (stages_logic.hpp
-        // variation_label), the stage's own name back on its vanilla look
+        // one name line in the game's own text (its font and glow; AutoRegionFit 1, region 361 x 46: a long name is shrunk to
+        // the banner, read 05/11, probe p14): a tile's name, a variation's (stages_logic.hpp variation_label), the stage's own
+        // name back on its vanilla look
         std::string name = l.name;
         if (!s.tile && nvar > 0) name = sl::variation_label(vanilla_name(s.base), l.v ? l.v->name : std::string(), l.v ? l.v->bundle : std::string());
         if (ptext && !name.empty() && (s.tile || nvar > 0)) set_text(ptext, name);
