@@ -40,7 +40,7 @@ the tile / variation guess): a few seconds, up to a few minutes with large archi
   - The automatic sorting into cells and variations can be overridden in `reframework\stage_mods\stage_slots.ini`
     (`kind=tile` or `kind=variation`, `name=`); see `stages/README.md`.
   - Each menu keeps its own choice: Battle Settings, Training and Replays.
-- Note (not new): a mod alone in its own sub-folder of `costume_mods\<Character>\` always gets its own outfit, even a retouch.
+- Fix: mods put together in one sub-folder of a character folder are now handled together, even when they are only meshes and textures: one outfit of its own, the others its options. They were all becoming options of the game's outfit. A mod alone in its sub-folder always gets its own outfit, as before.
 - The costume pak is not rebuilt at the first launch (`LOADER_PAK_ID` is unchanged).
 
 ### SF6 Color Mod 0.24.0
