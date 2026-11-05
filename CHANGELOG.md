@@ -40,7 +40,7 @@ the tile / variation guess): a few seconds, up to a few minutes with large archi
   - The automatic sorting into cells and variations can be overridden in `reframework\stage_mods\stage_slots.ini`
     (`kind=tile` or `kind=variation`, `name=`); see `stages/README.md`.
   - Each menu keeps its own choice: Battle Settings, Training and Replays.
-- Fix: mods put together in one sub-folder of a character folder are now handled together, even when they are only meshes and textures: one outfit of its own, the others its options. They were all becoming options of the game's outfit. A mod alone in its sub-folder always gets its own outfit, as before.
+- Fix: mods put together in one sub-folder of a character folder, at least one of them with a body mesh, are now handled together, even when they ship only meshes and textures: one outfit of its own, the others its options. They were all becoming options of the game's outfit. A mod alone in its sub-folder always gets its own outfit, as before.
 - The costume pak is not rebuilt at the first launch (`LOADER_PAK_ID` is unchanged).
 
 ### SF6 Color Mod 0.24.0
@@ -57,7 +57,10 @@ the tile / variation guess): a few seconds, up to a few minutes with large archi
 ### Known issues
 - The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
 - Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
-  have not been checked in a real online match yet.
+  have not been checked in a real online match yet. The sub-folder fix above was checked by automated tests and on real mods
+  offline, but not yet in the game.
+- An outfit made from a mod that replaces only part of a game outfit (a body mesh, say) can be taken for that game outfit by
+  Costume options: its menu then shows and changes the game outfit's options. Fix to come.
 - Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
   a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
   only shorter; the character select and its loading screen avoid it.
