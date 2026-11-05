@@ -103,7 +103,8 @@ inline const RegSlot* slot_of(const std::vector<RegSlot>& reg, int fid, int cost
 
 // ---- replay_outfits.json (written by the Replay Outfits tab) -----------------------------------------------------------
 // {"version":1,"fighters":{"<fighter id>":{"mode":"forced","costume":<n>,"mod_id":"<mod>"(extra outfit),"color":<n>}}}
-struct Forced { int costume = -1, color = 0; std::string mod_id; };
+// colormod: a Color Mod entry's id (its file path) on colour 1, the entries' carrier (colormod/include/sf6colormod_entries.h)
+struct Forced { int costume = -1, color = 0; std::string mod_id, colormod; };
 
 // false: not a file of this format (the caller keeps what it had)
 // `stage` (when given): "stage":{"mode":"forced","id":N} -> N (StageDesc.StageId), -1 = the replay's own stage
@@ -134,6 +135,7 @@ inline bool parse_outfits(const std::string& text, std::map<int, Forced>& out, i
         f.costume = static_cast<int>(c->num);
         if (const Json* col = v.get("color"); col && col->kind == Json::Number && col->num >= 0) f.color = static_cast<int>(col->num);
         if (const Json* m = v.get("mod_id"); m && m->kind == Json::String) f.mod_id = m->s;
+        if (const Json* cm = v.get("colormod"); cm && cm->kind == Json::String && !cm->s.empty()) { f.colormod = cm->s; f.color = 1; }
         out[fid] = f;
     }
     return true;
@@ -216,6 +218,8 @@ struct Wear {
     bool change = false;                  // false: what the replay recorded
     int costume = -1, color = 0;
     const char* why = "recorded";         // for the log
+    bool forced = false;                  // a forced outfit: the Color Mod is asked to dress it exactly (colormod or "")
+    std::string colormod;                 // the forced Color Mod entry ("" = the game's own colours)
 };
 
 // `recorded`: the replay's sides (fighter, outfit, colour, in team order). `entry`: the journal's line of this replay,
@@ -231,6 +235,8 @@ inline std::vector<Wear> plan(const std::vector<Side>& recorded, const Entry* en
             if (!f->second.mod_id.empty()) cos = resolve_mod(reg, r.fid, f->second.mod_id, f->second.costume);
             if (cos >= 0) {
                 w.costume = cos; w.color = f->second.color; w.why = "forced";
+                w.forced = true;
+                w.colormod = f->second.colormod;
                 w.change = cos != r.costume || w.color != r.color;
                 continue;
             }

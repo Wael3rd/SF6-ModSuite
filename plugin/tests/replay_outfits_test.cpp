@@ -85,6 +85,11 @@ int main() {
     check(!parse_outfits("{\"version\":1,\"fighters\":{", kept) && kept.size() == 2, "a half-written file: refused, the last choices kept");
     std::map<int, Forced> none;
     check(parse_outfits("{\"version\":1}", none) && none.empty(), "no fighters: nothing forced");
+    std::map<int, Forced> cmf;
+    check(parse_outfits("{\"version\":1,\"fighters\":{\"1\":{\"mode\":\"forced\",\"costume\":8,\"mod_id\":\"8cd9\",\"color\":4,"
+                        "\"colormod\":\"..\\\\color_mods\\\\Ryu\\\\MANUALCOLORS_01\\\\esf001_009_cmd_001.user.2\"}}}", cmf) &&
+          cmf[1].colormod == "..\\color_mods\\Ryu\\MANUALCOLORS_01\\esf001_009_cmd_001.user.2" && cmf[1].color == 1,
+          "a Color Mod entry is read (its id; worn on colour 1, its carrier)");
     int stage = 7;
     check(parse_outfits("{\"version\":1,\"fighters\":{},\"stage\":{\"mode\":\"forced\",\"id\":40000}}", none, &stage) && stage == 40000,
           "a forced stage is read");
@@ -159,6 +164,12 @@ int main() {
     std::map<int, Forced> fcol = { { 6, Forced{ 2, 4, "" } } };
     w = plan(ryu_cammy, nullptr, fcol, reg);
     check(w[1].change && w[1].costume == 2 && w[1].color == 4, "Forced, same outfit, another colour: written");
+    check(w[1].forced && w[1].colormod.empty() && !w[0].forced, "a forced side is marked (the Color Mod is asked: the game colour)");
+    Forced fe{ 2, 1, "" };
+    fe.colormod = "..\\color_mods\\Cammy\\MANUALCOLORS_01\\esf006_003_cmd_001.user.2";
+    std::map<int, Forced> fcm = { { 6, fe } };
+    w = plan(ryu_cammy, nullptr, fcm, reg);
+    check(w[1].forced && w[1].colormod == fe.colormod && w[1].color == 1, "Forced Color Mod entry: colour 1 and the entry to ask for");
 
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }
     std::printf("all ok\n");

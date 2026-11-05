@@ -4,7 +4,8 @@
 // The data file, read by the replay playback override (another module of this plugin):
 //   reframework/data/SF6_CostumeSlots_data/replay_outfits.json
 //   {"version":1,"fighters":{"<fighter id>":{"mode":"forced","costume":<FighterDesc.Costume>,
-//                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>}},
+//                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>,
+//                                            "colormod":"<a Color Mod entry's id: its file path; colour 1 then>"}},
 //    "stage":{"mode":"forced","id":<StageDesc.StageId>}}
 // No entry = Default (the replay's own outfit); no "stage" = the replay's own stage.
 #pragma once
@@ -23,12 +24,20 @@ namespace slots::replay {
 
 constexpr const char* kFile = "reframework/data/SF6_CostumeSlots_data/replay_outfits.json";
 
+// A Color Mod entry (RW / MC) of an outfit: not a game colour, it rides on colour 1 (colormod/include/sf6colormod_entries.h)
+struct ColorEntry {
+    std::string id;                   // stable id: the entry file's path
+    std::string label;                // the Color Mod's own label ("RW 3", "MC 1")
+};
+constexpr int kColorModCarrier = 1;   // the game colour every Color Mod entry rides on ("02")
+
 struct Outfit {
     int costume = 0;                  // FighterDesc.Costume
     std::string mod_id;               // registry.json mod_id of an extra outfit ("" for a game outfit, or when unknown)
     std::string name;                 // what the row shows ("Outfit 2", "Aloha Ryu")
     bool extra = false;               // one of the Slots Loader's outfits
     std::vector<int> colors;          // the colours that exist for it (FighterDesc.Color), ascending
+    std::vector<ColorEntry> cm;       // the Color Mod's entries for it, its order (after the game colours on the page)
 };
 
 struct Fighter {
@@ -42,8 +51,10 @@ struct Choice {
     int costume = 0;
     std::string mod_id;
     int color = 0;
+    std::string colormod;             // a Color Mod entry's id (color is then kColorModCarrier); "" = the game colour
     bool operator==(const Choice& o) const {
-        return forced == o.forced && (!forced || (costume == o.costume && mod_id == o.mod_id && color == o.color));
+        return forced == o.forced &&
+               (!forced || (costume == o.costume && mod_id == o.mod_id && color == o.color && colormod == o.colormod));
     }
 };
 
@@ -101,21 +112,29 @@ inline Choice cycle_outfit(const Fighter& f, const Choice& c, int dir, bool keep
     r.costume = o.costume;
     r.mod_id = o.mod_id;
     r.color = color_on(o, c.forced && keep_color ? c.color : 0);
+    if (c.forced && keep_color && !c.colormod.empty())        // a Color Mod entry: kept only when this outfit has it too
+        for (const ColorEntry& e : o.cm)
+            if (e.id == c.colormod && color_on(o, kColorModCarrier) == kColorModCarrier) { r.color = kColorModCarrier; r.colormod = e.id; }
     return r;
 }
 
-// The colour key: the next (dir +1) or previous colour of the chosen outfit, wrapping. Default stays Default.
+// The colour key: the next (dir +1) or previous colour of the chosen outfit, wrapping: its game colours, then the
+// Color Mod's entries (each one rides on colour 1, the carrier, so only when the outfit has colour 1). Default stays.
 inline Choice cycle_color(const Fighter& f, const Choice& c, int dir) {
     const int i = outfit_index(f, c);
     if (i < 0) return c;
     const Outfit& o = f.outfits[static_cast<size_t>(i)];
     if (o.colors.empty()) return c;
-    const int n = static_cast<int>(o.colors.size());
+    const bool carrier = color_on(o, kColorModCarrier) == kColorModCarrier;
+    const int ng = static_cast<int>(o.colors.size()), nm = carrier ? static_cast<int>(o.cm.size()) : 0, n = ng + nm;
     int at = -1;
-    for (int k = 0; k < n; ++k) if (o.colors[static_cast<size_t>(k)] == c.color) at = k;
+    if (!c.colormod.empty()) { for (int k = 0; k < nm; ++k) if (o.cm[static_cast<size_t>(k)].id == c.colormod) at = ng + k; }
+    else for (int k = 0; k < ng; ++k) if (o.colors[static_cast<size_t>(k)] == c.color) at = k;
     Choice r = c;
-    if (at < 0) r.color = o.colors.front();
-    else r.color = o.colors[static_cast<size_t>(((at + (dir >= 0 ? 1 : -1)) % n + n) % n)];
+    r.colormod.clear();
+    const int next = at < 0 ? 0 : ((at + (dir >= 0 ? 1 : -1)) % n + n) % n;
+    if (next < ng) r.color = o.colors[static_cast<size_t>(next)];
+    else { r.color = kColorModCarrier; r.colormod = o.cm[static_cast<size_t>(next - ng)].id; }
     return r;
 }
 
@@ -131,11 +150,20 @@ inline std::string color_label(int color) {
     return b;
 }
 
+// A choice's colour as the page shows it: the game's name ("01", "EX 1", "DX 1"), or a Color Mod entry's own label
+// ("RW 3", "MC 1"); an entry the Color Mod no longer lists (or no Color Mod): what is worn then, the game's colour 1
+inline std::string choice_color_label(const Outfit& o, const Choice& c) {
+    if (!c.colormod.empty())
+        for (const ColorEntry& e : o.cm) if (e.id == c.colormod) return e.label;
+    return color_label(c.color);
+}
+
 // What a row shows on its right: "Default", or "<outfit name> - Color N"
 inline std::string row_text(const Fighter& f, const Choice& c) {
     const int i = outfit_index(f, c);
     if (i < 0) return "Default";
-    return f.outfits[static_cast<size_t>(i)].name + " - Color " + color_label(c.color);
+    const Outfit& o = f.outfits[static_cast<size_t>(i)];
+    return o.name + " - Color " + choice_color_label(o, c);
 }
 
 // ---- the file ------------------------------------------------------------------------------------------------------------
@@ -148,7 +176,9 @@ inline std::string to_json(const Choices& cs, const StageChoice& stage = {}) {
         first = false;
         o += "        \"" + std::to_string(fid) + "\": {\"mode\": \"forced\", \"costume\": " + std::to_string(c.costume);
         if (!c.mod_id.empty()) o += ", \"mod_id\": \"" + json_escape(c.mod_id) + "\"";
-        o += ", \"color\": " + std::to_string(c.color) + "}";
+        o += ", \"color\": " + std::to_string(c.color);
+        if (!c.colormod.empty()) o += ", \"colormod\": \"" + json_escape(c.colormod) + "\"";
+        o += "}";
     }
     o += first ? "}" : "\n    }";
     if (stage.forced) o += ",\n    \"stage\": {\"mode\": \"forced\", \"id\": " + std::to_string(stage.id) + "}";
@@ -188,6 +218,7 @@ inline bool from_json(const std::string& text, Choices& out, StageChoice* stage 
         c.costume = static_cast<int>(cos->as_int());
         if (const Json* m = e.get("mod_id")) c.mod_id = m->as_str();
         if (const Json* col = e.get("color")) c.color = static_cast<int>(col->as_int(0));
+        if (const Json* cm = e.get("colormod"); cm && !cm->as_str().empty()) { c.colormod = cm->as_str(); c.color = kColorModCarrier; }
         out[static_cast<int>(fid)] = c;
     }
     return true;

@@ -1106,6 +1106,24 @@ The tan option ships colour files whose only change is the skin entry (entry 0 o
 `esf_Head00`), its own shade per colour number. It can therefore mix with any colour: the Color Mod (later) applies
 it as an overlay per colour number on top of the chosen colour, from the stored `colour` files of the option.
 
+## Color Mod entries for Replays > Settings (contract, `colormod/include/sf6colormod_entries.h`)
+
+The Color Mod's RW / MC entries are not game colours: each rides on the game's colour 02 (id 1) and the Color Mod dresses
+the fighter from its own per-side state. So that the plugin's Replays > Settings tab can offer them, preview them and
+force them in a replay, `SF6_ColorModNative.dll` exports (the suite's usual pattern: `GetModuleHandleW` +
+`GetProcAddress`, plugin side `plugin/src/colormod_link.hpp`):
+- `int SF6ColorMod_EntriesVersion()`: 1 while its colour engine runs (0 or missing: the tab lists 01-10 / EX / DX only);
+- `int SF6ColorMod_Entries(int fighter, int costume, SF6CMEntry* out, int cap)`: a fighter / costume's entries, the Color
+  Mod's order and labels ("RW n", "MC n") with a stable id each (the entry file's path), as its catalogue makes them;
+- `int SF6ColorMod_Request(int scope, int fighter, int costume, const char* id, void* battle)` /
+  `void SF6ColorMod_ClearRequests(int scope)`: what one fighter / costume wears, over the player's own Color Mod choices
+  (state.json is never changed): that entry on colour 02, or `""` = the game's own colours. Scope 1 = the tab's preview
+  (Battle Settings' capture-room fighter outside a battle, set while the character's page is up); scope 2 = one replay's
+  battle (`battle` = its `ReplayFlowMap`), applied only while it is the running flow map and dropped once another runs.
+The tab stores a Color Mod entry as `"color": 1, "colormod": "<entry file path>"` in `replay_outfits.json`; at the
+replay's `setupDesc` every forced fighter is asked for (its entry, or the game colours), replacing the previous replay's
+requests.
+
 ## Not covered yet
 
 - Lot B limits: a model the game rebuilds in a fight without one of the two events (round reload, replay seek...) is

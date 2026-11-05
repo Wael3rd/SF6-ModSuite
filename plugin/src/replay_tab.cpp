@@ -1,22 +1,29 @@
-// SF6 Slots — "Replay Outfits": a 6th tab of the Replays menu (agent CFNReplayTop), after Search.
+// SF6 Slots — "Settings": a 6th tab of the Replays menu (agent CFNReplayTop), after Search.
 //
-// The page is laid out and works like Battle Settings > Other > Opponent Outfit Settings (read 05/11):
-//   - the option row: on the left one row, "Replay Outfit Settings", selected (light, blue bar); right of the divider
-//     line, the character portraits (4 columns, the game's order, "On" over a character whose replays get a chosen
-//     outfit, the name below), dimmed. Confirm (F, pad A) goes into the grid; Back (Esc, the tab-back key, pad B / L1)
-//     goes back to Search;
-//   - the grid: the row turns dark with its small marker, the grid's panel lights up, the focused portrait is light
-//     (the last one focused, as the game's). Arrows move (wrapping), Confirm opens the character's page, Esc (pad B)
-//     goes back to the row; the tab keys do nothing (as the game's);
-//   - the character's page: the tab bar gives way to the character's name (the game's header), its settings as the
-//     game's rows ("Outfit Settings < On >", "Costume < Outfit 1 >", "Color < 01 >": Up / Down a row, wrapping, Left /
-//     Right its value; Off disables the two rows below, the focus stays on the first) and the fighter in 3D at the game's
-//     place. Back (Esc, pad B) goes back to the grid; Confirm and the tab keys do nothing there, as on the game's page.
+// Laid out and working like Battle Settings > Other (read 05/11): two option rows on the left, "Replay Outfit Settings"
+// and "Stage Settings" (Up / Down, wrapping; Confirm goes into the focused row's page; Back (Esc, the tab-back key,
+// pad B / L1) goes back to Search), the divider line, and on the right the focused row's page:
+//   - Replay Outfit Settings, as Opponent Outfit Settings:
+//     - the grid: the character portraits (4 columns, the game's order, "On" over a character whose replays get a chosen
+//       outfit, the name below), dimmed while the option rows have the focus; in it the row turns dark with its small
+//       marker, the panel lights up, the focused portrait is light (the last one focused). Arrows move (wrapping),
+//       Confirm opens the character's page, Esc (pad B) goes back to the rows; the tab keys do nothing (as the game's);
+//     - the character's page: the tab bar gives way to the character's name (the game's header), its settings as the
+//       game's rows ("Outfit Settings < On >", "Costume < Outfit 1 >", "Color < 01 >": Up / Down a row, wrapping, Left /
+//       Right its value; Off disables the two rows below, the focus stays on the first; a costume change puts the colour
+//       back to 01) and the fighter in 3D at the game's place (a colour change recolours it in place, as the game's page
+//       does). The colours: the outfit's game colours, then the Color Mod's RW / MC entries with its own labels
+//       (colormod_link.hpp: each rides on colour 02; the preview and the replay ask the Color Mod for exactly that
+//       entry, or for the game's own colours). Back (Esc, pad B) goes back to the grid; Confirm and the tab keys do
+//       nothing there, as on the game's page;
+//   - Stage Settings, as the game's: the banner of the focused (or chosen) stage with its name, a 3-column grid with its
+//     scroll bar, "Default" first (the replay's own stage), the chosen cell marked; Confirm picks the focused cell and
+//     stays, Esc goes back to the rows. The list: stage_list(), Battle Settings' own.
 // Not taken: the game's "Game Settings" summary on the right (not wanted), its T / R shortcuts.
 // The game picks the colours with a grid of colour boxes (several at once); a choice here is one colour, hence the
-// third row. On = the outfit a replay's fighter of that character wears (replay_logic.hpp; the playback override reads
-// the file), Off = what the replay holds. Every change writes reframework/data/SF6_CostumeSlots_data/replay_outfits.json
-// at once (temporary file + rename).
+// third row. On = the outfit a replay's fighter of that character wears (replay_logic.hpp; the playback override,
+// replay_outfits.cpp, reads the file), Off = what the replay holds; the stage likewise. Every change writes
+// reframework/data/SF6_CostumeSlots_data/replay_outfits.json at once (temporary file + rename).
 //
 // The game's own page (app.UIFlowOtherMatchingFighterSetting.Start(fighter, save)) cannot run here: its flow looks up the
 // GameObject "OtherMatchingFighterSetting" by name (UIParam.get_ObjectName, empty folder path), which only Battle
@@ -65,6 +72,7 @@
 #include "slots_ui.hpp"
 #include "replay_logic.hpp"
 #include "replay_tab.hpp"
+#include "colormod_link.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -410,6 +418,14 @@ void build_catalog() {
             by[fid].outfits.push_back(o);
             ++game;
         }
+    // the Color Mod's entries (RW / MC) of every outfit, its labels and order (none without the Color Mod)
+    int cm_entries = 0;
+    if (colormod::available())
+        for (auto& [fid, f] : by)
+            for (Outfit& o : f.outfits) {
+                for (const colormod::Entry& e : colormod::entries(fid, o.costume)) o.cm.push_back({ e.id, e.label });
+                cm_entries += static_cast<int>(o.cm.size());
+            }
     g_cat.clear();
     for (auto& [fid, f] : by) {
         f.fid = fid;
@@ -419,8 +435,9 @@ void build_catalog() {
         if (!f.outfits.empty()) g_cat.push_back(f);
     }
     order_fighters(g_cat);
-    logf("replay tab: %zu characters, %d game outfits, %d extra outfits%s", g_cat.size(), game, slots,
-         nsfw_left ? (" (" + std::to_string(nsfw_left) + " NSFW hidden)").c_str() : "");
+    logf("replay tab: %zu characters, %d game outfits, %d extra outfits%s, %s", g_cat.size(), game, slots,
+         nsfw_left ? (" (" + std::to_string(nsfw_left) + " NSFW hidden)").c_str() : "",
+         colormod::available() ? (std::to_string(cm_entries) + " Color Mod entries").c_str() : "no Color Mod entries (no Color Mod, or an older one)");
 }
 
 void load_choices() {
@@ -564,13 +581,23 @@ constexpr uint32_t kDrainMax = 300;               // frames a given-back room ma
 constexpr int kTries = 3;
 const char* const kRtt = "Product/GUI/menu/ui91000/ui91060/RTT_MatchingFighterSetting.rtex";
 
-struct Want { int fid = 0, cos = 0, col = 0; bool operator==(const Want& o) const { return fid == o.fid && cos == o.cos && col == o.col; } };
+// cm: a Color Mod entry's id on colour 1 ("" = the game colour): asked of the Color Mod (scope 1), which dresses this room's
+// fighter with exactly it, not with its own Fighter Settings choice (colormod_link.hpp)
+struct Want {
+    int fid = 0, cos = 0, col = 0;
+    std::string cm;
+    bool operator==(const Want& o) const { return fid == o.fid && cos == o.cos && col == o.col && cm == o.cm; }
+};
 bool g_off = false;                               // given up for the session (types missing, or kTries failures)
 bool g_ready_types = false;
 Method *m_request = nullptr, *m_deactivate = nullptr, *m_activate = nullptr, *m_list_add = nullptr, *m_list_ctor = nullptr;
 Method *m_recolor = nullptr, *m_has_color = nullptr;   // CaptureRoomFighter.UpdateFighterColor / IsExistColorData
 TD *t_list = nullptr, *t_req = nullptr, *t_ctrl = nullptr, *t_obs = nullptr;
 int g_color_now = 0;                              // the colour the room's fighter shows (loaded, then recoloured)
+std::string g_cm_now;                             // the Color Mod entry it shows ("" = the game colour)
+// What the room's fighter wears, asked of the Color Mod before the game dresses it (its SetupColor): the entry, or the
+// game's own colours
+void ask_colormod(const Want& w) { colormod::request(SF6CM_SCOPE_PREVIEW, w.fid, w.cos, w.cm); }
 Obj* g_rtt = nullptr;                             // RenderTargetTextureResourceHolder, held for the session
 Want g_want, g_asked;                             // what the page shows; what the room was asked for
 uint32_t g_want_since = 0, g_asked_at = 0, g_ready_since = 0, g_poll_at = 0;
@@ -706,6 +733,7 @@ bool ask(const Want& w) {
     if (list_count(list) != 1) { req->release(); list->release(); logf("replay tab: 3D preview: request list refused the fighter"); return false; }
     Obj* empty = new_string("");
     if (empty) empty->add_ref();
+    ask_colormod(w);                              // before the room dresses its fighter
     const auto r = call(m_request, obs, { arg_i32(kRoomType), arg_obj(list), nullptr, arg_obj(empty) });
     if (empty) empty->release();
     if (r.exception_thrown) { req->release(); list->release(); logf("replay tab: 3D preview: the request threw"); return false; }
@@ -715,6 +743,7 @@ bool ask(const Want& w) {
     g_room = true;
     g_asked = w;
     g_color_now = w.col;
+    g_cm_now = w.cm;
     g_asked_at = g_frame;
     g_activated = false;
     g_ready = false;
@@ -723,9 +752,9 @@ bool ask(const Want& w) {
     return true;
 }
 
-// The page shows this fighter in this outfit (fid 0: nothing)
-void want(int fid, int cos, int col) {
-    Want w{ fid, cos, col };
+// The page shows this fighter in this outfit, colour and Color Mod entry (fid 0: nothing)
+void want(int fid, int cos, int col, const std::string& cm) {
+    Want w{ fid, cos, col, cm };
     if (!(w == g_want)) { g_want = w; g_want_since = g_frame; }
 }
 
@@ -766,12 +795,18 @@ void frame() {
     // a colour change only, the room ready: the same fighter recoloured at once (no reload); otherwise (another fighter or
     // outfit, or a colour that cannot be applied in place) ask again once the choice held still and the room given back
     // is gone
+    // (a Color Mod entry: the Color Mod asked first, then the same recolouring makes the game dress the fighter again)
     const bool same_outfit = g_room && g_asked.fid == g_want.fid && g_asked.cos == g_want.cos;
-    if (same_outfit && g_ready && g_color_now != g_want.col) {
+    if (same_outfit && g_ready && (g_color_now != g_want.col || g_cm_now != g_want.cm)) {
+        ask_colormod(g_want);
+        // the same colour, another Color Mod entry (or the game's 02 again): through colour 01 and back in the same frame,
+        // so that the game dresses the fighter again (a fresh SetupColor) and the Color Mod applies the new request
+        if (g_color_now == g_want.col) recolor(g_want.col == 0 ? kColorModCarrier : 0);
         if (recolor(g_want.col)) {
-            logf("replay tab: 3D preview recoloured in place: fighter %d costume %d colour %d -> %d", g_want.fid, g_want.cos, g_color_now,
-                 g_want.col);
+            logf("replay tab: 3D preview recoloured in place: fighter %d costume %d colour %d -> %d%s", g_want.fid, g_want.cos, g_color_now,
+                 g_want.col, g_want.cm.empty() ? "" : (" (Color Mod " + g_want.cm + ")").c_str());
             g_color_now = g_want.col;
+            g_cm_now = g_want.cm;
         } else {
             logf("replay tab: 3D preview: colour %d not applicable in place: a new room", g_want.col);
             g_asked.col = -1;                     // makes the room be asked again below
@@ -835,10 +870,12 @@ void frame() {
 }
 // The model shows exactly what the page wants
 bool showing() {
-    return !g_off && g_ready && g_asked.fid == g_want.fid && g_asked.cos == g_want.cos && g_asked.col >= 0 && g_color_now == g_want.col;
+    return !g_off && g_ready && g_asked.fid == g_want.fid && g_asked.cos == g_want.cos && g_asked.col >= 0 && g_color_now == g_want.col &&
+           g_cm_now == g_want.cm;
 }
 void stop(const char* why) {
     give_back(why);
+    colormod::clear(SF6CM_SCOPE_PREVIEW);         // the room's fighter is the Color Mod's again (Battle Settings' preview)
     g_want = Want{};
     g_ready_since = 0;
 }
@@ -1501,11 +1538,11 @@ void render_page(void* title, const Fighter* f) {
     };
     const char* labels[kRows] = { "Outfit Settings", "Costume", "Color" };
     const std::string values[kRows] = { c.forced ? "On" : "Off", oi >= 0 ? fit(f->outfits[static_cast<size_t>(oi)].name) : "-",
-                                        shown.forced ? color_label(shown.color) : "-" };
+                                        shown.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], shown) : "-" };
     for (int r = 0; r < kRows; ++r) put_row(title, r, labels[r], values[r], on, r == g_row, r > 0 && !c.forced);
     // Off: no model at all, the room given back; On: the model once it shows the choice, nothing meanwhile
     const bool forced = on && c.forced;
-    preview::want(forced ? f->fid : 0, forced ? c.costume : 0, forced ? c.color : 0);
+    preview::want(forced ? f->fid : 0, forced ? c.costume : 0, forced ? c.color : 0, forced ? c.colormod : std::string());
     const bool model = forced && preview::showing();
     g_model_shown = model;
     put_model(title, model);
@@ -1635,7 +1672,10 @@ void tick() {
         if (g_up) down();
         return;
     }
-    if (!g_up) logf("replay tab: Replays screen up");
+    if (!g_up) {
+        logf("replay tab: Replays screen up");
+        colormod::clear(SF6CM_SCOPE_REPLAY);      // a replay played from here is over (the Color Mod drops them too)
+    }
     g_up = true;
     g_top_addr.store(reinterpret_cast<uintptr_t>(agent), std::memory_order_release);
     g_main_addr.store(reinterpret_cast<uintptr_t>(main), std::memory_order_release);
