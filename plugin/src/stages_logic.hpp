@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -25,9 +26,16 @@ inline const char* menu_key(int m) {
 
 using Choice = std::map<uint32_t, std::string>;   // vanilla stage id -> variant key (the vanilla look is not stored)
 
+// Random Stage Settings, per menu: the entries left out of the random pool ("" a stage's own entry, else a tile's key), per
+// vanilla stage with tiles (each tile's tick is its own: Wael 05/11), and whether the menu's stage is Random (the game's
+// random then lands on a vanilla id; the plugin picks one of that stage's ticked entries for this PC).
+using Off = std::map<uint32_t, std::set<std::string>>;
+
 struct State {
     Choice active;                  // what the loader serves now ("selected")
     Choice menu[kMenus];            // each menu's own choice
+    Off off[kMenus];                // unticked entries in each menu's Random Stage Settings
+    bool random[kMenus] = {};       // the menu's stage is Random (999999)
 };
 
 // "selected" first and flat (the loader's tolerant scan reads the first object after the word), then "menus".
@@ -46,6 +54,20 @@ inline std::string state_json(const State& s) {
     };
     std::string o = "{\n    \"selected\": " + obj(s.active, "    ") + ",\n    \"menus\": {";
     for (int m = 0; m < kMenus; ++m) o += std::string(m ? ",\n" : "\n") + "        \"" + menu_key(m) + "\": " + obj(s.menu[m], "        ");
+    o += "\n    },\n    \"random\": {";
+    for (int m = 0; m < kMenus; ++m) {
+        o += std::string(m ? ",\n" : "\n") + "        \"" + menu_key(m) + "\": {\"on\": " + (s.random[m] ? "true" : "false") + ", \"off\": {";
+        bool first = true;
+        for (auto& [id, keys] : s.off[m]) {
+            if (keys.empty()) continue;
+            o += std::string(first ? "" : ", ") + "\"" + std::to_string(id) + "\": [";
+            bool k1 = true;
+            for (auto& k : keys) { o += std::string(k1 ? "" : ", ") + "\"" + json_escape(k) + "\""; k1 = false; }
+            o += "]";
+            first = false;
+        }
+        o += "}}";
+    }
     o += "\n    }\n}\n";
     return o;
 }
@@ -71,6 +93,19 @@ inline bool parse_state(const std::string& text, State& out) {
     } else {
         for (int m = 0; m < kMenus; ++m) out.menu[m] = out.active;   // every menu starts from the look it had
     }
+    if (const Json* r = j.get("random"); r && r->kind == Json::Object)
+        for (int m = 0; m < kMenus; ++m) {
+            const Json* mm = r->get(menu_key(m));
+            if (!mm || mm->kind != Json::Object) continue;
+            if (const Json* on = mm->get("on"); on && on->kind == Json::Bool) out.random[m] = on->b;
+            const Json* off = mm->get("off");
+            if (!off || off->kind != Json::Object) continue;
+            for (auto& [k, v] : off->obj) {
+                if (k.empty() || k.find_first_not_of("0123456789") != std::string::npos || v.kind != Json::Array) continue;
+                auto& set = out.off[m][static_cast<uint32_t>(std::stoul(k))];
+                for (auto& e : v.arr) if (e.kind == Json::String) set.insert(e.s);
+            }
+        }
     return true;
 }
 
@@ -184,6 +219,63 @@ inline unsigned qwerty_scan(const std::string& symbol) {
 // cursor moves"). True when the game goes on with the Decide (marks the focused entry at once).
 inline bool decide_marks_now(const std::vector<Slot>& slots, uint32_t base, const std::string& before, int focused) {
     return entry_index(slots, base, before) != focused;
+}
+
+// ---- the variation key previews, Confirm chooses (Wael 05/11) ---------------------------------------------------------------
+// One source per frame for what a stage's own entry shows: the focused entry the variation the key moved it to (the
+// preview), the chosen entry its chosen variation, any other its own look. The preview lives while the focus stays on its
+// entry: moving off puts the entry back as it was (picture, banner, mark); Confirm makes it the choice.
+struct Preview {
+    int entry = -1;                // the entry the key moved off its resting look (-1: none)
+    int var = 0;                   // the variation it shows (0 its own look, i: the i-th variation)
+    bool operator==(const Preview& o) const { return entry == o.entry && var == o.var; }
+};
+inline int shown_variation(int entry, int chosen_entry, int chosen_var, const Preview& p) {
+    if (p.entry >= 0 && entry == p.entry) return p.var;
+    return entry == chosen_entry ? chosen_var : 0;
+}
+// The key on the focused entry: the variation after the one it shows now (wrapping over its own look)
+inline Preview preview_next(int focused, int chosen_entry, int chosen_var, const Preview& p, int count) {
+    return { focused, cycle(shown_variation(focused, chosen_entry, chosen_var, p), count, 1) };
+}
+// The focus is now on `focused`: a preview of another entry goes
+inline Preview preview_follow(const Preview& p, int focused) { return p.entry == focused ? p : Preview{}; }
+
+// ---- Random Stage Settings: each entry its own tick -----------------------------------------------------------------------
+// The game ticks vanilla ids: a stage and its tiles share one tick. The plugin keeps the entries' ticks (`off`: the unticked
+// keys of a stage, "" its own entry); the game's id is in its pool (not in its disable list) while one of them is ticked.
+// The game's state wins when they disagree: its id out of the pool = none ticked; in the pool with every entry unticked
+// (changed elsewhere) = all ticked.
+inline bool is_ticked(const std::vector<std::string>& keys, const std::set<std::string>& off, bool game_in_pool, const std::string& key) {
+    if (!game_in_pool) return false;
+    bool any = false;
+    for (auto& k : keys) any = any || !off.count(k);
+    return !any || !off.count(key);
+}
+inline std::set<std::string> effective_off(const std::vector<std::string>& keys, const std::set<std::string>& off, bool game_in_pool) {
+    std::set<std::string> out;
+    for (auto& k : keys) if (!is_ticked(keys, off, game_in_pool, k)) out.insert(k);
+    return out;
+}
+// Confirm on an entry in Random Stage Settings: its tick flips. game_toggles: the stage's id enters or leaves the game's
+// pool, so the game's own Decide runs (with its own checks); otherwise the game's Decide is skipped (it would flip the
+// shared id, so every entry of the stage).
+struct TickStep { std::set<std::string> off; bool game_toggles = false; bool in_pool_after = false; };
+inline TickStep toggle_tick(const std::vector<std::string>& keys, const std::set<std::string>& off, bool game_in_pool, const std::string& key) {
+    TickStep t;
+    t.off = effective_off(keys, off, game_in_pool);
+    const bool any_before = t.off.size() < keys.size();
+    if (t.off.count(key)) t.off.erase(key); else t.off.insert(key);
+    t.in_pool_after = t.off.size() < keys.size();
+    t.game_toggles = any_before != t.in_pool_after;
+    return t;
+}
+// The game's random landed on this stage: the entry served, one of the ticked ones (r: a random draw); "" (its own entry)
+// when none is
+inline std::string pick_ticked(const std::vector<std::string>& keys, const std::set<std::string>& off, unsigned r) {
+    std::vector<std::string> on;
+    for (auto& k : keys) if (is_ticked(keys, off, true, k)) on.push_back(k);
+    return on.empty() ? std::string() : on[r % on.size()];
 }
 
 }  // namespace slots::stagelogic

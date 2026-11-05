@@ -116,6 +116,8 @@ const char* const kListLabels[kListRows] = { "Replay Outfit Settings", "Stage Se
 // centred on (1356, 359); the grid 3 columns of 252 x 63 cells, 262 x 73 apart from (760, 404), 6 rows shown; its scroll
 // bar 6 x 430 at (1546, 404)
 constexpr float kBannerX = 760, kBannerY = 184, kBannerW = 776, kBannerH = 194, kStageNameX = 1356, kStageNameY = 359;
+// the name's region: centred 180 from the banner's right edge (the game's e_text_stage, read 05/11), so at most 340 wide
+constexpr float kStageNameW = 340;
 constexpr float kSGridX = 760, kSGridY = 404, kSCellW = 252, kSCellH = 63, kSStepX = 262, kSStepY = 73;
 constexpr float kSBarX = 1546, kSBarY = 404, kSBarW = 6, kSBarH = 430;
 constexpr int kSCols = 3, kSVisRows = 6, kSCells = kSCols * kSVisRows;
@@ -253,7 +255,7 @@ struct StageEntry {
 };
 std::vector<StageEntry> g_stages;
 std::map<int, std::vector<StageVar>> g_stage_vars;   // vanilla stage id -> its variations (stages.hpp)
-std::map<int, int> g_stage_cycle;                 // vanilla stage id -> the variation its cell shows (0 = its own look)
+stagelogic::Preview g_stage_preview;             // the variation key's preview on the focused cell (Confirm chooses it)
 bool g_stage_slots = false;                       // the stage slots have tiles or variations here
 std::map<std::string, void*> g_stage_tex;         // picture path -> TextureResourceHolder (one reference held)
 StageChoice g_stage;
@@ -654,26 +656,55 @@ int stage_cell_of_choice() {
     }
     return own;
 }
-// The cells show the choice: its stage's cell cycled to the chosen variation, the others on their own look
-void stage_cycle_from_choice() {
-    g_stage_cycle.clear();
-    if (g_stage.forced) if (const int v = variation_index(g_stage.id, g_stage.entry)) g_stage_cycle[g_stage.id] = v;
+// What every cell shows, from three things only (Wael 05/11: one source per frame): the choice (g_stage), the focused cell
+// (g_stage_cursor) and the variation key's preview on it (g_stage_preview, stages_logic.hpp). A stage's own cell shows the
+// preview while it is focused, else the chosen variation if it is the chosen cell, else its own look; a tile its picture.
+int chosen_variation() {                          // the chosen cell's variation (0: a tile, its own look, Default)
+    return g_stage.forced ? variation_index(g_stage.id, g_stage.entry) : 0;
 }
-// What a cell shows: its picture and, on a stage's cell, the variation it is cycled to (nullptr: its own look)
+int cell_variation(int cell) {
+    if (cell <= 0 || cell > static_cast<int>(g_stages.size()) || !g_stages[static_cast<size_t>(cell - 1)].key.empty()) return 0;
+    return stagelogic::shown_variation(cell, stage_cell_of_choice(), chosen_variation(), g_stage_preview);
+}
 struct StageLook { std::string pic; const StageVar* var = nullptr; };
 StageLook stage_look(int cell) {
     StageLook l;
     if (cell <= 0 || cell > static_cast<int>(g_stages.size())) { l.pic = kStageDefaultImage; return l; }
     const StageEntry& s = g_stages[static_cast<size_t>(cell - 1)];
     l.pic = s.banner;
-    if (!s.key.empty()) return l;
     auto it = g_stage_vars.find(s.id);
-    auto c = g_stage_cycle.find(s.id);
-    if (it != g_stage_vars.end() && c != g_stage_cycle.end() && c->second > 0 && c->second <= static_cast<int>(it->second.size())) {
-        l.var = &it->second[static_cast<size_t>(c->second - 1)];
+    const int v = cell_variation(cell);
+    if (it != g_stage_vars.end() && v > 0 && v <= static_cast<int>(it->second.size())) {
+        l.var = &it->second[static_cast<size_t>(v - 1)];
         l.pic = l.var->banner;
     }
     return l;
+}
+// The game's message of a stage's name as text (via.gui.message.get), "" when not found
+std::string message_text(const uint8_t guid[16]) {
+    static Method* m = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        TD* t = api().tdb()->find_type("via.gui.message");
+        m = t ? method_of(t, "get(System.Guid)", 1) : nullptr;
+        logf("replay tab: stage names %s", m ? "as text from via.gui.message.get" : "from the stage slots (via.gui.message.get not found)");
+    }
+    return m ? str(call_obj(m, nullptr, { const_cast<uint8_t*>(guid) })) : std::string();
+}
+// A cell's name, always as text: the banner's name has one writer mode (a message id there left its id behind under a
+// written text, and the core's compare then skipped the next stage's id: Wael 05/11, "moving keeps the old name")
+std::string cell_name(int cell) {
+    if (cell <= 0 || cell > static_cast<int>(g_stages.size())) return "Default";
+    const StageEntry& s = g_stages[static_cast<size_t>(cell - 1)];
+    std::string name = s.name;
+    if (s.key.empty() && s.named && (name.empty() || name.rfind("ess", 0) == 0)) {
+        const std::string m = message_text(s.guid);
+        if (!m.empty()) name = m;
+    }
+    if (name.empty()) name = "Stage " + std::to_string(s.id);
+    const StageLook l = stage_look(cell);
+    return l.var ? stagelogic::variation_label(name, l.var->name, l.var->bundle) : name;
 }
 // The stage slots serve the replay menu's own choice (stages::choose(kReplay), never Battle Settings' nor Training's):
 // at most the forced stage's tile / variation, nothing for Default (the replay's own stage on its own look). The replay
@@ -1149,22 +1180,25 @@ void input() {
         if (ok && g_list_row == 1) {
             g_level.store(kLevelStage);
             g_stage_cursor = stage_cell_of_choice();
-            stage_cycle_from_choice();
+            g_stage_preview = {};
             g_dirty = true;
         }
         return;
     }
     if (level == kLevelStage) {                    // the stage grid: Confirm picks the focused cell and stays (the game's)
-        if (esc) { g_level.store(kLevelList); g_dirty = true; return; }
+        if (esc) { g_level.store(kLevelList); g_stage_preview = {}; g_dirty = true; return; }   // left: no preview
         const int n = static_cast<int>(g_stages.size()) + 1;
         const int before = g_stage_cursor;
         if (k_up.step(k.up)) g_stage_cursor = grid_move(g_stage_cursor, 0, -1, n, kSCols);
         if (k_down.step(k.down)) g_stage_cursor = grid_move(g_stage_cursor, 0, 1, n, kSCols);
         if (k_left.step(k.left)) g_stage_cursor = grid_move(g_stage_cursor, -1, 0, n, kSCols);
         if (k_right.step(k.right)) g_stage_cursor = grid_move(g_stage_cursor, 1, 0, n, kSCols);
-        if (g_stage_cursor != before) g_dirty = true;
-        // the variation key (the pad's X): one press, the focused stage's next variation (its own look, then each one,
-        // wrapping), as Battle Settings' grid; its "<key> Stage Variation" in the guide bar while that stage has some
+        if (g_stage_cursor != before) {
+            g_stage_preview = stagelogic::preview_follow(g_stage_preview, g_stage_cursor);   // left: the cell as it was
+            g_dirty = true;
+        }
+        // the variation key (the pad's X): one press previews the focused stage's next variation (its own look, then each
+        // one, wrapping), Confirm chooses it, as Battle Settings' grid; its "<key> Stage Variation" in the guide bar
         const bool var_press = k_var.press(k.var);
         if (g_stage_cursor > 0 && g_stage_cursor <= static_cast<int>(g_stages.size())) {
             const StageEntry& s = g_stages[static_cast<size_t>(g_stage_cursor - 1)];
@@ -1172,7 +1206,8 @@ void input() {
             if (s.key.empty() && it != g_stage_vars.end() && !it->second.empty()) {
                 stages::replay_variation_hint();
                 if (var_press) {
-                    g_stage_cycle[s.id] = stagelogic::cycle(g_stage_cycle[s.id], static_cast<int>(it->second.size()), 1);
+                    g_stage_preview = stagelogic::preview_next(g_stage_cursor, stage_cell_of_choice(), chosen_variation(), g_stage_preview,
+                                                               static_cast<int>(it->second.size()));
                     g_dirty = true;
                 }
             }
@@ -1186,6 +1221,7 @@ void input() {
                 if (!s.key.empty()) next.entry = s.key;                         // a tile
                 else if (const StageVar* v = stage_look(g_stage_cursor).var) next.entry = v->key;   // the variation shown
             }
+            g_stage_preview = {};                  // chosen: the cell now rests on it
             if (!(next == g_stage)) {
                 g_stage = next;
                 save_choices();
@@ -1558,9 +1594,11 @@ void render_list(void* title, bool on, int focus, bool entered, bool stage) {
     const float ph = stage ? kPanelHStage : kPanelH;
     // the stage page's panel starts at the divider, as the game's c_StageSelect (it began 5 units left of the line: Wael
     // 05/11, 36.png against 35.png); the outfit page keeps its own place
+    // and below the divider's top square, where the game's panel shows (its textured panel fades in over those 5 units)
     const float px = stage ? kLineX - kLineW / 2 : kPanelX, pw = stage ? kPanelW - (kLineX - kLineW / 2 - kPanelX) : kPanelW;
-    put_box(title, "e_ro_gpanel", px, kPanelY, pw, ph, kColPanel, on, kPrioPanel);
-    put_box(title, "e_ro_gfocus", px, kPanelY, pw, ph, kColPanelFocus, on && entered, kPrioPanel);
+    const float py = stage ? kPanelY + kLineW : kPanelY, pht = stage ? ph - kLineW : ph;
+    put_box(title, "e_ro_gpanel", px, py, pw, pht, kColPanel, on, kPrioPanel);
+    put_box(title, "e_ro_gfocus", px, py, pw, pht, kColPanelFocus, on && entered, kPrioPanel);
 }
 
 // A centred text copy (the banner's stage name, the Default cell's label): the title's display font, its middle on (x, y);
@@ -1583,11 +1621,13 @@ void put_center_text(void* title, const char* name, const char* text, const uint
 }
 // The banner's name gets the game's drop shadow (the title text the copy comes from has none): once per copy. Value types
 // go by address (via.Color, via.Size), as the core's own set_Position.
+// A long name is squeezed into the banner as the game's fitted texts are (AutoRegionFit, its region kStageNameW wide).
 std::set<uintptr_t> g_shadowed;
-void text_shadow(void* c) {
+void banner_name_style(void* c) {
     if (!c || !g_shadowed.insert(reinterpret_cast<uintptr_t>(c)).second) return;
     auto inv = [c](const char* sig, SF6CoreArg a) { A()->obj_invoke(C(), c, sig, &a, 1, nullptr); };
     SF6CoreArg a{};
+    a.type = SF6CORE_ARG_I64; a.v.i = 1; inv("set_AutoRegionFit(System.Boolean)", a);
     a.type = SF6CORE_ARG_BOOL; a.v.i = 1; inv("set_ShadowEnable(System.Boolean)", a);
     uint32_t col = 0xC0000000;                     // via.Color raw: black, 75 %
     a.type = SF6CORE_ARG_PTR; a.v.p = &col; inv("set_ShadowColor(via.Color)", a);
@@ -1648,17 +1688,12 @@ void render_stage(void* title, bool on, bool grid) {
     for (int i = 0; i < kSMarkLeg; ++i)            // its rows: the full leg on the cell's top edge, one unit shorter each row
         put_box(title, cname("smk", i), kSGridX + (cv % kSCols) * kSStepX, kSGridY + (cv / kSCols) * kSStepY + static_cast<float>(i),
                 static_cast<float>(kSMarkLeg - i), 1.0f, kColStageMark, c_on, kPrioText);
-    // the banner: picture and name (a tile: its name; a stage with variations: Battle Settings' label, the cycle keys'
-    // symbols around "stage · variation"; else the game's name by its message id)
-    const StageLook bl = stage_look(shown);
-    put_stage_picture(title, "e_ro_sbanner", bl.pic, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
-    const StageEntry* se = shown > 0 && shown <= static_cast<int>(g_stages.size()) ? &g_stages[static_cast<size_t>(shown - 1)] : nullptr;
-    std::string label = se ? (se->name.empty() ? "Stage " + std::to_string(se->id) : se->name) : "Default";
-    const bool cycled = se && se->key.empty() && bl.var;
-    if (cycled) label = stagelogic::variation_label(label, bl.var->name, bl.var->bundle);   // one name line, never two
-    const bool by_id = se && se->key.empty() && !cycled && se->named;
-    put_center_text(title, "e_ro_sname", label.c_str(), by_id ? se->guid : nullptr, kStageNameX, kStageNameY, 520, kFontStageName, kColText, on);
-    if (on) text_shadow(copy_of(title, "e_ro_sname"));
+    // the banner: the focused cell's picture and name (the chosen cell's while the option row has the focus), every frame
+    // from cell_name / stage_look: one source, one writer mode (text)
+    put_stage_picture(title, "e_ro_sbanner", stage_look(shown).pic, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
+    put_center_text(title, "e_ro_sname", cell_name(shown).c_str(), nullptr, kStageNameX, kStageNameY, kStageNameW, kFontStageName,
+                    kColText, on);
+    if (on) banner_name_style(copy_of(title, "e_ro_sname"));
     // the scroll bar: its track and its thumb (rows shown / rows)
     put_box(title, "e_ro_sbarbg", kSBarX, kSBarY, kSBarW, kSBarH, kColScrollTrack, on && rows > kSVisRows, kPrioFrame);
     const float thumb = rows > kSVisRows ? kSBarH * kSVisRows / rows : kSBarH;
@@ -1964,7 +1999,7 @@ void enter(Obj* main) {
     g_stages = stage_list();                      // each time: the stage list may grow (stage_list())
     load_stage_pictures();
     sync_stage_slots();                           // the stage slots' replay choice: the file's (edited by hand, another PC)
-    stage_cycle_from_choice();
+    g_stage_preview = {};
     hide_page(false);
     prime_keys();
     g_cursor = std::max(0, std::min(g_cursor, static_cast<int>(g_cat.size()) - 1));
