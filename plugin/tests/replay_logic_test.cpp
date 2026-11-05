@@ -3,6 +3,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "../src/replay_logic.hpp"
 
+#include <cmath>
 #include <cstdio>
 
 using namespace slots::replay;
@@ -203,6 +204,52 @@ int main() {
     check(std::string(fighter_name(30)) == "C. Viper" && fighter_name(23) == nullptr, "fighter names");
     check(game_outfit_name(0) == "Outfit 1" && game_outfit_name(3) == "Outfit 4" && game_outfit_name(4) == "DriveTech",
           "game outfit names");
+
+    // the summary on the right: one line per character set to On, the panel's layout
+    {
+        Fighter luke;
+        luke.fid = 2; luke.name = "Luke";
+        luke.outfits = { { 3, "", "Outfit 4", false, { 0, 1, 2 } } };
+        Fighter vr = g;                                   // Ryu with Vagrant Ryu and its RW / MC entries
+        vr.name = "Ryu";
+        std::vector<Fighter> cat = { luke, vr };
+        Choices sc;
+        check(summary_lines(cat, sc, 20) == std::vector<std::string>{ "Default" }, "summary: nobody On, Default");
+        Choice lc; lc.forced = true; lc.costume = 3; lc.color = 0;
+        Choice rc = cycle_outfit(vr, Choice{}, +1);
+        rc.color = 1; rc.colormod = vag.cm[1].id;
+        sc[1] = rc; sc[2] = lc;
+        const std::vector<std::string> two = summary_lines(cat, sc, 20);
+        check(two.size() == 2 && two[0] == "Luke: Outfit 4, 01" && two[1] == "Ryu: Vagrant Ryu, MC 1",
+              "summary: the catalog's order, outfit and colour as the page names them");
+        Choice lost; lost.forced = true; lost.costume = 99;
+        check(summary_line(luke, lost) == "Luke: Default", "summary: an outfit no longer listed shows Default");
+        std::vector<Fighter> many;
+        Choices all;
+        for (int i = 0; i < 25; ++i) {
+            Fighter one = luke; one.fid = 100 + i; one.name = "F" + std::to_string(i);
+            many.push_back(one);
+            all[one.fid] = lc;
+        }
+        const std::vector<std::string> capped = summary_lines(many, all, 20);
+        check(capped.size() == 20 && capped[18] == "F18: Outfit 4, 01" && capped[19] == "+ 6 more",
+              "summary: 25 On, 19 lines and \"+ 6 more\"");
+        check(cut_utf8("Short", 32) == "Short" && cut_utf8("abcdefghij", 8) == "abcde...", "summary: long lines cut with ...");
+        check(cut_utf8("ab\xC3\xA9" "cdefgh", 6) == "ab...", "summary: never cut inside a UTF-8 sequence");
+        // Battle Settings > Other's "Game Settings", measured on screen (y = 189 + 0.81 x layout): Stage Settings (its picture),
+        // Battle BGM, Commentary Settings (6 lines), Side Settings, Battle HUD Design
+        using K = SumKind;
+        const std::vector<float> ys = summary_layout({ K::Name, K::Picture, K::Name, K::Line, K::Name, K::Line, K::Line, K::Line,
+                                                       K::Line, K::Line, K::Line, K::Name, K::Line, K::Name, K::Line });
+        const float screen[] = { 240, 256, 338, 362, 401, 424, 449, 475, 499, 525, 550, 589, 613, 652, 676 };
+        bool near = ys.size() == 15;
+        for (size_t i = 0; near && i < ys.size(); ++i) near = std::fabs(189.0f + 0.81f * ys[i] - screen[i]) <= 2.0f;
+        check(near, "summary layout: Battle Settings > Other's panel within 2 px");
+        const std::vector<float> page = summary_layout({ K::Name, K::Line, K::Name, K::Line, K::Name, K::Line });
+        check(page == std::vector<float>{ 63, 93, 141, 171, 219, 249 }, "summary layout: the character page's three settings");
+        const std::vector<float> sl = summary_layout({ K::Name, K::Line, K::Name, K::Picture, K::Line });
+        check(sl[3] == sl[2] + kSumPicGap && sl[4] == sl[3] + kSumPicH + kSumLineAfterPic, "summary layout: the stage's name under its picture");
+    }
 
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;

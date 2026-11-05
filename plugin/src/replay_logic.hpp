@@ -167,6 +167,64 @@ inline std::string row_text(const Fighter& f, const Choice& c) {
     return o.name + " - Color " + choice_color_label(o, c);
 }
 
+// ---- the summary on the right (as the game's: Battle Settings > Other's "Game Settings", the Opponent Outfit page's) ------
+// A text cut to `max` bytes, "..." at its end (never inside a UTF-8 sequence)
+inline std::string cut_utf8(const std::string& v, size_t max) {
+    if (v.size() <= max || max < 4) return v;
+    size_t cut = max - 3;
+    while (cut > 0 && (static_cast<unsigned char>(v[cut]) & 0xC0) == 0x80) --cut;
+    return v.substr(0, cut) + "...";
+}
+// A character set to On: "Luke: Outfit 4, 01" (its outfit, its colour as the page shows it); an outfit no longer listed:
+// "Luke: Default", as its row
+inline std::string summary_line(const Fighter& f, const Choice& c) {
+    const int i = outfit_index(f, c);
+    if (i < 0) return f.name + ": Default";
+    const Outfit& o = f.outfits[static_cast<size_t>(i)];
+    return f.name + ": " + o.name + ", " + choice_color_label(o, c);
+}
+// The lines under "Replay Outfit Settings": one per character set to On (the catalog's order, the grid's), at most `max`
+// (the last one then says how many more); "Default" when none is On
+inline std::vector<std::string> summary_lines(const std::vector<Fighter>& cat, const Choices& cs, size_t max) {
+    std::vector<std::string> on;
+    for (const Fighter& f : cat) {
+        auto it = cs.find(f.fid);
+        if (it != cs.end() && it->second.forced) on.push_back(summary_line(f, it->second));
+    }
+    if (on.empty()) return { "Default" };
+    if (max > 0 && on.size() > max) {
+        const size_t more = on.size() - (max - 1);
+        on.resize(max - 1);
+        on.push_back("+ " + std::to_string(more) + " more");
+    }
+    return on;
+}
+// The panel's items, top to bottom, and their place in the game's units (the panel is drawn at 0.81): a name's or a line's
+// middle, a picture's top. Read 05/11 on OtherMatchingFighterSetting's c_CostumeSetting (the first name at 63, its lines
+// from 93, every 31) and measured on Battle Settings > Other's "Game Settings" (a name 48 under the line before it; the stage
+// picture, 248 x 62, 20 under its name, the next name 39 under the picture). A line under a picture: 20 under it.
+enum class SumKind { Name, Line, Picture };
+constexpr float kSumFirstY = 63, kSumLineGap = 30, kSumLineStep = 31, kSumBlockGap = 48;
+constexpr float kSumPicGap = 20, kSumPicH = 62, kSumAfterPic = 39, kSumLineAfterPic = 20;
+inline std::vector<float> summary_layout(const std::vector<SumKind>& kinds) {
+    std::vector<float> y;
+    float at = 0;
+    for (size_t i = 0; i < kinds.size(); ++i) {
+        const SumKind k = kinds[i];
+        if (i == 0) at = kSumFirstY;
+        else {
+            const SumKind p = kinds[i - 1];
+            const float below = p == SumKind::Picture ? at + kSumPicH : at;   // under a picture: from its bottom
+            if (k == SumKind::Name) at = p == SumKind::Picture ? below + kSumAfterPic : below + kSumBlockGap;
+            else if (k == SumKind::Line) at = p == SumKind::Name ? below + kSumLineGap : p == SumKind::Picture ? below + kSumLineAfterPic
+                                                                                            : below + kSumLineStep;
+            else at = below + kSumPicGap;
+        }
+        y.push_back(at);
+    }
+    return y;
+}
+
 // ---- the file ------------------------------------------------------------------------------------------------------------
 inline std::string to_json(const Choices& cs, const StageChoice& stage = {}) {
     std::string o = "{\n    \"version\": 1,\n    \"fighters\": {";

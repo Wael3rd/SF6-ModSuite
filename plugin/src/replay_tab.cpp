@@ -154,6 +154,32 @@ constexpr uint32_t kColStageFocus = 0xFFFF8C28, kColStageMark = 0xFF00E6FF, kCol
 // Draw order: the GUI sorts its elements by Priority (child order only breaks ties): the model and the grid's panel
 // under the cells and rows, pictures and arrows over them, texts on top
 constexpr int kPrioPanel = 1, kPrioModel = 1, kPrioFrame = 2, kPrioImage = 3, kPrioText = 4;
+// The summary on the right, as the game's (OtherMatchingFighterSetting c_CostumeSetting, read 05/11, probe g45): the panel
+// at (1596, 189) drawn at 0.81 (its 0.9 x its c_Costume's 0.9), in its own units below (replay_logic.hpp: the items' y);
+// its title pill: a UVS_hub shadow (sequence 15, 334 x 36.5, borders 11 / 14.5) under a white-to-grey rect (334 x 32)
+// masked by sequence 14 (borders 11 / 11); the title at (20, 16), font 24, 0xFFD9D9D9; the names at x 36 (0xFFFFBF65),
+// the lines at x 47 (0xFFEEEEEE), font 23, region 320 x 36 aligned 8; the game's UI font (FontSlot 8); the stage picture
+// (4:1) at the lines' x. Each text has the game's shadow (the title: 54000000, 3 at 45, blur 5, strength 2; the others:
+// CC000000, 0, blur 3, strength 5) and the lines their glow.
+constexpr float kSumX = 1596, kSumY = 189, kSumScale = 0.81f;
+constexpr float kPillW = 334, kPillH = 32, kPillShadowH = 36.5f;
+constexpr float kSumTitleX = 20, kSumTitleY = 16, kSumNameX = 36, kSumLineX = 47, kSumPicW = 248;
+constexpr float kSumTitleRegionW = 360, kSumTitleRegionH = 37, kSumRegionW = 320, kSumRegionH = 36;
+constexpr float kFontSumTitle = 24, kFontSumLine = 23;
+constexpr int64_t kSumFontSlot = 8, kSumLineAlign = 8;
+constexpr int kSumTexts = 24, kSumMaxFighters = 20;   // 2 names + 20 outfit lines + the stage's line, the page's 6
+constexpr size_t kSumLineMax = 32;                 // a longer line is cut (the panel ends at the screen's edge)
+constexpr uint32_t kColSumTitle = 0xFFD9D9D9, kColSumName = 0xFFFFBF65, kColSumLine = 0xFFEEEEEE;
+constexpr uint32_t kColPillLeft = 0xFFFFFFFF, kColPillRight = 0xFF5A5A5A;   // the pill's rect: ColorType 2, left / right
+constexpr int64_t kPillColorType = 2;
+constexpr uint32_t kPillShadowSeq = 15, kPillMaskSeq = 14;
+constexpr float kPillShadowBorder[4] = { 11, 0, 14.5f, 0 }, kPillMaskBorder[4] = { 11, 0, 11, 0 };   // left, top, right, bottom
+struct TextLook { uint32_t shadow; float dist, rot, blur, strength; bool glow; uint32_t glow_col; float glow_blur, glow_strength; };
+constexpr TextLook kSumTitleLook{ 0x54000000, 3, 45, 5, 2, false, 0xFF000000, 5, 1 };
+constexpr TextLook kSumLineLook{ 0xCC000000, 0, 0, 3, 5, true, 0xFF000000, 3, 1 };
+constexpr const char* kPillFill = "e_ro_pfill";    // the pill's rect: a rectangle copy inside the pill's panel copy
+const char* const kSumTitleGrid = "Replay Settings";
+const char* const kSumTitlePage = "Outfit Settings (Replay)";
 constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (the cells' pictures are 4:3)
 const char* const kDescGrid = "Set which outfit each character will appear in during replays.";
 const char* const kDescPage = "Set which outfit and color this character will appear in during replays.";
@@ -204,7 +230,7 @@ int g_status_logged = 1000;
 bool g_place_logged = false;
 uint32_t g_enter_frame = 0;
 int64_t g_cp_lefttop = -1;                        // via.gui.ControlPoint.LeftTop
-bool g_no_arrows_logged = false;
+bool g_no_arrows_logged = false, g_no_pill_logged = false;
 std::map<int, void*> g_faces;                     // fighter -> portrait TextureResourceHolder (one reference held)
 // The stages: the cells after Default (the game's stages, then the stage slots' tiles), each stage's variations (cycled on
 // its cell), the pictures (path -> holder), the choice
@@ -226,8 +252,9 @@ StageChoice g_stage;
 int g_stage_cursor = 0, g_stage_top = 0;          // the focused cell (0 = Default), the first grid row shown
 
 // ---- the page's copies, made inside the tab hook (R19) ----
-// Plain controls of the tab bar's screen (no UIParts), the game's row and its plain text, the banner's two arrows
-enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow };
+// Plain controls of the tab bar's screen (no UIParts), the game's row and its plain text, the banner's two arrows; the
+// summary's title pill: the row's shadow and its masked background panel (the same UVS_hub sheet as the game's pill)
+enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow, kPillShadow, kPill };
 struct Copy { std::string name; Kind kind; };
 
 std::string cname(const char* what, int i) {
@@ -261,6 +288,11 @@ const std::vector<Copy>& copies() {
     v.push_back({ "e_ro_name", kText });
     v.push_back({ "e_ro_sname", kText });          // the banner's stage name, the Default cell's label
     v.push_back({ "e_ro_sdeflbl", kText });
+    v.push_back({ "e_ro_pshadow", kPillShadow });  // the summary on the right: its title pill, picture and texts
+    v.push_back({ "e_ro_pill", kPill });
+    v.push_back({ "e_ro_sumpic", kImage });
+    v.push_back({ "e_ro_sumtitle", kLabel });
+    for (int i = 0; i < kSumTexts; ++i) v.push_back({ cname("sum", i), kLabel });
     return v;
 }
 
@@ -294,17 +326,23 @@ bool make_copies() {
     void* t_arrow_l = arrow_l ? a->ui_find_child(arrow_l, "e_texture_arrow", 2) : nullptr;
     void* t_arrow_r = arrow_r ? a->ui_find_child(arrow_r, "e_texture_arrow", 2) : nullptr;
     const bool arrows = t_arrow_l && t_arrow_r;
+    // the summary's pill: the row's shadow (c_bg_m > e_scale9grid_shadow) and its background panel (c_bg_m > c_bg: its
+    // mask, then its material, bar and marker), both drawing the game's UVS_hub sheet
+    void* t_shadow = t_row ? a->ui_find_child(t_row, "e_scale9grid_shadow", 3) : nullptr;
+    void* t_pill = t_row ? a->ui_find_child(t_row, "c_bg", 3) : nullptr;
     if (!title || !t_text || !t_rect || !t_line || !t_image || !t_row || !t_label) {
         ++g_refused;
         g_copy_status.store(t_row && t_label ? -3000 : -3001);
         return false;
     }
     if (!arrows && !g_no_arrows_logged) { g_no_arrows_logged = true; logf("replay tab: no arrow to copy (%s not up): rows without arrows", kArrowTemplateAgent); }
+    if ((!t_shadow || !t_pill) && !g_no_pill_logged) { g_no_pill_logged = true; logf("replay tab: the row has no shadow / c_bg to copy: a summary without its title pill"); }
     for (const Copy& cp : copies()) {
         if ((cp.kind == kLeftArrow || cp.kind == kRightArrow) && !arrows) continue;
+        if ((cp.kind == kPillShadow && !t_shadow) || (cp.kind == kPill && !t_pill)) continue;
         if (a->ui_find_child(title, cp.name.c_str(), 0)) continue;
         void* tmpl = cp.kind == kText ? t_text : cp.kind == kRect ? t_rect : cp.kind == kLine ? t_line : cp.kind == kRow ? t_row
-                   : cp.kind == kLabel ? t_label
+                   : cp.kind == kLabel ? t_label : cp.kind == kPillShadow ? t_shadow : cp.kind == kPill ? t_pill
                    : cp.kind == kLeftArrow ? t_arrow_l : cp.kind == kRightArrow ? t_arrow_r : t_image;
         void* c = nullptr;
         const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, title, cp.name.c_str(), &c);
@@ -315,6 +353,15 @@ bool make_copies() {
             a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
         }
         a->ui_set_visible(C(), c, 0);                           // placed and shown by the frame
+    }
+    // the pill's rect: a rectangle copy as the last child of the pill's panel copy, after its mask, so the mask cuts it
+    // (as the game's c_mask: e_scale9grid_mask, then e_rect_bg); MaskType 0 like e_rect_bg (the template was a mask)
+    if (void* pill = a->ui_find_child(title, "e_ro_pill", 0); pill && !a->ui_find_child(pill, kPillFill, 0)) {
+        void* f = nullptr;
+        const SF6CoreStatus st = a->ui_clone_control(C(), t_rect, pill, kPillFill, &f);
+        if (st != SF6CORE_OK || !f) { ++g_refused; g_copy_status.store(st == SF6CORE_OK ? -1000 : static_cast<int>(st)); return false; }
+        SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 0;
+        a->obj_invoke(C(), f, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
     }
     return true;
 }
@@ -1396,6 +1443,17 @@ void set_enum(void* c, const char* sig, int64_t v) {
     SF6CoreArg a{}; a.type = SF6CORE_ARG_I64; a.v.i = v;
     A()->obj_invoke(C(), c, sig, &a, 1, nullptr);
 }
+void set_float(void* c, const char* sig, double v) {
+    if (!c) return;
+    SF6CoreArg a{}; a.type = SF6CORE_ARG_F64; a.v.f = v;
+    A()->obj_invoke(C(), c, sig, &a, 1, nullptr);
+}
+// A value type (via.Color, via.Size, a border...) passed by address, as the core's own set_Color / set_Position
+void set_value(void* c, const char* sig, void* value) {
+    if (!c) return;
+    SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = value;
+    A()->obj_invoke(C(), c, sig, &a, 1, nullptr);
+}
 void place(void* c, float x, float y) { if (c) A()->ui_set_position(C(), c, x, y, 0); }
 void resize(void* c, float w, float h) { if (c) A()->ui_set_size(C(), c, w, h); }
 
@@ -1664,6 +1722,160 @@ void restore_desc() {
     g_desc_ours.clear();
 }
 
+// ---- the summary on the right (the game's own on Battle Settings > Other and on the Opponent Outfit page) ----
+float sum_x(float x) { return kSumX + x * kSumScale; }
+float sum_y(float y) { return kSumY + y * kSumScale; }
+// A Scale9Grid of the pill: the UVS_hub sequence on its 9 cells (via.gui.GridPos 0-8, their patterns kept), its borders
+void pill_grid(void* g, uint32_t seq, const float (&border)[4], float w, float h) {
+    if (!g) return;
+    for (int64_t pos = 0; pos < 9; ++pos) {
+        SF6CoreArg a[2] = {};
+        a[0].type = SF6CORE_ARG_I64; a[0].v.i = pos;
+        a[1].type = SF6CORE_ARG_I64; a[1].v.i = seq;
+        A()->obj_invoke(C(), g, "setSequenceNo", a, 2, nullptr);
+    }
+    float b[4] = { border[0], border[1], border[2], border[3] };
+    set_value(g, "set_BorderRect", b);
+    resize(g, w, h);
+}
+// The pill, once per copy: its shadow; its panel (the row's c_bg) showing only its mask and our rect, the rect coloured
+// as the game's e_rect_bg (ColorType 2: white, its right side and right top corner grey)
+void style_pill(void* title) {
+    if (void* sh = copy_of(title, "e_ro_pshadow"); sh && g_styled.insert(reinterpret_cast<uintptr_t>(sh)).second) {
+        set_priority(sh, kPrioFrame);
+        if (g_cp_lefttop >= 0) set_enum(sh, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
+        pill_grid(sh, kPillShadowSeq, kPillShadowBorder, kPillW, kPillShadowH);
+        A()->ui_set_color(C(), sh, kColText);
+        A()->ui_set_scale(C(), sh, kSumScale, kSumScale, 1);
+    }
+    void* pill = copy_of(title, "e_ro_pill");
+    if (!pill || !g_styled.insert(reinterpret_cast<uintptr_t>(pill)).second) return;
+    set_priority(pill, kPrioFrame);
+    A()->ui_set_scale(C(), pill, kSumScale, kSumScale, 1);
+    for (const char* n : { "e_mat_bg", "e_rect_bar", "e_focus_bar" })
+        if (void* e = A()->ui_find_child(pill, n, 0)) A()->ui_set_force_invisible(C(), e, 1);
+    pill_grid(A()->ui_find_child(pill, "e_scale9grid_mask", 0), kPillMaskSeq, kPillMaskBorder, kPillW, kPillH);
+    if (void* f = A()->ui_find_child(pill, kPillFill, 0)) {
+        if (g_cp_lefttop >= 0) set_enum(f, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
+        place(f, 0, 0);
+        resize(f, kPillW, kPillH);
+        set_enum(f, "set_ColorType", kPillColorType);
+        uint32_t left = kColPillLeft, right = kColPillRight;
+        for (const char* m : { "set_Color", "set_ColorLeft", "set_ColorTop", "set_ColorBottom", "set_ColorLeftTop", "set_ColorLeftBottom",
+                               "set_ColorRightBottom" })
+            set_value(f, m, &left);
+        for (const char* m : { "set_ColorRight", "set_ColorRightTop" }) set_value(f, m, &right);
+        A()->ui_set_visible(C(), f, 1);
+    }
+}
+// A text of the summary, once per copy: the game's place (its left middle), alignment, region, font, shadow and glow,
+// drawn at the panel's scale
+void style_sum_text(void* t, bool head) {
+    const TextLook& k = head ? kSumTitleLook : kSumLineLook;
+    set_enum(t, "set_ControlPoint(via.gui.ControlPoint)", kLeftCenter);
+    set_enum(t, "set_PageAlignment(via.gui.PageAlignment)", head ? kLeftCenter : kSumLineAlign);
+    A()->ui_set_region_size(C(), t, head ? kSumTitleRegionW : kSumRegionW, head ? kSumTitleRegionH : kSumRegionH);
+    const float font = head ? kFontSumTitle : kFontSumLine;
+    A()->ui_set_font_size(C(), t, font, font);
+    set_enum(t, "set_FontSlot(via.gui.FontSlot)", kSumFontSlot);
+    set_enum(t, "set_AutoRegionFit(System.Boolean)", 1);
+    set_enum(t, "set_Bold(System.Boolean)", 0);
+    set_enum(t, "set_ShadowEnable(System.Boolean)", 1);
+    uint32_t shadow = k.shadow;
+    set_value(t, "set_ShadowColor(via.Color)", &shadow);
+    set_float(t, "set_ShadowDistance(System.Single)", k.dist);
+    set_float(t, "set_ShadowRotation(System.Single)", k.rot);
+    float blur[2] = { k.blur, k.blur };
+    set_value(t, "set_ShadowBlurSize(via.Size)", blur);
+    set_float(t, "set_ShadowStrength(System.Single)", k.strength);
+    set_enum(t, "set_GlowEnable(System.Boolean)", k.glow ? 1 : 0);
+    if (k.glow) {
+        uint32_t glow = k.glow_col;
+        set_value(t, "set_GlowColor(via.Color)", &glow);
+        float gb[2] = { k.glow_blur, k.glow_blur };
+        set_value(t, "set_GlowBlurSize(via.Size)", gb);
+        set_float(t, "set_GlowStrength(System.Single)", k.glow_strength);
+    }
+    A()->ui_set_scale(C(), t, kSumScale, kSumScale, 1);
+    set_priority(t, kPrioText);
+}
+// `guid`: the game's message shown by its id (the player's language), otherwise `text`
+void put_sum_text(void* title, const std::string& name, bool head, const std::string& text, const uint8_t* guid, float x, float y,
+                  uint32_t col, bool on) {
+    void* t = copy_of(title, name);
+    if (!t) return;
+    if (on) {
+        if (g_styled.insert(reinterpret_cast<uintptr_t>(t)).second) style_sum_text(t, head);
+        if (guid) A()->ui_set_message_id(C(), t, guid);
+        else A()->ui_set_text(C(), t, text.c_str());
+        A()->ui_set_color(C(), t, col);
+        place(t, x, y);
+    }
+    show(t, on);
+}
+// The summary: the title pill and its heading, then the items (names, lines, a picture: text = its path) where
+// summary_layout puts them
+struct SumItem { SumKind kind; std::string text; const uint8_t* guid = nullptr; };
+void render_summary(void* title, bool on, const char* heading, const std::vector<SumItem>& items) {
+    style_pill(title);
+    for (const char* n : { "e_ro_pshadow", "e_ro_pill" })
+        if (void* c = copy_of(title, n)) {
+            if (on) place(c, kSumX, kSumY);
+            show(c, on);
+        }
+    put_sum_text(title, "e_ro_sumtitle", true, heading, nullptr, sum_x(kSumTitleX), sum_y(kSumTitleY), kColSumTitle, on);
+    std::vector<SumKind> kinds;
+    for (const SumItem& it : items) kinds.push_back(it.kind);
+    const std::vector<float> ys = summary_layout(kinds);
+    int t = 0;
+    std::string pic;
+    float pic_y = 0;
+    for (size_t i = 0; on && i < items.size(); ++i) {
+        const SumItem& it = items[i];
+        if (it.kind == SumKind::Picture) { pic = it.text; pic_y = ys[i]; continue; }
+        if (t >= kSumTexts) continue;
+        const bool name = it.kind == SumKind::Name;
+        put_sum_text(title, cname("sum", t++), false, it.text, it.guid, sum_x(name ? kSumNameX : kSumLineX), sum_y(ys[i]),
+                     name ? kColSumName : kColSumLine, true);
+    }
+    for (; t < kSumTexts; ++t) put_sum_text(title, cname("sum", t), false, std::string(), nullptr, 0, 0, 0, false);
+    put_stage_picture(title, "e_ro_sumpic", pic, sum_x(kSumLineX), sum_y(pic_y), kSumPicW * kSumScale, kSumPicH * kSumScale, kColText,
+                      on && !pic.empty());
+}
+// The chosen stage as the summary names it: a tile, its name; a variation, "stage · variation"; a stage of the game, its
+// name by the game's message; Default (or a stage no longer listed), the Default cell's picture and "Default"
+void stage_summary(std::string& pic, std::string& name, const uint8_t*& guid) {
+    guid = nullptr;
+    const int cell = stage_cell_of_choice();
+    if (cell <= 0 || cell > static_cast<int>(g_stages.size())) { pic = kStageDefaultImage; name = "Default"; return; }
+    const StageEntry& e = g_stages[static_cast<size_t>(cell - 1)];
+    const std::string stage = e.name.empty() ? "Stage " + std::to_string(e.id) : e.name;
+    pic = e.banner;
+    name = stage;
+    if (!e.key.empty()) return;
+    if (const int v = variation_index(e.id, g_stage.entry)) {
+        const StageVar& var = g_stage_vars[e.id][static_cast<size_t>(v - 1)];
+        pic = var.banner;
+        name = stagelogic::cycle_label(std::string(), stage, var.name, std::string());
+        return;
+    }
+    if (e.named) guid = e.guid;
+}
+// The option rows' levels: "Replay Settings": Replay Outfit Settings (a line per character set to On, or Default), Stage
+// Settings (the stage's picture and name)
+std::vector<SumItem> grid_summary() {
+    std::vector<SumItem> v;
+    v.push_back({ SumKind::Name, kListLabels[0] });
+    for (const std::string& l : summary_lines(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, cut_utf8(l, kSumLineMax) });
+    v.push_back({ SumKind::Name, kListLabels[1] });
+    std::string pic, name;
+    const uint8_t* guid = nullptr;
+    stage_summary(pic, name, guid);
+    v.push_back({ SumKind::Picture, pic });
+    v.push_back({ SumKind::Line, cut_utf8(name, kSumLineMax), guid });
+    return v;
+}
+
 // The grid (on: the option row or the grid is up; grid: the grid has the focus: the focused portrait light; otherwise
 // every portrait dimmed, none focused, as the game's grid behind its option row)
 void render_grid(void* title, bool on, bool grid) {
@@ -1708,6 +1920,14 @@ void render_page(void* title, const Fighter* f) {
     const std::string values[kRows] = { c.forced ? "On" : "Off", oi >= 0 ? fit(f->outfits[static_cast<size_t>(oi)].name) : "-",
                                         shown.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], shown) : "-" };
     for (int r = 0; r < kRows; ++r) put_row(title, r, labels[r], values[r], on, r == g_row, r > 0 && !c.forced);
+    // the summary: "Outfit Settings (Replay)", the three settings (Off: the outfit and colour are the replay's own)
+    if (on) {
+        const std::string costume = c.forced && oi >= 0 ? cut_utf8(f->outfits[static_cast<size_t>(oi)].name, kSumLineMax) : "Default";
+        const std::string color = c.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], c) : "Default";
+        render_summary(title, true, kSumTitlePage, { { SumKind::Name, labels[0] }, { SumKind::Line, values[0] },
+                                                     { SumKind::Name, labels[1] }, { SumKind::Line, costume },
+                                                     { SumKind::Name, labels[2] }, { SumKind::Line, color } });
+    }
     // Off: no model at all, the room given back; On: the model once it shows the choice, nothing meanwhile
     const bool forced = on && c.forced;
     preview::want(forced ? f->fid : 0, forced ? c.costume : 0, forced ? c.color : 0, forced ? c.colormod : std::string());
@@ -1733,6 +1953,7 @@ void render(Obj* main) {
     render_grid(title, f == nullptr && !stage, level == kLevelGrid);
     render_stage(title, f == nullptr && stage, level == kLevelStage);
     render_page(title, f);
+    if (!f) render_summary(title, true, kSumTitleGrid, grid_summary());   // the page draws its own
     g_copies_shown = true;
     if (!g_place_logged && g_frame - g_enter_frame >= 3) {
         g_place_logged = true;
