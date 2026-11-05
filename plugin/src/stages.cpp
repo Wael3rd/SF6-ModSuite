@@ -822,7 +822,7 @@ struct GridState {
     sl::Preview preview;               // the variation key's preview on the focused entry (stages_logic.hpp)
     uint32_t decided_seen = UINT32_MAX;// the game's decided stage as last seen (Random or not)
     int name_right = -1;               // the preview's name: 0 at the game's place, 1 right-aligned, -1 not set for this grid
-    bool on_screen = false;            // shown (looked at every frame while it lives: the variation key, the hint)
+    bool on_screen = false;            // on screen (looked at every frame while it is: the variation key, the hint)
     bool focused = false;              // its cells have the focus
     int focus_log = -1;                // the focus check's last logged answer
     uint32_t until = 0, cap = 0, next = 0;
@@ -883,6 +883,7 @@ std::string ess_of(uint32_t id) {
     return b;
 }
 std::string vanilla_pic(uint32_t id, bool thumb) {
+    if (id == sl::kRandomStage) return "Product/GUI/data/Area_Image/random/tex_random_IM.tex";
     const std::string e = ess_of(id);
     return "Product/GUI/data/Area_Image/ess/" + e + (thumb ? "/tex_StageThumb_" : "/tex_StageImage_") + e + "_IM.tex";
 }
@@ -969,6 +970,18 @@ void chosen_entry(Obj* grid, int& entry, int& var) {
     entry = sl::entry_index(g_grid.slots, base, tile ? key : std::string());
     if (entry >= 0 && !key.empty() && !tile) var = cycle_of(base, key);
 }
+// On screen: its control is drawn. Not IsShow: that is "activated" (its control's state pattern 0, set by Activate, read
+// 05/11 in the game's code), false with the focus on Battle Settings' rows while the grid is on screen.
+bool grid_visible(Obj* grid) {
+    Obj* c = call_obj(grid, "get_Control");
+    bool ok = false;
+    const bool v = c && call_bool(c, "get_ActualVisible", {}, &ok);
+    return ok && v;
+}
+// Battle Settings is open: its grid is built when it opens, on another tab, and no game event says when it comes on screen
+// (the frame then looks at it every frame: grid_frame). EV_MENU_OPEN / EV_MENU_CLOSE, or its agent gone for 5 s.
+bool g_grid_watch = false;
+int g_watch_off = 0;
 // The variation a stage's own entry shows now (0 for a tile or its own look)
 int shown_var(Obj* grid, int entry) {
     if (entry < 0 || entry >= static_cast<int>(g_grid.slots.size()) || g_grid.slots[static_cast<size_t>(entry)].tile) return 0;
@@ -1325,6 +1338,18 @@ bool show_pic(Obj* tex, const Look& l) {
 
 const char* const kNoCellText = "<no cell text>";   // not a control name
 
+// Battle Settings' summary (p_BattleSettingProfileGameSetting_ > e_texture_stage): the chosen entry's picture
+bool summary_pic(Obj* grid, int entry, int var) {
+    const SF6CoreAPI* a = slots::ui::core();
+    if (!a || entry < 0 || entry >= static_cast<int>(g_grid.slots.size())) return true;
+    Obj* owner = m_owner ? call_obj(m_owner, grid) : nullptr;
+    Obj* cm = owner ? call_obj(owner, "get_ControlMain") : nullptr;
+    void* part = cm ? a->ui_find_cached(cm, "p_BattleSettingProfileGameSetting_") : nullptr;
+    Obj* tex = part ? reinterpret_cast<Obj*>(a->ui_find_cached(part, "e_texture_stage")) : nullptr;
+    if (!tex) return true;
+    return show_pic(tex, look_of(g_grid.slots[static_cast<size_t>(entry)], var, false));
+}
+
 // The preview's name (the game's e_text_stage: AutoRegionFit 1 of its own, read 05/11, probe p14: it squeezed a long name;
 // off here, Wael 05/11): at the game's place, or right-aligned with a region as wide as the banner. That place is read while
 // the text holds it, the probe's values until then.
@@ -1374,13 +1399,15 @@ bool grid_work() {
     std::lock_guard<std::recursive_mutex> lk(g_mx);
     Obj* grid = grid_alive(g_grid.obj);
     if (!grid || g_grid.slots.empty()) return true;
-    bool ok = false;
-    const bool shown = m_is_show && call_bool(grid, "IsShow", {}, &ok);
-    if (ok && !shown) return false;                          // set up but not on screen yet
+    int chosen_e = -1, chosen_v = 0;
+    chosen_entry(grid, chosen_e, chosen_v);
+    // Battle Settings' "Game Settings" summary shows the chosen entry on any tab
+    const bool summary_done = g_grid.menu != sl::kBattle || summary_pic(grid, chosen_e, chosen_v);
+    if (!grid_visible(grid)) return false;                   // set up but not on screen yet
     Obj* scroll = obj_field(grid, f_scroll);
     Ret rs = scroll ? call(m_sel_index, scroll) : Ret{};
     const int focus = scroll && !rs.exception_thrown ? static_cast<int32_t>(rs.dword) : -1;
-    bool done = true;
+    bool done = summary_done;
 
     // the variation key: the focused vanilla entry's next variation (one press, one step, wrapping)
     const int step = g_cycle_pending.exchange(0);
@@ -1396,10 +1423,11 @@ bool grid_work() {
         }
     }
 
-    // the preview: the focused entry's picture and name
+    // the preview: the picture and name of the focused entry, of the chosen one while the focus is on the rows
     Obj* preview = obj_field(grid, f_preview);
-    if (preview && focus >= 0 && focus < static_cast<int>(g_grid.slots.size())) {
-        const sl::Slot& s = g_grid.slots[static_cast<size_t>(focus)];
+    const int shown_e = sl::banner_entry(g_grid.focused, focus, chosen_e);
+    if (preview && shown_e >= 0 && shown_e < static_cast<int>(g_grid.slots.size())) {
+        const sl::Slot& s = g_grid.slots[static_cast<size_t>(shown_e)];
         Obj* ptex = get_obj(preview, "mTexThumbnail");
         Obj* ptext = get_obj(preview, "mTextStageName");
         if (!g_grid.preview_pic && ptex) {
@@ -1408,7 +1436,7 @@ bool grid_work() {
                 logf("stages: grid (%s): preview picture: %s", sl::menu_key(g_grid.menu), g_grid.preview_pic == 2 ? "thumbnails" : "4:1 images");
             else done = false;                                 // its picture not loaded yet: looked at again
         }
-        const Look l = look_of(s, shown_var(grid, focus), g_grid.preview_pic == 2);
+        const Look l = look_of(s, shown_var(grid, shown_e), g_grid.preview_pic == 2);
         if (g_grid.preview_pic) done = show_pic(ptex, l) && done;
         const int nvar = s.tile ? 0 : static_cast<int>(variations_of(s.base).size());
         // one name line in the game's own text (its font and glow): a tile's name, a variation's (stages_logic.hpp
@@ -1852,11 +1880,12 @@ void grid_frame() {
         Obj* grid = grid_alive(g_grid.obj);
         if (grid && !g_grid.slots.empty()) {
             if (g_grid.obj != g_grid_seen) { g_grid_seen = g_grid.obj; g_key_symbols.clear(); }
-            const Ret rv = m_is_show ? call(m_is_show, grid) : Ret{};
-            on = !m_is_show || rv.exception_thrown || rv.byte != 0;
+            on = grid_visible(grid);
             if (on) {
                 Obj* scroll = obj_field(grid, f_scroll);
-                focus = grid_has_focus(grid, scroll);
+                const Ret rv = m_is_show ? call(m_is_show, grid) : Ret{};
+                const bool active = !m_is_show || rv.exception_thrown || rv.byte != 0;   // activated: the cursor is in it
+                focus = active && grid_has_focus(grid, scroll);
                 const Ret rs = scroll ? call(m_sel_index, scroll) : Ret{};
                 const int sel = scroll && !rs.exception_thrown ? static_cast<int32_t>(rs.dword) : -1;
                 if (sel >= 0 && sel < static_cast<int>(g_grid.slots.size())) {
@@ -1884,11 +1913,19 @@ void grid_frame() {
         if (grid && !on && g_grid.name_right == 1)
             if (Obj* prv = obj_field(grid, f_preview))
                 if (Obj* ptext = get_obj(prv, "mTextStageName")) name_layout(ptext, false);
+        // it came on screen (Battle Settings' tab, its Stage Settings row): the pictures and the banner at once
+        if (on && !g_grid.on_screen) { g_grid.until = 0; open_grid_window(); }
+        if (g_grid_watch) {
+            Obj* owner = grid && m_owner ? call_obj(m_owner, grid) : nullptr;
+            g_watch_off = owner && agent_visible(owner) ? 0 : g_watch_off + 1;
+            if (g_watch_off > 300) { g_grid_watch = false; g_watch_off = 0; }
+        }
         g_grid.on_screen = on;
         if (on && (focus ? 1 : 0) != g_grid.focus_log) {
             g_grid.focus_log = focus ? 1 : 0;
             logf("stages: grid (%s): its cells %s the focus", sl::menu_key(g_grid.menu), focus ? "have" : "do not have");
         }
+        if ((on && focus) != g_grid.focused) open_grid_window();   // the banner changes entry (focused / chosen)
         g_grid.focused = on && focus;
     }
     // the key: one step per press, on a stage with variations
@@ -1914,6 +1951,8 @@ void replay_hint_frame() {
 }
 
 void grid_tick(uint32_t ev) {
+    if (ev & EV_MENU_OPEN) { g_grid_watch = true; g_watch_off = 0; open_grid_window(); }
+    if (ev & EV_MENU_CLOSE) g_grid_watch = false;
     if ((ev & EV_STAGE_GRID) || g_grid_event.exchange(false)) {
         std::lock_guard<std::recursive_mutex> lk(g_mx);
         if (g_grid.obj && !g_grid.slots.empty() && !g_grid.until) {
@@ -2154,7 +2193,7 @@ void install_hooks() {
 bool busy() {
     if (!g_variant_count) return g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2);
     if ((g_check_started && !g_hooks_done) || g_grid.until != 0 || g_decided.pending || g_cycle_pending.load() != 0) return true;
-    if (g_grid.on_screen || g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2)) return true;   // the key, the hint
+    if (g_grid.on_screen || g_grid_watch || g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2)) return true;   // the key, the hint
     return (g_scr.active && (g_scr.need || g_scr.settle > 0 || g_strip.until != 0)) || g_vs.until != 0 || g_scr.check_until != 0;
 }
 

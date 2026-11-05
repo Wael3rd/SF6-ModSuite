@@ -301,6 +301,9 @@ inline int shown_variation(int entry, int chosen_entry, int chosen_var, const Pr
 inline Preview preview_next(int focused, int chosen_entry, int chosen_var, const Preview& p, int count) {
     return { focused, cycle(shown_variation(focused, chosen_entry, chosen_var, p), count, 1) };
 }
+// The entry the banner shows: the focused one while the grid has the focus, else the chosen one (the game's own banner stands
+// on the decided stage then, and a tile shares its id)
+inline int banner_entry(bool grid_focused, int focused, int chosen) { return grid_focused || chosen < 0 ? focused : chosen; }
 // The focus is now on `focused`: a preview of another entry goes
 inline Preview preview_follow(const Preview& p, int focused) { return p.entry == focused ? p : Preview{}; }
 

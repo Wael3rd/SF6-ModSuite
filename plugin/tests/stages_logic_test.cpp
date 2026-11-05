@@ -209,6 +209,9 @@ static void test_preview() {
     p = preview_follow(p, 1);
     check(shown_variation(0, chosen, chosen_var, p) == 0, "left without Confirm: its own look again");
     check(shown_variation(1, -1, 0, Preview{}) == 0, "nothing chosen in the grid: own looks");
+    check(banner_entry(true, 5, 9) == 5, "the banner: the focused entry while the grid has the focus");
+    check(banner_entry(false, 5, 9) == 9, "the focus on the rows: the chosen entry");
+    check(banner_entry(false, 5, -1) == 5, "nothing chosen in the grid: where the cursor rests");
 }
 
 static void test_ticks() {
