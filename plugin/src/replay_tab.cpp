@@ -154,29 +154,32 @@ constexpr uint32_t kColStageFocus = 0xFFFF8C28, kColStageMark = 0xFF00E6FF, kCol
 // Draw order: the GUI sorts its elements by Priority (child order only breaks ties): the model and the grid's panel
 // under the cells and rows, pictures and arrows over them, texts on top
 constexpr int kPrioPanel = 1, kPrioModel = 1, kPrioFrame = 2, kPrioImage = 3, kPrioText = 4;
-// The summary on the right, as the game's (OtherMatchingFighterSetting c_CostumeSetting, read 05/11, probe g45): the panel
-// at (1596, 189) drawn at 0.81 (its 0.9 x its c_Costume's 0.9), in its own units below (replay_logic.hpp: the items' y);
-// its title pill: a UVS_hub shadow (sequence 15, 334 x 36.5, borders 11 / 14.5) under a white-to-grey rect (334 x 32)
-// masked by sequence 14 (borders 11 / 11); the title at (20, 16), font 24, 0xFFD9D9D9; the names at x 36 (0xFFFFBF65),
-// the lines at x 47 (0xFFEEEEEE), font 23, region 320 x 36 aligned 8; the game's UI font (FontSlot 8); the stage picture
-// (4:1) at the lines' x. Each text has the game's shadow (the title: 54000000, 3 at 45, blur 5, strength 2; the others:
-// CC000000, 0, blur 3, strength 5) and the lines their glow.
+// The summary on the right, as the game's: Battle Settings > Other's "Game Settings" (MatchingSetting
+// p_BattleSettingProfileGameSetting_) and the Opponent Outfit page's (OtherMatchingFighterSetting c_CostumeSetting), read
+// 05/11 (probes g45, g48a). The panel at (1596, 189) drawn at 0.81 (0.9 x 0.9), in its own units below (replay_logic.hpp:
+// the items' y). Its title pill (c_title): a UVS_hub shadow (sequence 15, 334 x 36.5) under c_mask (colour scale alpha
+// 0.302): a white-to-grey rect (334 x 32, ColorType Horizontal) masked by sequence 14 (the borders come with the sequence).
+// The title at (20, 16), font 24, 0xFFD9D9D9; the names at x 36 (0xFFFFBF65), the values at x 48 (0xFFEEEEEE), font 23,
+// region 320 x 36, LeftCenter; the game's UI font (FontSlot 8); the stage picture (248 x 62) at x 50. The title's shadow
+// 54000000, 3 at 45, blur 5, strength 2, no glow; the others' shadow CC000000, 0, blur 3, strength 5 and glow 80000000,
+// blur 10, strength 4.
 constexpr float kSumX = 1596, kSumY = 189, kSumScale = 0.81f;
 constexpr float kPillW = 334, kPillH = 32, kPillShadowH = 36.5f;
-constexpr float kSumTitleX = 20, kSumTitleY = 16, kSumNameX = 36, kSumLineX = 47, kSumPicW = 248;
-constexpr float kSumTitleRegionW = 360, kSumTitleRegionH = 37, kSumRegionW = 320, kSumRegionH = 36;
+constexpr float kSumTitleX = 20, kSumTitleY = 16, kSumNameX = 36, kSumLineX = 48, kSumPicX = 50, kSumPicW = 248;
+constexpr float kSumTitleRegionW = 430, kSumTitleRegionH = 37, kSumRegionW = 320, kSumRegionH = 36;
 constexpr float kFontSumTitle = 24, kFontSumLine = 23;
-constexpr int64_t kSumFontSlot = 8, kSumLineAlign = 8;
+constexpr int64_t kSumFontSlot = 8;
 constexpr int kSumTexts = 24, kSumMaxFighters = 20;   // 2 names + 20 outfit lines + the stage's line, the page's 6
 constexpr size_t kSumLineMax = 32;                 // a longer line is cut (the panel ends at the screen's edge)
 constexpr uint32_t kColSumTitle = 0xFFD9D9D9, kColSumName = 0xFFFFBF65, kColSumLine = 0xFFEEEEEE;
-constexpr uint32_t kColPillLeft = 0xFFFFFFFF, kColPillRight = 0xFF5A5A5A;   // the pill's rect: ColorType 2, left / right
-constexpr int64_t kPillColorType = 2;
+// the pill's rect: the game's colours (white, its right side and right top corner grey) at c_mask's alpha 0.302 (0x4D),
+// written on the rect itself: the copied panel's own animation may key its colour scale
+constexpr uint32_t kColPillLeft = 0x4DFFFFFF, kColPillRight = 0x4D5A5A5A;
+constexpr int64_t kPillColorType = 2;              // via.gui.ColorType.Horizontal
 constexpr uint32_t kPillShadowSeq = 15, kPillMaskSeq = 14;
-constexpr float kPillShadowBorder[4] = { 11, 0, 14.5f, 0 }, kPillMaskBorder[4] = { 11, 0, 11, 0 };   // left, top, right, bottom
 struct TextLook { uint32_t shadow; float dist, rot, blur, strength; bool glow; uint32_t glow_col; float glow_blur, glow_strength; };
-constexpr TextLook kSumTitleLook{ 0x54000000, 3, 45, 5, 2, false, 0xFF000000, 5, 1 };
-constexpr TextLook kSumLineLook{ 0xCC000000, 0, 0, 3, 5, true, 0xFF000000, 3, 1 };
+constexpr TextLook kSumTitleLook{ 0x54000000, 3, 45, 5, 2, false, 0x80000000, 10, 4 };
+constexpr TextLook kSumLineLook{ 0xCC000000, 0, 0, 3, 5, true, 0x80000000, 10, 4 };
 constexpr const char* kPillFill = "e_ro_pfill";    // the pill's rect: a rectangle copy inside the pill's panel copy
 const char* const kSumTitleGrid = "Replay Settings";
 const char* const kSumTitlePage = "Outfit Settings (Replay)";
@@ -1725,17 +1728,16 @@ void restore_desc() {
 // ---- the summary on the right (the game's own on Battle Settings > Other and on the Opponent Outfit page) ----
 float sum_x(float x) { return kSumX + x * kSumScale; }
 float sum_y(float y) { return kSumY + y * kSumScale; }
-// A Scale9Grid of the pill: the UVS_hub sequence on its 9 cells (via.gui.GridPos 0-8, their patterns kept), its borders
-void pill_grid(void* g, uint32_t seq, const float (&border)[4], float w, float h) {
+// A Scale9Grid of the pill: the UVS_hub sequence on its 9 cells (via.gui.GridPos LT..RB = 0-8, their patterns kept; the
+// borders come with the sequence: BorderRect has no setter)
+void pill_grid(void* g, uint32_t seq, float w, float h) {
     if (!g) return;
     for (int64_t pos = 0; pos < 9; ++pos) {
         SF6CoreArg a[2] = {};
         a[0].type = SF6CORE_ARG_I64; a[0].v.i = pos;
         a[1].type = SF6CORE_ARG_I64; a[1].v.i = seq;
-        A()->obj_invoke(C(), g, "setSequenceNo", a, 2, nullptr);
+        A()->obj_invoke(C(), g, "setSequenceNo(via.gui.GridPos,System.UInt32)", a, 2, nullptr);
     }
-    float b[4] = { border[0], border[1], border[2], border[3] };
-    set_value(g, "set_BorderRect", b);
     resize(g, w, h);
 }
 // The pill, once per copy: its shadow; its panel (the row's c_bg) showing only its mask and our rect, the rect coloured
@@ -1744,7 +1746,7 @@ void style_pill(void* title) {
     if (void* sh = copy_of(title, "e_ro_pshadow"); sh && g_styled.insert(reinterpret_cast<uintptr_t>(sh)).second) {
         set_priority(sh, kPrioFrame);
         if (g_cp_lefttop >= 0) set_enum(sh, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
-        pill_grid(sh, kPillShadowSeq, kPillShadowBorder, kPillW, kPillShadowH);
+        pill_grid(sh, kPillShadowSeq, kPillW, kPillShadowH);
         A()->ui_set_color(C(), sh, kColText);
         A()->ui_set_scale(C(), sh, kSumScale, kSumScale, 1);
     }
@@ -1754,7 +1756,7 @@ void style_pill(void* title) {
     A()->ui_set_scale(C(), pill, kSumScale, kSumScale, 1);
     for (const char* n : { "e_mat_bg", "e_rect_bar", "e_focus_bar" })
         if (void* e = A()->ui_find_child(pill, n, 0)) A()->ui_set_force_invisible(C(), e, 1);
-    pill_grid(A()->ui_find_child(pill, "e_scale9grid_mask", 0), kPillMaskSeq, kPillMaskBorder, kPillW, kPillH);
+    pill_grid(A()->ui_find_child(pill, "e_scale9grid_mask", 0), kPillMaskSeq, kPillW, kPillH);
     if (void* f = A()->ui_find_child(pill, kPillFill, 0)) {
         if (g_cp_lefttop >= 0) set_enum(f, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
         place(f, 0, 0);
@@ -1773,7 +1775,7 @@ void style_pill(void* title) {
 void style_sum_text(void* t, bool head) {
     const TextLook& k = head ? kSumTitleLook : kSumLineLook;
     set_enum(t, "set_ControlPoint(via.gui.ControlPoint)", kLeftCenter);
-    set_enum(t, "set_PageAlignment(via.gui.PageAlignment)", head ? kLeftCenter : kSumLineAlign);
+    set_enum(t, "set_PageAlignment(via.gui.PageAlignment)", kLeftCenter);
     A()->ui_set_region_size(C(), t, head ? kSumTitleRegionW : kSumRegionW, head ? kSumTitleRegionH : kSumRegionH);
     const float font = head ? kFontSumTitle : kFontSumLine;
     A()->ui_set_font_size(C(), t, font, font);
@@ -1839,7 +1841,7 @@ void render_summary(void* title, bool on, const char* heading, const std::vector
                      name ? kColSumName : kColSumLine, true);
     }
     for (; t < kSumTexts; ++t) put_sum_text(title, cname("sum", t), false, std::string(), nullptr, 0, 0, 0, false);
-    put_stage_picture(title, "e_ro_sumpic", pic, sum_x(kSumLineX), sum_y(pic_y), kSumPicW * kSumScale, kSumPicH * kSumScale, kColText,
+    put_stage_picture(title, "e_ro_sumpic", pic, sum_x(kSumPicX), sum_y(pic_y), kSumPicW * kSumScale, kSumPicH * kSumScale, kColText,
                       on && !pic.empty());
 }
 // The chosen stage as the summary names it: a tile, its name; a variation, "stage · variation"; a stage of the game, its

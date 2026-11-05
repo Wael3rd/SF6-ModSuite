@@ -200,12 +200,13 @@ inline std::vector<std::string> summary_lines(const std::vector<Fighter>& cat, c
     return on;
 }
 // The panel's items, top to bottom, and their place in the game's units (the panel is drawn at 0.81): a name's or a line's
-// middle, a picture's top. Read 05/11 on OtherMatchingFighterSetting's c_CostumeSetting (the first name at 63, its lines
-// from 93, every 31) and measured on Battle Settings > Other's "Game Settings" (a name 48 under the line before it; the stage
-// picture, 248 x 62, 20 under its name, the next name 39 under the picture). A line under a picture: 20 under it.
+// middle, a picture's top. Read 05/11 on Battle Settings > Other's "Game Settings" (MatchingSetting
+// p_BattleSettingProfileGameSetting_: Stage Settings at 63, its picture (248 x 62) at 82, Battle BGM at 184 and its value at
+// 214, Commentary Settings at 261 and its lines from 291 every 31, Side Settings at 493...) and on the Opponent Outfit
+// page's c_CostumeSetting (the same 63, 93, every 31). A line under a picture (ours: the stage's name): 20 under it.
 enum class SumKind { Name, Line, Picture };
-constexpr float kSumFirstY = 63, kSumLineGap = 30, kSumLineStep = 31, kSumBlockGap = 48;
-constexpr float kSumPicGap = 20, kSumPicH = 62, kSumAfterPic = 39, kSumLineAfterPic = 20;
+constexpr float kSumFirstY = 63, kSumLineGap = 30, kSumLineStep = 31, kSumBlockGap = 47;
+constexpr float kSumPicGap = 19, kSumPicH = 62, kSumAfterPic = 40, kSumLineAfterPic = 20;
 inline std::vector<float> summary_layout(const std::vector<SumKind>& kinds) {
     std::vector<float> y;
     float at = 0;

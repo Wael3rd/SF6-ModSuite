@@ -236,17 +236,20 @@ int main() {
               "summary: 25 On, 19 lines and \"+ 6 more\"");
         check(cut_utf8("Short", 32) == "Short" && cut_utf8("abcdefghij", 8) == "abcde...", "summary: long lines cut with ...");
         check(cut_utf8("ab\xC3\xA9" "cdefgh", 6) == "ab...", "summary: never cut inside a UTF-8 sequence");
-        // Battle Settings > Other's "Game Settings", measured on screen (y = 189 + 0.81 x layout): Stage Settings (its picture),
-        // Battle BGM, Commentary Settings (6 lines), Side Settings, Battle HUD Design
+        // Battle Settings > Other's "Game Settings" (read 05/11, its own units): Stage Settings (its picture), Battle BGM,
+        // Commentary Settings (6 lines), Side Settings, Battle HUD Design; and as measured on screen (y = 189 + 0.81 x layout)
         using K = SumKind;
         const std::vector<float> ys = summary_layout({ K::Name, K::Picture, K::Name, K::Line, K::Name, K::Line, K::Line, K::Line,
                                                        K::Line, K::Line, K::Line, K::Name, K::Line, K::Name, K::Line });
+        const float game[] = { 63, 82, 184, 214, 261, 291, 322, 353, 384, 415, 446, 493, 523, 572, 602 };
         const float screen[] = { 240, 256, 338, 362, 401, 424, 449, 475, 499, 525, 550, 589, 613, 652, 676 };
-        bool near = ys.size() == 15;
+        bool exact = ys.size() == 15, near = ys.size() == 15;
+        for (size_t i = 0; exact && i < ys.size(); ++i) exact = std::fabs(ys[i] - game[i]) <= 2.0f;
         for (size_t i = 0; near && i < ys.size(); ++i) near = std::fabs(189.0f + 0.81f * ys[i] - screen[i]) <= 2.0f;
-        check(near, "summary layout: Battle Settings > Other's panel within 2 px");
+        check(exact, "summary layout: Battle Settings > Other's panel, its units within 2");
+        check(near, "summary layout: the same on screen within 2 px");
         const std::vector<float> page = summary_layout({ K::Name, K::Line, K::Name, K::Line, K::Name, K::Line });
-        check(page == std::vector<float>{ 63, 93, 141, 171, 219, 249 }, "summary layout: the character page's three settings");
+        check(page == std::vector<float>{ 63, 93, 140, 170, 217, 247 }, "summary layout: the character page's three settings");
         const std::vector<float> sl = summary_layout({ K::Name, K::Line, K::Name, K::Picture, K::Line });
         check(sl[3] == sl[2] + kSumPicGap && sl[4] == sl[3] + kSumPicH + kSumLineAfterPic, "summary layout: the stage's name under its picture");
     }
