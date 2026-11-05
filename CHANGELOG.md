@@ -47,6 +47,8 @@ the tile / variation guess): a few seconds, up to a few minutes with large archi
 - For other mods: the RW / MC colours of a fighter's outfit can be listed, and one can be requested for the preview or for
   one replay (`colormod/include/sf6colormod_entries.h`, `docs/RUNTIME_OPTIONS.md`, "Color Mod entries for Replays >
   Settings"). The player's saved colours are never written. The Slots Loader's Replay Outfit Settings uses it.
+- New: a folder `all_chars` in `reframework\color_mods`, there by default, for colour packs that cover several characters.
+  The fighter and the costume still come from the file names; the editor's MC colours stay in `<Character>/MANUALCOLORS_NN`.
 
 ### SF6 Native Core 0.9.6
 - New: an "OVERDRIVE EDITION" line under the logo on the title screen, in the logo's white. An empty

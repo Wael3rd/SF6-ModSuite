@@ -6,6 +6,8 @@ or the loose files (esfNNN_CCC_cmd_KKK.user.2) in any folder below this one.
 
 The character folder is only for your own tidiness: the fighter and the costume come from the
 file names (esf001 = Ryu, 001 = Outfit 1...). Files placed directly in this folder work too.
+The folder all_chars is there for colour packs that cover several characters; the fighter and the costume
+still come from the file names.
 
 Archives are unpacked once, in the background, a few seconds after the game starts, into the
 hidden folder .cache (only the colour files are kept). The new colours appear in the colour list

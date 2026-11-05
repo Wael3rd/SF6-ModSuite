@@ -15,6 +15,9 @@
 namespace fs = std::filesystem;
 using namespace engine;
 
+// the live colour hooks are not linked here: catalog / color_mods only tell them a file changed
+namespace engine::live { void files_changed() {} }
+
 static int g_fail = 0;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL line %d: %s\n", __LINE__, #c); ++g_fail; } } while (0)
 
@@ -276,6 +279,14 @@ int main() {
     // 7. layout and README
     color_mods::ensure_layout(root);
     CHECK(fs::is_directory(root / "A.K.I") && fs::is_directory(root / "Chun-Li") && fs::is_directory(root / "Arjun"));
+    CHECK(fs::is_directory(root / "all_chars"));                          // for packs that cover several characters
+    {   // a colour file below all_chars is found by the scan like any other (the fighter and costume come from its name)
+        put(root / "all_chars/SomePack/esf002_001_cmd_001.user.2", "x");
+        bool found = false;
+        for (const auto& c : color_mods::candidate_files(root))
+            if (c.generic_string().find("all_chars/SomePack/esf002_001_cmd_001.user.2") != std::string::npos) found = true;
+        CHECK(found);
+    }
     {
         std::ifstream f(root / "README.txt", std::ios::binary);
         std::string shipped((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());

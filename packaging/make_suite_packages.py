@@ -227,7 +227,7 @@ def main():
               [(os.path.join(REPO, "build", "colormod", "SF6_ColorModNative.dll"), "reframework/plugins/SF6_ColorModNative.dll"),
                (os.path.join(REPO, "colormod", "data", "SF6_NativeLocale_data", "locale.json"), "reframework/data/SF6_NativeLocale_data/locale.json")],
               # reframework/color_mods: one folder per character + its usage text (the DLL creates them too if missing)
-              dirs=["reframework/color_mods/%s" % n for n in CHARACTERS],
+              dirs=["reframework/color_mods/%s" % n for n in CHARACTERS] + ["reframework/color_mods/all_chars"],
               texts=[("reframework/color_mods/README.txt", open(os.path.join(REPO, "colormod", "data", "color_mods_README.txt"), encoding="utf-8").read().replace("\r\n", "\n").replace("\n", CRLF))])
 
     print("== SF6 Slots Loader %s" % a.version)

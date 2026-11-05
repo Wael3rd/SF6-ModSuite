@@ -108,6 +108,8 @@ or the loose files (esfNNN_CCC_cmd_KKK.user.2) in any folder below this one.
 
 The character folder is only for your own tidiness: the fighter and the costume come from the
 file names (esf001 = Ryu, 001 = Outfit 1...). Files placed directly in this folder work too.
+The folder all_chars is there for colour packs that cover several characters; the fighter and the costume
+still come from the file names.
 
 Archives are unpacked once, in the background, a few seconds after the game starts, into the
 hidden folder .cache (only the colour files are kept). The new colours appear in the colour list
@@ -179,6 +181,7 @@ void ensure_layout(const fs::path& root) {
     std::error_code ec;
     fs::create_directories(root, ec);
     for (const Character& c : kCharacters) fs::create_directories(root / c.name, ec);
+    fs::create_directories(root / "all_chars", ec);        // for packs that cover several characters (not a character)
     const fs::path readme = root / "README.txt";
     std::string t = readme_text(), crlf;
     for (char c : t) { if (c == '\n') crlf += '\r'; crlf += c; }
