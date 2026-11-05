@@ -3,9 +3,11 @@
 // A copy of the title's static (c) CAPCOM text (e_text_copyright, a child of the Panel c_main of
 // app.menu.UIFlowTitle's GUI), made inside a post-hook of app.menu.UIFlowTitle.update (R19: a duplicate made outside
 // a UI update is unfinished), attached to c_main and found again by name every frame (no reference kept on it: R19 /
-// R35). Shown only while the flow is in its Select state (the logo fully displayed): Select.OnEnter starts a short
-// entrance (white flash, scale down, white to green), Select.OnExit and every other state hide it. Every return to
-// the title makes a new flow, so the copy is made again when missing; it dies with the title GUI.
+// R35). Shown only while c_main plays its "DEFAULT2" state: the logo is fully displayed and PRESS ANY BUTTON blinks
+// (seen live: "DEFAULT" during the logo animation and around the demo video). Entering DEFAULT2 starts a short
+// entrance (white flash, scale down, white to green); any other state hides it. The flow's own Select state hooks
+// were tried first and never fired. Every return to the title makes a new flow, so the copy is made again when
+// missing; it dies with the title GUI.
 //
 // Off: an empty reframework/data/sf6core/title_off.txt (read when the hooks are installed).
 // Everything is drawn through the core's own guarded display calls (client "sf6core.title").
@@ -27,9 +29,10 @@ constexpr float       kPosX = 960.0f, kPosY = 812.0f, kPosZ = 0.0f;
 constexpr float       kFontW = 76.0f, kFontH = 76.0f;
 constexpr float       kRegionW = 1600.0f, kRegionH = 130.0f;
 constexpr int32_t     kPriority      = 10;                 // the movie texture and the others have 0
-constexpr uint32_t    kGreenRgba     = 0xFF00C337u;        // Drive-gauge green (R 0x37 G 0xC3 B 0x00), replaceable
+constexpr uint32_t    kGreenRgba     = 0xFF00D40Eu;        // the Drive gauge's full green (c_gauge00: R 14 G 212 B 0)
 constexpr uint32_t    kWhiteRgba     = 0xFFFFFFFFu;
-// entrance (frames counted from Select.OnEnter)
+constexpr const char* kShownState    = "DEFAULT2";         // c_main's play state once the logo is complete
+// entrance (frames counted from c_main entering kShownState)
 constexpr float       kScaleStart    = 1.25f;              // frame 0
 constexpr int         kScaleFrames   = 8;                  // ease-out down to 1.0
 constexpr int         kColorStart    = 8;                  // the white holds while the scale comes down
@@ -43,24 +46,23 @@ constexpr float       kFlash2Amount  = 0.5f;               // 50% toward white a
 namespace {
 
 constexpr int kMaxFaults = 5;
-constexpr int kMaxCreateTries = 5;     // per Select entry
+constexpr int kMaxCreateTries = 5;     // per entry into kShownState
 
 std::atomic<bool>     g_installed{false};
 std::atomic<bool>     g_failed{false};
-std::atomic<bool>     g_in_select{false};
-std::atomic<uint32_t> g_enter_seq{0};
 std::atomic<uint64_t> g_ticks{0};              // update post-hook calls
 std::atomic<uint64_t> g_enter_tick{0};
 std::atomic<int>      g_faults{0};
 
 SF6CoreClient* g_client = nullptr;
-REFrameworkTypeDefinitionHandle g_td_flow = nullptr, g_td_select = nullptr;
+REFrameworkTypeDefinitionHandle g_td_flow = nullptr;
 int g_install_step = 0;
 
 thread_local void* tl_flow = nullptr;
 
 // state of the animation (touched by the update hook only)
-uint32_t g_seen_seq = 0;
+bool     g_prev_sel = false;                    // c_main was in kShownState last tick
+bool     g_first_logged = false;
 bool     g_shown = false;                       // we made it visible and not yet hidden
 int64_t  g_last_rgba = -1;
 int      g_last_scale_q = -1;                   // scale * 1000
@@ -155,13 +157,16 @@ void configure_new(void* copy) {
 void tick_inner(void* flow) {
     using namespace tcfg;
     const SF6CoreAPI* api = sf6core_api_ptr();
-    const bool sel = g_in_select.load();
-    const uint32_t seq = g_enter_seq.load();
-    if (seq != g_seen_seq) { g_seen_seq = seq; g_last_rgba = -1; g_last_scale_q = -1; g_create_tries = 0; }
-    if (!sel && !g_shown) return;                                    // nothing to hide, nothing to show
-
     void* cmain = find_c_main(flow);
-    if (!cmain) { if (!sel) g_shown = false; return; }
+    if (!cmain) { g_prev_sel = false; g_shown = false; return; }
+    char st[32] = "";
+    void* ps = call0(cmain, "get_PlayState");
+    if (ps) managed_str_to_utf8(ps, st, sizeof st);
+    const bool sel = strcmp(st, kShownState) == 0;
+    if (!g_first_logged) { g_first_logged = true; core_log(SF6CORE_LOG_INFO, nullptr, "[title] title seen (c_main state \"%s\")", st); }
+    if (sel && !g_prev_sel) { g_enter_tick.store(g_ticks.load()); g_last_rgba = -1; g_last_scale_q = -1; g_create_tries = 0; }
+    g_prev_sel = sel;
+    if (!sel && !g_shown) return;                                    // nothing to hide, nothing to show
     void* copy = api->ui_find_child(cmain, kCopyName, 0);
 
     if (!sel) {
@@ -215,19 +220,6 @@ void post_update(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     g_ticks.fetch_add(1);
     tick_seh(flow);
 }
-int pre_enter(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (argv && is_type(argv[1], g_td_select)) {
-        g_enter_tick.store(g_ticks.load());
-        g_enter_seq.fetch_add(1);
-        g_in_select.store(true);
-    }
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-}
-int pre_exit(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (argv && is_type(argv[1], g_td_select)) g_in_select.store(false);
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-}
-void post_none(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
 bool hook_one(REFrameworkTypeDefinitionHandle td, const char* name, REFPreHookFn pre, REFPostHookFn post) {
     auto mh = td ? s_sdk->type_definition->find_method(td, name) : nullptr;
@@ -266,9 +258,7 @@ void title_frame() {
         }
         auto* tdb = s_sdk->functions->get_tdb();
         g_td_flow = s_sdk->tdb->find_type(tdb, "app.menu.UIFlowTitle");
-        g_td_select = s_sdk->tdb->find_type(tdb, "app.menu.UIFlowTitle.FlowMain.Select");
-        if (!g_td_select) g_td_select = s_sdk->tdb->find_type(tdb, "app.menu.UIFlowTitle.FlowMain+Select");
-        if (!g_td_flow || !g_td_select) {
+        if (!g_td_flow) {
             core_log(SF6CORE_LOG_WARN, nullptr, "[title] types not found: title line off");
             g_failed = true;
             return;
@@ -283,13 +273,11 @@ void title_frame() {
         g_install_step = 1;
         return;
     }
-    case 1: if (!hook_one(g_td_flow, "update", pre_update, post_update)) g_failed = true; else g_install_step = 2; return;
-    case 2: if (!hook_one(g_td_select, "OnEnter", pre_enter, post_none)) g_failed = true; else g_install_step = 3; return;
-    case 3:
-        if (!hook_one(g_td_select, "OnExit", pre_exit, post_none)) g_failed = true;
+    case 1:
+        if (!hook_one(g_td_flow, "update", pre_update, post_update)) g_failed = true;
         else {
             g_installed = true;
-            core_log(SF6CORE_LOG_INFO, nullptr, "[title] hooks installed (UIFlowTitle.update, Select.OnEnter / OnExit)");
+            core_log(SF6CORE_LOG_INFO, nullptr, "[title] hook installed (UIFlowTitle.update)");
         }
         return;
     }
