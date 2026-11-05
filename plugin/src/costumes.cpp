@@ -1758,6 +1758,18 @@ bool load_fighters(std::vector<LoadFighter>& out, const char** why) {
     }
     return !out.empty();
 }
+bool dressed_slot(Obj* fd, int fid, int& slot, int& color) {
+    std::lock_guard lk(g_alias_mx);
+    const Dressed* w = nullptr;
+    if (auto it = g_dressed.find(fd); it != g_dressed.end()) w = &it->second;
+    else
+        for (auto& [o, d] : g_dressed)
+            if (d.fid == fid && (!w || d.seq > w->seq) && alive(o)) w = &d;
+    if (!w) return false;
+    slot = w->slot;
+    color = w->color;
+    return true;
+}
 int battle_mode() {
     auto* desc = battle_desc();
     auto* rule = desc ? get_obj(desc, "Rule") : nullptr;

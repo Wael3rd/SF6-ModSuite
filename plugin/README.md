@@ -138,6 +138,29 @@ done here without Lua.
 - Log: `[F9] Opponent Outfit Settings: 20 outfits, 6 summary labels: the summary shows the first 6 ...` (when the fighter
   or its counts change), and the hook's line (`installed`, or `REFUSED (R18)`).
 
+## Replay Outfits (`replay_outfits.cpp`, rules in `replay_outfits.hpp`)
+
+What each character wears in a replay, never in a live battle. **Default**: what the players really wore. The replay holds
+the carrier for the player's own fighter (online alias), so at the end of each online match one line goes to
+`SF6_CostumeSlots_data\replay_journal.jsonl` (numbers only: the replay's key, the player's side, both sides' outfit and
+colour as the replay holds them, the slot really worn, by its mod); a replay found there shows the player's side in that
+slot, the opponent as recorded; a replay not found there shows what it recorded. **Forced**
+(`SF6_CostumeSlots_data\replay_outfits.json`, written by the Replay Outfits tab, read again when it changed): the chosen
+outfit and colour on every side that plays that character, the player's own included. An extra outfit is named by its
+`mod_id` (registry.json): a mod that is gone leaves the character on Default.
+
+- The key: FNV-1a of the replay's `ReplayInfo` (match seed, stage, fighters, rounds' seeds without the trailing zero ones:
+  the replay built at the end of a match has one round entry per round played, the server's and the local copies are padded
+  to 5). Outfits and colours are not in the key. Seen equal, 05/11: the end of a match and its replay in My Replays.
+- Journal: post-hook on `app.BattleReplayDataManager.CreateSaveData` (the match's replay is built), online only; the side
+  is the team of `SelfSessionMemberindex`, the slot is the one the alias dressed that `FighterDesc` in.
+- Replay: post-hook on `app.battle.ReplayFlowMap.setupDesc` (`FGReplayFlowMap` inherits it): the description is filled
+  from the replay there, and the game builds the fighters from it later (`setupFighterAsset`) without asking for files
+  through the requests the alias follows (a local replay of slots picked on a select screen loads them that way). Each
+  side's `Costume` / `Color` is written there; the replay's own data is not. A replay has no player (pads -2): the alias
+  leaves it alone. Opponent Outfit Settings are not applied in replays (seen 05/11).
+- Log: `replay outfits: replay <key>: P1 F1 c0/1 -> c7/3 (worn (journal)), P2 F1 c2/6 (recorded)`.
+
 ## Known limits
 
 - The alias follows the game's requests for a fighter's files (`requestNotManagedFighterAssetLoad`, online
