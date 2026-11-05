@@ -154,6 +154,62 @@ static void test_chosen_mark() {
     check(!decide_marks_now(slots, 0, "", 2), "the stage chosen again: already chosen");
 }
 
+static void test_preview() {
+    std::printf("the variation key previews, Confirm chooses\n");
+    // entries: 0 Genbu (2 variations), 1 Training Room (3 variations); Training Room chosen with its variation 2
+    const int chosen = 1, chosen_var = 2;
+    Preview p;
+    check(shown_variation(0, chosen, chosen_var, p) == 0 && shown_variation(1, chosen, chosen_var, p) == 2,
+          "at rest: the chosen entry its chosen variation, another its own look");
+    p = preview_next(1, chosen, chosen_var, p, 3);
+    check(p.entry == 1 && p.var == 3 && shown_variation(1, chosen, chosen_var, p) == 3, "the key on the chosen entry: the next one");
+    p = preview_next(1, chosen, chosen_var, p, 3);
+    check(p.var == 0, "again: wraps to its own look");
+    p = preview_follow(p, 1);
+    check(p.entry == 1, "the focus stays: the preview stays");
+    p = preview_follow(p, 0);
+    check(p.entry == -1 && shown_variation(1, chosen, chosen_var, p) == 2, "the focus moves off: back to the chosen variation");
+    p = preview_next(0, chosen, chosen_var, p, 2);
+    check(p.entry == 0 && p.var == 1 && shown_variation(0, chosen, chosen_var, p) == 1, "another stage: its first variation");
+    p = preview_follow(p, 1);
+    check(shown_variation(0, chosen, chosen_var, p) == 0, "left without Confirm: its own look again");
+    check(shown_variation(1, -1, 0, Preview{}) == 0, "nothing chosen in the grid: own looks");
+}
+
+static void test_ticks() {
+    std::printf("Random Stage Settings: each entry its own tick\n");
+    const std::vector<std::string> keys = { "", "tA", "tB" };   // Training Room's own entry and two tiles
+    std::set<std::string> off;
+    check(is_ticked(keys, off, true, "") && is_ticked(keys, off, true, "tB"), "nothing stored, in the game's pool: all ticked");
+    check(!is_ticked(keys, off, false, "tA"), "out of the game's pool: none ticked");
+    auto t = toggle_tick(keys, off, true, "tA");
+    check(!t.game_toggles && t.in_pool_after && t.off == std::set<std::string>{ "tA" }, "untick one tile: only it, the game's id stays");
+    check(is_ticked(keys, t.off, true, "") && !is_ticked(keys, t.off, true, "tA") && is_ticked(keys, t.off, true, "tB"),
+          "the others keep their ticks");
+    t = toggle_tick(keys, t.off, true, "");
+    t = toggle_tick(keys, t.off, true, "tB");
+    check(t.game_toggles && !t.in_pool_after, "the last ticked one unticked: the game takes its id out (its own Decide runs)");
+    t = toggle_tick(keys, t.off, false, "tB");
+    check(t.game_toggles && t.in_pool_after && t.off == std::set<std::string>{ "", "tA" }, "out of the pool, one ticked: only it, the id back in");
+    check(is_ticked(keys, { "", "tA", "tB" }, true, "tA"), "every entry unticked but the id in the pool (changed elsewhere): all ticked");
+    std::set<std::string> one = { "", "tA" };
+    check(pick_ticked(keys, one, 0) == "tB" && pick_ticked(keys, one, 7) == "tB", "the random's pick: the one ticked entry");
+    std::set<std::string> two = { "tA" };
+    check(pick_ticked(keys, two, 0) == "" && pick_ticked(keys, two, 1) == "tB", "two ticked: either");
+    // state.json keeps them per menu, the loader still reads "selected" only
+    State s;
+    s.menu[kBattle][0] = "tB";
+    s.active = s.menu[kBattle];
+    s.off[kBattle][0] = { "", "tA" };
+    s.random[kBattle] = true;
+    const std::string js = state_json(s);
+    State back;
+    check(parse_state(js, back) && back.off[kBattle][0] == s.off[kBattle][0] && back.random[kBattle] && !back.random[kTraining] &&
+          back.off[kTraining].empty(), "ticks and Random per menu: round trip");
+    auto served = loader_parse(js);
+    check(served.size() == 1 && served[0].second == "tB", "the loader's scan still reads the served selection only");
+}
+
 static void test_codecheck() {
     using namespace slots::codecheck;
     std::printf("code check cache (several methods)\n");
@@ -190,6 +246,8 @@ int main() {
     test_grid();
     test_cycle_keys();
     test_chosen_mark();
+    test_preview();
+    test_ticks();
     test_codecheck();
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;

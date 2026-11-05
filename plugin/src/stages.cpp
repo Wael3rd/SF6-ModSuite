@@ -145,11 +145,12 @@ ApplyFn loader_apply() {
     return fn;
 }
 
-// The only writer of state.json. apply_menu >= 0: that menu's choice becomes what the loader serves (told at once through
-// its export when it changed); -1: the menus' choices are saved, the served selection stays. Any thread (g_mx).
-void save_state(int apply_menu = stagelogic::kClassic, const char* why = nullptr) {
+// The only writer of state.json. apply_menu >= 0: that menu's choice (or `serve`, a choice made for this load: Random's
+// pick) becomes what the loader serves (told at once through its export when it changed); -1: the menus' choices are
+// saved, the served selection stays. Any thread (g_mx).
+void save_state(int apply_menu = stagelogic::kClassic, const char* why = nullptr, const stagelogic::Choice* serve = nullptr) {
     std::lock_guard<std::recursive_mutex> lk(g_mx);
-    if (apply_menu >= 0 && apply_menu < stagelogic::kMenus) g_state.active = g_state.menu[apply_menu];
+    if (apply_menu >= 0 && apply_menu < stagelogic::kMenus) g_state.active = serve ? *serve : g_state.menu[apply_menu];
     const std::string o = stagelogic::state_json(g_state);
     { int64_t pt = perf::begin(); if (!write_file(kState, o)) logf("stages: cannot write state.json"); perf::end(perf::StateWrite, pt); }
     if (apply_menu < 0 || g_state.active == g_applied) return;
@@ -767,6 +768,7 @@ bool g_hooked[kHooks] = {};
 // ---- the game's types, methods, fields (resolved on the first frame) ----
 TD* t_simple = nullptr;                                        // app.UIPartsStageSelectSimple
 API::Field *f_scroll = nullptr, *f_state = nullptr, *f_preview = nullptr, *f_is_matching = nullptr, *f_is_hub = nullptr;
+API::Field *f_decide = nullptr, *f_rand_off = nullptr;         // mDecideStageId, mListRandomDisable (List<Int32>)
 Method *m_owner = nullptr, *m_is_show = nullptr, *m_sel_index = nullptr, *m_items = nullptr, *m_list_index = nullptr;
 Method *m_list_count = nullptr, *m_list_item = nullptr, *m_list_insert = nullptr;   // List<UInt32>
 API::Field *f_map_desc = nullptr, *f_desc_stage = nullptr, *f_stage_id = nullptr, *f_desc_net = nullptr;   // replays
@@ -777,7 +779,9 @@ struct GridState {
     uintptr_t obj = 0;                 // the grid; no reference held: checked alive and of its type before each use
     int menu = -1;                     // sl::kBattle / sl::kTraining
     std::vector<sl::Slot> slots;       // its entries once the tiles are in (empty: none inserted)
-    std::map<uint32_t, int> cycle;     // vanilla stage -> variation shown on its entry (0: the vanilla look)
+    sl::Preview preview;               // the variation key's preview on the focused entry (stages_logic.hpp)
+    bool name_fit = false;             // the preview's name text set to fit its region (once per grid)
+    uint32_t decided_seen = UINT32_MAX;// the game's decided stage as last seen (Random or not)
     bool on_screen = false;            // shown (looked at every frame while it lives: the variation key, the hint)
     bool focused = false;              // its cells have the focus
     int focus_log = -1;                // the focus check's last logged answer
@@ -825,6 +829,12 @@ int cycle_of(uint32_t base, const std::string& key) {
 bool is_tile(uint32_t base, const std::string& key) {
     const Variant* v = key.empty() ? nullptr : variant_of(base, key);
     return v && v->tile;
+}
+// A stage's entries in the grids: its own ("") and its tiles' keys (Random Stage Settings' ticks)
+std::vector<std::string> entry_keys(uint32_t base) {
+    std::vector<std::string> k = { std::string() };
+    for (auto& t : g_tiles) if (t.base == base) k.push_back(t.key);
+    return k;
 }
 
 std::string ess_of(uint32_t id) {
@@ -906,6 +916,43 @@ void open_grid_window() {
     g_grid.next = g_frame;
 }
 
+// The grid's chosen entry (the game's decided stage, our choice for it) and its chosen variation; entry -1: not in this grid
+void chosen_entry(Obj* grid, int& entry, int& var) {
+    entry = -1; var = 0;
+    const int32_t d = i32_field(grid, f_decide, -1);
+    if (d < 0 || g_grid.menu < 0 || g_grid.slots.empty()) return;
+    const uint32_t base = static_cast<uint32_t>(d);
+    const auto& c = g_state.menu[g_grid.menu];
+    auto it = c.find(base);
+    const std::string key = it != c.end() ? it->second : std::string();
+    const bool tile = is_tile(base, key);
+    entry = sl::entry_index(g_grid.slots, base, tile ? key : std::string());
+    if (entry >= 0 && !key.empty() && !tile) var = cycle_of(base, key);
+}
+// The variation a stage's own entry shows now (0 for a tile or its own look)
+int shown_var(Obj* grid, int entry) {
+    if (entry < 0 || entry >= static_cast<int>(g_grid.slots.size()) || g_grid.slots[static_cast<size_t>(entry)].tile) return 0;
+    int ce = -1, cv = 0;
+    chosen_entry(grid, ce, cv);
+    return sl::shown_variation(entry, ce, cv, g_grid.preview);
+}
+// Whether a stage is in the game's random pool (not in mListRandomDisable); known: the list was read
+bool in_random_pool(Obj* grid, uint32_t base, bool* known = nullptr) {
+    Obj* list = obj_field(grid, f_rand_off);
+    if (known) *known = list != nullptr;
+    if (!list) return true;
+    const Ret rc = call(list, "get_Count");
+    const int n = rc.exception_thrown ? 0 : static_cast<int32_t>(rc.dword);
+    for (int i = 0; i < n; ++i) {
+        const Ret r = call(list, "get_Item", { arg_i32(i) });
+        if (!r.exception_thrown && static_cast<int32_t>(r.dword) == static_cast<int32_t>(base)) return false;
+    }
+    return true;
+}
+// Random Stage Settings' Decide on an entry of a stage with tiles (pre to post, this thread, this frame)
+struct RandomGuard { uintptr_t obj = 0; int menu = -1; uint32_t base = 0; std::string key; bool want_in_pool = false; uint32_t frame = 0; bool on = false; };
+thread_local RandomGuard tl_random;
+
 // ---- hooks (any thread: numbers, fields, managed calls; the GUI is the frame's) ----
 int pre_setup_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || argc < 2) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -954,9 +1001,6 @@ void post_get_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned lon
             if (ok && !rc2.exception_thrown && static_cast<size_t>(rc2.dword) == slots.size()) g.slots = std::move(slots);
             else logf("stages: grid (%s): the tiles could not be put in the list (%d entries now): grid left as the game made it",
                       sl::menu_key(f.menu), rc2.exception_thrown ? -1 : static_cast<int>(rc2.dword));
-            const auto& choice = g_state.menu[f.menu];
-            for (auto& s : g.slots)
-                if (!s.tile) { auto c = choice.find(s.base); g.cycle[s.base] = c != choice.end() ? cycle_of(s.base, c->second) : 0; }
         }
         g_grid = std::move(g);
     } catch (...) {
@@ -996,8 +1040,38 @@ int pre_decide(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned
     try {
         Obj* grid = reinterpret_cast<Obj*>(argv[1]);
         std::lock_guard<std::recursive_mutex> lk(g_mx);
-        if (grid && reinterpret_cast<uintptr_t>(grid) == g_grid.obj && !g_grid.slots.empty() && g_grid.menu >= 0 &&
-            i32_field(grid, f_state, -1) == 0) {               // the default state (Random's toggles its checks)
+        const int32_t state = grid ? i32_field(grid, f_state, -1) : -1;
+        if (grid && reinterpret_cast<uintptr_t>(grid) == g_grid.obj && !g_grid.slots.empty() && g_grid.menu >= 0 && state == 1) {
+            // Random Stage Settings: an entry of a stage with tiles flips its own tick (stages_logic.hpp toggle_tick); the
+            // game's Decide runs only when the stage's id enters or leaves its pool
+            Obj* scroll = obj_field(grid, f_scroll);
+            Ret r = scroll ? call(m_sel_index, scroll) : Ret{};
+            const int sel = scroll && !r.exception_thrown ? static_cast<int32_t>(r.dword) : -1;
+            if (sel >= 0 && sel < static_cast<int>(g_grid.slots.size())) {
+                const sl::Slot& s = g_grid.slots[static_cast<size_t>(sel)];
+                const auto keys = entry_keys(s.base);
+                bool known = false;
+                const bool in_pool = in_random_pool(grid, s.base, &known);
+                if (keys.size() > 1 && known) {
+                    const std::string key = s.tile ? s.key : std::string();
+                    auto& off = g_state.off[g_grid.menu][s.base];
+                    const sl::TickStep t = sl::toggle_tick(keys, off, in_pool, key);
+                    off = t.off;
+                    save_state(-1, "Random Stage Settings tick");
+                    logf("stages: grid (%s): random tick of entry %d (%s) -> %s; the game's own Decide %s", sl::menu_key(g_grid.menu), sel,
+                         key.empty() ? "the stage's own" : key.c_str(), t.off.count(key) ? "off" : "on", t.game_toggles ? "runs" : "skipped");
+                    g_grid_event.store(true);
+                    post(EV_STAGE_GRID);
+                    if (!t.game_toggles) {
+                        Obj* owner = m_owner ? call_obj(m_owner, grid) : nullptr;
+                        if (owner) call(owner, "TriggerSoundDecide");        // the game's own decide sound, its Decide skipped
+                        perf::end(perf::HkStgGrid, pt);
+                        return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
+                    }
+                    tl_random = { g_grid.obj, g_grid.menu, s.base, key, t.in_pool_after, g_frame, true };
+                }
+            }
+        } else if (grid && reinterpret_cast<uintptr_t>(grid) == g_grid.obj && !g_grid.slots.empty() && g_grid.menu >= 0 && state == 0) {
             Obj* scroll = obj_field(grid, f_scroll);
             Ret r = scroll ? call(m_sel_index, scroll) : Ret{};
             const int sel = scroll && !r.exception_thrown ? static_cast<int32_t>(r.dword) : -1;
@@ -1005,11 +1079,13 @@ int pre_decide(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned
                 const sl::Slot& s = g_grid.slots[static_cast<size_t>(sel)];
                 std::string key;
                 if (s.tile) key = s.key;
-                else {
+                else {                                         // what the entry shows: Confirm chooses the preview
                     auto vars = variations_of(s.base);
-                    const int c = g_grid.cycle[s.base];
+                    const int c = shown_var(grid, sel);
                     if (c > 0 && c <= static_cast<int>(vars.size())) key = vars[static_cast<size_t>(c - 1)]->key;
                 }
+                g_grid.preview = {};
+                if (g_state.random[g_grid.menu] != (s.base == sl::kRandomStage)) g_state.random[g_grid.menu] = s.base == sl::kRandomStage;
                 auto& choice = g_state.menu[g_grid.menu];
                 const auto old = choice.find(s.base);
                 g_decided = { true, g_grid.menu, s.base, key, old != choice.end() ? old->second : std::string() };
@@ -1032,7 +1108,29 @@ int pre_decide(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned
     perf::end(perf::HkStgGrid, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-void post_decide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { tl_decide = {}; }
+void post_decide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    tl_decide = {};
+    const RandomGuard g = tl_random;
+    tl_random = {};
+    if (!g.on || g.frame != g_frame || g_closing.load(std::memory_order_relaxed)) return;
+    try {
+        // the game's own Decide ran (the id in or out of its pool): it may have refused (it keeps one stage): our tick back
+        std::lock_guard<std::recursive_mutex> lk(g_mx);
+        Obj* grid = grid_alive(g.obj);
+        bool known = false;
+        const bool in_pool = grid ? in_random_pool(grid, g.base, &known) : g.want_in_pool;
+        if (known && in_pool != g.want_in_pool) {
+            auto& off = g_state.off[g.menu][g.base];
+            if (off.count(g.key)) off.erase(g.key); else off.insert(g.key);
+            save_state(-1, "Random Stage Settings tick refused by the game");
+            logf("stages: grid (%s): the game kept its pool as it was: the tick goes back", sl::menu_key(g.menu));
+        }
+        g_grid_event.store(true);
+        post(EV_STAGE_GRID);
+    } catch (...) {
+        logf("stages: EXCEPTION after a Random Stage Settings tick");
+    }
+}
 
 // UpdateList / SelectionChangedEvent of our grid: the frame looks at it again
 int pre_grid_dirty(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
@@ -1044,18 +1142,49 @@ int pre_grid_dirty(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsi
 }
 
 // ---- per-menu choice: served when that menu's stage loads ----
+// A menu whose stage is Random: the game's random landed on `stage` (a vanilla id, the one the opponent and the server
+// see); when that stage has tiles, one of its ticked entries is served on this PC (stages_logic.hpp pick_ticked).
+void serve_menu(int menu, int32_t stage, const char* why) {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    if (stage < 0 || !g_state.random[menu]) { save_state(menu, why); return; }
+    const uint32_t base = static_cast<uint32_t>(stage);
+    const auto keys = entry_keys(base);
+    if (keys.size() < 2) { save_state(menu, why); return; }
+    static uint32_t s_seed = GetTickCount() ^ 0x9E3779B9u;
+    s_seed = s_seed * 1664525u + 1013904223u;
+    const std::string k = sl::pick_ticked(keys, g_state.off[menu][base], s_seed >> 8);
+    sl::Choice c = g_state.menu[menu];
+    if (!k.empty()) c[base] = k;                                // a ticked tile
+    else if (is_tile(base, c[base]) || c[base].empty()) c.erase(base);   // its own entry (with its chosen variation, if any)
+    logf("stages: %s: Random landed on stage %u: entry %s picked among its ticked ones", sl::menu_key(menu), base,
+         k.empty() ? "of the stage itself" : k.c_str());
+    save_state(menu, why, &c);
+}
+thread_local uintptr_t tl_battle_desc = 0;
+int pre_battle_desc(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_battle_desc = (argc >= 3 && !g_closing.load(std::memory_order_relaxed)) ? reinterpret_cast<uintptr_t>(argv[2]) : 0;
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
 void post_battle_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const uintptr_t d = tl_battle_desc;
+    tl_battle_desc = 0;
     if (g_closing.load(std::memory_order_relaxed)) return;
     int64_t pt = perf::begin();
-    try { save_state(sl::kBattle, "an online battle is set up: on this PC only, the opponent and the server keep the vanilla id"); }
-    catch (...) { logf("stages: EXCEPTION serving Battle Settings' choice"); }
+    try {
+        Obj* desc = reinterpret_cast<Obj*>(d);
+        Obj* stage = d && alive(desc) ? obj_field(desc, f_desc_stage) : nullptr;
+        serve_menu(sl::kBattle, stage ? i32_field(stage, f_stage_id, -1) : -1,
+                   "an online battle is set up: on this PC only, the opponent and the server keep the vanilla id");
+    } catch (...) { logf("stages: EXCEPTION serving Battle Settings' choice"); }
     perf::end(perf::HkStgApply, pt);
 }
-int pre_training_stage(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+int pre_training_stage(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     int64_t pt = perf::begin();
-    try { save_state(sl::kTraining, "Training sets its stage"); }
-    catch (...) { logf("stages: EXCEPTION serving Training's choice"); }
+    try {
+        Obj* desc = argc >= 3 ? reinterpret_cast<Obj*>(argv[2]) : nullptr;
+        serve_menu(sl::kTraining, desc && alive(desc) ? i32_field(desc, f_stage_id, -1) : -1, "Training sets its stage");
+    } catch (...) { logf("stages: EXCEPTION serving Training's choice"); }
     perf::end(perf::HkStgApply, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -1154,6 +1283,40 @@ bool show_pic(Obj* tex, const Look& l) {
 
 const char* const kNoCellText = "<no cell text>";   // not a control name
 
+// The preview's name (the game's own text, centred on the banner's lower right): a long tile name is squeezed into the
+// room it has, AutoRegionFit as the game's other fitted texts, its region no wider than twice its distance to the banner's
+// right edge (it is centred 180 units from it: 1356 against 1536, read 05/11)
+constexpr float kNameMaxW = 340;
+void fit_name(Obj* text) {
+    const SF6CoreAPI* a = slots::ui::core();
+    if (!a || !text) return;
+    SF6CoreArg on{}; on.type = SF6CORE_ARG_I64; on.v.i = 1;
+    a->obj_invoke(slots::ui::client(), text, "set_AutoRegionFit(System.Boolean)", &on, 1, nullptr);
+    float rs[2] = {};
+    const Ret r = call(text, "get_RegionSize");
+    if (!r.exception_thrown) std::memcpy(rs, r.bytes.data(), sizeof rs);
+    if (std::isfinite(rs[0]) && std::isfinite(rs[1]) && rs[1] > 0 && (rs[0] <= 0 || rs[0] > kNameMaxW))
+        a->ui_set_region_size(slots::ui::client(), text, kNameMaxW, rs[1]);
+    logf("stages: grid (%s): the preview's name fits its region (was %.0f x %.0f, at most %.0f wide)", sl::menu_key(g_grid.menu), rs[0], rs[1], kNameMaxW);
+}
+// Random Stage Settings: an entry of a stage with tiles shows its own tick (its c_check's StatePattern, which the game
+// sets from the shared id: SetupRandomCheck)
+void random_tick(Obj* item, const sl::Slot& s) {
+    const auto keys = entry_keys(s.base);
+    if (keys.size() < 2) return;
+    Obj* grid = grid_alive(g_grid.obj);
+    bool known = false;
+    const bool in_pool = grid ? in_random_pool(grid, s.base, &known) : true;
+    if (!known) return;
+    Obj* check = find_child(item, "c_check", 0);
+    if (!check) return;
+    const int want = sl::is_ticked(keys, g_state.off[g_grid.menu][s.base], in_pool, s.tile ? s.key : std::string()) ? 1 : 0;
+    const Ret cur = call(check, "get_StatePattern");
+    if (!cur.exception_thrown && static_cast<int>(cur.dword) == want) return;
+    SF6CoreArg v{}; v.type = SF6CORE_ARG_I64; v.v.i = want;
+    if (const SF6CoreAPI* a = slots::ui::core()) a->obj_invoke(slots::ui::client(), check, "set_StatePattern(System.UInt32)", &v, 1, nullptr);
+}
+
 bool grid_work() {
     perf::Scope ps(perf::StgGrid);
     std::lock_guard<std::recursive_mutex> lk(g_mx);
@@ -1173,8 +1336,11 @@ bool grid_work() {
         const sl::Slot& s = g_grid.slots[static_cast<size_t>(focus)];
         const int n = static_cast<int>(variations_of(s.base).size());
         if (!s.tile && n > 0) {
-            g_grid.cycle[s.base] = sl::cycle(g_grid.cycle[s.base], n, 1);
-            logf("stages: grid (%s): stage %u shows variation %d of %d", sl::menu_key(g_grid.menu), s.base, g_grid.cycle[s.base], n);
+            int ce = -1, cv = 0;
+            chosen_entry(grid, ce, cv);
+            g_grid.preview = sl::preview_next(focus, ce, cv, g_grid.preview, n);
+            logf("stages: grid (%s): stage %u previews variation %d of %d (Confirm chooses it)", sl::menu_key(g_grid.menu), s.base,
+                 g_grid.preview.var, n);
         }
     }
 
@@ -1190,9 +1356,12 @@ bool grid_work() {
                 logf("stages: grid (%s): preview picture: %s", sl::menu_key(g_grid.menu), g_grid.preview_pic == 2 ? "thumbnails" : "4:1 images");
             else done = false;                                 // its picture not loaded yet: looked at again
         }
-        const int cyc = s.tile ? 0 : g_grid.cycle[s.base];
-        const Look l = look_of(s, cyc, g_grid.preview_pic == 2);
+        const Look l = look_of(s, shown_var(grid, focus), g_grid.preview_pic == 2);
         if (g_grid.preview_pic) done = show_pic(ptex, l) && done;
+        if (ptext && !g_grid.name_fit) {                       // a long name is squeezed into the banner, as the game does
+            g_grid.name_fit = true;
+            fit_name(ptext);
+        }
         const int nvar = s.tile ? 0 : static_cast<int>(variations_of(s.base).size());
         // one name line in the game's own text (its font and shadow): a tile's name, a variation's (stages_logic.hpp
         // variation_label), the stage's own name back on its vanilla look
@@ -1201,7 +1370,9 @@ bool grid_work() {
         if (ptext && !name.empty() && (s.tile || nvar > 0)) set_text(ptext, name);
     }
 
-    // the cells: each item of the pool shows list[ListIndex]
+    // the cells: each item of the pool shows list[ListIndex]; in Random Stage Settings each entry of a stage with tiles its
+    // own tick (the game ticks the shared id)
+    const bool random_state = i32_field(grid, f_state, -1) == 1;
     Obj* items = scroll && m_items ? call_obj(m_items, scroll) : nullptr;
     Ret rl = items ? call(items, "get_Length") : Ret{};
     const int n_items = items && !rl.exception_thrown ? static_cast<int32_t>(rl.dword) : 0;
@@ -1226,9 +1397,9 @@ bool grid_work() {
                      g_grid.pic == 2 ? "thumbnails" : g_grid.pic == 1 ? "4:1 images" : "kind not known");
             }
         }
-        const int cyc = s.tile ? 0 : g_grid.cycle[s.base];
-        const Look l = look_of(s, cyc, g_grid.pic == 2);
+        const Look l = look_of(s, shown_var(grid, li), g_grid.pic == 2);
         if (tex && g_grid.pic) done = show_pic(tex, l) && done;
+        if (random_state) random_tick(item, s);
         // a name on the cell: the stage's own name written by the game becomes the tile's; a reused cell gets its own back
         const std::string vname = vanilla_name(s.base);
         const std::string want = s.tile ? l.name : vname;
@@ -1639,6 +1810,20 @@ void grid_frame() {
                     tile = s.tile;
                     nvar = s.tile ? 0 : static_cast<int>(variations_of(s.base).size());
                 }
+                // the preview lives while the focus stays on its entry (left without Confirm, or the grid left: the entry as
+                // it was)
+                const sl::Preview p = focus ? sl::preview_follow(g_grid.preview, sel) : sl::Preview{};
+                if (!(p == g_grid.preview)) { g_grid.preview = p; open_grid_window(); }
+                // whether the menu's stage is Random (the game's random lands on a vanilla id: Random's pick, serve_menu)
+                const int32_t d = i32_field(grid, f_decide, -1);
+                if (d >= 0 && static_cast<uint32_t>(d) != g_grid.decided_seen) {
+                    g_grid.decided_seen = static_cast<uint32_t>(d);
+                    const bool rnd = static_cast<uint32_t>(d) == sl::kRandomStage;
+                    if (g_grid.menu >= 0 && g_state.random[g_grid.menu] != rnd) {
+                        g_state.random[g_grid.menu] = rnd;
+                        save_state(-1, "the menu's stage is Random or not");
+                    }
+                }
             }
         }
         g_grid.on_screen = on;
@@ -1710,6 +1895,8 @@ void start_grid_check() {
     TD* t_desc = tdb->find_type("app.battle.BattleDesc");
     TD* t_stage = tdb->find_type("app.battle.StageDesc");
     f_scroll = t_simple ? field_of(t_simple, "mScrollGrid") : nullptr;
+    f_decide = t_simple ? field_of(t_simple, "mDecideStageId") : nullptr;
+    f_rand_off = t_simple ? field_of(t_simple, "mListRandomDisable") : nullptr;
     f_state = t_simple ? field_of(t_simple, "mState") : nullptr;
     f_preview = t_simple ? field_of(t_simple, "mPreviewParts") : nullptr;
     f_is_matching = t_simple ? field_of(t_simple, "IsMatchingSetting") : nullptr;
@@ -1757,7 +1944,7 @@ void install_grid_hooks() {
         { kDecide, pre_decide, post_decide },
         { kUpdateList, pre_grid_dirty, nullptr },
         { kSelChanged, pre_grid_dirty, nullptr },
-        { kBattleDesc, nullptr, post_battle_desc },
+        { kBattleDesc, pre_battle_desc, post_battle_desc },
         { kTrainStage, pre_training_stage, nullptr },
         { kReplayDesc, pre_replay_desc, post_replay_desc },
     };
