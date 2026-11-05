@@ -5,12 +5,12 @@ packages:
 
 | Package | What it does | Needs |
 |---|---|---|
-| **SF6 Slots Loader** | costume mods become **extra** outfit slots, the original outfits stay; stage mods become variants of their stage (experimental) | REFramework |
+| **SF6 Slots Loader** | costume mods become **extra** outfit slots, the original outfits stay; stage mods become variants or new cells of their stage in the stage menus (experimental); a Settings tab in Replays (outfit and stage shown in replays) | REFramework; the Replays Settings tab needs SF6 Native Core 0.8.2 or newer |
 | **SF6 Color Mod** | extra costume colours, a colour editor, Drive colours per character and per player, all from the game's own menus: [colormod/README.md](colormod/README.md) | REFramework, SF6 Native Core |
 | **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
 | **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, drills, a reversal picker and online sharing of recordings, all in the game's training pause menu: [crsm/README.md](crsm/README.md) | REFramework, SF6 Native Core |
 
-Install what you want: the Slots Loader works on its own; the Color Mod and the Recording Manager need the Native Core of the same
+Install what you want: the Slots Loader works on its own (only its Replays Settings tab and the Stage Variation hint in the guide bar need the Native Core); the Color Mod and the Recording Manager need the Native Core of the same
 release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, the four packages in one: install either it or
 the separate packages, never both (two packages shipping the same files conflict in Fluffy Mod Manager).
 
@@ -70,8 +70,21 @@ unpack, nothing to convert.
 
 **Stage mods** (experimental, since 1.9.0) go into `reframework\stage_mods\`, as downloaded too. On the stage
 select screen of Fighting Ground > Versus, UP / DOWN cycles a stage through its original look and each mod
-made for it. Without stage mods, no stage is changed and nothing is hooked. See
-[stages/README.md](stages/README.md).
+made for it. Since 1.20.0 they also show in **Battle Settings > Other > Stage Settings** and **Training pause >
+Environment Settings > Change Stage**: a mod that is really another stage (a Suzaku Castle over the Training Room) gets
+a cell of its own, with its picture and name, and a mod that only changes a stage's look (lighting) is a variation of
+that stage, cycled with X / R and confirmed. Random Stage Settings has a tick per cell. Only the game's own stage ids
+travel online. Without stage mods, no stage is changed and nothing is hooked. See [stages/README.md](stages/README.md).
+
+**Replays Settings** (since 1.20.0): Replays has a sixth tab, Settings, with two rows. *Replay Outfit Settings* is a grid of
+the fighters; a fighter set to On is shown in replays in the costume and colour you pick (the colour row also lists
+the Color Mod's RW / MC colours), with a live 3D preview; R / pad X opens the Costume options of that outfit, as in
+Edit Character. Off (Default) shows the outfit you really wore, taken from a local journal of your online matches
+(`replay_journal.jsonl`, written from the first match played with 1.20.0); older replays show what they recorded.
+*Stage Settings* picks the stage shown in replays, modded stages included. All of it applies on your PC only: the replay file
+is never changed, and neither are your own outfit, colour and costume options. The choices are in
+`reframework\data\SF6_CostumeSlots_data\replay_outfits.json`. The Settings tab needs the SF6 Native Core 0.8.2 or newer
+(without it the tab is not added; the log says so).
 
 Updating in Fluffy Mod Manager: disable or remove the previous version first. Since 1.9.0 the mod is named
 SF6 Slots Loader.

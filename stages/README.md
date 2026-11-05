@@ -47,24 +47,45 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
   pack); that folder can be deleted at any time.
 - Without stage mods, no stage is changed and nothing is hooked.
 
-### Tiles and variations (Battle Settings and Training), in test
+### Tiles and variations (Battle Settings, Training and Replays), in test
 
-- The loader guesses what each mod is from the files it replaces: a **tile** is another stage built over a vanilla
+Since 1.20.0 stage mods also show in the stage menus of **Battle Settings > Other > Stage Settings**,
+**Training pause > Environment Settings > Change Stage** and **Replays > Settings > Stage Settings**. The classic
+stage select screen (Fighting Ground > Versus) keeps its UP / DOWN, unchanged.
+
+- The loader guesses what each mod is from the files it replaces. A **tile** is another stage built over a vanilla
   one (it replaces the stage's root prop scene, its arena mesh, ships collision, or adds 20 or more new files: the
-  Suzaku Castle or Medieval Town ports over the Training Room, NULSPACE, Aokigahara); a **variation** only tweaks
+  Suzaku Castle or Medieval Town ports over the Training Room, NULSPACE, Aokigahara). A **variation** only tweaks
   its stage (lighting, colours, a few textures). The guess and its reason are in `registry.json` (`kind`,
   `kind_reason`).
-- `reframework\stage_mods\stage_slots.ini` corrects the guess and the names, one section per mod (its name, or
-  its archive / folder name): `kind=tile` or `kind=variation`, `name=...`. It is written as a commented template
-  the first time; changes apply at the next start without rebuilding anything.
-- **Battle Settings > Other > Stage Settings** and **Training > Change Stage** show each tile as an entry of its
-  own after the game's stages, with its picture and name. On a stage with variations, LT / RT (the child tab keys;
-  LB / RB when the screen uses those) cycle them; the name shows `<LT> Training Room · Red <RT>`.
-- Each menu keeps its own choice: Battle Settings' is used for online battles, Training's when Training loads its
-  stage, the replay picker's for replays, the stage select screen's (UP / DOWN) for the battles it starts. The game,
-  the opponent and the replay files only ever get the vanilla stage (the Training Room for a tile over it).
+- A tile gets a cell of its own after the game's stages, with its picture and name.
+- A variation belongs to its stage's cell. **X** (pad) or **R** (keyboard; the game's own key for it) previews the
+  next one on the focused cell; the guide bar shows "Stage Variation" only when that stage has some (this hint needs the
+  Native Core 0.8.2 or newer). **Confirm** chooses the shown variation; leaving the cell without confirming puts
+  the chosen one back.
+- Random Stage Settings: each cell has its own tick. When the game's random lands on a stage that has ticked cells,
+  one of them is loaded.
+- The VS screen shows the stage that is really loaded.
+- Online is safe: only the original stage ids travel (the Training Room for a tile over it). The mod is visible on
+  your PC only, so the other player sees the original stage.
+- Each menu keeps its own choice: Battle Settings', Training's and Replays' are separate (Battle Settings' is used for
+  online battles, Training's when Training loads its stage, Replays' for replays, the stage select screen's UP / DOWN
+  for the battles it starts). Replay files only ever hold the vanilla stage id.
 - Pictures: the mod's own stage-select picture and thumbnail when it ships them, else cut from its screenshot,
   else the stage's own picture with the mod's name.
+- `reframework\stage_mods\stage_slots.ini` overrides the guess and the names, one section per mod (the mod's key, its
+  name, its source, or its archive / folder name, with or without its extension; a later matching section wins):
+  `kind=tile` or `kind=variation`, `name=the name shown in the menus`. Lines starting with `;` or `#` are comments;
+  any other value for `kind` is ignored and logged. The file is written as a commented template the first time; changes
+  apply at the next start without rebuilding anything. Example:
+
+  ```ini
+  [SIRN Training Room]
+  kind=variation
+
+  [Suzaku Castle Over Training Room]
+  name=Suzaku Castle
+  ```
 
 ## Limits
 

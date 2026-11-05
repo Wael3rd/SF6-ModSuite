@@ -14,8 +14,10 @@
 //       back to 01) and the fighter in 3D at the game's place (a colour change recolours it in place, as the game's page
 //       does). The colours: the outfit's game colours, then the Color Mod's RW / MC entries with its own labels
 //       (colormod_link.hpp: each rides on colour 02; the preview and the replay ask the Color Mod for exactly that
-//       entry, or for the game's own colours). Back (Esc, pad B) goes back to the grid; Confirm and the tab keys do
-//       nothing there, as on the game's page;
+//       entry, or for the game's own colours). For an outfit with costume options, R / pad X opens the same Costume
+//       options menu as Edit Character (without its Player side row; the guide bar says "Costume options"), the choices
+//       kept per fighter and outfit for replays only. Back (Esc, pad B) goes back to the grid; Confirm and the tab
+//       keys do nothing there, as on the game's page;
 //   - Stage Settings, as the game's: the banner of the focused (or chosen) stage with its name, a 3-column grid with its
 //     scroll bar, "Default" first (the replay's own stage), the chosen cell marked; Confirm picks the focused cell and
 //     stays, Esc goes back to the rows. The list: stage_list(), Battle Settings' own, with the stage slots as Battle
@@ -25,7 +27,9 @@
 //     chosen cell's yellow corner triangle. The choice is the replay menu's own
 //     (stages::choose(kReplay), never Battle Settings' nor Training's): the replay keeps a vanilla stage id, the stage
 //     slots serve the chosen tile / variation when the replay's description is set up.
-// Not taken: the game's "Game Settings" summary on the right (not wanted), its T / R shortcuts.
+//   - The summary panel on the right of both pages, as Battle Settings' (the title pill, the fighters' outfit lines, the
+//     stage's picture and line), drawn from the same choices.
+// Not taken: the game's T shortcut of that screen.
 // The game picks the colours with a grid of colour boxes (several at once); a choice here is one colour, hence the
 // third row. On = the outfit a replay's fighter of that character wears (replay_logic.hpp; the playback override,
 // replay_outfits.cpp, reads the file), Off = what the replay holds; the stage likewise. Every change writes
