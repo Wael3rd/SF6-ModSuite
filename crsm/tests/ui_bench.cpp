@@ -2,10 +2,12 @@
 // slots and 30 reversal rows, the cursor answers at the block edges (single cases and whole walks with a model of the game's
 // list), the arrows, the slot name fit, the learnt wording, the spin names' ellipsis, the text dialog's outcome, the key
 // edges, and the Community dialog (pages, sort, votes, downloads, and the cursor kept after a list refresh); the drill
-// details dialog (src/ui/details_logic.*: slot pages, texts, the wrapped lines from baselines, the window, the thumb, the
-// hold-repeat) and the pack readers it shows (model::pack author / source / slot_summaries).
+// details dialog (src/ui/details_logic.*: slot pages, texts, the drillcodes author label, the guide entries, the wrapped
+// lines from baselines, the window, the thumb, the hold-repeat, the mouse wheel's client -> UI mapping, area and notches)
+// and the pack readers it shows (model::pack author / source / slot_summaries).
 // Expected values: RecordingManagerTab.lua / ReversalSlots.lua behaviour (line numbers in logic.hpp) and the game's
 // own screens. No game, no data. Exit code 0 only when every check passed.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -943,12 +945,24 @@ void test_tab_guard() {
 // A fake ui::T: the texts the details read, in English
 std::string fake_t(const std::string& key, const std::vector<std::string>& a) {
     if (key == "details_slot") return "Slot " + (a.empty() ? std::string() : a[0]);
-    if (key == "details_header") return a.size() == 3 ? a[0] + " slots saved - page " + a[1] + "/" + a[2] : "?";
-    if (key == "details_header_one") return a.size() == 2 ? "1 slot saved - page " + a[0] + "/" + a[1] : "?";
+    if (key == "details_page") return a.size() == 2 ? "page " + a[0] + "/" + a[1] : "?";
+    if (key == "details_saved") return a.size() == 1 ? a[0] + " slots saved" : "?";
+    if (key == "details_saved_one") return a.empty() ? "1 slot saved" : "?";
     if (key == "details_author") return "Author: " + (a.empty() ? std::string() : a[0]);
     if (key == "details_source") return "Source: " + (a.empty() ? std::string() : a[0]);
     if (key == "source_community") return "Community";
     if (key == "source_local") return "Local file";
+    if (key == "source_local_short") return "Local";
+    if (key == "details_md_help") return "Markdown Help";
+    if (key == "details_md_newline") return "new line";
+    if (key == "details_md_heading") return "heading";
+    if (key == "details_md_emphasis") return "emphasis";
+    if (key == "details_md_violet") return "light violet";
+    if (key == "details_md_magenta") return "magenta";
+    if (key == "details_md_purple") return "dark purple";
+    if (key == "details_md_blue") return "blue highlight";
+    if (key == "details_md_list") return "list line";
+    if (key == "details_md_note") return "Up to " + (a.empty() ? std::string("?") : a[0]) + " characters. Ctrl+V pastes. <b> [x] are ( ).";
     return key;
 }
 
@@ -998,9 +1012,12 @@ void test_details() {
     eq(dt::page_range(0, 0).last, 0, "no slot: nothing shown");
 
     group("details texts");
-    eq(dt::header_text(fake_t, 15, 0, 2), std::string("15 SLOTS SAVED - PAGE 1/2"), "header, capitals, page from 1");
-    eq(dt::header_text(fake_t, 1, 0, 1), std::string("1 SLOT SAVED - PAGE 1/1"), "header of a single slot");
-    eq(dt::header_text(fake_t, 0, 0, 1), std::string("0 SLOTS SAVED - PAGE 1/1"), "header without a slot");
+    eq(dt::header_text(fake_t, 0, 2), std::string("PAGE 1/2"), "header: the page only, capitals, page from 1");
+    eq(dt::header_text(fake_t, 1, 2), std::string("PAGE 2/2"), "header of the second page");
+    eq(dt::header_text(fake_t, 0, 0), std::string("PAGE 1/1"), "header: never fewer than one page");
+    eq(dt::saved_text(fake_t, 14), std::string("14 SLOTS SAVED"), "saved count, capitals");
+    eq(dt::saved_text(fake_t, 1), std::string("1 SLOT SAVED"), "a single slot: the singular");
+    eq(dt::saved_text(fake_t, 0), std::string("0 SLOTS SAVED"), "no slot");
     eq(dt::row_text("Slot 7", "Fireball", 64, 0), std::string("Slot 7 - Fireball - 64F"), "row with a name");
     eq(dt::row_text("Slot 7", "", 64, 0), std::string("Slot 7 - 64F"), "row without a name");
     eq(dt::row_text("Slot 7", "  <b>x</b>  ", 3, 0), std::string("Slot 7 - (b)x(/b) - 3F"), "markup made safe, trimmed");
@@ -1017,8 +1034,66 @@ void test_details() {
     eq(dt::source_label(fake_t, "drillcodes.com"), std::string("drillcodes.com"), "source drillcodes");
     eq(dt::source_label(fake_t, ""), std::string("Local file"), "no source: a local file");
     eq(dt::source_label(fake_t, "my <site>"), std::string("my (site)"), "another source as written");
-    eq(dt::frame_text("Ryu", "Community"), std::string("Ryu - Community"), "frame text");
-    eq(dt::frame_text("", "Local file"), std::string("Local file"), "frame text without a character");
+    // the top-left box: origin, short source, author, first line
+    check(dt::origin("") == dt::Origin::Local && dt::origin("my site") == dt::Origin::Local, "no source or another one: Local");
+    check(dt::origin(" Community ") == dt::Origin::Community && dt::origin("DrillCodes.com") == dt::Origin::DrillCodes
+          && dt::origin("drillcodes") == dt::Origin::DrillCodes, "community / drillcodes(.com), any case");
+    eq(dt::short_source(fake_t, ""), std::string("Local"), "short source: Local");
+    eq(dt::short_source(fake_t, "other place"), std::string("Local"), "short source of another source: Local");
+    eq(dt::short_source(fake_t, "community"), std::string("Community"), "short source: Community (translated)");
+    eq(dt::short_source(fake_t, "drillcodes.com"), std::string("DrillCodes"), "short source: DrillCodes (a name)");
+    eq(dt::frame_author("Chris_F", "Wael3rd_PC", "community"), std::string("Chris_F"), "info.author first");
+    eq(dt::frame_author(" <Chris> ", "", ""), std::string("(Chris)"), "info.author made safe");
+    eq(dt::frame_author("", "Wael3rd_PC", ""), std::string("Wael3rd_PC"), "a Local drill without author: the share name");
+    eq(dt::frame_author("", "Wael3rd_PC", "something"), std::string("Wael3rd_PC"), "another source counts as Local");
+    eq(dt::frame_author("", "Wael3rd_PC", "community"), std::string(), "a Community drill without author: none");
+    eq(dt::frame_author("", "Wael3rd_PC", "drillcodes.com"), std::string(), "a DrillCodes drill without author: none");
+    eq(dt::frame_author("", "", ""), std::string(), "no share name known: none");
+    // a Community import of a drill code: "<author> (drillcodes)" (the server's authorLabel) is DrillCodes, its author bare
+    {
+        std::string bare;
+        check(dt::drillcodes_author("Chris_F (drillcodes)", &bare) && bare == "Chris_F", "the drillcodes label: the author bare: " + bare);
+        check(dt::drillcodes_author("Chris_F (DrillCodes)   ", &bare) && bare == "Chris_F", "any case, spaces after it: " + bare);
+        check(dt::drillcodes_author("Big  Name   (DRILLCODES)", &bare) && bare == "Big Name", "spaces inside collapsed: " + bare);
+        check(dt::drillcodes_author("(drillcodes)", &bare) && bare.empty(), "the suffix alone: no author");
+        check(!dt::drillcodes_author("Chris_F", &bare) && !dt::drillcodes_author("Bob(drillcodes)") && !dt::drillcodes_author("x (drillcodes) y")
+              && !dt::drillcodes_author("drillcodes") && !dt::drillcodes_author(""), "no suffix, or not the label: not one");
+        eq(dt::shown_author("Chris_F (drillcodes)"), std::string("Chris_F"), "shown author: the suffix dropped");
+        eq(dt::shown_author(" <Chris> "), std::string("(Chris)"), "shown author: made safe as before");
+        check(dt::origin("community", "Chris_F (drillcodes)") == dt::Origin::DrillCodes, "community + the label: DrillCodes");
+        check(dt::origin("community", "Chris_F") == dt::Origin::Community, "community alone: still Community");
+        check(dt::origin("drillcodes.com", "Chris_F") == dt::Origin::DrillCodes, "a local conversion: still DrillCodes");
+        check(dt::origin("", "Me (drillcodes)") == dt::Origin::DrillCodes, "the label wins over no source");
+        eq(dt::short_source(fake_t, "community", "Chris_F (drillcodes)"), std::string("DrillCodes"), "short source of the label: DrillCodes");
+        eq(dt::short_source(fake_t, "community", "Chris_F"), std::string("Community"), "short source of a Community author: Community");
+        eq(dt::source_label(fake_t, "community", "Chris_F (drillcodes)"), std::string("drillcodes.com"), "source line of the label: drillcodes.com");
+        eq(dt::source_label(fake_t, "community", "Chris_F"), std::string("Community"), "source line of a Community author: Community");
+        eq(dt::frame_author("Chris_F (drillcodes)", "Wael3rd_PC", "community"), std::string("Chris_F"), "top-left author: the label bare");
+        eq(dt::frame_author("(drillcodes)", "Wael3rd_PC", "community"), std::string(), "the suffix alone: no author, never the share name");
+        eq(dt::frame_text("Akuma", dt::frame_author("Chris_F (drillcodes)", "", "community"),
+                          dt::short_source(fake_t, "community", "Chris_F (drillcodes)"), 0),
+           std::string("Akuma - Chris_F - DrillCodes"), "Wael's line: Akuma - Chris_F - DrillCodes");
+        eq(dt::frame_text("Akuma", dt::frame_author("Chris_F", "", "community"), dt::short_source(fake_t, "community", "Chris_F"), 0),
+           std::string("Akuma - Chris_F - Community"), "a Community-only drill: Community");
+        eq(dt::detail_text(fake_t, "Do it.", "Chris_F (drillcodes)", dt::source_label(fake_t, "community", "Chris_F (drillcodes)")),
+           std::string("Do it.\n\nAuthor: Chris_F\nSource: drillcodes.com"), "the description pane's author / source lines of the label");
+    }
+    eq(dt::frame_text("Ryu", "Wael3rd_PC", "Local", 0), std::string("Ryu - Wael3rd_PC - Local"), "first line: character, author, source");
+    eq(dt::frame_text("Ryu", "", "Community", 0), std::string("Ryu - Community"), "first line without an author");
+    eq(dt::frame_text("", "", "Local", 0), std::string("Local"), "first line without a character nor an author");
+    eq(dt::frame_text("", "Chris_F", "DrillCodes", 0), std::string("Chris_F - DrillCodes"), "first line without a character");
+    {
+        const std::string longa = "An author name so long that it never fits the top-left box at all";
+        const std::string r = dt::frame_text("Ryu", longa, "Community", 22.0);
+        check(lg::text_em(r) <= 22.0, "a long author: the line fits its em: " + r);
+        check(r.rfind("Ryu - ", 0) == 0 && r.size() > 12 && r.substr(r.size() - 12) == " - Community", "the character and the source kept: " + r);
+        check(r.find("\xE2\x80\xA6") != std::string::npos, "the author cut with an ellipsis: " + r);
+        const double tight = lg::text_em("Ryu - Community") + 1.0;   // (an author under 3 em would stay)
+        eq(dt::frame_text("Ryu", longa, "Community", tight), std::string("Ryu - Community"), "no room for 3 em of the author: dropped");
+        const std::string all = dt::frame_text("A character name far too long", "", "Community", 8.0);
+        check(lg::text_em(all) <= 8.0 && all.find("\xE2\x80\xA6") != std::string::npos, "no author and still too wide: the line cut: " + all);
+        eq(dt::frame_text("Ryu", "[x]", "Local", 0), std::string("Ryu - (x) - Local"), "brackets made ( )");
+    }
     eq(dt::clean_text("\r\n\nLine one\r\n\n\n\nLine\ttwo  <x> [y]\n\n", 6000), std::string("Line one\n\nLine two (x) (y)"),
        "paragraphs kept, one blank line at most, none first or last");
     eq(dt::clean_text("abc\x01\x7F d", 6000), std::string("abc d"), "control characters dropped");
@@ -1157,14 +1232,25 @@ void test_details() {
         eq(dt::leading_combo_icons("<ICON KeyA"), std::string(), "a cut tag: none");
         auto gt = [](const std::string& k, const std::vector<std::string>&) {
             return k == "details_confirm" ? std::string("Confirm") : k == "details_more_slots" ? std::string("Show More Slots")
-                 : k == "details_edit" ? std::string("Edit description") : k;
+                 : k == "details_edit" ? std::string("Edit Drill Description") : k == "details_md_help" ? std::string("Markdown Help")
+                 : k == "details_show_desc" ? std::string("Show Drill Description") : k;
         };
         eq(dt::guide_entries(gt, false, "<ICON KeyA><ICON +><ICON KeyE>", true),
-           std::string("<ICON KeyF> Confirm   <ICON KeyA> / <ICON KeyE> Show More Slots   <ICON KeyT> Edit description"),
-           "keyboard, two pages: a slash between the tab glyphs");
-        eq(dt::guide_entries(gt, true, "<ICON BtnL1><ICON +><ICON BtnR1>", false), std::string("<ICON BtnD> Confirm   <ICON BtnU> Edit description"),
-           "pad, one page: no slot pages entry");
-        eq(dt::guide_entries(gt, false, "", true), std::string("<ICON KeyF> Confirm   <ICON KeyT> Edit description"), "no tab glyphs known: no entry");
+           std::string("<ICON KeyF> Confirm   <ICON KeyA> / <ICON KeyE> Show More Slots   <ICON KeyT> Edit Drill Description   <ICON KeyR> Markdown Help"),
+           "keyboard, two pages: a slash between the tab glyphs, R for the help");
+        eq(dt::guide_entries(gt, true, "<ICON BtnL1><ICON +><ICON BtnR1>", false),
+           std::string("<ICON BtnD> Confirm   <ICON BtnU> Edit Drill Description   <ICON BtnL> Markdown Help"),
+           "pad, one page: no slot pages entry, the west button (X / Square) for the help");
+        eq(dt::guide_entries(gt, false, "", true), std::string("<ICON KeyF> Confirm   <ICON KeyT> Edit Drill Description   <ICON KeyR> Markdown Help"),
+           "no tab glyphs known: no entry");
+        // the R entry follows the pane: the way back to the description while the Markdown help is shown
+        eq(dt::guide_entries(gt, false, "<ICON KeyA><ICON +><ICON KeyE>", true, true),
+           std::string("<ICON KeyF> Confirm   <ICON KeyA> / <ICON KeyE> Show More Slots   <ICON KeyT> Edit Drill Description   <ICON KeyR> Show Drill Description"),
+           "keyboard, the help shown: [R] Show Drill Description");
+        eq(dt::guide_entries(gt, true, "", false, true), std::string("<ICON BtnD> Confirm   <ICON BtnU> Edit Drill Description   <ICON BtnL> Show Drill Description"),
+           "pad, the help shown: the same key, the description's way back");
+        eq(dt::guide_entries(gt, true, "", false, false), std::string("<ICON BtnD> Confirm   <ICON BtnU> Edit Drill Description   <ICON BtnL> Markdown Help"),
+           "the description shown again: Markdown Help again");
         const std::vector<float> nx = dt::guide_layout({ 100, 400, 900 }, { 110, 300, 120 }, { 23, 23, 23 });
         check(nx.size() == 3 && nx[0] == 100 && nx[1] == 233 && nx[2] == 556, "laid out as the game: x + width + font width");
         check(dt::guide_layout({}, {}, {}).empty(), "no item: nothing");
@@ -1251,6 +1337,82 @@ void test_details() {
         check(opens == closes && opens > 0, "every span closed (" + std::to_string(opens) + " / " + std::to_string(closes) + ")");
     }
 
+    group("details help");
+    {
+        const std::string L = "<COLOR preset=\"FGM_Cmn_2\">", V = "<COLOR preset=\"FGM_Cmn_1\">", M = "<COLOR preset=\"FGM_Cmn_0\">",
+                          C = "</COLOR>", B = "<HLBGN Arg0 = \"3\">", BE = "<HLEND Arg0 = \"3\">";
+        const std::string h = dt::help_text(fake_t);
+        check(h.rfind(L + "Markdown Help" + C + "\n", 0) == 0, "the help's heading first: " + h.substr(0, 60));
+        const std::string rows[] = {
+            "\n/n  =  new line\n",
+            "\n# Title  =  " + L + "heading" + C + "\n",
+            "\n**text**  =  " + V + "emphasis" + C + "\n",
+            "\n{violet}text{/}  =  " + L + "light violet" + C + "\n",
+            "\n{magenta}text{/}  =  " + V + "magenta" + C + "\n",
+            "\n{purple}text{/}  =  " + M + "dark purple" + C + "\n",
+            "\n{blue}text{/}  =  " + B + "blue highlight" + BE + "\n",
+            "\n- item  =  list line\n",
+        };
+        size_t at = 0;
+        bool order = true;
+        for (const std::string& r : rows) {
+            const size_t f = h.find(r, at);
+            check(f != std::string::npos, "help row: " + r.substr(1, r.size() - 2));
+            if (f == std::string::npos || f < at) order = false; else at = f + 1;
+        }
+        check(order, "the help's rows in order");
+        eq(h.substr(h.rfind("\n\n") + 2), std::string("Up to 1000 characters. Ctrl+V pastes. (b) (x) are ( )."),
+           "the note last, after a blank line, its limit 1000, its brackets made ( )");
+        // the only tags are the converter's verified ones, every span closed on its own line; the syntax shown as typed
+        auto tags_ok = [&](const std::string& s, int* opens, int* closes) {
+            *opens = *closes = 0;
+            for (size_t i = s.find('<'); i != std::string::npos; i = s.find('<', i + 1)) {
+                const size_t e = s.find('>', i);
+                if (e == std::string::npos) return false;
+                const std::string tag = s.substr(i, e - i + 1);
+                if (tag == L || tag == V || tag == M || tag == B) ++*opens;
+                else if (tag == C || tag == BE) ++*closes;
+                else return false;
+            }
+            return s.find('[') == std::string::npos && s.find(']') == std::string::npos;
+        };
+        int o = 0, c = 0;
+        check(tags_ok(h, &o, &c) && o == 7 && c == 7, "7 spans (title, heading, emphasis, 4 colours), only verified tags, no [ ]: " +
+              std::to_string(o) + " / " + std::to_string(c));
+        bool lines_ok = true;
+        for (size_t p = 0; p <= h.size();) {
+            size_t e = h.find('\n', p);
+            if (e == std::string::npos) e = h.size();
+            int lo = 0, lc = 0;
+            if (!tags_ok(h.substr(p, e - p), &lo, &lc) || lo != lc) lines_ok = false;
+            p = e + 1;
+        }
+        check(lines_ok, "each line of the help opens and closes its own span");
+        check(h.find("**text**") != std::string::npos && h.find("{violet}text{/}") != std::string::npos && h.find("# Title") != std::string::npos,
+              "the syntax shown as typed (never converted)");
+        // a translation holding markers or tags makes no span of its own
+        auto evil = [](const std::string& k, const std::vector<std::string>& a) {
+            if (k == "details_md_newline") return std::string("**x** {blue}y{/} <COLOR preset=\"FGM_Cmn_1\">z");
+            if (k == "details_md_heading") return std::string("# head [1]");
+            return fake_t(k, a);
+        };
+        const std::string he = dt::help_text(evil);
+        check(tags_ok(he, &o, &c) && o == 7 && c == 7, "a translation's markers and tags make no span: " + std::to_string(o) + " / " + std::to_string(c));
+        check(he.find("\n/n  =  x bluey/ (COLOR preset=\"FGM_Cmn_1\")z\n") != std::string::npos, "its marker characters dropped, its tag shown as ( )");
+        check(he.find("\n# Title  =  " + L + "head (1)" + C + "\n") != std::string::npos, "a translated '# ' dropped, the heading still one span");
+        // the help through the window: each line alone valid, the walk skips its tags (one line a window)
+        std::vector<size_t> st{ 0 };
+        for (size_t i = 0; i < h.size(); ++i) if (h[i] == '\n') st.push_back(i + 1);
+        bool win_ok = true;
+        for (int k = 0; k < (int)st.size(); ++k) {
+            int wo = 0, wc = 0;
+            if (!tags_ok(dt::window_text(h, st, k, 1), &wo, &wc) || wo != wc) win_ok = false;
+        }
+        check(win_ok, "every one-line window of the help is valid on its own");
+        const dt::Lines ls = dt::line_starts(h, [](uint32_t) { return 23.0f; });   // (no wrap: one baseline)
+        check(ls.laid_out && ls.starts == st, "the walk finds the help's lines (tags skipped): " + std::to_string(ls.starts.size()));
+    }
+
     group("details keys");
     {
         dt::HoldRepeat h;
@@ -1260,6 +1422,66 @@ void test_details() {
         check(steps.size() >= 2 && steps[0] == 1 && steps[1] == 15, "one at the press, the next once held over 12 frames, then every 3");
         check(!h.step(false) && h.held == 0, "released: reset");
         check(h.step(true), "pressed again: a step at once");
+    }
+
+    group("details wheel");
+    {
+        auto near = [](float a, float b) { return std::fabs(a - b) < 0.01f; };
+        // the client pixels in the UI's 1920 x 1080 units
+        dt::GuiPoint p = dt::client_to_gui(1100, 744, 1920, 1080);
+        check(p.ok && near(p.x, 1100) && near(p.y, 744), "1080p: the client pixels as they are (in game 04/11: the game's cursor too)");
+        p = dt::client_to_gui(1280, 720, 2560, 1440);
+        check(p.ok && near(p.x, 960) && near(p.y, 540), "1440p: scaled down by 4/3");
+        p = dt::client_to_gui(3839, 2159, 3840, 2160);
+        check(p.ok && near(p.x, 1919.5f) && near(p.y, 1079.5f), "2160p: halved");
+        p = dt::client_to_gui(320, 0, 2560, 1080);
+        check(p.ok && near(p.x, 0) && near(p.y, 0), "21:9 (2560 x 1080): bars left and right, the UI from x 320");
+        p = dt::client_to_gui(2240, 1080, 2560, 1080);
+        check(p.ok && near(p.x, 1920) && near(p.y, 1080), "21:9: the UI's right edge at x 2240");
+        p = dt::client_to_gui(0, 60, 1920, 1200);
+        check(p.ok && near(p.x, 0) && near(p.y, 0), "16:10 (1920 x 1200): bars above and below, the UI from y 60");
+        p = dt::client_to_gui(640, 400, 1280, 800);
+        check(p.ok && near(p.x, 960) && near(p.y, 540), "16:10 smaller (1280 x 800): scale 2/3, the centre stays the centre");
+        p = dt::client_to_gui(10, 10, 1920, 1200);
+        check(p.ok && p.y < 0, "in the bar above: above the UI (outside every area)");
+        check(!dt::client_to_gui(5, 5, 0, 1080).ok && !dt::client_to_gui(5, 5, 1920, 0).ok, "an empty client area: no point");
+        // the area: the text (930 wide) and the bar (30 further, 8 wide), 18 lines + the bar's offset high, from the region
+        const dt::Area a = dt::wheel_area(740, 191);
+        check(near(a.left, 740) && near(a.top, 191) && near(a.right, 740 + 930 + 30 + 8) && near(a.bottom, 191 + 6 + 18 * 32.5f),
+              "the description's area at 1080p: 740, 191 - 1708, 782");
+        check(dt::contains(a, dt::client_to_gui(1000, 400, 1920, 1080)), "over the text: inside");
+        check(dt::contains(a, dt::client_to_gui(1704, 300, 1920, 1080)), "over the scroll bar: inside");
+        check(dt::contains(a, dt::client_to_gui(740, 191, 1920, 1080)) && dt::contains(a, dt::client_to_gui(1708, 782, 1920, 1080)),
+              "the edges: inside");
+        check(!dt::contains(a, dt::client_to_gui(739, 400, 1920, 1080)) && !dt::contains(a, dt::client_to_gui(1709, 400, 1920, 1080))
+              && !dt::contains(a, dt::client_to_gui(1000, 190, 1920, 1080)) && !dt::contains(a, dt::client_to_gui(1000, 783, 1920, 1080)),
+              "beside, above, under: outside");
+        check(!dt::contains(a, dt::client_to_gui(300, 300, 1920, 1080)), "the slot list (left of the text): outside");
+        check(!dt::contains(a, dt::GuiPoint{ 1000, 400, false }), "a point not known: never inside");
+        check(dt::contains(a, dt::client_to_gui(1333.33f, 533.33f, 2560, 1440)), "1440p: the same place on screen, inside");
+        check(!dt::contains(a, dt::client_to_gui(900, 400, 2560, 1440)) && dt::contains(a, dt::client_to_gui(900, 400, 1920, 1080)),
+              "the pixel (900, 400): inside at 1080p, left of the area at 1440p (675 in the UI's units)");
+        check(dt::contains(a, dt::client_to_gui(320 + 1000, 400, 2560, 1080)) && !dt::contains(a, dt::client_to_gui(1000, 400, 2560, 1080)),
+              "21:9: the area moved right by the bar");
+        // the notches
+        dt::WheelSteps w;
+        eq(w.take(120), -3, "a notch forward: 3 lines up");
+        eq(w.take(-120), 3, "a notch back: 3 lines down");
+        eq(w.take(240), -6, "two notches at once: 6 lines");
+        eq(w.take(0), 0, "no delta: nothing");
+        eq(w.take(40), 0, "a third of a notch (a smooth wheel): nothing yet");
+        eq(w.take(40), 0, "two thirds: nothing yet");
+        eq(w.take(40), -3, "a whole notch summed: 3 lines");
+        eq(w.rest, 0, "nothing left");
+        eq(w.take(60), 0, "half a notch forward");
+        eq(w.take(-120), 3, "then a notch back: the half forward dropped, 3 lines down");
+        eq(w.take(-130), 3, "a bit more than a notch: 3 lines, the rest kept");
+        eq(w.rest, -10, "the rest");
+        w.reset();
+        eq(w.rest, 0, "reset");
+        // clamped as Up / Down: the window's top within 0 .. total - 18
+        eq(std::clamp(1 + w.take(120), 0, dt::max_top(40, dt::kWindowLines)), 0, "near the top: clamped at 0");
+        eq(std::clamp(20 + w.take(-120), 0, dt::max_top(40, dt::kWindowLines)), 22, "near the end: clamped at total - 18");
     }
 
     group("pack info");

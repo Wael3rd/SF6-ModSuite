@@ -1,11 +1,15 @@
 // ui/drill_details — the drill details dialog (Wael 04/11): Confirm (keyboard F, pad A / Cross) on the Manager page's
 // Drill row opens the game's own app.training.UITrainingImageDialog (GUI / UIAgent ui11281, the page of "Simple
-// Training Settings > The Frame Meter and You") filled with the selected drill: its name as the title, "<Character> -
-// <Source>" in the top-left box, its saved slots ten a page in the list (the game's tab keys: the keys at Q / E of a
-// QWERTY keyboard, A / E on AZERTY, pad L1 / R1), its whole description wrapped by the game and scrolled 18 lines at a
-// time (Up / Down, W / Z / S, pad d-pad and left stick), with a scroll bar, and the buttons "Open drill" / "Cancel". T
-// (pad Y / Triangle) edits the description in the game's text dialog, drawn over this one (in game 04/11), the new text
-// shown in place after. The key guide at the bottom shows the dialog's own entries while it is up. The pure parts are
+// Training Settings > The Frame Meter and You") filled with the selected drill: its name as the title, two lines in the
+// top-left box ("<Character> - <Author> - <Source>", "14 SLOTS SAVED"), its saved slots ten a page in the list under a
+// "PAGE 1/2" header (the game's tab keys: the keys at Q / E of a QWERTY keyboard, A / E on AZERTY, pad L1 / R1), its whole
+// description wrapped by the game and scrolled 18 lines at a time (Up / Down, W / Z / S, pad d-pad and left stick, the mouse
+// wheel over it), with a scroll bar, and the buttons "Open drill" / "Cancel". The top-left box's author / source read a
+// Community import of a drill code ("Chris_F (drillcodes)") as "Chris_F - DrillCodes". T (pad Y / Triangle) edits the
+// description in the game's text dialog, drawn over this one (in game 04/11), the new text shown in place after. R (pad X
+// / Square, the Community dialog's Sort key) shows the Markdown help in the description's place, in the same window of
+// lines; R again, the description where it was. The key guide at the bottom shows the dialog's own entries while it is
+// up (its R entry naming the other pane), its help line through the game's own help-line part. The pure parts are
 // ui/details_logic; the Confirm comes from the core (on_confirm, core 0.9.5) through the Manager page, which gathers the
 // drill, runs "Open drill" and the edit (ui/manager_page.cpp).
 //
@@ -91,12 +95,13 @@ constexpr uint64_t kClosingWait = 120;          // frames a dialog we closed get
 constexpr uint64_t kRearm = 60;                 // a decide / back press the dialog did not take: the inputs back after this
                                                 // (its close takes ~9 frames, 04/11)
 constexpr uint64_t kDecideToEnd = 90;           // "Open drill": a decide on the left button at most this long before the end
+constexpr uint64_t kInputFallback = 45;         // frames after the open: its UIFlowInputWait.OnEnter not seen, the presses count anyway
 constexpr int kMenuGoneFrames = 3;              // the menu seen closed that many frames in a row: the dialog is closed
 constexpr int kCloneTries = 3;
 constexpr uint64_t kAfterEnd = 10;              // frames is_open() still answers after the end: the press that closed it
                                                 // (F on a button) is never a Confirm on the Drill row that opens it again
 constexpr int kKeyUp = 0x26, kKeyDown = 0x28, kKeyW = 0x57, kKeyZ = 0x5A, kKeyS = 0x53;   // the demo's scroll keys
-constexpr int kKeyF = 0x46, kKeyEsc = 0x1B, kKeyT = 0x54;                                // decide, back, edit
+constexpr int kKeyF = 0x46, kKeyEsc = 0x1B, kKeyT = 0x54, kKeyR = 0x52;                  // decide, back, edit, help
 constexpr int kMouseL = 0x01, kMouseR = 0x02;                                            // VK_LBUTTON / VK_RBUTTON
 constexpr int kScanTabLeft = 0x10, kScanTabRight = 0x12;   // the game's tab keys by position: Q / E (QWERTY), A / E (AZERTY)
 
@@ -130,9 +135,13 @@ struct State {                                   // under ui::lock
     Drill d;
     std::function<void()> on_open, on_edit;
     std::vector<model::pack::SlotSummary> saved;
-    std::string text;                            // the whole description box text
+    std::string text;                            // the whole description box text (the description's, or the help's)
     std::vector<size_t> starts{ 0 };             // its lines' byte offsets
     int total = 1, top = 0, page = 0, pages = 1;
+    bool help = false;                           // the box shows the Markdown help (R / pad X), not the description
+    struct Pane { std::string text; std::vector<size_t> starts{ 0 }; int top = 0; bool known = false; };
+    Pane other;                                  // the box's other text, its lines and place kept for the way back
+    bool frame_logged = false;                   // the top-left box's lines journaled (once)
     uint64_t opened_at = 0, filled_at = 0, closing_at = 0, ending_at = 0;
     int measure_tries = 0, menu_gone = 0, clone_tries = 0;
     bool measured_visible = false, bar = false, clones = false;
@@ -140,7 +149,8 @@ struct State {                                   // under ui::lock
     double row_em = 0, header_em = 0;
     const char* filled_by = "";
     bool gui_seen = false;                       // one of our show hooks ran for our Param: the GUI holds our elements
-    bool input_seen = false;                     // its UIFlowInputWait.OnEnter ran: the dialog takes the inputs
+    bool input_seen = false;                     // its UIFlowInputWait.OnEnter ran (or kInputFallback passed): the dialog takes the inputs
+    bool input_logged = false;                   // the journal line of a UIFlowInputWait.OnEnter that did not count: once
     bool closed_by_us = false;                   // CloseDialog was ours (the menu closed): no "Open drill"
     bool editing = false;                        // the text dialog of an edit is up over it: every key its, none ours
     uint64_t quiet_until = 0;                    // after the edit: the presses that closed the text dialog are not ours
@@ -150,10 +160,15 @@ struct State {                                   // under ui::lock
     float guide_orig_w = 0;
     bool guide_saved = false, help_saved = false, guide_missing_logged = false;
     uint64_t guide_next = 0;
+    uint64_t help_check_at = 0;                  // the help line's marquee read back then (journal; decided again once if stale)
+    bool help_checked = false, help_redone = false, help_part_logged = false;
     LastPress last;                              // the last decide / back press seen while it took the inputs
-    uint32_t presses_f = 0, presses_esc = 0, presses_ml = 0, presses_mr = 0, presses_t = 0;   // the keys' press counts seen
+    uint32_t presses_f = 0, presses_esc = 0, presses_ml = 0, presses_mr = 0, presses_t = 0, presses_r = 0;   // press counts seen
+    int64_t wheel_seen = 0;                      // cmn::wheel_total() as last read
+    WheelSteps wheel;
+    bool wheel_logged = false;                   // the first notch's place journaled (once a dialog)
     HoldRepeat scroll, paging;
-    logic::KeyEdge pad_south, pad_east, pad_y;
+    logic::KeyEdge pad_south, pad_east, pad_y, pad_x;
 };
 State g_st;
 
@@ -161,7 +176,7 @@ State g_st;
 bool g_guids = false;
 uint8_t g_title_guid[16] = {}, g_detail_guid[16] = {};
 MO* g_actions = nullptr;                         // System.Action[2] of nulls (gm::new_array: held)
-uint64_t g_opens = 0, g_refused = 0, g_drills_opened = 0, g_decides = 0, g_backs = 0, g_rearms = 0, g_edits = 0;
+uint64_t g_opens = 0, g_refused = 0, g_drills_opened = 0, g_decides = 0, g_backs = 0, g_rearms = 0, g_edits = 0, g_helps = 0;
 bool ok_before = false, ok_showed = false, ok_input = false;
 
 std::string tr(const std::string& key, const std::vector<std::string>& args) { return ui::T(key, args); }
@@ -247,22 +262,24 @@ bool gpos(MO* o, float* x, float* y) {
 float hfrac(int32_t cp) { const int h = cp & 3; return h == 1 ? 0.5f : (h == 2 ? 1.0f : 0.0f); }        // via.gui.ControlPoint:
 float vfrac(int32_t cp) { const int v = (cp >> 2) & 3; return v == 1 ? 0.5f : (v == 2 ? 1.0f : 0.0f); } // h = value & 3, v = value >> 2
 
-// A frame line (via.gui.Scale9Grid): its left edge and width, global units; false when unreadable
-bool box_of(MO* line, float* left, float* w) {
+// A frame line (via.gui.Scale9Grid): its left edge and width (and its top edge and height), global units; false when
+// unreadable
+bool box_of(MO* line, float* left, float* w, float* top = nullptr, float* h = nullptr) {
     float x = 0, y = 0, sw = 0, sh = 0;
     int32_t cp = 0;
     if (!line || !gpos(line, &x, &y) || !gx::size_of(line, "get_Size", &sw, &sh) || !gx::call_i32(line, "get_ControlPoint", &cp) || sw < 50) return false;
     *left = x - sw * hfrac(cp);
     *w = sw;
+    if (top) *top = y - sh * vfrac(cp);
+    if (h) *h = sh;
     return true;
 }
 
-// A text's place: its ControlPoint's global position, its region's left / top edges, its region and font width
-struct TextGeo { float gx = 0, gy = 0, left = 0, top = 0, w = 0, h = 0, fw = 0; int32_t cp = 0; bool ok = false; };
+// A text's place: its ControlPoint's global position, its region's left / top edges, its region and font size
+struct TextGeo { float gx = 0, gy = 0, left = 0, top = 0, w = 0, h = 0, fw = 0, fh = 0; int32_t cp = 0; bool ok = false; };
 TextGeo text_geo(MO* t) {
     TextGeo g;
-    float fh = 0;
-    g.ok = t && gpos(t, &g.gx, &g.gy) && gx::size_of(t, "get_RegionSize", &g.w, &g.h) && gx::size_of(t, "get_FontSize", &g.fw, &fh)
+    g.ok = t && gpos(t, &g.gx, &g.gy) && gx::size_of(t, "get_RegionSize", &g.w, &g.h) && gx::size_of(t, "get_FontSize", &g.fw, &g.fh)
            && gx::call_i32(t, "get_ControlPoint", &g.cp);
     if (g.ok) { g.left = g.gx - g.w * hfrac(g.cp); g.top = g.gy - g.h * vfrac(g.cp); }
     return g;
@@ -276,6 +293,27 @@ void place_region(MO* t, const TextGeo& g, float left, float width) {
     const float anchor = left + width * hfrac(g.cp);
     if (std::fabs(anchor - g.gx) > 0.5f) gx::set_pos(t, p[0] + anchor - g.gx, p[1], p[2]);
     if (std::fabs(width - g.w) > 0.5f) gx::set_region(t, width, g.h);
+}
+
+// The same with its top edge and height too: the region made width x height with its top-left corner at (left, top)
+void place_box(MO* t, const TextGeo& g, float left, float top, float width, float height) {
+    float p[3] = {};
+    if (!g.ok || width < 1 || height < 1 || !gx::vec3_of(t, "get_Position", p)) return;
+    const float ax = left + width * hfrac(g.cp), ay = top + height * vfrac(g.cp);
+    if (std::fabs(ax - g.gx) > 0.5f || std::fabs(ay - g.gy) > 0.5f) gx::set_pos(t, p[0] + ax - g.gx, p[1] + ay - g.gy, p[2]);
+    if (std::fabs(width - g.w) > 0.5f || std::fabs(height - g.h) > 0.5f) gx::set_region(t, width, height);
+}
+
+// A via.gui.Text's line space (a System.Single comes back as a double, as getCharBaseLine's), for the journal; NAN when
+// unreadable
+float line_space(MO* t) {
+    TD* td = t ? t->get_type_definition() : nullptr;
+    Method* m = td ? gm::method_n(td, "get_LineSpace", 0) : nullptr;
+    TD* rt = m ? m->get_return_type() : nullptr;
+    reframework::InvokeRet r{};
+    if (!rt || !gm::call(t, m, {}, &r)) return NAN;
+    const std::string n = rt->get_full_name();
+    return (n == "System.Single" || n == "System.Double") ? (float)r.d : (float)(int32_t)r.dword;
 }
 
 // A text cut with "…" to what its region holds (a region too narrow to be trusted: as it is)
@@ -343,6 +381,42 @@ void layout_list(const Parts& p, bool first) {
     cmn::journal("ui: drill details: %s", b);
 }
 
+// The top-left box (its frame meter hidden): one text of two lines, "<Character> - <Author> - <Source>" and "14 SLOTS
+// SAVED", each cut with "…" to what the box holds (never squashed). The region runs to the box's right edge (as the one
+// line before); when the box (its frame line) is tall enough for the two lines, the region is made the box's inner area
+// and the lines centred in it (vertical PageAlignment Center, its horizontal kept), else the text keeps its own place.
+void write_frame(const Parts& p, bool first) {
+    State& st = g_st;
+    MO* t = p.frame_text;
+    no_squash(t);
+    const TextGeo g = text_geo(t);
+    float bl = 0, bt = 0, bw = 0, bh = 0, w = g.ok ? g.w : 0;
+    const bool box = g.ok && box_of(kid(p.frame, "e_s9g_line"), &bl, &bw, &bt, &bh);
+    const char* placed = "its own place";
+    if (box && bl + bw - kBoxMargin - g.left > kMinFitWidth) {
+        w = bl + bw - kBoxMargin - g.left;
+        const float h = bh - 2 * kBoxMargin;
+        if (g.fh > 0 && h >= 3.0f * g.fh) {             // (two lines of the game's ~1.4 font heights each)
+            int32_t pa = 0;
+            if (gx::call_i32(t, "get_PageAlignment", &pa) && ((pa >> 2) & 3) != 1) set_prop(t, "set_PageAlignment", gx::I((pa & 3) | 4));
+            place_box(t, g, g.left, bt + kBoxMargin, w, h);
+            placed = "centred in the box";
+        } else {
+            place_region(t, g, g.left, w);
+            placed = "its own place (the box is too low for two lines)";
+        }
+    }
+    const double em = g.ok && w >= kMinFitWidth ? em_for(w, g.fw) : 0;
+    const std::string line1 = frame_text(st.d.character, frame_author(st.d.author, st.d.own_name, st.d.source), short_source(tr, st.d.source, st.d.author), em);
+    const std::string line2 = saved_text(tr, (int)st.saved.size());
+    gx::set_text(t, line1 + "\n" + (em > 0 ? logic::cut_em(line2, em) : line2));
+    if (!first) return;
+    char b[256];
+    std::snprintf(b, sizeof b, "top-left box %s (left %.0f, top %.0f, %.0f x %.0f), its text font %.0f x %.0f, line space %.1f, %.1f em a line, %s",
+                  box ? "found" : "NOT found", bl, bt, bw, bh, g.fw, g.fh, line_space(t), em, placed);
+    cmn::journal("ui: drill details: %s", b);
+}
+
 // The header and the rows of the page shown: the saved slots page * 10 .. + 9, the rows past them hidden
 void write_rows(const Parts& p) {
     State& st = g_st;
@@ -355,7 +429,7 @@ void write_rows(const Parts& p) {
         MO* t = it ? kid(it, "e_txt_title") : nullptr;
         if (!t) continue;
         if (i == 0) {
-            const std::string h = header_text(tr, saved, st.page, st.pages);
+            const std::string h = header_text(tr, st.page, st.pages);
             gx::set_text(t, st.header_em > 0 ? logic::cut_em(h, st.header_em) : h);
             gx::set_visible(it, true);
             continue;
@@ -391,18 +465,8 @@ void apply(const Parts& p, const char* where) {
     State& st = g_st;
     const bool first = st.phase == Phase::Opening;
     write_fitted(p.title, clean_line(st.d.title));                       // the header: the drill's name
-    if (p.meter) gx::set_visible(p.meter, false);                         // the top-left box: no frame meter, the source
-    if (p.frame_text) {
-        no_squash(p.frame_text);
-        const TextGeo g = text_geo(p.frame_text);
-        float bl = 0, bw = 0, w = g.ok ? g.w : 0;
-        if (g.ok && box_of(kid(p.frame, "e_s9g_line"), &bl, &bw) && bl + bw - kBoxMargin - g.left > kMinFitWidth) {
-            w = bl + bw - kBoxMargin - g.left;
-            place_region(p.frame_text, g, g.left, w);
-        }
-        const std::string s = frame_text(st.d.character, source_label(tr, st.d.source));
-        gx::set_text(p.frame_text, g.ok ? fit(s, w, g.fw) : s);
-    }
+    if (p.meter) gx::set_visible(p.meter, false);                         // the top-left box: no frame meter, two lines
+    if (p.frame_text) write_frame(p, first);
     layout_list(p, first);
     write_rows(p);
     // the description: wrapped by the game in its own font, from the top
@@ -540,8 +604,48 @@ void measure() {
     show_window(p);
     gx::set_force_invisible(p.text, false);
     st.phase = Phase::Ready;
-    cmn::journal("ui: drill details: %d line(s), window %d, %s", st.total, kWindowLines,
+    cmn::journal("ui: drill details: %s: %d line(s), window %d, %s", st.help ? "the Markdown help" : "the description", st.total, kWindowLines,
                  st.total > kWindowLines ? (st.bar ? "scrolled, with the bar" : "scrolled, no bar") : "all shown");
+    int32_t n = 0;                               // (the top-left box was written with the fill: its lines are drawn now)
+    if (!st.frame_logged && p.frame_text && gx::call_i32(p.frame_text, "get_LineCount", &n)) {
+        st.frame_logged = true;
+        cmn::journal("ui: drill details: the top-left box draws %d line(s)", n);
+    }
+}
+
+// R / pad X: the box's other text in its place (the description <-> the Markdown help), the one shown kept with its lines
+// and place. Shown before: its lines and place back at once. Never shown (the help, the first time): written whole,
+// hidden, its lines read as the description's were at the open (Filled, then measure), from the top.
+void toggle_help(const char* by) {
+    State& st = g_st;
+    Parts p;
+    if (!find_parts(param_now(), true, p)) return;
+    State::Pane next = std::move(st.other);
+    st.other = State::Pane{ std::move(st.text), std::move(st.starts), st.top, true };
+    st.help = !st.help;
+    ++g_helps;
+    st.guide_next = 0;                           // (the guide's R entry names the other pane: written at the next frame)
+    if (next.known) {
+        st.text = std::move(next.text);
+        st.starts = std::move(next.starts);
+        if (st.starts.empty()) st.starts = { 0 };
+        st.total = (int)st.starts.size();
+        st.top = std::clamp(next.top, 0, max_top(st.total, kWindowLines));
+        place_bar(p);
+        show_window(p);
+        cmn::journal("ui: drill details: %s: %s again (line %d of %d)", by, st.help ? "the Markdown help" : "the description", st.top + 1, st.total);
+        return;
+    }
+    st.text = st.help ? help_text(tr) : detail_text(tr, st.d.description, st.d.author, source_label(tr, st.d.source, st.d.author));
+    st.starts = { 0 };
+    st.total = 1;
+    st.top = 0;
+    st.phase = Phase::Filled;
+    st.measured_visible = false;
+    st.measure_tries = 0;
+    write_detail(p.text);
+    st.filled_at = ui::tick();
+    cmn::journal("ui: drill details: %s: %s shown (%zu bytes)", by, st.help ? "the Markdown help" : "the description", st.text.size());
 }
 
 // ---- the key guide at the bottom (in game 04/11) ----------------------------------------------------------------------------
@@ -551,8 +655,12 @@ void measure() {
 // Settings" and Back; BlockInput on the menu's agent and InputGuideManager.RequestUpdate change nothing). So while our
 // dialog is up (and no text dialog over it) the Drill row's "Go to Basic Settings" entry (an e_text_0_g_* item) shows
 // ours instead: Confirm, Show More Slots on the game's own tab glyphs (copied from that entry: device and layout as the
-// game draws them), Edit description; every other item but Back is hidden (the Drill row's own hints: "Edit Drill
-// Name"), the items laid out again by the game's rule; the help line says how to scroll. Written from the frame (R1), every item found again by name each time, each write compared first (the core).
+// game draws them), Edit Drill Description, Markdown Help (Show Drill Description while the help is shown); every other
+// item but Back is hidden (the Drill row's own hints: "Edit Drill Name"), the items laid out again by the game's rule; the
+// help line says how to scroll. Written from the frame (R1), every item found again by name each time, each write compared
+// first (the core). The help line goes through its game part's SetText (gx::set_help_text): the game decides its marquee
+// on the new text (a short one stays still, as the game shows a short help; a set_Message kept the Drill row's long
+// description's marquee and scrolled ours, Wael 04/11).
 // Put back at the end (the entry's text and width, the help line), only where the bar still shows what we wrote.
 constexpr uint64_t kGuideEvery = 5;              // the bar checked again every 5 frames (the game may write it back)
 
@@ -595,6 +703,30 @@ std::string tab_icons_fallback(bool pad) {       // no game entry to copy them f
     return std::string("<ICON Key") + left + "><ICON +><ICON KeyE>";
 }
 
+// The help line's marquee as the game decided it at our SetText, read back a few frames later (journal, once a write): its
+// drawn width (get_DisplaySize) against its line (the part's mTextDispLength), the game's own test, and the part's
+// mCanScroll. Decided on a stale width (the drawn size not yet the new text's within the frame of the write): SetText again,
+// once a dialog (our help line is short: the same short text written twice is safe, R7 is about long ones).
+void help_check(MO* help, const std::string& want) {
+    State& st = g_st;
+    MO* part = gx::input_guide_scroll_part(help);
+    float dw = 0, dh = 0;
+    int64_t line = 0, can = 0;
+    if (!part || !gx::size_of(help, "get_DisplaySize", &dw, &dh) || !gx::get_i64(part, "mTextDispLength", &line)
+        || !gx::get_i64(part, "mCanScroll", &can)) {
+        cmn::journal("ui: drill details: the help line's marquee not read back (%s)", part ? "a field unreadable" : "no game part");
+        return;
+    }
+    const bool wide = (int64_t)dw + 1 > line;
+    cmn::journal("ui: drill details: the help line draws %.0f px on a %lld px line: %s, the game's marquee %s", dw, (long long)line,
+                 wide ? "wider" : "it fits", can ? "on" : "off");
+    if (wide != (can != 0) && !st.help_redone && want.size() < 400) {
+        st.help_redone = true;
+        gx::set_help_text(help, want);
+        cmn::journal("ui: drill details: the help line's marquee was decided on a stale width: decided again");
+    }
+}
+
 void guide_apply() {
     State& st = g_st;
     const GuideParts g = guide_parts();
@@ -617,7 +749,7 @@ void guide_apply() {
             }
             const bool pad = ui::com::guide_mode_pad().value_or(false);
             const std::string tabs = st.tab_icons.empty() ? tab_icons_fallback(pad) : st.tab_icons;
-            const std::string text = guide_entries(tr, pad, tabs, st.pages > 1);
+            const std::string text = guide_entries(tr, pad, tabs, st.pages > 1, st.help);
             if (cur != text) {
                 no_squash(host);
                 gx::set_text(host, text);
@@ -652,7 +784,16 @@ void guide_apply() {
         const std::string cur = gx::msg(g.help);
         if (cur != want) {
             if (cur != st.help_written || !st.help_saved) { st.help_orig = cur; st.help_saved = true; }
-            gx::set_text(g.help, want);
+            if (!gx::set_help_text(g.help, want) && !st.help_part_logged) {
+                st.help_part_logged = true;
+                cmn::journal("ui: drill details: the help line's game part (app.UIPartsScrollText) not found: written as a plain text "
+                             "(its marquee keeps the decision made for the text before)");
+            }
+            st.help_check_at = ui::tick() + 3;
+            st.help_checked = false;
+        } else if (!st.help_checked && st.help_check_at && ui::tick() >= st.help_check_at) {
+            st.help_checked = true;
+            help_check(g.help, want);
         }
         st.help_written = want;
     }
@@ -678,7 +819,8 @@ void guide_restore() {
         if (moved) guide_relayout(g.btn);
     }
     st.guide_hidden.clear();
-    if (st.help_saved && g.help && gx::msg(g.help) == st.help_written) gx::set_text(g.help, st.help_orig);
+    // (through the game's part too: the Drill row's long description gets its marquee back, a short text stays still)
+    if (st.help_saved && g.help && gx::msg(g.help) == st.help_written) gx::set_help_text(g.help, st.help_orig);
     st.guide_saved = st.help_saved = false;
     cmn::journal("ui: drill details: the key guide put back");
 }
@@ -699,9 +841,13 @@ void count_presses(State& st, const windows::PadHeld& pad) {   // (at the open: 
     st.presses_ml = cmn::key_presses(kMouseL);
     st.presses_mr = cmn::key_presses(kMouseR);
     st.presses_t = cmn::key_presses(kKeyT);
+    st.presses_r = cmn::key_presses(kKeyR);
+    st.wheel_seen = cmn::wheel_total();
+    st.wheel.reset();
     st.pad_south.press(pad.south);
     st.pad_east.press(pad.east);
     st.pad_y.press(pad.y);
+    st.pad_x.press(pad.x);
 }
 
 // A decide or back press while the dialog takes the inputs: the last one decides at the end. A key or pad press begins
@@ -733,11 +879,56 @@ void end_presses(State& st, const windows::PadHeld& pad) {
     st.ending_at = ui::tick();
 }
 
+// The game's own UI cursor (app.UIAgentManager.GetCursor().get_Pos(), a via.Point of two floats), read for the journal only
+// (the wheel's hit test is ours: its units against ours are not known off 1080p, where they matched the client pixels)
+bool game_cursor(float* x, float* y) {
+    MO* cur = gx::call_obj(gx::singleton("app.UIAgentManager"), "GetCursor");
+    reframework::InvokeRet r{};
+    if (!cur || !gm::call(cur, "get_Pos", {}, &r)) return false;
+    float v[2] = {};
+    std::memcpy(v, r.bytes.data(), sizeof v);
+    *x = v[0];
+    *y = v[1];
+    return true;
+}
+
+// The mouse wheel (Wael 04/11): the lines it scrolls, over the description's area (its text and its scroll bar, as the
+// dialog draws them: wheel_area from the text's region edges, found again now) and only while the bar is shown; 0
+// elsewhere, without a bar, or without the cursor's place (the client pixels mapped to the UI's 1920 x 1080 units,
+// client_to_gui). The first notch of a dialog is journaled with both places (and the game's own cursor, to compare).
+int wheel_lines(int delta) {
+    State& st = g_st;
+    if (delta == 0) return 0;
+    if (!st.bar) { st.wheel.reset(); return 0; }
+    int cx = 0, cy = 0, cw = 0, chh = 0;
+    Parts p;
+    const bool cur = cmn::cursor_client(&cx, &cy, &cw, &chh);
+    const TextGeo g = cur && find_parts(param_now(), true, p) ? text_geo(p.text) : TextGeo{};
+    const GuiPoint at = client_to_gui((float)cx, (float)cy, (float)cw, (float)chh);
+    const Area area = wheel_area(g.left, g.top);
+    const bool in = g.ok && contains(area, at);
+    if (!st.wheel_logged) {
+        st.wheel_logged = true;
+        float gxp = 0, gyp = 0;
+        const bool game = game_cursor(&gxp, &gyp);
+        char b[320];
+        std::snprintf(b, sizeof b, "the wheel (%+d) at client %d, %d of %d x %d = UI %.0f, %.0f (the game's cursor %s%.0f, %.0f); the "
+                      "description's area %.0f, %.0f - %.0f, %.0f: %s", delta, cx, cy, cw, chh, at.x, at.y, game ? "" : "unread ", gxp, gyp,
+                      area.left, area.top, area.right, area.bottom, !cur ? "no cursor place" : !g.ok ? "the text's place unreadable"
+                      : in ? "inside, scrolled" : "outside, nothing");
+        cmn::journal("ui: drill details: %s", b);
+    }
+    if (!in) { st.wheel.reset(); return 0; }
+    return st.wheel.take(delta);
+}
+
 // The keys of the dialog (raw): scroll Up / Down, W / Z (up) and S (down), the pad's d-pad and left stick, as the
 // validated demo; slot pages on the game's tab keys (by position: QWERTY Q / E, AZERTY A / E) and the pad's L1 / R1;
 // T / pad Y edits the description (the game's text dialog over this one: in game 04/11 it draws over it, Esc closes only
-// it, this dialog keeps its state). One step at the press, then one every 3 frames after 12 frames held.
-void keys(const windows::PadHeld& pad, bool t, bool py) {
+// it, this dialog keeps its state); R / pad X shows the Markdown help in the description's place, or the description
+// again (the slot pages, the scroll and the edit work on either). One step at the press, then one every 3 frames after 12
+// frames held. The mouse wheel over the description's text or its bar scrolls it kWheelLines a notch (wheel_lines).
+void keys(const windows::PadHeld& pad, bool t, bool py, bool r, bool px, int wheel) {
     State& st = g_st;
     if (!writable()) return;                     // (ended: the keys are the menu's again)
     if ((t || py) && st.on_edit) {
@@ -747,12 +938,14 @@ void keys(const windows::PadHeld& pad, bool t, bool py) {
         st.on_edit();
         return;
     }
+    if (r || px) { toggle_help(r ? "R" : "pad X"); return; }
     const bool up = cmn::key_down(kKeyUp) || cmn::key_down(kKeyW) || cmn::key_down(kKeyZ) || pad.up;
     const bool down = cmn::key_down(kKeyDown) || cmn::key_down(kKeyS) || pad.down;
     const bool prev = cmn::scan_down(kScanTabLeft) || pad.l1;
     const bool next = cmn::scan_down(kScanTabRight) || pad.r1;
     int top = st.top, page = st.page;
     if (st.scroll.step(up || down)) top = std::clamp(st.top + (down ? 1 : -1), 0, max_top(st.total, kWindowLines));
+    if (const int lines = wheel_lines(wheel)) top = std::clamp(top + lines, 0, max_top(st.total, kWindowLines));
     if (st.paging.step(prev || next)) page = std::clamp(st.page + (next ? 1 : -1), 0, st.pages - 1);
     if (top == st.top && page == st.page) return;
     Parts p;
@@ -807,7 +1000,7 @@ void start(Req r, bool training, bool paused) {
     st.on_edit = std::move(r.on_edit);
     for (const model::pack::SlotSummary& s : st.d.slots) if (!s.empty) st.saved.push_back(s);
     st.pages = page_count((int)st.saved.size());
-    st.text = detail_text(tr, st.d.description, st.d.author, source_label(tr, st.d.source));
+    st.text = detail_text(tr, st.d.description, st.d.author, source_label(tr, st.d.source, st.d.author));
     st.opened_at = ui::tick();
     count_presses(st, windows::pad_held());      // the Confirm that opened it, still held, is no press
     g_st = std::move(st);
@@ -863,7 +1056,13 @@ void tick(bool training, bool paused) {
     State& st = g_st;
     bool ended = false;
     if (!gm::call_bool(st.dlg, "get_IsEnd", &ended)) ended = true;   // (unreadable: gone)
-    if (ended) { g_live.store(false); finish(st.phase == Phase::Closing ? "ended after its close" : "ended"); return; }
+    if (ended) {
+        g_live.store(false);                     // (first: end_presses writes nothing from here)
+        // a press the game took in the frame it ended the dialog: read now, or "Open drill" would be lost
+        if (st.phase == Phase::Ready || st.phase == Phase::Filled || st.phase == Phase::Ending) end_presses(st, windows::pad_held(false));
+        finish(st.phase == Phase::Closing ? "ended after its close" : "ended");
+        return;
+    }
     if (st.phase == Phase::Closing) {
         if (ui::tick() - st.closing_at > kClosingWait) finish("closed, its end not seen");
         return;
@@ -872,6 +1071,9 @@ void tick(bool training, bool paused) {
     if (!training) { close_now("training ended"); return; }
     if (st.menu_gone >= kMenuGoneFrames) { close_now("the menu closed"); return; }
     const windows::PadHeld pad = windows::pad_held(st.phase == Phase::Ready);
+    const int64_t wheel_now = cmn::wheel_total();   // (read every frame: a notch while it is not ours is spent)
+    const int wheel = (int)std::clamp<int64_t>(wheel_now - st.wheel_seen, -(1 << 20), 1 << 20);
+    st.wheel_seen = wheel_now;
     if (st.phase == Phase::Ending) {             // a decide / back press: the dialog closes (get_IsEnd above)
         end_presses(st, pad);                    // (a later press still counts: the last one decides)
         if (ui::tick() - st.ending_at > kRearm) {   // not taken: the dialog is still up, the inputs back
@@ -884,8 +1086,14 @@ void tick(bool training, bool paused) {
         return;
     }
     if (!g_param.load()) if (MO* pm = param_now()) g_param.store(pm);
+    if (!st.input_seen && (st.phase == Phase::Filled || st.phase == Phase::Ready) && ui::tick() - st.opened_at >= kInputFallback) {
+        st.input_seen = true;                    // (the Confirm that opened it was counted at the open: no press of ours)
+        cmn::journal("ui: drill details: its UIFlowInputWait.OnEnter not seen in %llu frames: the presses count from now",
+                     (unsigned long long)kInputFallback);
+    }
     end_presses(st, pad);
     const bool t = pressed(kKeyT, &st.presses_t), py = st.pad_y.press(pad.y);   // (read every frame: an early press is spent)
+    const bool r = pressed(kKeyR, &st.presses_r), px = st.pad_x.press(pad.x);
     if (st.phase == Phase::Ending || st.editing) return;   // (the text dialog over it: its own guide, its keys)
     if (writable() && (st.phase == Phase::Filled || st.phase == Phase::Ready) && ui::tick() >= st.guide_next) {
         st.guide_next = ui::tick() + kGuideEvery;
@@ -902,7 +1110,7 @@ void tick(bool training, bool paused) {
         case Phase::Filled:
             if (writable() && ui::tick() >= st.filled_at + kMeasureAfter) { PERF_SUB(pl, "UI:details_lines"); measure(); }
             break;
-        case Phase::Ready: keys(pad, t, py); break;
+        case Phase::Ready: keys(pad, t, py, r, px, wheel); break;
         default: break;
     }
 }
@@ -917,7 +1125,8 @@ bool ours(void* param) {
 }
 
 MO* flow_param(MO* flow) {                       // a nested flow's Param (the Lua probe read either)
-    MO* p = gx::call_obj(flow, "get_Param");
+    MO* p = gx::call_obj(flow, "get_Param");     // (app.UIFlow`1<Param>: get_Param, its field "param")
+    if (!p) p = gx::ref(flow, "param");
     return p ? p : gx::ref(flow, "_Param");
 }
 
@@ -925,8 +1134,16 @@ void show_body(void* param, const char* where, bool input_wait) {
     std::lock_guard lk(ui::lock());
     try {
         State& st = g_st;
-        if (!g_live.load() || st.phase == Phase::None || st.phase == Phase::Closing || st.phase == Phase::Ending || !ours(param)) return;
+        if (!g_live.load() || st.phase == Phase::None || st.phase == Phase::Closing || st.phase == Phase::Ending || !ours(param)) {
+            if (input_wait && !st.input_logged && st.phase != Phase::None) {
+                st.input_logged = true;
+                cmn::journal("ui: drill details: a UIFlowInputWait.OnEnter not counted (%s)",
+                             !g_live.load() ? "not live" : !ours(param) ? "not our Param" : "ending");
+            }
+            return;
+        }
         st.gui_seen = true;                      // our dialog's show: the pooled GUI holds our elements now
+        if (input_wait && !st.input_seen) cmn::journal("ui: drill details: its UIFlowInputWait.OnEnter seen: the presses count");
         if (input_wait) st.input_seen = true;    // it takes the inputs from now: the presses count
         Parts p;
         if (!find_parts(static_cast<MO*>(param), true, p)) return;
@@ -967,7 +1184,11 @@ int input_pre(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long 
     if (s && g_open.load(std::memory_order_relaxed)) s->self = argv[1];
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
-void input_body(void* flow) { if (MO* p = flow_param(static_cast<MO*>(flow))) show_body(p, "UIFlowInputWait.OnEnter", true); }
+void input_body(void* flow) {
+    if (MO* p = flow_param(static_cast<MO*>(flow))) { show_body(p, "UIFlowInputWait.OnEnter", true); return; }
+    static std::atomic<bool> logged{ false };
+    if (!logged.exchange(true)) cmn::journal("ui: drill details: a UIFlowInputWait.OnEnter without a Param (get_Param / _Param)");
+}
 void input_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
     const ShowCall c = s_input.pop();
     if (!c.self || cmn::closing() || !ui::active()) return;
@@ -999,7 +1220,11 @@ void edit_done(bool changed, const std::string& description) {
     st.guide_next = 0;                           // the guide the text dialog wrote: ours again at once
     if (!changed || !writable()) return;
     st.d.description = description;              // the new text in place: whole, hidden, its lines read again, from the top
-    st.text = detail_text(tr, st.d.description, st.d.author, source_label(tr, st.d.source));
+    if (st.help) {                               // (edited from the Markdown help: the help kept for R, the new text shown)
+        st.other = State::Pane{ std::move(st.text), std::move(st.starts), st.top, true };
+        st.help = false;
+    }
+    st.text = detail_text(tr, st.d.description, st.d.author, source_label(tr, st.d.source, st.d.author));
     st.phase = Phase::Filled;
     st.measured_visible = false;
     st.measure_tries = 0;
@@ -1047,11 +1272,12 @@ void hand_back() {
 }
 
 std::string status() {
-    char b[320];
+    char b[352];
     std::snprintf(b, sizeof b, "%s, opened %llu, refused %llu, decide presses %llu, back presses %llu, presses not taken %llu, drills "
-                  "opened %llu, edits %llu; hooks before-show %d, showed %d, input-wait %d", phase_name(g_st.phase),
+                  "opened %llu, edits %llu, help toggles %llu; hooks before-show %d, showed %d, input-wait %d", phase_name(g_st.phase),
                   (unsigned long long)g_opens, (unsigned long long)g_refused, (unsigned long long)g_decides, (unsigned long long)g_backs,
-                  (unsigned long long)g_rearms, (unsigned long long)g_drills_opened, (unsigned long long)g_edits, ok_before, ok_showed, ok_input);
+                  (unsigned long long)g_rearms, (unsigned long long)g_drills_opened, (unsigned long long)g_edits, (unsigned long long)g_helps,
+                  ok_before, ok_showed, ok_input);
     return b;
 }
 

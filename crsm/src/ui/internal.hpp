@@ -93,6 +93,10 @@ void frame();
 bool open();                                   // _com.dialog_open
 // The game's guide glyphs: app.InputGuideManager.GetMode(0): true pad, false keyboard, nullopt nothing to follow (game thread)
 std::optional<bool> guide_mode_pad();
+// The name the Community shows as the author of the player's shares (game thread): the CFN a share sends (read from the
+// game's banner now, else earlier this session: community::identity), else the CFN the Worker linked to the player's
+// Steam-verified token (community::linked_cfn); "" when neither is a public CFN (an id, anon_ / local_ never shown).
+std::string share_name();
 void hand_back();
 std::string status();
 }  // namespace com

@@ -40,19 +40,44 @@ struct Range { int first = 0, last = 0; };     // the saved slots [first, last) 
 Range page_range(int saved, int page);
 
 // ---- texts -------------------------------------------------------------------------------------------------------------
-// The list's header: rsm.details_header "%d SLOTS SAVED - PAGE %d/%d" (rsm.details_header_one for a single slot: its
-// page and count only), page counted from 0 here and from 1 on screen, in capitals (ASCII letters; the locale's own
-// texts are already written so).
-std::string header_text(const Tr& T, int saved, int page, int pages);
+// The list's header: rsm.details_page "PAGE %d/%d", page counted from 0 here and from 1 on screen, in capitals (ASCII
+// letters; the locale's own texts are already written so).
+std::string header_text(const Tr& T, int page, int pages);
+// The top-left box's second line: rsm.details_saved "%d SLOTS SAVED" (rsm.details_saved_one "1 SLOT SAVED" for a single
+// slot), in capitals as header_text.
+std::string saved_text(const Tr& T, int saved);
 // A slot row: "<slot_label> - <name> - <frames>F" ("<slot_label> - <frames>F" without a name), slot_label being
 // rsm.details_slot "Slot %d". Wider than max_em (logic::text_em; <= 0: no limit): the name cut with "…", or dropped
 // when less than 3 em of it would stay; still wider: the whole row cut.
 std::string row_text(const std::string& slot_label, const std::string& name, int64_t frames, double max_em);
+// A drill the Community imported from drillcodes.com: its author label "<author> (drillcodes)" (the server's drillcodes.js
+// authorLabel: the author cut to 19 characters + the fixed " (drillcodes)"), written into info.author by a Community
+// download (with info.source "community"). True for such an author (the suffix in any case, spaces after it tolerated;
+// "(drillcodes)" alone too); *bare (optional) = the author without it (one line, trimmed). Read at display time: the drills
+// downloaded before show right too (Wael 04/11: "Akuma - Chris_F - DrillCodes").
+bool drillcodes_author(const std::string& author, std::string* bare = nullptr);
+// The author as the dialog names it: clean_line, the " (drillcodes)" suffix dropped
+std::string shown_author(const std::string& author);
 // info.source as shown: "community" -> rsm.source_community, "drillcodes.com" / "drillcodes" as it is (a site),
-// none -> rsm.source_local ("Local file"), anything else as written (one line).
-std::string source_label(const Tr& T, const std::string& source);
-// The top-left box: "<Character> - <Source>" (the source alone without a character).
-std::string frame_text(const std::string& character, const std::string& source_label);
+// none -> rsm.source_local ("Local file"), anything else as written (one line). An author with the " (drillcodes)" suffix
+// makes it "drillcodes.com" whatever the source.
+std::string source_label(const Tr& T, const std::string& source, const std::string& author = "");
+// Where a pack came from, as the top-left box names it: info.source "community" (any case) = Community,
+// "drillcodes.com" / "drillcodes" = DrillCodes, none or anything else = Local (the player's own drill). The two-argument
+// form: an author with the " (drillcodes)" suffix = DrillCodes whatever the source (a Community import of a drill code).
+enum class Origin { Local, Community, DrillCodes };
+Origin origin(const std::string& source);
+Origin origin(const std::string& source, const std::string& author);
+// The top-left box's source: rsm.source_local_short ("Local"), rsm.source_community ("Community"), "DrillCodes" (a name,
+// not translated); origin(source, author).
+std::string short_source(const Tr& T, const std::string& source, const std::string& author = "");
+// The author the top-left box names: info.author when there is one (shown_author: its " (drillcodes)" dropped); else, for
+// a Local drill, own_name (the name the Community shows for the player's shares, "" when unknown); else "".
+std::string frame_author(const std::string& author, const std::string& own_name, const std::string& source);
+// The top-left box's first line: "<Character> - <Author> - <Source>" (the parts that are empty left out, each one line).
+// Wider than max_em (logic::text_em; <= 0: no limit): the author cut with "…", or dropped when less than 3 em of it would
+// stay; still wider: the whole line cut.
+std::string frame_text(const std::string& character, const std::string& author, const std::string& source_label, double max_em);
 // A free text made safe for a game text, its paragraphs kept: the first max_bytes (UTF-8 boundary), \r and the other
 // control characters dropped, tabs as spaces, '<' / '>' and '[' / ']' as '(' / ')' (a '<' starts the game's markup; its
 // texts draw no square bracket: "[x]" showed "x", 04/11), runs of spaces as one, each
@@ -77,8 +102,16 @@ std::string markdown(const std::string& clean);
 std::string strip_markdown(const std::string& text);
 
 // The description box: the description (clean_text, then markdown), a blank line, rsm.details_author "Author: %s" (when
-// there is one), rsm.details_source "Source: %s".
+// there is one; shown_author: its " (drillcodes)" dropped), rsm.details_source "Source: %s" (source_label(T, source,
+// author): "drillcodes.com" for such an author).
 std::string detail_text(const Tr& T, const std::string& description, const std::string& author, const std::string& source_label);
+// The Markdown help (R / pad X in the dialog, shown in the description box): a heading rsm.details_md_help, then one line
+// a syntax, "<syntax as typed>  =  <what it does>", the words of what it does (rsm.details_md_*) rendered by that syntax
+// itself through markdown() (the heading's and the colours' words in their colour), then a blank line and
+// rsm.details_md_note (the 1000 limit, Ctrl+V, the brackets). The syntax shown as typed is never converted: written as
+// it is (clean_line: no '<' nor '[' in it), next to the converted part; the translated words are cleaned (clean_line)
+// and lose every marker character ('#', '*', '{', '}') first, so each converted part is the one span its syntax makes.
+std::string help_text(const Tr& T);
 // What a text fits in em of logic::text_em: its region width over its font width (px per em of the estimate ~ the font
 // size: the guide row items, 27/10), with a 2 % margin. 0 when unknown.
 double em_for(float width_px, float font_w);
@@ -101,10 +134,13 @@ std::string edit_result(const std::string& text);
 // The leading glyphs of a guide text when they are a key combination ("<ICON KeyA><ICON +><ICON KeyE>" of "... Go to
 // Basic Settings"): the game's own tab-left / tab-right glyphs. "" otherwise.
 std::string leading_combo_icons(const std::string& msg);
-// The dialog's entries on one text: "<decide> Confirm   <tab-left> / <tab-right> Show More Slots   <T> Edit description"
-// (the slot pages only with more than one page and tab glyphs known; the game's "<ICON +>" between the two tab glyphs
-// written " / ", as the sub-tab header's "[W] / [Q]"); pad: <ICON BtnD> / <ICON BtnU>, keyboard <ICON KeyF> / <ICON KeyT>.
-std::string guide_entries(const Tr& T, bool pad, const std::string& tab_icons, bool more_pages);
+// The dialog's entries on one text: "<decide> Confirm   <tab-left> / <tab-right> Show More Slots   <T> Edit Drill
+// Description   <R> Markdown Help" (the slot pages only with more than one page and tab glyphs known; the game's
+// "<ICON +>" between the two tab glyphs written " / ", as the sub-tab header's "[W] / [Q]"); pad: <ICON BtnD> / <ICON BtnU>
+// / <ICON BtnL> (the west button, as the Community dialog's Sort), keyboard <ICON KeyF> / <ICON KeyT> / <ICON KeyR>. The
+// R entry follows the pane (Wael 04/11): rsm.details_md_help "Markdown Help" while the description is shown,
+// rsm.details_show_desc "Show Drill Description" while the Markdown help is (help_shown).
+std::string guide_entries(const Tr& T, bool pad, const std::string& tab_icons, bool more_pages, bool help_shown = false);
 // The bar's items laid out as the game lays them, left to right: the first keeps its x, each next one at the previous
 // x + its region width + its font width (the option window's guide row, measured 27/10)
 std::vector<float> guide_layout(const std::vector<float>& x, const std::vector<float>& w, const std::vector<float>& font_w);
@@ -138,6 +174,32 @@ struct HoldRepeat {
     int held = 0;
     bool step(bool down);
     void reset() { held = 0; }
+};
+
+// ---- the mouse wheel over the description (Wael 04/11) ------------------------------------------------------------------
+// The wheel scrolls the description (or the Markdown help) when it has a scroll bar and the cursor is over its text or its
+// bar; anywhere else, or without a bar, it does nothing.
+constexpr float kGuiWidth = 1920.0f;           // the game's UI is laid out at 1920 x 1080 (its global positions: 1080p units)
+constexpr float kGuiHeight = 1080.0f;
+constexpr int kWheelDelta = 120;               // WHEEL_DELTA: one notch of WM_MOUSEWHEEL
+constexpr int kWheelLines = 3;                 // lines one notch scrolls
+// A point of the game window's client area (pixels) in the UI's 1920 x 1080 units: the UI drawn at the largest scale that
+// fits, min(w / 1920, h / 1080), centred (bars left and right in a wider window, above and below in a taller one). ok false
+// for an empty client area.
+struct GuiPoint { float x = 0, y = 0; bool ok = false; };
+GuiPoint client_to_gui(float x, float y, float client_w, float client_h);
+// The area the wheel acts on, in the UI's units, from the description's region left / top edges: kDetailWidth wide plus
+// the scroll bar (kBarGap further, kBarWidth wide), the window's kWindowLines lines high (+ the bar's kBarTopOffset)
+struct Area { float left = 0, top = 0, right = 0, bottom = 0; };
+Area wheel_area(float text_left, float text_top);
+bool contains(const Area& a, const GuiPoint& p);   // edges included; a point not ok is never inside
+// The wheel's deltas summed (a smooth wheel or a touchpad sends less than a notch at a time), whole notches taken out: the
+// lines to scroll, forward (a positive delta) = up (negative lines), kWheelLines a notch. A delta the other way drops what
+// was left of a notch first.
+struct WheelSteps {
+    int rest = 0;
+    int take(int delta);
+    void reset() { rest = 0; }
 };
 
 }  // namespace ui::details

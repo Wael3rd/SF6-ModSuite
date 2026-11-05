@@ -57,9 +57,14 @@ Range page_range(int saved, int page) {
 }
 
 // ---- texts -------------------------------------------------------------------------------------------------------------
-std::string header_text(const Tr& T, int saved, int page, int pages) {
-    const std::string p = std::to_string(page + 1), n = std::to_string(std::max(1, pages));
-    std::string s = saved == 1 ? T("details_header_one", { p, n }) : T("details_header", { std::to_string(std::max(0, saved)), p, n });
+std::string header_text(const Tr& T, int page, int pages) {
+    std::string s = T("details_page", { std::to_string(page + 1), std::to_string(std::max(1, pages)) });
+    ascii_upper(s);
+    return s;
+}
+
+std::string saved_text(const Tr& T, int saved) {
+    std::string s = saved == 1 ? T("details_saved_one", {}) : T("details_saved", { std::to_string(std::max(0, saved)) });
     ascii_upper(s);
     return s;
 }
@@ -81,7 +86,28 @@ std::string row_text(const std::string& slot_label, const std::string& name_raw,
     return logic::cut_em(full, max_em);
 }
 
-std::string source_label(const Tr& T, const std::string& source) {
+bool drillcodes_author(const std::string& author, std::string* bare) {
+    static const std::string kSuffix = "(drillcodes)";
+    const std::string a = clean_line(author);   // (one line, spaces collapsed, trimmed: "x (drillcodes)  " ends with it)
+    const std::string low = ascii_lower(a);
+    if (low.size() < kSuffix.size() || low.compare(low.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0) return false;
+    const size_t cut = low.size() - kSuffix.size();
+    if (cut > 0 && low[cut - 1] != ' ') return false;   // ("Bob(drillcodes)" is a name, not the label)
+    if (bare) {
+        std::string b = a.substr(0, cut);
+        while (!b.empty() && b.back() == ' ') b.pop_back();
+        *bare = b;
+    }
+    return true;
+}
+
+std::string shown_author(const std::string& author) {
+    std::string bare;
+    return drillcodes_author(author, &bare) ? bare : clean_line(author);
+}
+
+std::string source_label(const Tr& T, const std::string& source, const std::string& author) {
+    if (drillcodes_author(author)) return "drillcodes.com";
     const std::string s = clean_line(source);
     const std::string low = ascii_lower(s);
     if (s.empty()) return T("source_local", {});
@@ -90,9 +116,51 @@ std::string source_label(const Tr& T, const std::string& source) {
     return s;
 }
 
-std::string frame_text(const std::string& character, const std::string& source_label) {
-    const std::string c = clean_line(character);
-    return c.empty() ? source_label : c + " - " + source_label;
+Origin origin(const std::string& source) {
+    const std::string low = ascii_lower(clean_line(source));
+    if (low == "community") return Origin::Community;
+    if (low == "drillcodes.com" || low == "drillcodes") return Origin::DrillCodes;
+    return Origin::Local;
+}
+
+Origin origin(const std::string& source, const std::string& author) {
+    return drillcodes_author(author) ? Origin::DrillCodes : origin(source);
+}
+
+std::string short_source(const Tr& T, const std::string& source, const std::string& author) {
+    switch (origin(source, author)) {
+        case Origin::Community: return T("source_community", {});
+        case Origin::DrillCodes: return "DrillCodes";
+        default: return T("source_local_short", {});
+    }
+}
+
+std::string frame_author(const std::string& author, const std::string& own_name, const std::string& source) {
+    const std::string a = shown_author(author);
+    if (!a.empty()) return a;
+    return origin(source, author) == Origin::Local ? clean_line(own_name) : std::string();
+}
+
+std::string frame_text(const std::string& character, const std::string& author, const std::string& source_label, double max_em) {
+    const std::string c = clean_line(character), a = clean_line(author), s = clean_line(source_label);
+    auto join = [](std::initializer_list<const std::string*> parts) {
+        std::string r;
+        for (const std::string* p : parts) if (!p->empty()) r += (r.empty() ? "" : " - ") + *p;
+        return r;
+    };
+    const std::string full = join({ &c, &a, &s });
+    if (max_em <= 0 || logic::text_em(full) <= max_em) return full;
+    if (!a.empty()) {
+        const std::string bare = join({ &c, &s });
+        const double room = max_em - logic::text_em(bare) - (bare.empty() ? 0.0 : logic::text_em(" - "));
+        if (room >= 3.0) {
+            const std::string cut_a = logic::cut_em(a, room);
+            const std::string cut = join({ &c, &cut_a, &s });
+            if (logic::text_em(cut) <= max_em) return cut;
+        }
+        if (!bare.empty() && logic::text_em(bare) <= max_em) return bare;
+    }
+    return logic::cut_em(full, max_em);
 }
 
 std::string clean_text(const std::string& raw, size_t max_bytes) {
@@ -219,9 +287,35 @@ std::string strip_markdown(const std::string& text) { return convert(text, false
 std::string detail_text(const Tr& T, const std::string& description, const std::string& author, const std::string& source_label) {
     std::string out = markdown(clean_text(description, kDescMaxBytes));
     if (!out.empty()) out += "\n\n";
-    const std::string a = clean_line(author);
+    const std::string a = shown_author(author);
     if (!a.empty()) out += T("details_author", { a }) + "\n";
     out += T("details_source", { source_label });
+    return out;
+}
+
+std::string help_text(const Tr& T) {
+    // the syntax as typed (written as it is, never converted) and the Markdown source around the translated words that
+    // shows what it does (converted)
+    struct Row { const char* syntax; const char* key; const char* before; const char* after; };
+    static const Row rows[] = {
+        { "/n", "details_md_newline", "", "" },
+        { "# Title", "details_md_heading", "# ", "" },
+        { "**text**", "details_md_emphasis", "**", "**" },
+        { "{violet}text{/}", "details_md_violet", "{violet}", "{/}" },
+        { "{magenta}text{/}", "details_md_magenta", "{magenta}", "{/}" },
+        { "{purple}text{/}", "details_md_purple", "{purple}", "{/}" },
+        { "{blue}text{/}", "details_md_blue", "{blue}", "{/}" },
+        { "- item", "details_md_list", "", "" },
+    };
+    auto words = [&](const char* key, const std::vector<std::string>& args) {   // (no marker character left: one span a row)
+        std::string s = T(key, args);
+        s.erase(std::remove_if(s.begin(), s.end(), [](char ch) { return ch == '#' || ch == '*' || ch == '{' || ch == '}'; }), s.end());
+        return clean_line(s);
+    };
+    std::string out = markdown("# " + words("details_md_help", {}));
+    for (const Row& r : rows)
+        out += "\n" + clean_line(r.syntax) + "  =  " + markdown(r.before + words(r.key, {}) + r.after);
+    out += "\n\n" + words("details_md_note", { std::to_string(kDescMaxUnits) });
     return out;
 }
 
@@ -274,7 +368,7 @@ std::string leading_combo_icons(const std::string& msg) {
     return icons.find("<ICON +>") != std::string::npos ? icons : std::string();
 }
 
-std::string guide_entries(const Tr& T, bool pad, const std::string& tab_icons, bool more_pages) {
+std::string guide_entries(const Tr& T, bool pad, const std::string& tab_icons, bool more_pages, bool help_shown) {
     std::string s = std::string(pad ? "<ICON BtnD>" : "<ICON KeyF>") + " " + T("details_confirm", {});
     if (more_pages && !tab_icons.empty()) {
         std::string tabs = tab_icons;
@@ -282,6 +376,7 @@ std::string guide_entries(const Tr& T, bool pad, const std::string& tab_icons, b
         s += "   " + tabs + " " + T("details_more_slots", {});
     }
     s += std::string("   ") + (pad ? "<ICON BtnU>" : "<ICON KeyT>") + " " + T("details_edit", {});
+    s += std::string("   ") + (pad ? "<ICON BtnL>" : "<ICON KeyR>") + " " + T(help_shown ? "details_show_desc" : "details_md_help", {});
     return s;
 }
 
@@ -375,6 +470,39 @@ bool HoldRepeat::step(bool down) {
     if (!down) { held = 0; return false; }
     ++held;
     return held == 1 || (held > kRepeatDelay && held % kRepeatEvery == 0);
+}
+
+// ---- the mouse wheel -------------------------------------------------------------------------------------------------------
+GuiPoint client_to_gui(float x, float y, float client_w, float client_h) {
+    GuiPoint p;
+    if (!(client_w > 0) || !(client_h > 0)) return p;
+    const float s = std::min(client_w / kGuiWidth, client_h / kGuiHeight);
+    const float ox = (client_w - kGuiWidth * s) * 0.5f, oy = (client_h - kGuiHeight * s) * 0.5f;
+    p.x = (x - ox) / s;
+    p.y = (y - oy) / s;
+    p.ok = true;
+    return p;
+}
+
+Area wheel_area(float text_left, float text_top) {
+    Area a;
+    a.left = text_left;
+    a.top = text_top;
+    a.right = text_left + kDetailWidth + kBarGap + kBarWidth;
+    a.bottom = text_top + kBarTopOffset + (float)kWindowLines * kLineHeight;
+    return a;
+}
+
+bool contains(const Area& a, const GuiPoint& p) {
+    return p.ok && p.x >= a.left && p.x <= a.right && p.y >= a.top && p.y <= a.bottom;
+}
+
+int WheelSteps::take(int delta) {
+    if (delta != 0 && rest != 0 && (delta > 0) != (rest > 0)) rest = 0;   // (turned the other way: what was left is dropped)
+    rest += delta;
+    const int notches = rest / kWheelDelta;      // (toward zero: what is left of a notch waits, either way)
+    rest -= notches * kWheelDelta;
+    return -notches * kWheelLines;
 }
 
 }  // namespace ui::details

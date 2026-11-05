@@ -123,10 +123,23 @@ its id, not by its place.
   turn with a counter "(1/3)" instead), in place of the
   row's own help. Share sends the shared pack's description to the Worker (cut to 1000 characters). Confirm (F, pad
   A / Cross) on the Drill row opens the drill details (the game's image dialog, Native Core 0.9.5): the drill's name,
-  "<Character> - <Source>" (`source`: "community" = Community, "drillcodes.com", none = a local file), its saved slots
+  "<Character> - <Author> - <Source>" and "14 SLOTS SAVED" in its top-left box (`source`: "community" = Community,
+  "drillcodes.com" = DrillCodes, none or anything else = Local; the author is `author`, else for a Local drill the name
+  the Community shows for the player's shares, the CFN a share sends). An `author` ending with " (drillcodes)" (any
+  case, spaces after it allowed: the Community's label of a drill it imported from drillcodes.com, the author cut to 19
+  characters + that suffix, stored as it is with `source` "community") is read at display time as that author without the
+  suffix and the source DrillCodes: "Akuma - Chris_F - DrillCodes", "Author: Chris_F", "Source: drillcodes.com"
+  (`ui::details::drillcodes_author`; the Community list keeps the label). Then its saved slots under "PAGE 1/2"
   (`empty` false: "Slot 7 - <name> - 64F", the frames being the timeline's run lengths summed, else the inputs' count;
-  10 a page), and the whole description (its paragraphs kept, scrolled), then "Author: ..." and "Source: ...". Readers:
-  `model::pack::author`, `source`, `slot_summaries`. T (pad Y) there edits the description in the game's text dialog
+  10 a page), and the whole description (its paragraphs kept, scrolled 18 lines at a time: Up / Down, the pad's d-pad /
+  left stick, or the mouse wheel over the text or its scroll bar, 3 lines a notch, only when there is a scroll bar), then
+  "Author: ..." and "Source: ...". Readers: `model::pack::author`, `source`, `slot_summaries`. The key guide at the
+  bottom shows the dialog's entries: "[F] Confirm", "[A] / [E] Show More Slots" (more than one page), "[T] Edit Drill
+  Description", "[R] Markdown Help" ("[R] Show Drill Description" while the help is shown; pad Y / X), and Back; its help
+  line ("Up / down: scroll the description") goes through the game's own help-line part
+  (`app.UIPartsScrollText.SetText`), which scrolls it only when it is wider than the line, as for the game's own helps.
+  R (pad X) there shows the Markdown help (each syntax as typed and
+  what it does, drawn by that syntax) in the description's place, R again the description where it was. T (pad Y) there edits the description in the game's text dialog
   (one line: each line break shown as "/n", "/n" or a typed "\n" a line break again at the OK; 1000 characters at
   most, the Worker's count): written into this file's `info.description` (`info` made when missing, `author`, `source` and the rest kept,
   `model::pack::with_description`). A Community drill's edit stays local until it is shared again.

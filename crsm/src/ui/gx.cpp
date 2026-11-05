@@ -502,23 +502,55 @@ MO* find_param() {
     return nullptr;
 }
 
-MO* input_guide_main() {
+namespace {
+MO* input_guide_agent() {
     if (!api() || !SF6CORE_HAS(api(), ui_agents)) return nullptr;
     void* out[4] = {};
     const uint32_t n = perf::counted(api())->ui_agents("InputGuide", out, 4);
     for (uint32_t i = 0; i < n && i < 4; ++i) {
         int64_t on = 0;
         MO* ag = static_cast<MO*>(out[i]);
-        if (get_i64(ag, "_IsEnableInput", &on) && on) return call_obj(ag, "get_ControlMain");
+        if (get_i64(ag, "_IsEnableInput", &on) && on) return ag;
     }
     return nullptr;
 }
+
+// The app.UIPartsScrollText whose mTextScroll is `text`, in a parts manager and its parts' child managers (the InputGuide's:
+// one level down, in game 04/11)
+MO* scroll_part_in(MO* manager, MO* text, int depth) {
+    MO* list = manager ? gm::ref(manager, "_List") : nullptr;
+    const int32_t n = list ? gm::list_count(list) : 0;
+    for (int32_t i = 0; i < n && i < 256; ++i) {
+        MO* part = gm::list_item(list, i);
+        if (!part) continue;
+        if (is_type(part, "app.UIPartsScrollText") && gm::ref(part, "mTextScroll") == text) return part;
+        if (depth > 0) if (MO* found = scroll_part_in(gm::ref(part, "<ChildManager>k__BackingField"), text, depth - 1)) return found;
+    }
+    return nullptr;
+}
+}  // namespace
+
+MO* input_guide_main() { return call_obj(input_guide_agent(), "get_ControlMain"); }
 
 MO* input_guide_help() {
     MO* root = input_guide_main();
     if (!root || !api()) return nullptr;
     MO* scroll = static_cast<MO*>(perf::counted(api())->ui_find_child(root, "p_ScrollText_0", 4));
     return scroll ? static_cast<MO*>(perf::counted(api())->ui_find_child(scroll, "e_text", 2)) : nullptr;
+}
+
+MO* input_guide_scroll_part(MO* help) {
+    return help ? scroll_part_in(ref(input_guide_agent(), "_PartsManager"), help, 3) : nullptr;
+}
+
+bool set_help_text(MO* help, const std::string& s) {
+    if (!help) return false;
+    if (MO* part = input_guide_scroll_part(help)) {
+        if (invoke(part, "SetText(System.String)", { S(s.c_str()) })) return true;
+        if (msg(help) == s) return false;        // (written before the call failed: never the same text twice, R7)
+    }
+    set_text(help, s);
+    return false;
 }
 
 MO* pause_agent() {

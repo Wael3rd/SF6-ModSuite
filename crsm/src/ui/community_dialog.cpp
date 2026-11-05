@@ -24,6 +24,7 @@
 #include <optional>
 
 #include "common.hpp"
+#include "community/auth.hpp"
 #include "community/community.hpp"
 #include "community/page.hpp"
 #include "details_logic.hpp"
@@ -662,6 +663,12 @@ void do_share() {
 
 bool open() { return g_open.load(); }
 std::optional<bool> guide_mode_pad() { return guide_pad(); }
+
+std::string share_name() {
+    const community::Identity id = community::identity(banner_cfn());   // (what Page::share sends as `cfn`)
+    if (community::auth::public_cfn(id.cfn)) return model::lutil::trim(id.cfn);
+    return community::linked_cfn();
+}
 
 void frame() {                                   // _com.tick (RMT:317-395), every frame
     if (g_share_request.exchange(false)) { try { do_share(); } catch (...) { ui::fault("Community share"); } }

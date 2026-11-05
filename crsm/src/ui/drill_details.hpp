@@ -1,9 +1,9 @@
 // ui/drill_details — the drill details dialog: Confirm (keyboard F, pad A / Cross) on the Manager page's Drill row
 // opens the game's own app.training.UITrainingImageDialog (GUI / UIAgent ui11281, the page of "The Frame Meter and
-// You") filled with the selected drill: its name, "<Character> - <Source>", its saved slots ten a page, its whole
-// description scrolled 18 lines at a time, "Open drill" / "Cancel". The Manager page (ui/manager_page.cpp) gathers the
-// drill when the core sends the Confirm (core 0.9.5, on_confirm) and asks here; "Open drill" runs its Open action, T /
-// pad Y its edit of the description.
+// You") filled with the selected drill: its name, "<Character> - <Author> - <Source>" and its saved slot count, its saved
+// slots ten a page, its whole description scrolled 18 lines at a time (R / pad X: the Markdown help in its place),
+// "Open drill" / "Cancel". The Manager page (ui/manager_page.cpp) gathers the drill when the core sends the Confirm (core
+// 0.9.5, on_confirm) and asks here; "Open drill" runs its Open action, T / pad Y its edit of the description.
 #pragma once
 
 #include <functional>
@@ -18,6 +18,8 @@ struct Drill {
     std::string title;                        // the drill's name as the spin shows it
     std::string character;                    // the dummy's character (the drills' folder)
     std::string source, author, description;  // info.source / info.author / info.description of the pack
+    std::string own_name;                     // the name the Community shows for the player's shares ("" unknown): the
+                                              // top-left box's author of a Local drill without info.author
     std::vector<model::pack::SlotSummary> slots;
 };
 

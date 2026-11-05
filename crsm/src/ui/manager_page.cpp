@@ -588,12 +588,17 @@ void details_open() {
     d.source = model::pack::source(data);
     d.author = model::pack::author(data);
     d.description = model::pack::description(data);
+    // the player's own drill without an author: the top-left box names the player as the Community names their shares
+    if (d.author.empty() && ui::details::origin(d.source) == ui::details::Origin::Local) {
+        try { d.own_name = ui::com::share_name(); } catch (...) { cmn::fault(F::Ui, "drill details: the share name"); }
+    }
     d.slots = model::pack::slot_summaries(data);
     const size_t n = d.slots.size();
+    const char* who = !d.author.empty() ? "info.author" : !d.own_name.empty() ? "the share name" : "none";
     const bool asked = ui::details::request(std::move(d), [] {     // (the dialog's end, the UI frame callback: run here next)
         if (live()) g_queue.push(Action{ Act::Open, 0 });
     }, [] { g_edit_due.store(true); });
-    cmn::journal("ui: manager drill details %s (%zu slot entries)", asked ? "asked" : "refused (one is up, or the UI is off)", n);
+    cmn::journal("ui: manager drill details %s (%zu slot entries, author: %s)", asked ? "asked" : "refused (one is up, or the UI is off)", n, who);
 }
 
 // T / pad Y in the drill details: the selected drill's description edited in the game's text dialog (the one of the slot

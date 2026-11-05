@@ -102,6 +102,17 @@ MO* pause_agent();                             // the pause menu's agent ui11200
 // discovery, read-only); nullptr when not there.
 MO* input_guide_main();
 MO* input_guide_help();
+// The help line's marquee (in game 04/11, disassembled): the game's app.UIPartsScrollText of p_ScrollText_0 scrolls its
+// text only when its mCanScroll says so, and decides that only in its SetText(System.String) (= mTextScroll.set_Message, then
+// SetDefaultPos, then CheckScroll: mCanScroll = (int)get_DisplaySize().w + 1 > mTextDispLength, the line's width 1805 at
+// 1080p); its OnUpdate never checks again. A set_Message of our own keeps the decision made for the text before (the
+// Drill row's long description: a short text of ours scrolled too).
+// input_guide_scroll_part: that part (the live InputGuide's, its mTextScroll being `help`), nullptr when not found.
+// set_help_text: the help line written as the game writes it, through that part's SetText (obj_invoke through the core):
+// static and placed as the game places it when it fits, the game's marquee when it is wider; no part (or the core refused
+// and nothing was written): set_Message as before (ui_set_text), false.
+MO* input_guide_scroll_part(MO* help);
+bool set_help_text(MO* help, const std::string& s);
 MO* singleton(const char* name);
 
 }  // namespace ui::gx

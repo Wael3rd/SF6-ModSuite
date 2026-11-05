@@ -141,28 +141,76 @@ void test_details_texts() {
     begin("P5 drill details texts (locale.json, every language)");
     const Tr T = translator();
     check(g_langs.size() >= 14, "14 languages", std::to_string(g_langs.size()));
-    const char* plain[] = { "cancel", "source_community", "source_local", "details_more_slots", "details_edit", "details_confirm",
-                            "edit_drill_name", "details_help", "see_details" };
+    const char* plain[] = { "cancel", "source_community", "source_local", "source_local_short", "details_more_slots", "details_edit",
+                            "details_confirm", "edit_drill_name", "details_help", "see_details", "details_saved_one", "details_md_help", "details_show_desc",
+                            "details_md_newline", "details_md_heading", "details_md_emphasis", "details_md_violet", "details_md_magenta",
+                            "details_md_purple", "details_md_blue", "details_md_list" };
+    const char* md_words[] = { "details_md_newline", "details_md_heading", "details_md_emphasis", "details_md_violet", "details_md_magenta",
+                               "details_md_purple", "details_md_blue", "details_md_list" };
+    const std::string tags[] = { "<COLOR preset=\"FGM_Cmn_2\">", "<COLOR preset=\"FGM_Cmn_1\">", "<COLOR preset=\"FGM_Cmn_0\">", "</COLOR>",
+                                 "<HLBGN Arg0 = \"3\">", "<HLEND Arg0 = \"3\">" };
     for (const std::string& l : g_langs) {
         g_loc.set_lang(l);
         for (const char* k : plain) {
             const std::string v = T(k, {});
             check(!v.empty() && v != k && g_loc.lookup(std::string("rsm.") + k).has_value(), l + " rsm." + k, v);
         }
-        const std::string h = ui::details::header_text(T, 15, 0, 2);
-        check(h.find("15") != std::string::npos && h.find("1/2") != std::string::npos, l + " header 15 slots, page 1/2", h);
-        const std::string h1 = ui::details::header_text(T, 1, 0, 1);
-        check(h1.find("1/1") != std::string::npos && g_loc.lookup("rsm.details_header_one").has_value(), l + " header of one slot", h1);
+        const std::string h = ui::details::header_text(T, 0, 2);
+        check(h.find("1/2") != std::string::npos && h != "DETAILS_PAGE", l + " header page 1/2", h);
+        check(h.find("15") == std::string::npos && h.find("SLOT") == std::string::npos, l + " header: the page only", h);
+        const std::string sv = ui::details::saved_text(T, 14);
+        check(sv.find("14") != std::string::npos && sv != "DETAILS_SAVED", l + " 14 slots saved", sv);
+        const std::string s1 = ui::details::saved_text(T, 1);
+        check(!s1.empty() && s1 != sv && s1.find('%') == std::string::npos, l + " one slot saved", s1);
+        check(!g_loc.lookup("rsm.details_header").has_value() && !g_loc.lookup("rsm.details_header_one").has_value(), l + " no old header keys");
         const std::string sl = T("details_slot", { "27" });
         check(sl.find("27") != std::string::npos && sl != "details_slot", l + " slot label", sl);
         const std::string au = T("details_author", { "Chris_F" }), so = T("details_source", { "drillcodes.com" });
         check(au.find("Chris_F") != std::string::npos, l + " author line", au);
         check(so.find("drillcodes.com") != std::string::npos, l + " source line", so);
-        for (const char* k : { "details_header", "details_slot", "details_author", "details_source" })
+        for (const char* k : { "details_page", "details_saved", "details_slot", "details_author", "details_source", "details_md_note" })
             check(g_loc.lookup(std::string("rsm.") + k).has_value(), l + " has rsm." + k);
+        eq(ui::details::short_source(T, "drillcodes.com"), std::string("DrillCodes"), l + " DrillCodes as a name");
+        eq(ui::details::frame_text("Akuma", ui::details::frame_author("Chris_F (drillcodes)", "", "community"),
+                                   ui::details::short_source(T, "community", "Chris_F (drillcodes)"), 0),
+           std::string("Akuma - Chris_F - DrillCodes"), l + " a Community import of a drill code: DrillCodes, the author bare");
+        check(T("details_show_desc", {}) != T("details_md_help", {}) && T("details_edit", {}) != T("edit_drill_name", {}),
+              l + " the R entry's two labels and the two edits differ", T("details_show_desc", {}));
+        const std::string ge = ui::details::guide_entries(T, false, "", false, true);
+        check(ge.find(T("details_show_desc", {})) != std::string::npos && ge.find(T("details_md_help", {})) == std::string::npos
+              && ge.find(T("details_edit", {})) != std::string::npos, l + " guide, the help shown: Show Drill Description", ge);
+        const std::string fr = ui::details::frame_text("Ryu", "Wael3rd_PC", ui::details::short_source(T, ""), 0);
+        check(fr.rfind("Ryu - Wael3rd_PC - ", 0) == 0 && fr.size() > 19, l + " top-left box line", fr);
+        // the Markdown help: the translated words (as rendered), the syntax as typed, only verified tags, no [ ]
+        const std::string help = ui::details::help_text(T);
+        bool words = true;
+        for (const char* k : md_words) if (help.find(T(k, {})) == std::string::npos) words = false;
+        check(words && help.find(T("details_md_help", {})) != std::string::npos, l + " help: every translated word", help.substr(0, 80));
+        bool syntax = true;
+        for (const char* s : { "\n/n  =  ", "\n# Title  =  ", "\n**text**  =  ", "\n{violet}text{/}  =  ", "\n{magenta}text{/}  =  ",
+                               "\n{purple}text{/}  =  ", "\n{blue}text{/}  =  ", "\n- item  =  " })
+            if (help.find(s) == std::string::npos) syntax = false;
+        check(syntax, l + " help: every syntax as typed");
+        const std::string note = T("details_md_note", { "1000" });
+        check(note.find("1000") != std::string::npos && note.find('%') == std::string::npos && help.find(note) != std::string::npos,
+              l + " help: the note with its 1000", note);
+        bool tags_ok = help.find('[') == std::string::npos && help.find(']') == std::string::npos;
+        int spans = 0;
+        for (size_t i = help.find('<'); tags_ok && i != std::string::npos; i = help.find('<', i + 1)) {
+            const size_t e = help.find('>', i);
+            const std::string tag = e == std::string::npos ? std::string() : help.substr(i, e - i + 1);
+            if (std::find(std::begin(tags), std::end(tags), tag) == std::end(tags)) tags_ok = false;
+            else if (tag[1] != '/' && tag.rfind("<HLEND", 0) != 0) ++spans;
+        }
+        check(tags_ok && spans == 7, l + " help: 7 spans of verified tags only, no [ ]", std::to_string(spans));
     }
     g_loc.set_lang("en");
-    eq(ui::details::header_text(T, 15, 1, 2), std::string("15 SLOTS SAVED - PAGE 2/2"), "en header");
+    eq(ui::details::header_text(T, 1, 2), std::string("PAGE 2/2"), "en header");
+    eq(ui::details::saved_text(T, 14), std::string("14 SLOTS SAVED"), "en saved count");
+    eq(ui::details::saved_text(T, 1), std::string("1 SLOT SAVED"), "en one slot saved");
+    eq(ui::details::frame_text("Ryu", "Wael3rd_PC", ui::details::short_source(T, ""), 0), std::string("Ryu - Wael3rd_PC - Local"), "en top-left box");
+    eq(ui::details::short_source(T, "community"), std::string("Community"), "en Community");
+    eq(T("details_md_help", {}), std::string("Markdown Help"), "en guide: the Markdown help");
     eq(ui::details::row_text(T("details_slot", { "7" }), "Fireball", 64, 0), std::string("Slot 7 - Fireball - 64F"), "en slot row");
     eq(ui::details::detail_text(T, "Do it.", "Chris_F", ui::details::source_label(T, "community")),
        std::string("Do it.\n\nAuthor: Chris_F\nSource: Community"), "en description box");
@@ -170,7 +218,8 @@ void test_details_texts() {
     eq(T("open", {}), std::string("Open drill"), "en left button: the Manager's own label");
     eq(T("cancel", {}), std::string("Cancel"), "en right button");
     eq(T("details_more_slots", {}), std::string("Show More Slots"), "en guide: the slot pages");
-    eq(T("details_edit", {}), std::string("Edit description"), "en guide: the edit");
+    eq(T("details_edit", {}), std::string("Edit Drill Description"), "en guide: the edit");
+    eq(T("details_show_desc", {}), std::string("Show Drill Description"), "en guide: R while the Markdown help is shown");
     eq(T("details_confirm", {}), std::string("Confirm"), "en guide: confirm");
     eq(T("edit_drill_name", {}), std::string("Edit Drill Name"), "en Drill row hint: the rename");
     eq(T("details_help", {}), std::string("Up / down: scroll the description"), "en key guide: the help line");
