@@ -123,6 +123,7 @@ with a WARN) are also one mod:
   other combinations are its `variants`. Option ids as above (the add-on's folder). Its name (`outfits.json`, the
   manifest's `label`, the menu's title) is the outfit's alone ("Ingrid - Fly In A Bucket - Drive Tech"; before,
   "... + Ingrid - True... meme book + Ingrid - Maxwell the cat (monad)"); the variants keep the names `off` gives.
+  Mods that are all retouches too (`M. Bison\Wesker\`: see "Several mods in one sub-folder").
 - Not when an add-on brings files for another costume folder than the outfit's (the runtime swaps the slot's own
   folders only; Cammy's Belly_cammy02 + BellyHair01_Cammy, hair made for `001/02/`): `off` rules.
 
@@ -155,8 +156,8 @@ Where each group of the add-on goes (a group = a series of its menu: `!C2 Mai fa
   and Drive Tech (Outfit 2 wears no mesh there, Outfit 3 no material for that part); the "C2" series (`002/00/`) on
   Outfit 2. A mod's outfit that ships only the series' textures itself is a re-skin of its own, left out (Cammy C4
   pale skin, next to outfits made for Cammy's Outfit 4 slot that ship their own textures at those paths; logged).
-- An add-on put with an outfit in one sub-folder is still that outfit's option only (the folder wins, as before); a
-  copy of an add-on an outfit already has (same paths, same sizes) is not put on it twice.
+- An add-on put with an outfit in one sub-folder is still that outfit's option only (the folder wins, see "Several
+  mods in one sub-folder"); a copy of an add-on an outfit already has (same paths, same sizes) is not put on it twice.
 
 The options: **none is worn by default** (the outfit stays as installed; the slot's own files, or the game's, are
 the way back: no base copy). A series with a "main files" option (its name says "main file") is one choice with None:
@@ -207,6 +208,8 @@ a chain stays an outfit. Colour and other files cannot be swapped on a live mode
 - **Kept as an outfit** when it does not fit the game outfit it was made from (checked while the mods are read,
   against the game's files): Ken "VEGETA MAJIN" (its hair lacks 95 joints of the game's hair) is still an outfit.
 - An add-on mod that never made an outfit ("Mai face accessories": no body mesh) keeps the add-on rules above.
+- **Not in a sub-folder with other mods**: when one of them has a body mesh, they are handled together, retouches or
+  not (see "Several mods in one sub-folder"). The rule is for a mod loose in the character folder.
 - **Former outfits**: the game outfit's `former` lists each retouch's slot of the launch before (its costume number and
   folder, its option); a Battle Settings choice of it moves to the game outfit with that option chosen (see Saved
   choices). The other outfits keep their numbers (registry); only their names ("Outfit IV") follow their rank.
@@ -264,7 +267,8 @@ Their add-ons are made with it (the same add-on of several versions once). The o
 share ("Aloha Ryu"), else the archive's name without its download numbers ("Lily Jun Kazama Cosplay"), else the
 base's; option labels: the words that tell their names apart ("C1" / "C2"; "Muay Thai" / "Tiger Photo" / "Tiger" from
 the archives' names when two names are alike). Not merged: Fluffy installs, modular mods, retouches, outfits put with
-their add-ons in a sub-folder.
+their add-ons in a sub-folder. An outfit of a sub-folder holding several mods is merged only with the outfits of that
+sub-folder (versions of one archive, never identical meshes).
 
 **Colour entries of an option's materials** (`on` only, `add_slot_files`, `cmd_add_missing_clusters` in
 `patch.cpp`). Colour files are not swapped live, so the slot's own ones colour every option: a material no entry
@@ -293,8 +297,9 @@ nothing (two corners on one vertex; the other materials keep their triangles as 
 something taken off, and its meshes have the game meshes' joints **in the same order** (bone indices: Havok cloth and
 chains address bones by index). Ryu "Outfit 1 No Cloak - Drive Tech" is the game's Outfit 1 body with `esf_Costume00`,
 `esf_Ring` and `esf_Threads` folded; Sagat "Outfit 1 Shirtless" ships Outfit 1's head as it is and its body with the fur
-vest folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. A mod alone in its
-sub-folder is never a subset (that rule, below, comes first): Ryu No Cloak in its own sub-folder
+vest folded; Ken "Outfit 2 Shirtless", Alex "Outfit 1 No Vest", Yasmine "Outfit 1 No Jacket" alike. A mod in a
+sub-folder with other mods is never a subset (not a lone option), and a mod alone in its sub-folder neither (that rule,
+below, comes first): Ryu No Cloak in its own sub-folder
 (`costume_mods/Ryu/Ryu_Outfit1_NoCloak_DriveTech_v1.0/`) stays its own outfit; the same archive put directly in
 `costume_mods/Ryu/` is a subset. It makes no outfit: its
 files are moved to the paths that game outfit loads (Drive Tech's `005/01` -> Outfit 1's `001/01`), the ones the same
@@ -363,10 +368,52 @@ character folder (`costume_mods/<Character>/<Sub-folder>/<that mod>`; the sub-fo
 **always its own outfit** with `RuntimeOptions=on`. It is left out of every rule above, on both sides: never a retouch,
 a subset or a version of another outfit, never merged with another outfit (rules B, C, D), never an option of another
 outfit's add-on placement, and no other mod's add-ons or retouches are placed on it. Its own internal options (a modular
-mod) stay runtime options of that outfit. Several mods in one sub-folder keep the grouped-outfit rule. A lone mod that is
+mod) stay runtime options of that outfit. Several mods in one sub-folder: next section. A lone mod that is
 a pure add-on (no complete outfit) cannot be an outfit: it keeps the add-on rules, and the log says so. The log has one
 line per mod kept apart (`<mod>: alone in its sub-folder <name>: its own outfit (no merge)`), repeated in the merge audit.
 `RuntimeOptions=variants` and `off` (no longer selectable) were unchanged.
+
+### Several mods in one sub-folder (05/11)
+
+Several mods (archives, paks or folder mods) in one sub-folder of the character folder, one of them at least with a body
+mesh: the user put them there to have them together. With `RuntimeOptions=on` they are **handled together**, whatever
+files they ship:
+
+- **One outfit of the group's own, the others its options**, worn by default (the rule of "Outfits with add-ons", above).
+  Nothing of the group goes on a game outfit or on another mod's outfit, and an outfit of the group is not merged with an
+  outfit from elsewhere.
+- **Retouches included**: the mods of a sub-folder are not retouches, even when they all ship only meshes and textures.
+  `M. Bison\Wesker\` with RE4R Wesker (body mesh) and Krauser Hair (head and hair meshes, no body): one outfit
+  "RER4R Wesker for Suit Bison", the hair its option, on by default. Before, both were options of the game's Outfit 1,
+  the hair of Outfit 3 as well: all the mods of a sub-folder are read as one source, and the retouch
+  rule took that source for one mod with two options.
+- **Two or more with a body mesh**: versions of one archive, one outfit with a "Version" choice where they fit; else each
+  stays an outfit of the group (the merge audit says why), and the add-ons are options of each.
+- **An add-on that brings files of another costume folder** than the outfit's: no option (the runtime swaps the slot's
+  own folders only), the outfit is made with it, as in "Outfits with add-ons".
+- **A modular mod in the group**: the other mods go on its outfit only, where it wears their files; where it does not,
+  they are not used (the log says `no outfit: not used`).
+
+Not a group, each as before:
+
+- mods that are all pure add-ons (no body mesh in any): the add-on rules;
+- a mod alone in its sub-folder (previous section), and mods loose in the character folder: Krauser Hair directly in
+  `M. Bison\` stays an option of the outfits it fits;
+- the options of one unpacked mod: all folders, and Fluffy's own links say so (a menu entry, an `AddonFor`, one
+  `NameAsBundle` for all of them). The same mod in an archive already counts as one;
+- mods of several fighters, an archive dropped in the root of `costume_mods`, Fluffy installs.
+
+Folders with no such link cannot be told apart from mods the user put together: an unpacked download whose options are
+plain folders, all retouches, one with a body mesh, was options of the game outfits and is now an outfit with options.
+
+Other mods can still reach the group's outfit: an add-on or a retouch loose in the character folder goes on it where it
+fits, as on any outfit that is not alone in its sub-folder. `costume_mods/X/` and `costume_mods_nsfw/X/` are two
+sub-folders (`nsfw:<char>/<sub>`). `RuntimeOptions=off` and Manager mode: no change (`RtoLayout::One` only).
+
+The log says `sub-folder <name>: <n> mods, handled together: an outfit of its own, the others its options`, repeated in
+the merge audit. `LOADER_PAK_ID` stayed, so that no other install rebuilds for this: an install that already has such a
+sub-folder says `Up to date` and keeps its old result until the next rebuild, which any change in the mods folders starts
+(moving a mod in or out of the sub-folder is one).
 
 ### NSFW outfits: `costume_mods_nsfw` (20/10)
 

@@ -6571,6 +6571,17 @@ static bool is_lone_unit(const UnitFiles& u) {
     return !k.empty() && g_lone_sources.count(k) != 0;
 }
 
+// Several mods the user put in one sub-folder of a character folder, one of them at least an outfit (a body mesh): handled
+// together with RuntimeOptions=on (docs/RUNTIME_OPTIONS.md, "Several mods in one sub-folder"). The add-on rules decide, not
+// the retouch rule: an outfit of the group's own, the others its options, nothing of the group on a game outfit or on another
+// mod's outfit. Key: as g_lone_sources.
+static std::set<std::string> g_group_sources;
+static bool is_group_unit(const UnitFiles& u) {
+    if (g_group_sources.empty()) return false;
+    const std::string k = lone_key_of(u);
+    return !k.empty() && g_group_sources.count(k) != 0;
+}
+
 static bool units_overlap(const UnitFiles& a, const UnitFiles& b) {
     for (auto& [p, mf] : a.files) if (b.files.count(p)) return true;
     return false;
@@ -7893,6 +7904,14 @@ static void attach_addons(ScanOutputs& o) {
                     return ms != g_mod_source.end() && (ms->second.source != pa.source || ms->second.nsfw_dir != pa_dir)
                            && g_lone_sources.count(lone_key_of(ms->second)) != 0;
                 }), mods_hit.end());
+            // An add-on of a sub-folder handled together goes on that sub-folder's outfits only
+            if (g_group_sources.count((pa_dir ? "nsfw:" : "") + str_lower(pa.source))) {
+                games_hit.clear();
+                mods_hit.erase(std::remove_if(mods_hit.begin(), mods_hit.end(), [&](size_t k) {
+                    auto ms = g_mod_source.find(o.mods_out[k].first);
+                    return ms == g_mod_source.end() || ms->second.source != pa.source || ms->second.nsfw_dir != pa_dir;
+                }), mods_hit.end());
+            }
             std::string names;
             // A retouch's options on one outfit: those that touch it (a file of its costume folder, a 000/ file it
             // loads), not where the outfit (a mod's: e) ships one of their files itself (it replaces the game's files)
@@ -8901,7 +8920,7 @@ static void merge_outfits(ScanOutputs& o, std::map<size_t, std::vector<size_t>>&
             }
     std::map<std::string, std::vector<size_t>> by_sig;   // fighter \t folder \t every mesh and its md5
     for (auto i : cand) {
-        if (handled.count(i) || g_units[i].costumes.size() != 1) continue;
+        if (handled.count(i) || g_units[i].costumes.size() != 1 || is_group_unit(g_units[i])) continue;
         const ModCostume& mc = g_units[i].costumes[0];
         std::string sig = mc.fighter_dir + "\t" + mc.original_folder;
         bool all = true, any = false;
@@ -8946,14 +8965,28 @@ static void merge_outfits(ScanOutputs& o, std::map<size_t, std::vector<size_t>>&
         if (v.size() < 2 || std::all_of(v.begin(), v.end(), [&](auto& x) { return handled.count(x.first) > 0; })) continue;
         std::string names, why;
         std::set<std::string> folders;
+        bool in_group = false;
         for (auto& [i, p] : v) {
             names += (names.empty() ? "" : ", ") + unit_label(g_units[i]);
             folders.insert(g_units[i].costumes[0].original_folder);
+            in_group = in_group || is_group_unit(g_units[i]);
         }
-        if (folders.size() > 1) why = "made for other game outfits";
+        if (in_group) why = "one of them is in a sub-folder with other mods";
+        else if (folders.size() > 1) why = "made for other game outfits";
         else why = "their other meshes differ, or not every one fits";
         merge_note(k.substr(0, k.find('\t')), "identical mesh " + rel_tail(v[0].second) + " in " + names + ": not one outfit (" + why + ")");
     }
+}
+
+// Whether the folders of a sub-folder are the options of one unpacked mod and not several mods: Fluffy's own links say so (a
+// menu entry, an AddonFor, one bundle for all of them). An archive or a pak in the sub-folder is a mod of its own.
+static bool one_unpacked_mod(const std::set<std::string>& mods, const std::vector<size_t>& idx) {
+    for (auto& m : mods) if (is_archive_name(m) || str_ends_with(m, ".pak")) return false;
+    const UnitFiles& first = g_units[idx[0]];
+    if (std::any_of(g_menus.begin(), g_menus.end(), [&](const MenuNode& n) { return n.source == first.source; })) return true;
+    if (std::any_of(idx.begin(), idx.end(), [](size_t i) { return !trim_ws(g_units[i].addonfor).empty(); })) return true;
+    return !first.bundle.empty()
+        && std::all_of(idx.begin(), idx.end(), [&](size_t i) { return eq_ci(g_units[i].bundle, first.bundle); });
 }
 
 // Turns the loaded units into costumes. Complete options are used as they are. A partial option
@@ -8999,8 +9032,12 @@ static void finalize_units(ScanOutputs& o) {
     // an outfit: one with a body mesh, or a lone option applied to the outfit it modifies (C. Viper C2 Glasses
     // Removed: Outfit 2's head); an add-on mod that makes none ("Mai face accessories") keeps the add-on rules.
     // (RuntimeOptions=variants keeps the outfits of off: a retouch stays one there)
-    // A mod alone in its sub-folder (is_lone_unit) is always its own outfit: left out of every rule below, both sides
+    // A mod alone in its sub-folder (is_lone_unit) is always its own outfit: left out of every rule below, both sides.
+    // Several mods in one sub-folder, one of them at least an outfit (is_group_unit), are handled together: no retouch, the
+    // add-on rules below decide, inside that sub-folder (all of its units share a source: a mod of it is no lone option, so
+    // the subset rule leaves it out too).
     g_lone_sources.clear();
+    g_group_sources.clear();
     if (g_rto_layout == RtoLayout::One) {
         std::map<std::string, std::set<std::string>> mods_in;   // "<char>/<sub>" -> the mods (3rd path part) in it
         std::map<std::string, std::vector<size_t>> units_in;
@@ -9014,7 +9051,6 @@ static void finalize_units(ScanOutputs& o) {
             units_in[k].push_back(i);
         }
         for (auto& [k, mods] : mods_in) {
-            if (mods.size() != 1) continue;
             const auto& idx = units_in[k];
             const std::string rel = g_units[idx[0]].u.rel;
             size_t a = rel.find('/'); a = rel.find('/', a + 1);
@@ -9022,6 +9058,23 @@ static void finalize_units(ScanOutputs& o) {
             const std::string label = unit_label(g_units[idx[0]]);
             std::string fd;
             for (auto i : idx) if (!g_units[i].costumes.empty()) { fd = g_units[i].costumes[0].fighter_dir; break; }
+            if (mods.size() != 1) {
+                // (an archive dropped in the root has no character folder, a Fluffy install is no folder of the user's; mods
+                // of several fighters have no outfit to share)
+                std::set<std::string> fighters;
+                for (auto i : idx)
+                    for (auto& [p, mf] : g_units[i].files) {
+                        std::string f, folder;
+                        if (parse_model_folder(str_lower(p), f, folder)) fighters.insert(f);
+                    }
+                if (fd.empty() || fighters.size() > 1 || is_archive_name(rel.substr(0, rel.find('/')))
+                    || rel.compare(0, 19, "Fluffy Mod Manager/") == 0 || one_unpacked_mod(mods, idx)) continue;
+                g_group_sources.insert(k);
+                printf("\n  sub-folder %s: %zu mods, handled together: an outfit of its own, the others its options\n", sub.c_str(),
+                       mods.size());
+                merge_note(fd, "sub-folder " + sub + ": " + std::to_string(mods.size()) + " mods, handled together");
+                continue;
+            }
             if (fd.empty()) {
                 printf("\n  %s: alone in its sub-folder %s, but a pure add-on (no complete outfit): it cannot be its own "
                        "outfit, made as before\n", label.c_str(), sub.c_str());
@@ -9038,7 +9091,7 @@ static void finalize_units(ScanOutputs& o) {
         std::map<int, std::vector<size_t>> by_source;
         for (size_t i = 0; i < g_units.size(); ++i) by_source[g_units[i].source].push_back(i);
         for (auto& [src, idx] : by_source) {
-            if (std::any_of(idx.begin(), idx.end(), [](size_t i) { return is_lone_unit(g_units[i]); })) continue;
+            if (std::any_of(idx.begin(), idx.end(), [](size_t i) { return is_lone_unit(g_units[i]) || is_group_unit(g_units[i]); })) continue;
             if (!std::all_of(idx.begin(), idx.end(), [](size_t i) { return unit_retouch(g_units[i]); })) continue;
             const bool outfit = std::any_of(idx.begin(), idx.end(), [](size_t i) { return !g_units[i].costumes.empty(); })
                 || (idx.size() == 1 && trim_ws(g_units[idx[0]].addonfor).empty()
@@ -9189,20 +9242,22 @@ static void finalize_units(ScanOutputs& o) {
                 const auto& b = g_units[j];
                 if (b.costumes.empty() || modular.count(j) || retouch.count(j) || complete_addon_of.count(j)) continue;
                 if (b.source != a.source && is_lone_unit(b)) continue;   // alone in its sub-folder: nobody else's add-on goes on it
+                if (b.source != a.source && is_group_unit(a)) continue;   // handled with its sub-folder: the folder wins
                 bool hit = false;
                 if (rule == 0) hit = !a.addonfor.empty() && eq_ci(a.addonfor, b.name);
                 if (rule == 1) hit = !a.bundle.empty() && eq_ci(a.bundle, b.bundle) && shares_target(a, b);
                 if (rule == 2) hit = a.source == b.source && shares_target(a, b);
                 // Same sub-folder, another outfit's folder: a partial add-on brings a part the costume lacks
-                if (rule == 3) hit = a.source == b.source && !shares_target(a, b) && b.costumes.size() == 1;
+                if (rule == 3) hit = a.source == b.source && !shares_target(a, b) && (b.costumes.size() == 1 || is_group_unit(a));
                 if (hit) bases.push_back(j);
             }
         }
         if (bases.empty()) {
             // Nothing in its own mod to complete (glasses removed, other earrings): it completes the
             // original outfit it modifies, in a slot of its own; that outfit stays as it is.
+            // (handled with its sub-folder: its outfit is there, not one of its own; attach_addons keeps it in the sub-folder)
             auto costumes = detect_mod_costumes(a.files, o.inv, true);
-            if (costumes.empty() && g_rto_layout != RtoLayout::Off) {
+            if ((costumes.empty() || is_group_unit(a)) && g_rto_layout != RtoLayout::Off) {
                 // With RuntimeOptions: an option of the outfits whose files it replaces (attach_addons)
                 printf("\n  add-on %s: no costume it can complete was found: an option of the outfits whose files it "
                        "replaces\n", a.u.rel.c_str());
