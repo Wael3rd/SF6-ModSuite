@@ -173,4 +173,7 @@ void pausemenu_release_client(SF6CoreClient* c);  // unregister_client, once the
 // The core's frame counter, readable from any thread (the hooks run on the game's UI job threads).
 uint64_t core_frame_pub();
 
+// A key of the game window held now (WM_KEYDOWN / WM_KEYUP, all up when the window loses the focus), sf6core.cpp.
+bool core_key_down(int vk);
+
 #endif // SF6CORE_INTERNAL_H

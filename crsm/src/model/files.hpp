@@ -149,6 +149,7 @@ public:
     void set_dropdown_index(const json& idx);
     std::string selected_name() const;
     std::string selected_file() const { return custom_file_input_; }
+    const std::vector<std::string>& files() const { return filtered_file_list_; }   // dropdown entry i + 2 = files()[i]
     std::string loaded_name() const;
     uint64_t list_version() const { return list_version_; }
 
@@ -158,6 +159,13 @@ public:
     std::string export_selected(std::string* ticker);
     std::string erase_selected();
     std::string rename_selected(const json& new_name, std::string* ticker);
+    // The native Manager's rename (T / pad Y on the Drill row): the selected drill's FILE renamed, its content kept (the
+    // Lua's rename_selected above saves the game's slots under the new name and empties the old file). The typed name as
+    // Save As takes it (pack::typed_name: trimmed, the characters Windows refuses dropped, ".json" kept or added; the
+    // character's prefix as save_filename), its display name kept in _names.json, the drill still selected, the loaded
+    // drill followed. "Renamed: <old> -> <new>", or "No drill selected" / "No name" / "Name already used: <display>"
+    // (another drill of the character has that file, any case) / "Cannot rename <old>: <why>".
+    std::string rename_file(const json& new_name);
     std::string reopen_loaded();
     void set_native_action(bool on) { native_action_ = on; }
 
@@ -205,6 +213,7 @@ private:
     bool ensure_file_list();
     void load_erased();
     void mark_erased(const std::string& filename);
+    void unmark_erased(const std::string& filename);
     void load_names();
     void set_display_name(const std::string& filename, const std::string* display);
     std::string display_name(const std::string& file) const;

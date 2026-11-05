@@ -43,7 +43,7 @@ bool is_tint_pfb(const std::string& key) {
     return key.size() >= kLen && key.compare(key.size() - kLen, kLen, kSuf) == 0;
 }
 constexpr int kScanTimeout = 600;
-constexpr double kBudgetMs = 1.0;                          // per-frame time budget for fight-start work (ms)
+constexpr double kBudgetMs = 0.5;                          // per-frame time budget for fight-start work (ms; was 1.0)
 
 bool g_own = false, g_installed = false;
 int g_faults = 0;
@@ -59,6 +59,20 @@ void init_budget() {
 }
 int64_t budget_now() { LARGE_INTEGER c; QueryPerformanceCounter(&c); return c.QuadPart; }
 bool over_budget(int64_t t0) { return (double)(budget_now() - t0) >= kBudgetMs * g_ticks_per_ms; }
+int64_t deadline_of(int64_t t0) { return t0 + (int64_t)(kBudgetMs * g_ticks_per_ms); }   // providers::lines_step's deadline
+// One budget for the whole frame: enter_fight, the providers tick and the static pass share it (each was 0.5 ms on its
+// own, and ran in the same frames at a fight start). Every step still does at least one unit per call.
+int64_t g_frame_t0 = 0;
+
+// The page answers of this tick's raw reads, kept across frames (scene::set_read_cache): one VirtualQuery of the game's
+// huge heap regions costs 1-2 ms, and memguard asked it again at every frame of a pass spread over frames (28/10 perf
+// logs: one provider element ~2 ms). Kept kPassHeldFrames frames / kPassHeldMs, readable answers only.
+constexpr uint64_t kPassHeldFrames = 30;
+constexpr ULONGLONG kPassHeldMs = 500;
+memguard::Held g_pass_pages(false);
+bool g_pass_live = false;
+uint64_t g_pass_frame = 0;
+ULONGLONG g_pass_ms = 0;
 
 // cached spots: kept between fights so the file is not re-read
 std::vector<drive::Spot> g_prev_spots;
@@ -211,7 +225,9 @@ std::pair<size_t, size_t> load_spots() {
 }
 
 void save_spots() {
-    drive::save_spots_file(kSpotsPath, g_spots);
+    // the same text, written by the background writer (the synchronous write took ~3 ms in the frame, 28/10 perf logs;
+    // the file is read only at the next game start, the session keeps g_prev_spots)
+    cmn::bgwriter::write(kSpotsPath, drive::spots_json(g_spots));
     g_prev_sig = drive::palette_sig() + "|" + g_last_bases_sig;
     cmn::bgwriter::write(kSigPath, g_prev_sig);
 }
@@ -322,7 +338,7 @@ void enter_fight_start() {
 // Returns true when done, false when more frames are needed
 bool enter_fight_step() {
     init_budget();
-    const int64_t t0 = budget_now();
+    const int64_t t0 = g_frame_t0;
 
     // Phase 0: load and validate spots (chunked at 32 spots)
     if (g_enter_st.phase == 0) {
@@ -345,7 +361,7 @@ bool enter_fight_step() {
                     g_spots.push_back(sp);
             }
             ++g_enter_st.spot_idx;
-            if ((g_enter_st.spot_idx & 3) == 0 && over_budget(t0)) return false;   // a new page region costs a VirtualQuery
+            if (over_budget(t0)) return false;                  // after each spot: a new page region costs a VirtualQuery
         }
         g_enter_st.phase = 1;
         if (over_budget(t0)) return false;
@@ -508,6 +524,8 @@ int g_static_work_own = 0;
 size_t g_validate_idx = 0;                                          // phase 0: how far we are in g_spots
 size_t g_spot_queue_idx = 0;                                        // phase 2: how far we are in g_live
 int g_static_provider_step = 0;                                     // phase 1: 0=scan, 1..4=lines per (side,mech)
+int g_cont_stage = 0;                                               // phase 1 step 0: 0 = scan, 1 / 2 = container walks P1 / P2
+providers::LinesCursor g_cont_cur;                                  // its cursor
 bool g_lines_started = false;                                       // phase 1: the current (side,mech) is under way
 providers::LinesCursor g_lines_cur;                                 // its cursor (one provider per step)
 providers::MechColors g_lines_mc;                                   // its colours, taken when it started
@@ -545,6 +563,8 @@ void static_pass_start(int own) {
     g_validate_idx = 0;
     g_spot_queue_idx = 0;
     g_static_provider_step = 0;
+    g_cont_stage = 0;
+    g_cont_cur = providers::LinesCursor{};
     g_lines_started = false;
     g_static_queue.clear();
     g_cached_cands.clear();
@@ -554,7 +574,7 @@ void static_pass_start(int own) {
 // One frame of incremental static_pass work; returns true when done
 bool static_pass_step() {
     init_budget();
-    const int64_t t0 = budget_now();
+    const int64_t t0 = g_frame_t0;
     const int own = g_static_work_own;
     const int other = own == 1 ? 2 : 1;
 
@@ -570,7 +590,7 @@ bool static_pass_step() {
                                g_spots[g_validate_idx].written, cands))
                 g_live.push_back(g_validate_idx);
             ++g_validate_idx;
-            if ((g_validate_idx & 3) == 0 && over_budget(t0)) return false;
+            if (over_budget(t0)) return false;
         }
         g_static_work_phase = 1;
         if (over_budget(t0)) return false;
@@ -581,16 +601,29 @@ bool static_pass_step() {
         const int id1 = scene::side_char(0), id2 = scene::side_char(1);
         const int fid[3] = { 0, id1, id2 };
         perf::Scope sp(perf::StaticProviders);
-        // sub-step 0: scan providers
+        // sub-step 0: scan providers, then what container() walks (the extern lists of new style providers) within the
+        // budget, so that container() reads no list in one frame
         if (g_static_provider_step == 0) {
-            providers::scan();
-            if (!mech::manager(1) || !mech::manager(2)) mech::discover();
+            if (g_cont_stage == 0) {
+                providers::scan();
+                if (!mech::manager(1) || !mech::manager(2)) mech::discover();
+                g_cont_stage = 1;
+                g_cont_cur = providers::LinesCursor{};
+                if (over_budget(t0)) return false;
+            }
+            while (g_cont_stage <= 2) {
+                if (!providers::container_step(fid[g_cont_stage], g_cont_cur, deadline_of(t0))) return false;
+                ++g_cont_stage;
+                g_cont_cur = providers::LinesCursor{};
+            }
             mech::set_di_cont(providers::container(id1), providers::container(id2));
             g_static_provider_step = 1;
+            g_cont_stage = 0;
             if (over_budget(t0)) return false;
         }
-        // sub-steps 1..4: providers::lines for (other,0) (other,1) (own,0) (own,1), one provider per step within the
-        // budget (one lines() call took up to 3-6 ms in one frame, 16/10 perf logs)
+        // sub-steps 1..4: providers::lines for (other,0) (other,1) (own,0) (own,1), within the budget: one provider per
+        // step, its walk stopped at the deadline and resumed (one lines() call took up to 3-6 ms in one frame, 16/10
+        // perf logs; one provider 2-3 ms, 24/10)
         while (g_static_provider_step <= 4) {
             const int idx = g_static_provider_step - 1;
             const int s = (idx < 2) ? other : own;
@@ -602,7 +635,7 @@ bool static_pass_step() {
                 dc.wl.clear();
                 g_lines_started = true;
             }
-            while (!providers::lines_step(fid[s], g_lines_mc, dc.wl, g_lines_cur)) if (over_budget(t0)) return false;
+            while (!providers::lines_step(fid[s], g_lines_mc, dc.wl, g_lines_cur, deadline_of(t0))) if (over_budget(t0)) return false;
             g_lines_started = false;
             dc.present = g_lines_cur.present;
             dc.container = providers::container(fid[s]);
@@ -646,7 +679,7 @@ bool static_pass_step() {
                 }
             }
             ++g_spot_queue_idx;
-            if ((g_spot_queue_idx & 3) == 0 && over_budget(t0)) return false;
+            if (over_budget(t0)) return false;
         }
         g_static_work_phase = 3;
         if (over_budget(t0)) return false;
@@ -700,7 +733,7 @@ bool static_pass_step() {
 // legacy entry point: runs the whole static_pass at once (for live_fight.txt mode)
 void static_pass(int own) {
     static_pass_start(own);
-    while (!static_pass_step()) {}
+    while (!static_pass_step()) g_frame_t0 = budget_now();
 }
 
 void static_tick() {                                                    // every 60 frames in a fight: a string compare
@@ -747,6 +780,8 @@ void handle_ui(const std::string& req) {
 }
 
 void frame_inner() {
+    init_budget();
+    g_frame_t0 = budget_now();
     ++g_frame;
     if (g_frame % 30 == 0) {
         const bool now = scene::battle_char(0) != 0 || scene::battle_char(1) != 0;
@@ -761,12 +796,16 @@ void frame_inner() {
     bool dirty;
     { std::lock_guard<std::mutex> lk(g_in_mx); dirty = g_di_dirty; }
     const bool frozen = cmn::light_fight() && g_in_fight && !g_static_key.empty();   // light fight: written, nothing runs
-    if (dirty || (g_frame % 30 == 0 && !frozen)) {
+    // (spread over frames: a tick still under way goes on first; a setting changed meanwhile starts the next one)
+    if (!providers::tick_busy() && (dirty || (g_frame % 30 == 0 && !frozen))) {
         providers::StaticCfg st[2];
         { std::lock_guard<std::mutex> lk(g_in_mx); st[0] = g_static[0]; st[1] = g_static[1]; g_di_dirty = false; }
         const int chars[2] = { scene::side_char(0), scene::side_char(1) };
+        providers::tick_start(st, chars, dirty, g_in_fight);
+    }
+    if (providers::tick_busy()) {
         std::string q;
-        g_di_applied += providers::tick(st, chars, dirty, g_in_fight, providers::QueueFn{ queue_write, &q });
+        g_di_applied += providers::tick_step(deadline_of(g_frame_t0), providers::QueueFn{ queue_write, &q });
         if (!q.empty()) engine::queue(q);
     }
     if (g_want_scan && !g_enter_work_active && g_frame % 30 == 15) {
@@ -784,11 +823,19 @@ void frame_inner() {
 }
 
 void frame_guarded() {
+    const ULONGLONG ms = GetTickCount64();
+    if (!g_pass_live || g_frame - g_pass_frame > kPassHeldFrames || ms - g_pass_ms > kPassHeldMs) {
+        g_pass_pages.clear();
+        g_pass_live = true; g_pass_frame = g_frame; g_pass_ms = ms;
+    }
+    scene::set_read_cache(&g_pass_pages);
     try { frame_inner(); }
     catch (...) { ++g_faults; cmn::journal("vfx tick: exception (%d)", g_faults); }
+    scene::set_read_cache(nullptr);
 }
 
 void on_fault() {
+    scene::set_read_cache(nullptr);
     ++g_faults;
     cmn::journal("vfx tick: fault caught (%d)", g_faults);
     if (g_faults >= 3) {

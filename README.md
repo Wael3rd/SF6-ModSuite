@@ -8,7 +8,7 @@ packages:
 | **SF6 Slots Loader** | costume mods become **extra** outfit slots, the original outfits stay; stage mods become variants of their stage (experimental) | REFramework |
 | **SF6 Color Mod** | extra costume colours, a colour editor, Drive colours per character and per player, all from the game's own menus: [colormod/README.md](colormod/README.md) | REFramework, SF6 Native Core |
 | **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
-| **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, loadouts, a reversal picker and online sharing of recordings, all in the game's training pause menu: [crsm/README.md](crsm/README.md) | REFramework, SF6 Native Core |
+| **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, drills, a reversal picker and online sharing of recordings, all in the game's training pause menu: [crsm/README.md](crsm/README.md) | REFramework, SF6 Native Core |
 
 Install what you want: the Slots Loader works on its own; the Color Mod and the Recording Manager need the Native Core of the same
 release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, the four packages in one: install either it or
@@ -20,7 +20,7 @@ links lead here.
 ## Recording Manager
 
 `SF6_CRSM_<version>.zip` (the Recording Manager, CRSM) adds slots 9-30 to the game's 8 recording slots in Training,
-loadouts, slot names, a reversal picker and Community sharing of loadouts, all in the training pause menu (Recording
+drills, slot names, a reversal picker and Community sharing of drills, all in the training pause menu (Recording
 Settings > Manager / Record / Replay). Since 2.0.0 it is one native plugin, `reframework/plugins/SF6_CRSMNative.dll`,
 with no Lua script.
 
@@ -28,9 +28,9 @@ with no Lua script.
 - **Remove the Lua version (1.x) first**: delete `SF6_RecordingManager.lua`, `SF6_RecordingSlotManager.lua` and the
   `crsm` folder from `reframework\autorun\` (and `CRSM_REFrameworkUI.lua` if you added it). While one of them is there
   the plugin leaves the menu to it.
-- Your 1.x recordings, loadouts and names are kept: they stay in `reframework\data\SF6_RecordingSlotManager_data\`,
+- Your 1.x recordings, drills and names are kept: they stay in `reframework\data\SF6_RecordingSlotManager_data\`,
   the same folder as 1.x, and no package overwrites it.
-- **Community** (since 2.1.0): sharing and liking loadouts need an identity verified by Steam, obtained by the plugin
+- **Community** (since 2.1.0): sharing and liking drills need an identity verified by Steam, obtained by the plugin
   in the background (nothing to click). The server keeps your Steam account id for moderation; lists only show your
   CFN name, with `[V]` for a verified share. Version 2.0.x can browse and download, not share or like.
 - The zip's `README.txt` has the details (settings, logs, the emergency stop). The source is in `crsm/`;

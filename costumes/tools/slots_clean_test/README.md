@@ -23,3 +23,29 @@ nothing is written there. Any small costume mod archive (.zip, .7z, .rar) will d
 disappear above the loaders' paks, and after every run the patch paks must form an unbroken row from 001. A loader pak
 that has to stay below a mod pak becomes a marker-only placeholder (shown `c` / `s` in the output, `C` / `S` are the real
 paks) and is deleted once no mod pak is above it. A full run takes a few minutes.
+
+Cases 16-22 check the fixes ported from ZZtaii's Slotsloader fork 1.10.5 - 1.10.9 (MIT; his `tests/*.py` describe the
+same cases on a synthetic game). Their fixtures are made of the game's own files, read from the base pak: an extra outfit
+"ZZ Colour Fixture" (Ryu's Outfit 1 body, its colour list, two colours of Outfit 2 under Outfit 1's names, one of them
+with MaterialData's signature of before the game update that changed it, a mod-only file in Outfit 2's folder and one in
+`product/model/`). Turned-off pak entries are simulated with `SF6_COSTUME_TEST_TURNED_OFF` (the entry reads as absent) and
+a `dlc\test.pak` holding rows with zeros over the hash, as a mod manager's PAK method leaves them.
+
+- 16: `PakReader::turned_off_candidates`: the row between the neighbours of a hash, none outside, none for a table not
+  sorted, both of two rows, a row of a pak read over another.
+- 17: the outfit's scene names the colour list written for the slot, which names the slot's colours, which hold the mod's
+  bytes; the mod-only files are the outfit's copies; the `product/model/` one is in `loose_probes.tsv`; `outfits.json` says
+  `"loose_files_kept": true` after `"loader"`; a second run is Up to date.
+- 18: a loose file at the shared path (as a replacement installs it), changed, removed; then at the `product/model/` path:
+  each change rebuilds, the path is left to the loose file while it is there, the outfit's copy comes back after.
+- 19: Ryu's `esf001_001_cmd_000.user.2` turned off with its row kept, gone, every fighter's gone: where the current
+  signatures come from, and the old colour file brought up to date (not when there is none).
+- 20: the outfit's scene turned off: read from its row; another outfit's scene in the row, two rows, a table not sorted:
+  left out ("slot scene missing").
+- 21: a donor's colour list and colours (esf002 Outfit 1's) in Ryu's folder: the slot's copy names the slot's copies.
+- 22: a main and five add-ons that each replace its body mesh: one outfit with runtime options, not "too many to combine".
+
+`slots_clean_test.exe --row ... <previous build dir>` (a folder with the previous release's `costume_loader.exe` and
+`stagetest.exe`) adds case 23: an install built by the previous build is Up to date for this one, and this one built from
+scratch makes the same pak byte for byte (the archive given must not be a case a fix changes). The executables must be
+moved there, not copied, on a PC where Smart App Control is on.

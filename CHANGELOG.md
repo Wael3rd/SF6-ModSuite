@@ -10,18 +10,296 @@
   DriveTech slots always shown, the Manager's owned-outfit opt-out. Installed any other way, nothing changes.
 - `SlotsloaderContract=2` in `modinfo.ini` and `variants.json`.
 
+## 1.19.9 (2026-11-05) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.4 | fix: Opponent Outfit Settings for a fighter with extra outfits; fixes from ZZtaii's Slotsloader fork (1.10.6 - 1.10.9) |
+| SF6 Color Mod | 0.23.3 | unchanged |
+| SF6 Native Core | 0.9.5 | unchanged |
+| SF6 Recording Manager | 2.2.6 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.3, then install Slots Loader 1.16.4. Color Mod
+0.23.3, Native Core 0.9.5 and Recording Manager 2.2.6 are the same files as in 1.19.8: keep them. With the all-in-one
+package, replace 1.19.8 with 1.19.9. The costume pak is not rebuilt at the first launch ("Up to date"): the loader
+fixes below apply at the next rebuild, when a mod is added, changed or removed.
+
+### SF6 Slots Loader 1.16.4
+- Fix: Opponent Outfit Settings stayed empty for a fighter with extra outfits. In Battle Settings > Other > Opponent
+  Outfit Settings, a fighter with more than 6 outfits counting the slots (Cammy, for example) opened an empty screen
+  and Esc did nothing: the game writes one summary line per outfit and has 6. The summary now shows the fighter's
+  first 6 outfits; every outfit stays selectable and keeps its colours. The idea comes from ZZtaii's Slotsloader fork
+  (MIT); it is done in the native plugin (no Lua). The plugin checks the method it hooks once per game version (well
+  under a second, cached in `SF6_CostumeSlots_data\codecheck.txt`).
+- Fixes from ZZtaii's Slotsloader fork (1.10.6 - 1.10.9), thanks to ZZtaii:
+  - an extra outfit whose mod ships its own colour list no longer shows the original outfit's colours;
+  - with replacements installed by the "PAK method" (Fluffy without REFramework's loose file loader, or the
+    Slotsloader Manager): an extra outfit without a scene of its own is no longer left out ("slot scene missing"), and
+    when such a replacement covers Ryu's Outfit 1 colours (Sakura as Ryu), colour files of mods made before a game
+    update are still brought up to date (Ingrid's extra outfits could never finish loading);
+  - an extra outfit no longer hides a replacement: a file the outfit shares outside its own folder (a Drive Tech
+    mesh, for example) that a replacement also installed in the game folder is left to the replacement, and
+    installing, changing or removing that replacement rebuilds the costumes at the next launch;
+  - an extra outfit carrying another fighter's colour files ("Female Ryu C1") no longer crashes the game.
+- Other installs are unchanged: no rebuild at the first launch ("Up to date"); these fixes apply at the next rebuild
+  (when a mod is added, changed or removed).
+- For the Slotsloader Manager: `outfits.json` now says `"loose_files_kept": true` (`docs/MANAGER_CONTRACT.md`).
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
+## 1.19.8 (2026-11-05) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.3 | unchanged |
+| SF6 Color Mod | 0.23.3 | unchanged |
+| SF6 Native Core | 0.9.5 | Confirm on the pause menu's spin rows (`on_confirm`) |
+| SF6 Recording Manager | 2.2.6 | drill details dialog, Markdown descriptions |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Native Core 0.9.4 and SF6 Recording Manager 2.2.5, then install
+Native Core 0.9.5 and Recording Manager 2.2.6 (install both: Recording Manager 2.2.6 needs Native Core 0.9.5). Slots
+Loader 1.16.3 and Color Mod 0.23.3 are the same files as in 1.19.7: keep them. With the all-in-one package, replace
+1.19.7 with 1.19.8. The costume pak is not rebuilt.
+
+### SF6 Recording Manager 2.2.6
+- New: drill details. On the Manager page, Confirm (F, or a pad's A) on the Drill row opens the drill's details in the
+  game's image dialog:
+  - the drill's name, and a box at the top left: "<Character> - <Author> - <Source>" (Source is Local, Community, or
+    DrillCodes for a Community drill imported from drillcodes.com), with "N SLOTS SAVED" under it;
+  - the saved slots, 10 per page (A / E or Q / E, L1 / R1 to change page);
+  - the full description, scrolled with Up / Down, the stick, the d-pad or the mouse wheel, with a scroll bar;
+  - Open drill and Cancel (Esc never opens the drill).
+- T (pad Y) in the dialog edits the drill's description in the game's text dialog (`/n` = line break, 1000 characters).
+- Light Markdown in descriptions, drawn in the dialog: `# heading`, `**emphasis**`, and the colours `{violet}`,
+  `{magenta}`, `{purple}` and `{blue}`, closed by `{/}`. R (pad X) shows the help. Elsewhere the text is shown
+  without the markup.
+- The Drill row's hints read "[T] Edit Drill Name" and "[F] See Details". Its help line scrolls only when it is too
+  long to fit.
+- Fix: the slot names on Record / Replay were not redrawn right after Open drill.
+- Translated in the 14 languages.
+
+### SF6 Native Core 0.9.5
+- New: Confirm on spin rows. A client of the pause menu (the Recording Manager's Drill row) now gets the Confirm input
+  (F, a pad's A) on its spin rows through a new `on_confirm` callback, appended to the pause-menu callbacks: older
+  clients keep working unchanged. Details in `core/docs/PAUSE_MENU.md`.
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
+## 1.19.7 (2026-11-02) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.3 | unchanged |
+| SF6 Color Mod | 0.23.3 | colour files named `_CMD_` (capital letters) are listed too |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.5 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Color Mod 0.23.2, then install 0.23.3. Slots Loader 1.16.3,
+Native Core 0.9.4 and Recording Manager 2.2.5 are the same files as in 1.19.6: keep them. With the all-in-one package,
+replace 1.19.6 with 1.19.7. The costume pak is not rebuilt.
+
+### SF6 Color Mod 0.23.3
+- Fix: a colour file whose name has capital letters (`esf001_002_CMD_001.user.2`, as some colour packs ship them) was
+  unpacked from its archive but never listed. It is now listed like `esf001_002_cmd_001.user.2`.
+- Reminder: a colour pack for the whole cast works from any folder under `reframework\color_mods\` (for example
+  `color_mods\All_Chars\<the pack's .zip>`): the fighter and the outfit of each colour come from its file name.
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
+## 1.19.6 (2026-10-28) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.3 | fix: a Color Mod colour worn in the match too; part options (Ken's hair) right when Training opens from the main menu; less work in the game's frame |
+| SF6 Color Mod | 0.23.2 | less work in the game's frame (fight start, Drive effects, colour saves) |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.5 | "loadouts" are now called "drills"; fix: downloaded Test drills are recognised |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.2, SF6 Color Mod 0.23.1 and SF6 Recording
+Manager 2.2.4, then install Slots Loader 1.16.3, Color Mod 0.23.2 and Recording Manager 2.2.5. Native Core 0.9.4 is the
+same file as in 1.19.5: keep it. With the all-in-one package, replace 1.19.5 with 1.19.6. The costume pak is not rebuilt.
+
+### SF6 Slots Loader 1.16.3
+- Fix: with an outfit slot and a Color Mod colour (MC / RW), the select and VS screens showed the colour but the match
+  (Custom Room) showed the outfit's normal colour. The fighter's other costume record no longer clears the selection the
+  Color Mod reads while one of them still wears the slot.
+- Fix: runtime costume options made of parts (mesh, material and physics together, such as Ken's SFV hair) came up
+  detached, or showed the base part for a few seconds, when Training was opened with the main menu's shortcut. The
+  option files are now asked for when the game asks for the fighters' files, and the part is put on the frame the
+  model appears.
+- Less work on the game thread every frame: log lines are written by a background thread; the runtime options search
+  the scene only shortly after a change, look only at the models that can wear an option, spread the rest over several
+  frames and stop searching once the Training fighters are built; the settings file is read again only when it
+  changed; the stage strip reuses its controls between visits.
+
+### SF6 Color Mod 0.23.2
+- Less work on the game thread, the same colours: the Drive effect search is spread over several frames with one shared
+  budget per frame (fight start, effect providers), the game's effect tables are read in one copy, the memory checks of
+  the colour writes run on a background thread, and the journal, `_spots.json` and the select screen's `state.json` are
+  written by a background thread (each cost 2 to 6 ms in one frame).
+
+### SF6 Recording Manager 2.2.5
+- "Loadouts" are now called "drills" everywhere in the mod (Manager rows and help lines, the Community dialog, messages,
+  the 14 languages), as on the Community site.
+- Fix: a Test drill downloaded from the Community was not marked as downloaded (no DL mark, a second download allowed,
+  Like refused).
+
+### Known issues
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
+## 1.19.5 (2026-10-27) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | unchanged |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.4 | loadout descriptions shown in full: the Manager's help line follows the selection, the Community dialog shows them large; Like / Sort on the dialog's button row |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Recording Manager 2.2.3, then install 2.2.4. Slots Loader
+1.16.2, Color Mod 0.23.1 and Native Core 0.9.4 are the same files as in 1.19.4: keep them. With the all-in-one package,
+replace 1.19.4 with 1.19.5. The costume pak is not rebuilt.
+
+### SF6 Recording Manager 2.2.4
+- Fix: in the Manager, the help line under the Loadout row showed the description of the previous loadout (one step
+  behind left / right). It now shows the description of the loadout on screen at once (or the row's own help when the
+  loadout has none).
+- Community dialog (Download Loadouts): the focused loadout's description is shown large in the free space under the
+  list, on up to five lines, wrapped to the dialog's width; a longer one turns its pages every 6 seconds ("(1/2)").
+  It used to be cut to two small lines, glued to the key hints.
+- Community dialog: "Like" and "Sort" are now on the dialog's own button row, after "Back", placed like the game's
+  buttons in every language (and translated in the 14 languages of the mod).
+
+## 1.19.4 (2026-10-27) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | unchanged |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.3 | the Community knows your Steam account from the first list, not only after a like or a share |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Recording Manager 2.2.2, then install 2.2.3. Slots Loader
+1.16.2, Color Mod 0.23.1 and Native Core 0.9.4 are the same files as in 1.19.3: keep them. With the all-in-one package,
+replace 1.19.3 with 1.19.4. The costume pak is not rebuilt.
+
+### SF6 Recording Manager 2.2.3
+- The first Community list of a game session (Download Loadouts) asks Steam for your verified identity, as a like or a
+  share already did. A player who never liked nor shared is now known to the Community, and the identity follows the
+  Steam account the game runs with (it used to stay the one of the first like or share on that PC, even after a change
+  of Steam account). If Steam cannot answer, the list still opens, as before.
+
+## 1.19.3 (2026-10-26) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | unchanged |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | unchanged |
+| SF6 Recording Manager | 2.2.2 | the pad works in Download Loadouts, with its buttons shown; Download Loadouts opens every time |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Recording Manager 2.2.1, then install 2.2.2. Slots Loader
+1.16.2, Color Mod 0.23.1 and Native Core 0.9.4 are the same files as in 1.19.2: keep them. With the all-in-one package,
+replace 1.19.2 with 1.19.3. The costume pak is not rebuilt.
+
+### SF6 Recording Manager 2.2.2
+- Fix: in the Community dialog (Download Loadouts), a pad does what the keyboard does: L1 / R1 turn the pages (A / E),
+  Y likes (T), X changes the sort (R), and the dialog shows the pad's buttons instead of the keys while you play on a pad.
+- Fix: "Download Loadouts" sometimes did nothing, mostly on the first try after a while: the window opened empty and
+  closed before the server's list arrived. It now opens at once and shows "Loading..." until the list is there.
+
+## 1.19.2 (2026-10-25) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.16.2 | four fixes from ZZtaii's fork: holes in the patch pak row, locked paks, `variants.json`, structural files |
+| SF6 Color Mod | 0.23.1 | unchanged |
+| SF6 Native Core | 0.9.4 | fix: no more game sessions stuck at 45 fps |
+| SF6 Recording Manager | 2.2.1 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.1 and SF6 Native Core 0.9.3 (or 0.9.2), then
+install Slots Loader 1.16.2 and Native Core 0.9.4. Color Mod 0.23.1 and Recording Manager 2.2.1 are the same files as
+in 1.19.1: keep them. With the all-in-one package, replace 1.19.1 with 1.19.2. The costume pak is not rebuilt.
+
+### SF6 Native Core 0.9.4
+- **Fix: game sessions stuck at 45 fps.** In those sessions Windows 11 ignored the game's request for a 1 ms timer
+  (and 0.9.3's, made at start too) with the game in the foreground, so the game's 60 fps limiter slept on the 15.6 ms
+  default tick. The Core now checks every second, on a background thread, that a 1 ms sleep in the game takes about
+  1 ms, and when it takes 15.6 ms asks Windows for the 1 ms timer again: a session that starts at 45 fps is back at
+  60 within a second. `sf6core.log` says what it measured at start and each time it asked again. An empty
+  `reframework\data\sf6core\timer_off.txt` still turns this off.
+
+### SF6 Slots Loader 1.16.2
+Four fixes taken from ZZtaii's Slotsloader fork (MIT):
+- A hole in the row of patch paks (another tool removed `re_chunk_000.pak.patch_002.pak` and left 003 and above) no
+  longer hides every pak above it, the costume pak included: each missing number below a pak of another mod gets a
+  small marker-only pak, deleted again once no such pak sits above it. The log says `filled a hole in the patch pak
+  row: patch_002 (marker only)` (fork 1.10.1).
+- A patch pak the loader cannot read (locked by another program) counts as another mod's pak: the costume pak goes
+  above it and never takes, rewrites or deletes it (it used to be ignored, and the costume pak could end up below it)
+  (fork 1.10.1).
+- `variants.json` deleted while the costume pak is up to date (the Slotsloader Manager shows no variants) is written
+  again at the next launch: the mods are scanned again and the pak in place is kept. The log says `variants.json
+  missing: rebuilding` (fork 1.10.0).
+- Structural files built from the game: a version scene that is in the game but cannot be read now makes the loader
+  use its shipped copies (it was skipped, and the fighters it brings lost their slots); a fighter of the costume table
+  that is in no fighter scene gets no slot records and its mods are not installed, with a WARN (they got slots that
+  could not load); version scenes are looked for up to `ver_09_9900` (`ver_02_1900` before), by hundreds (fork 1.9.7).
+
+### Known issues
+- Slots Loader: replays show the outfit the other players saw (Outfit 1 or DriveTech), not your modded outfit:
+  a replay has no player the plugin can tell apart.
+- Slots Loader: the online alias was tested in Custom Rooms (against another platform, and with a character change
+  between matches), not yet in Ranked or the Battle Hub.
+- Slots Loader: a fighter built without the game asking for its files again (a Custom Room's training area right
+  after a match) keeps Outfit 1 (or DriveTech) until the next load; the log says so.
+- Slots Loader, Training pause menu: when the costume or colour changed, the fight shows for about half a second with
+  the old look after the pause menu closes, before the game's own reload fade (the game's timing).
+- Slots Loader: options that change only colour or cloth / physics files (a tan) are not offered in the menus; an
+  option that ships joint constraints is applied at the next launch only.
+- Slots Loader, character select and Training pause menu popup: the costume options menu (R1 / C) and the Color
+  Mod's Drive colours (L1) use buttons the game may also use on those screens; this is not confirmed either way. If
+  the game's own guide there shows them, a WARNING is written in the logs (`native_log.txt`, the Color Mod's journal).
+- Slots Loader, VS screen: an option that swaps a part with its own physics (a hair with its chain) shows one frame
+  later than the rest of the model.
+- Slots Loader: the character select costume options menu has not been tested online.
+- Slots Loader, Training pause menu: after confirming options only, the battle restarts (as Restart Battle) a few
+  frames after the pause menu closes, so the fight shows briefly before the fade.
+- Slots Loader: the Training popup costume options have not been tested with P2 (the dummy) nor with a gamepad on the
+  Up / Down window.
+- Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
+  run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
+  Fluffy's list names one of its paks.
+- Slots Loader 1.16.2: the four fixes from the fork were checked by the automated tests (the loaders on a test game
+  folder), not yet in game.
+
+
 ## 1.19.1 (2026-10-24) — SF6 Mod Suite
 
 | Package | Version | |
 |---|---|---|
 | SF6 Slots Loader | 1.16.1 | lighter stage-variant redirection, fewer hooks in fights |
 | SF6 Color Mod | 0.23.1 | fewer hook dispatches and allocations in fights |
-| SF6 Native Core | 0.9.2 | less work on the game thread every frame |
+| SF6 Native Core | 0.9.3 | asks Windows for a 1 ms timer at start; less work on the game thread every frame |
 | SF6 Recording Manager | 2.2.1 | no more small hitches every 2 s; lighter training entry |
 
 Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.0, SF6 Color Mod 0.23.0, SF6 Native Core
-0.9.1 and SF6 Recording Manager 2.2.0, then install Slots Loader 1.16.1, Color Mod 0.23.1, Native Core 0.9.2 and
+0.9.1 and SF6 Recording Manager 2.2.0, then install Slots Loader 1.16.1, Color Mod 0.23.1, Native Core 0.9.3 and
 Recording Manager 2.2.1. The costume pak is not rebuilt.
+
+Native Core 0.9.3 replaced 0.9.2 in this release on October 25 (the all-in-one zip too): if you installed Native Core
+0.9.2, disable or remove it and install 0.9.3.
 
 This release cuts what the mods do on the game's main thread during fights: on a CPU-bound PC (the game's own frame
 work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a dropped frame.
@@ -37,6 +315,11 @@ work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a
 - The Fighter Settings outfit-name hook is installed the first time Battle Settings opens instead of at start, so it
   no longer runs every frame in fights before that.
 - The fighter-profile hooks no longer take a lock on every call while Battle Settings is closed.
+
+### SF6 Native Core 0.9.3 (October 25)
+- The Core asks Windows for a 1 ms timer at start, as the game normally does itself (asking twice changes nothing).
+  An empty `reframework\data\sf6core\timer_off.txt` turns this off; `sf6core.log` says which.
+- Includes everything of 0.9.2 below.
 
 ### SF6 Native Core 0.9.2
 - The flow manager and the pause manager are cached instead of looked up by name every frame.
@@ -87,6 +370,9 @@ work close to 16.7 ms) every tenth of a millisecond decides between 60 fps and a
 - Slots Loader: after a game update Fluffy Mod Manager records the loader's paks as game files (`ArchiveList.bin`);
   run `SF6_SlotsClean.exe` first (README, Patch day). The loader logs a `WARN:` line at each pak build while
   Fluffy's list names one of its paks.
+- Some game sessions run at 45 fps instead of 60 from the start, menus included; closing and restarting the game
+  brings 60 back. Seen so far only with the Color Mod installed; under investigation (Native Core 0.9.3's 1 ms timer
+  does not fix it).
 
 
 ## 1.19.0 (2026-10-24) — SF6 Mod Suite

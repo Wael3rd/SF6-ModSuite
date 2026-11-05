@@ -39,6 +39,14 @@ contract `N - 1` unless this page says otherwise.
    An outfit already in `registry.json` keeps its number (saved choices, colours, replays name outfits by number).
 4. Unchanged files the Manager already reads: `outfits.json` (`source`, `name`, `label`, `left_out`, `pak`) and
    `registry.json`'s `"fingerprint"` (emptied by the Manager to force a rebuild).
+5. **`outfits.json`'s `"loose_files_kept": true`** (added after Slots Loader 1.16.3; the key, place and meaning of
+   ZZtaii's Slotsloader fork 1.10.9: top level, right after `"loader"`). Written by every build: the costume pak
+   never covers a loose game file with an outfit's copy (a mod-only file an extra outfit shares at a path outside its
+   slot, which a Replace-original install also put in the game's `natives` folder, is left to that file), and a
+   replacement installed, changed or removed at a path the pak depends on rebuilds it at the next launch (the
+   fingerprint walks `natives/stm/product/model/esf`; the other paths are listed in `loose_probes.tsv` beside the
+   registry). A launch that rebuilds nothing leaves `outfits.json` as the last build wrote it, so a pak an older
+   loader built is never reported this way. A missing key means `false`; no contract change.
 
 ### Contract 2 promises
 

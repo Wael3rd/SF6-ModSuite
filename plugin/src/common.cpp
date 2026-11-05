@@ -1,5 +1,6 @@
 // SF6 Slots — native plugin: game access helpers, files, JSON, context.
 #include "slots.hpp"
+#include "perf.hpp"
 
 #include <cstdarg>
 #include <cstdio>
@@ -29,20 +30,40 @@ void log_open() {
     g_log_bytes = 0;
 }
 
+// A line is formatted here and written by perf's background writer (in the order logged): opening, writing and closing
+// the file for each line cost the game thread up to milliseconds when a model's options were swapped (a line per part,
+// 24/10). Before the first frame (plugin init: no thread waited on there) the line is written here, as before; while
+// the game closes, logf waits for the line to be written (200 ms at most).
 void logf(const char* fmt, ...) {
     if (g_log_bytes > 2 * 1024 * 1024) return;          // one session never writes more than 2 MB
-    FILE* f = fopen(kLog, "ab");
-    if (!f) return;
     time_t now = time(nullptr);
     struct tm t; localtime_s(&t, &now);
     char head[32];
     int n = snprintf(head, sizeof head, "%02d:%02d:%02d f%u ", t.tm_hour, t.tm_min, t.tm_sec, g_frame);
-    fwrite(head, 1, static_cast<size_t>(n), f);
+    std::string line(head, static_cast<size_t>(n > 0 ? n : 0));
+    char buf[1024];
     va_list a; va_start(a, fmt);
-    int m = vfprintf(f, fmt, a);
+    int m = vsnprintf(buf, sizeof buf, fmt, a);
     va_end(a);
-    fputc('\n', f);
-    fclose(f);
+    if (m >= static_cast<int>(sizeof buf)) {
+        std::string big(static_cast<size_t>(m) + 1, '\0');
+        va_start(a, fmt);
+        vsnprintf(big.data(), big.size(), fmt, a);
+        va_end(a);
+        line.append(big.data(), static_cast<size_t>(m));
+    } else if (m > 0) {
+        line.append(buf, static_cast<size_t>(m));
+    }
+    line += '\n';
+    if (g_frame == 0) {
+        FILE* f = fopen(kLog, "ab");
+        if (!f) return;
+        fwrite(line.data(), 1, line.size(), f);
+        fclose(f);
+    } else {
+        perf::bg_write(kLog, line);
+        if (g_closing.load(std::memory_order_relaxed)) perf::bg_flush(200);
+    }
     g_log_bytes += static_cast<size_t>(n + (m > 0 ? m : 0) + 1);
 }
 

@@ -21,8 +21,8 @@ RowText row_text(Row r, const Tr& T) {
         case kSaveAs: return { T("save_as", {}), T("save_as_desc", {}) };
         case kReset: return { T("reset", {}), T("reset_desc", {}) };
         case kErase: return { T("erase", {}), T("erase_desc", {}) };
-        case kShare: return { "Share loadout", "Share the loaded loadout with the community." };
-        case kDownload: return { "Download Loadouts", "Browse and download loadouts shared by others." };
+        case kShare: return { "Share drill", "Share the loaded drill with the community." };
+        case kDownload: return { "Download Drills", "Browse and download drills shared by others." };
         default: return {};
     }
 }
@@ -254,7 +254,7 @@ void Runner::rename() {
     if (dialog_open()) return;
     const std::string sel = files_.selected_name();
     if (sel.empty()) return;
-    name_dialog("Rename loadout", sel, [this](const std::string& str) {
+    name_dialog("Rename drill", sel, [this](const std::string& str) {
         std::string r = "nil", tk;
         if (!str.empty()) r = files_.rename_selected(str, &tk);
         main_ticker(tk);

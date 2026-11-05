@@ -33,6 +33,18 @@ void journal(const char* fmt, ...);
 // The game window's keyboard state as REFramework's own is_key_down reads it (WM_KEYDOWN / WM_KEYUP, all up when the window
 // loses the focus): a key typed in another application is not seen (P4's raw keys, RMT:329-332, 1758-1760).
 bool key_down(int vk);
+// The same keyboard by position (the scancode of WM_KEYDOWN / WM_KEYUP, not extended): the game's own keys whatever the
+// layout (0x10 / 0x12: Q / E on QWERTY, A / E on AZERTY, the game's tab keys)
+bool scan_down(int scancode);
+// Fresh presses of a key (an auto-repeat is not one) or a mouse button (VK_LBUTTON / VK_RBUTTON) since the start: a reader
+// compares it with the count it saw, so a tap shorter than a frame is not missed
+uint32_t key_presses(int vk);
+// The mouse wheel over the game window (WM_MOUSEWHEEL: WHEEL_DELTA 120 a notch, forward positive), summed since the start:
+// a reader takes the difference with the sum it saw last (as key_presses), so no notch is missed between two frames
+int64_t wheel_total();
+// The mouse cursor in the game window's client area (GetCursorPos + ScreenToClient, pixels) and that area's size
+// (GetClientRect), the window being the one whose messages CRSM sees (on_message); false while unknown or empty
+bool cursor_client(int* x, int* y, int* w, int* h);
 // Plain text file (append only, off the game thread), for example the probes log.
 void append_file(const char* path, std::string text);
 

@@ -305,8 +305,8 @@ std::vector<std::string> desc_lines(const std::string& raw, double max_em, int m
     for (char ch : in) {
         if (ch == '\r') continue;
         if (ch == '\t') ch = ' ';
-        else if (ch == '<') ch = '[';
-        else if (ch == '>') ch = ']';
+        else if (ch == '<' || ch == '[') ch = '(';   // (a '<' starts a game tag; the game's texts draw no square bracket, 04/11)
+        else if (ch == '>' || ch == ']') ch = ')';
         else if (ch != '\n' && ((unsigned char)ch < 0x20 || ch == 0x7F)) continue;
         clean += ch;
     }
@@ -353,6 +353,23 @@ std::vector<std::string> desc_lines(const std::string& raw, double max_em, int m
     return lines;
 }
 
+std::vector<std::string> help_pages(const std::string& raw, double max_em) {
+    std::string joined;
+    for (const std::string& l : desc_lines(raw, 1e9, 1000)) joined += (joined.empty() ? "" : " | ") + l;
+    if (joined.empty()) return {};
+    if (text_em(joined) <= max_em) return { joined };
+    std::vector<std::string> pages;
+    for (std::string p : desc_lines(joined, max_em - text_em("  (99/99)"), 1000)) {
+        if (p.rfind("| ", 0) == 0) p.erase(0, 2);
+        if (p.size() >= 2 && p.compare(p.size() - 2, 2, " |") == 0) p.erase(p.size() - 2);
+        trim(p);
+        if (!p.empty() && p != "|") pages.push_back(std::move(p));
+    }
+    if (pages.size() < 2) return { pages.empty() ? joined : pages[0] };
+    for (size_t i = 0; i < pages.size(); ++i) pages[i] += "  (" + std::to_string(i + 1) + "/" + std::to_string(pages.size()) + ")";
+    return pages;
+}
+
 std::string desc_line(const std::string& raw, double max_em) {
     std::string joined;
     for (const std::string& l : desc_lines(raw, 1e9, 1000)) joined += (joined.empty() ? "" : " | ") + l;
@@ -360,10 +377,39 @@ std::string desc_line(const std::string& raw, double max_em) {
     return one.empty() ? std::string() : one[0];
 }
 
+std::vector<std::string> com_desc_page(const std::vector<std::string>& lines, int per_page, uint64_t page) {
+    if (lines.empty()) return {};
+    const size_t per = (size_t)std::max(1, per_page);
+    const size_t pages = (lines.size() + per - 1) / per;
+    const size_t p = (size_t)(page % pages);
+    std::vector<std::string> out(lines.begin() + (ptrdiff_t)(p * per), lines.begin() + (ptrdiff_t)std::min(lines.size(), (p + 1) * per));
+    if (pages > 1) out.back() += "  (" + std::to_string(p + 1) + "/" + std::to_string(pages) + ")";
+    return out;
+}
+
+bool keep_bottom_y(int32_t control_point, float y_old, float h_old, float h_new, float* y_new) {
+    const int32_t v = control_point >> 2;
+    if (control_point < 0 || v > 2 || (control_point & 3) > 2) return false;
+    const float below = 1.0f - 0.5f * (float)v;             // the share of the box under its ControlPoint
+    if (y_new) *y_new = y_old + below * (h_old - h_new);
+    return true;
+}
+
+double guide_text_w(const std::string& msg, double font_w) {
+    size_t icons = 0;
+    for (size_t p = msg.find("<ICON"); p != std::string::npos; p = msg.find("<ICON", p + 5)) ++icons;
+    return (text_em(msg) + kGuideIconEm * (double)icons) * font_w;
+}
+
+bool guide_w_fits(const std::string& msg, double region_w, double font_w) {
+    const double est = guide_text_w(msg, font_w);
+    return est > 0 && region_w >= 0.6 * est && region_w <= 1.6 * est;
+}
+
 std::string com_guide_text(const std::vector<std::string>& extra, const std::string& guide) {
     std::string s;
     for (const std::string& l : extra) if (!l.empty()) s += l + "\n";
-    return s + guide;
+    return s.empty() ? guide : s + "\n" + guide;
 }
 
 // ---- wording -----------------------------------------------------------------------------------------------------------
@@ -427,7 +473,7 @@ void ComDialog::render() {
         else labels_[i - 1] = i <= n ? p_.row_label(i) : "--";
         descs[i - 1] = i <= n ? p_.row_desc(i) : "";
     }
-    p_.show(p_.title(), labels_, descs);
+    p_.show(p_.title(pad_), labels_, descs);
     shown_version_ = p_.version();
 }
 
@@ -438,9 +484,10 @@ int ComDialog::current_row() {
     return f;
 }
 
-void ComDialog::open() {
+void ComDialog::open(bool pad) {
     p_.page_open();                                             // char, sync, sort New, page 1, fetch (RMT:421-426)
     open_ = true;
+    pad_ = pad;                                                 // the first render already right: no restart at the first tick
     a_.reset(); e_.reset(); t_.reset(); r_.reset();
     guide_focus_ = 0;
     render();
@@ -452,8 +499,15 @@ void ComDialog::closed() {
     a_.reset(); e_.reset(); t_.reset(); r_.reset();
 }
 
-void ComDialog::tick(bool key_a, bool key_e, bool key_t, bool key_r) {
+void ComDialog::tick(bool key_a, bool key_e, bool key_t, bool key_r, bool pad) {
     if (!open_) return;
+    if (pad != pad_) {                                          // the player changed device: the title's glyphs follow
+        pad_ = pad;
+        const int row = current_row();
+        render();
+        last_focus_ = row - 1;
+        p_.navigate(last_focus_);
+    }
     // the answer arrived after the dialog was built: rebuilt in place. The Lua meant to keep the cursor row there
     // (com_focus_idx) but wrote it as a global: the row was always 1. Fixed: the cursor stays on its row.
     if (p_.data_changed()) {

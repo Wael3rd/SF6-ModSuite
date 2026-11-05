@@ -5,6 +5,8 @@
 #include <atomic>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <random>
 
@@ -231,6 +233,15 @@ void register_lua(const SF6CoreAPI* api, SF6CoreClient* client) {
 bool on() { return g_on; }
 Client& client() { return g_client; }
 Identity identity(const std::string& banner_cfn) { return identity_now(banner_cfn); }
+
+std::string linked_cfn() {
+    std::ifstream f(auth::token_path(kConfigPath), std::ios::binary);
+    if (!f) return "";
+    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    auth::Token t;
+    if (!auth::token_from_json(nlohmann::json::parse(text, nullptr, false), &t) || !auth::public_cfn(t.cfn)) return "";
+    return t.cfn;
+}
 
 std::string status() {
     nlohmann::json j = nlohmann::json::object();

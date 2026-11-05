@@ -794,16 +794,60 @@ static const char* type_label(uint32_t t) {
     }
 }
 
+// A game colour file: its type signatures, MaterialData's among them; empty when it is not one
+static std::unordered_map<uint32_t, uint32_t> cmd_signatures(const std::vector<uint8_t>& data) {
+    std::unordered_map<uint32_t, uint32_t> crcs;
+    if (!user_type_crcs(data, crcs) || !crcs.count(0x9E32F1F4)) crcs.clear();
+    return crcs;
+}
+
+// Sakura as Ryu installed by a mod manager's PAK method replaces Ryu's Outfit 1 colours, which turns
+// esf001_001_cmd_000 off in the pak: nothing was read, no mod colour file was brought to the current
+// signatures, and the outfits using them never finished loading (Ingrid's). The turned-off entry still
+// holds the game's file; failing that, another fighter's Outfit 1 colours give the same signatures, but
+// not the 2023 layout template (its fur block may be another fighter's). From ZZtaii's Slotsloader fork
+// (1.10.8), MIT.
 static void load_current_crcs(PakReader& base_pak) {
     g_swap_official = &base_pak; g_swap_donors.clear(); g_swap_reported.clear();
     g_current_crc.clear(); g_crc_upgraded_files.clear(); g_crc_stale_files.clear();
     g_cmd_reference.clear(); g_layout_upgraded_files.clear();
     g_tex_repaired_files.clear(); g_tex_bad_files.clear();
     const char* ref = "natives/stm/product/model/esf/esf001/001/esf001_001_cmd_000.user.2";
-    if (auto* e = base_pak.find(pak_path_hash(std::string_view(ref)))) {
+    const uint64_t ref_hash = pak_path_hash(std::string_view(ref));
+    if (auto* e = base_pak.find(ref_hash)) {
         g_cmd_reference = base_pak.read(*e);
         user_type_crcs(g_cmd_reference, g_current_crc);
+        return;
     }
+    const PakEntry* found = nullptr;
+    int n = 0;
+    for (auto* e : base_pak.turned_off_candidates(ref_hash)) {
+        if (e->decompressed_size <= 0 || e->decompressed_size > (1 << 20)) continue;
+        try { if (!cmd_signatures(base_pak.read(*e)).empty()) { found = e; n++; } }
+        catch (const std::exception&) {}   // another file's data that does not decompress: not this one
+    }
+    if (n == 1) {
+        g_cmd_reference = base_pak.read(*found);
+        g_current_crc = cmd_signatures(g_cmd_reference);
+        printf("  colour files: the game's %s is turned off in the pak (a replacement installed over it): "
+               "read from its turned-off entry\n", ref);
+        return;
+    }
+    for (int f = 0; f < 100; f++) {
+        if (f == 1) continue;
+        char path[96];
+        snprintf(path, sizeof path, "natives/stm/product/model/esf/esf%03d/001/esf%03d_001_cmd_000.user.2", f, f);
+        auto* e = base_pak.find(pak_path_hash(std::string_view(path)));
+        if (!e) continue;
+        auto crcs = cmd_signatures(base_pak.read(*e));
+        if (crcs.empty()) continue;
+        g_current_crc = std::move(crcs);
+        printf("  colour files: the game's %s is missing (a replacement installed over it): signatures read from %s; "
+               "colour files of 2023 keep their layout\n", ref, path);
+        return;
+    }
+    printf("  WARN: no game colour file could be read: mod colour files made before a game update keep their "
+           "signatures, and the outfits using them may never finish loading\n");
 }
 
 // source: file name for the log (disk path, or the pak entry hash)
@@ -855,6 +899,33 @@ static std::vector<uint8_t> read_loose_game_file(const std::string& pak_path) {
 // the pak entry (from ZZtaii's Slotsloader fork (1.10.1), MIT)
 static bool game_file_exists(const PakReader& base_pak, const std::string& pak_path) {
     return base_pak.find(pak_path_hash(std::string_view(pak_path))) || !loose_game_path(pak_path).empty();
+}
+
+// Game files a build depended on outside natives\stm\product\model\esf, with their state then: "none" (no loose
+// file there) or "loose:<size>:<date>". The fingerprint already walks that folder file by file when the game has
+// it (a loose file appearing, changing or going away there rebuilds the pak); these are the paths it does not
+// see. Saved beside the registry (LOOSE_PROBES_FILE), probed again at launch, their digest ends the saved
+// fingerprint: a replacement installed, changed or removed at one of them rebuilds the pak. Probed where ZZtaii's
+// Slotsloader fork (1.10.9, MIT) probes: the mod-only dependencies add_restorations writes or leaves to a loose
+// file, and the paths the slot check finds in no pak. Usually none: then no file, and the fingerprint as before.
+static std::map<std::string, std::string> g_loose_probes;
+static std::string loose_probe_state(const std::string& pak_path) {
+    if (g_game_dir.empty()) return "none";
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(make_wide_path(p).c_str(), GetFileExInfoStandard, &fa)
+        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return "none";
+    char buf[80];
+    snprintf(buf, sizeof buf, "loose:%llu:%llu",
+             (unsigned long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow),
+             (unsigned long long)((uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime));
+    return buf;
+}
+static void probe_loose(const std::string& pak_path) {
+    const std::string low = str_lower(pak_path);
+    if (low.compare(0, 8, "natives/") != 0 || low.compare(0, 30, "natives/stm/product/model/esf/") == 0) return;
+    if (!g_loose_probes.count(low)) g_loose_probes[low] = loose_probe_state(low);
 }
 
 struct ModFileRef {
@@ -1052,17 +1123,22 @@ static bool delete_with_retry(const std::string& path) {
 // rebuild the costumes); only its number is kept, since ours goes above it.
 // Ours is split in real paks and marker-only placeholders (see retire_pak): a placeholder is never
 // the pak that holds the costumes. A stage placeholder is not a stage pak (stage_pak_num ignores it).
+// A pak that cannot be read (locked by another program) is still in the row: it goes in `unreadable`,
+// counted as another mod's (ours goes above it, never takes or deletes it), as the stage loader and
+// SF6_SlotsClean count it. From ZZtaii's Slotsloader fork 1.10.1, MIT.
 static void classify_patch_paks(const std::string& pak_dir,
                                 std::vector<PakInfo>& our_paks,
                                 std::vector<PakInfo>& our_stubs,
                                 std::vector<PakInfo>& mod_paks,
-                                int& stage_pak_num) {
+                                int& stage_pak_num,
+                                std::vector<PakInfo>& unreadable) {
     stage_pak_num = 0;
     WIN32_FIND_DATAA fd;
     std::string pattern = pak_dir + "\\re_chunk_000.pak.patch_*.pak";
     HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;   // not a pak (the stage loader skips it too)
         std::string fn = fd.cFileName;
         // Extract number
         auto ps = fn.find("patch_");
@@ -1072,7 +1148,7 @@ static void classify_patch_paks(const std::string& pak_dir,
         // Ours (costume marker), the stage slots' or a mod's: common/pak.cpp, shared with SF6_SlotsClean
         uint32_t entries = 0;
         PatchPakKind kind = classify_patch_pak(full.c_str(), &entries);
-        if (kind == PatchPakKind::Unreadable) continue;
+        if (kind == PatchPakKind::Unreadable) { unreadable.push_back({num, full}); continue; }
         if (kind == PatchPakKind::Stage) { if (entries != 1) stage_pak_num = std::max(stage_pak_num, num); continue; }
         if (kind == PatchPakKind::Costume) (entries == 1 ? our_stubs : our_paks).push_back({num, full});
         else mod_paks.push_back({num, full});
@@ -1124,6 +1200,40 @@ static void drop_stale_stubs(const std::vector<PakInfo>& stubs, int top_foreign)
     for (auto& st : stubs) {
         if (st.num <= top_foreign) continue;
         if (delete_with_retry(st.path)) logf("  removed placeholder: %s\n", st.path.c_str());
+    }
+}
+
+// The game stops reading the row at its first missing number: a hole another tool left (a pak removed
+// in the middle of the row) hides every pak above it, ours included. Each missing number below a pak
+// that stays (top_foreign) gets our marker-only placeholder, which both loaders keep while a pak of
+// another mod sits above it and delete once none does (drop_stale_stubs, the stage loader's run). A
+// hole with only our paks above it is left: ours go to top_foreign + 1 and the rest above is removed.
+// The placeholder is renamed from <pak>.tmp, never written over a pak that took the number meanwhile.
+// From ZZtaii's Slotsloader fork 1.10.1, MIT.
+static void fill_patch_row_holes(const std::string& pak_dir, int top_foreign) {
+    if (top_foreign <= 1) return;
+    std::set<int> present;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((pak_dir + "\\re_chunk_000.pak.patch_*.pak").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::string fn = fd.cFileName;
+        auto ps = fn.find("patch_");
+        if (ps != std::string::npos) present.insert(atoi(fn.c_str() + ps + 6));
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    for (int n = 1; n < top_foreign; n++) {
+        if (present.count(n)) continue;
+        char name[64];
+        snprintf(name, sizeof name, "\\re_chunk_000.pak.patch_%03d.pak", n);
+        const std::string path = pak_dir + name, tmp = path + ".tmp";
+        if (write_marker_pak(tmp.c_str(), PatchPakKind::Costume) && MoveFileExA(tmp.c_str(), path.c_str(), 0)) {
+            logf("  filled a hole in the patch pak row: patch_%03d (marker only)\n", n);
+        } else {
+            DeleteFileA(tmp.c_str());
+            logf("  WARN: cannot fill the hole in the patch pak row at patch_%03d: the paks above it may not load\n", n);
+        }
     }
 }
 
@@ -1719,7 +1829,10 @@ static void write_outfits_json(const std::string& path, const std::vector<SlotIn
     char when[32];
     SYSTEMTIME st; GetLocalTime(&st);
     sprintf(when, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
-    fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"pak\": \"%s\",\n  \"outfits\": [",
+    // loose_files_kept (ZZtaii's Slotsloader fork 1.10.9: same key, place and meaning): this pak never covers a loose
+    // game file with an outfit's copy, and a replacement installed or removed at a path it depends on rebuilds it
+    // (add_restorations, probe_loose). The Slotsloader Manager (1.0.18) reads it.
+    fprintf(f, "{\n  \"generated\": \"%s\",\n  \"loader\": \"%s\",\n  \"loose_files_kept\": true,\n  \"pak\": \"%s\",\n  \"outfits\": [",
             when, json_escape(LOADER_PAK_ID).c_str(), json_escape(pak_name).c_str());
     bool first = true;
     for (auto& sl : slots) {
@@ -2367,10 +2480,15 @@ static std::vector<SlotInfo> assign_slots(
                 }
             }
             auto* sr = meta.find(mc.fighter, si.new_costume_no);
-            if (sr) {
-                si.record_id = sr->record_id;
-                si.manage_id = sr->manage_id;
+            if (!sr) {
+                // No slot record (a fighter in no fighter scene of the game, or one the shipped tables do not know):
+                // the slot would have neither a table record nor a scene folder. From ZZtaii's Slotsloader fork 1.9.7, MIT.
+                printf("  WARN: %s has no reserved slot record for costume %d, %s not installed\n",
+                       mc.fighter_dir.c_str(), si.new_costume_no, mod_label(mod_id).c_str());
+                continue;
             }
+            si.record_id = sr->record_id;
+            si.manage_id = sr->manage_id;
             used_run[mc.fighter].insert(si.new_costume_no);
             slots.push_back(si);
             new_reg.push_back({si.mod_id, si.fighter_dir, si.original_folder,
@@ -2774,6 +2892,12 @@ static void add_slot_files(PakWriter& writer,
     // Slotsloader fork (1.9.8), MIT)
     std::vector<std::string> slot_ref_files;
     std::vector<std::pair<std::string, std::string>> mod_constraint_files;   // mod path, slot path
+    // A donor colour table (another fighter's colour list in this costume's folder) may also name the host's
+    // palettes (DriveTech ships both). From ZZtaii's Slotsloader fork (1.10.7), MIT.
+    const bool donor_colours = std::any_of(mc->files_in_folder.begin(), mc->files_in_folder.end(), [&](const auto& item) {
+        const std::string name = str_lower(item.first.substr(item.first.rfind('/') + 1));
+        return name.compare(0, 3, "esf") == 0 && name.compare(0, 6, fd) != 0 && str_ends_with(name, "_ccvd.user.2");
+    });
     auto record_relocation = [&](const std::string& source, const std::string& target) {
         if (source == target || !writer.find(pak_path_hash(std::string_view(target)))) return;
         std::string src = str_lower(source), dst = str_lower(target);
@@ -2787,6 +2911,18 @@ static void add_slot_files(PakWriter& writer,
                      || src.find("_shape.user.") != std::string::npos
                      || src.find("_jcs.user.") != std::string::npos
                      || src.find("_aogeo.user.") != std::string::npos)) ext = ".user.";
+        // A cross-fighter scene can bring its donor's colour and material-setting files into the host costume
+        // folder ("Female Ryu C1" as an extra outfit crashed: they named the original folder, where nothing is).
+        // Their references follow the slot's copies, only toward files the slot wrote. From ZZtaii's
+        // Slotsloader fork (1.10.7), MIT.
+        const std::string leaf = src.substr(src.rfind('/') + 1);
+        const bool donor_user = leaf.size() > 7 && leaf.compare(0, 3, "esf") == 0
+            && leaf[6] == '_' && (leaf.compare(0, 6, fd) != 0 || donor_colours)
+            && leaf.find_first_not_of("0123456789", 3) == 6
+            && (str_ends_with(leaf, "_ccvd.user.2") || str_ends_with(leaf, "_msl.user.2") ||
+                str_ends_with(leaf, "_bsd.user.2") || str_ends_with(leaf, "_nsd.user.2") ||
+                (leaf.find("_cmd_") != std::string::npos && str_ends_with(leaf, ".user.2")));
+        if (donor_user) ext = ".user.";
         if (!ext || src.compare(0, 12, "natives/stm/") != 0
                  || dst.compare(0, 12, "natives/stm/") != 0) return;
         auto a = src.rfind(ext), b = dst.rfind(ext);
@@ -3710,6 +3846,32 @@ static void add_slot_files(PakWriter& writer,
         uint64_t sh = pak_path_hash(std::string_view(orig_costume->scene));
         auto* se = base_pak.find(sh);
         std::vector<uint8_t> vdata;
+        if (!se && mc->files_scene.empty()) {
+            // A replacement installed over the pak turned the game's scene off (Ingrid C1 with its own scene as a
+            // replacement, a no-scene Ingrid C1 as an extra outfit: the slot had no scene and was left out). The
+            // entry keeps its data and its row of the table sorted by hash: the one turned-off row there that is
+            // a scene of this costume's model folder is the game's scene. Two such rows, or a table not sorted:
+            // left out as before. From ZZtaii's Slotsloader fork (1.10.6), MIT.
+            // "natives/stm/product/model/esf/esf032/001" in the index, "Product/Model/..." in the scene
+            std::string want = str_lower(orig_costume->model_dir) + "/";
+            if (want.compare(0, 12, "natives/stm/") == 0) want.erase(0, 12);
+            const PakEntry* found = nullptr;
+            int n = 0;
+            for (auto* e : base_pak.turned_off_candidates(sh)) {
+                if (e->decompressed_size <= 0 || e->decompressed_size > (8 << 20)) continue;
+                bool own = false;
+                try {
+                    for (auto& r : scene_model_refs(base_pak.read(*e)))
+                        if (str_lower(r.text).compare(0, want.size(), want) == 0) { own = true; break; }
+                } catch (const std::exception&) {}   // another file's data that does not decompress: not this one
+                if (own) { found = e; n++; }
+            }
+            if (n == 1) {
+                se = found;
+                printf("      scene: the game's %s is turned off in the pak (a replacement installed over it): "
+                       "read from its turned-off entry\n", orig_costume->scene.c_str());
+            }
+        }
         if (se) {
             auto scene_data = base_pak.read(*se);
             vdata.assign(scene_data.begin(), scene_data.end());
@@ -3779,6 +3941,13 @@ static void add_slot_files(PakWriter& writer,
                         while (!head.empty() && (head[0] == '@' || head[0] == ' ')) head.erase(0, 1);
                         std::string target = scene_ref_pak_path(head + new_wpfx + ws.substr(old_wpfx.size()), inv.suffixes);
                         slot_has = !target.empty() && written_paths.count(target);
+                        // A reference that already names a file of the slot stays: the colour list (moved, not
+                        // renamed, by patch_scene_minimal) went to the mod's list copied under the slot's name in
+                        // phase 1, which still lists the original folder's colours (an extra outfit whose mod
+                        // ships its own colour list showed the original outfit's colours). From ZZtaii's
+                        // Slotsloader fork (1.10.6), MIT.
+                        const std::string current = scene_ref_pak_path(head + ws, inv.suffixes);
+                        if (!current.empty() && written_paths.count(current)) slot_has = false;
                     }
                     if (slot_has) {
                         memcpy(vdata.data()+wi, nw16.data(), nw16.size());
@@ -4662,8 +4831,12 @@ static void add_restorations(PakWriter& writer,
     for (auto& sl : slots)
         relocated_prefixes.insert(inv.model_prefix(sl.fighter_dir, sl.original_folder));
 
-    int restored = 0, added = 0, streaming_restored = 0;
+    int restored = 0, added = 0, streaming_restored = 0, left = 0;
     size_t bp = strlen(BASE_PFX);
+    // Mod-only dependencies per shared folder: left to loose game files, written from the outfit (a mesh of the
+    // replacement with the outfit's material file may not load together: logged below)
+    std::map<std::string, std::pair<int, int>> folders;
+    auto folder_of = [](const std::string& p) { auto s = p.rfind('/'); return s == std::string::npos ? p : p.substr(0, s); };
     for (auto& [pak_path, mf] : all_mod) {
         if (written_paths.count(pak_path)) continue;
         // Skip streaming/ paths (handled as twins below)
@@ -4697,9 +4870,23 @@ static void add_restorations(PakWriter& writer,
             // Not in the game and not relocated by any slot: another slot may still reference it
             // at this path (in_relocated alone dropped files a slot of another mod needed).
             (void)in_relocated;
+            // ...unless a loose file of the game folder already supplies it: a replacement a mod manager installed
+            // there (the Slotsloader Manager either way, Fluffy). The game reads that file when no pak has the
+            // path, the outfit naming the path too; our copy covered the replacement for as long as the outfit was
+            // installed (Sakura as Ryu's DriveTech mesh, esf001/005/00). Its twin goes with it (the base decides the
+            // pair). A loose file appearing, changing or going away there rebuilds the pak (the fingerprint walks
+            // model/esf; probe_loose for the rest). From ZZtaii's Slotsloader fork (1.10.9), MIT.
+            probe_loose(pak_path);
+            if (!loose_game_path(pak_path).empty()) {
+                printf("  mod-only dependency left to the game folder's loose file: %s\n", pak_path.c_str());
+                left++;
+                folders[folder_of(pak_path)].first++;
+                continue;
+            }
             put_mod_data(writer, h, mf);
             written_paths.insert(pak_path);
             added++;
+            folders[folder_of(pak_path)].second++;
             // ...with its high-resolution twin when the mod ships one
             if (str_lower(pak_path).find(".tex.") != std::string::npos
                 && pak_path.compare(0, bp, BASE_PFX) == 0) {
@@ -4712,7 +4899,13 @@ static void add_restorations(PakWriter& writer,
             }
         }
     }
+    for (auto& [folder, n] : folders)
+        if (n.first && n.second)
+            printf("  WARN: %s: %d files left to the game folder's loose files, %d from the outfit: a replacement that "
+                   "ships only part of this folder can leave parts that do not load together\n",
+                   folder.c_str(), n.first, n.second);
     printf("  restored %d vanilla files, added %d mod-only files", restored, added);
+    if (left) printf(", %d left to loose game files", left);
     if (streaming_restored) printf(", %d streaming", streaming_restored);
     printf("\n");
 }
@@ -4885,6 +5078,8 @@ static std::vector<std::string> material_textures(const std::vector<uint8_t>& md
 // method": its loose copy in natives\ is what the game loads) is there and nowhere in the paks; without
 // it every slot using such a shared texture was left out as "texture missing" (from ZZtaii's Slotsloader
 // fork (1.10.1), MIT).
+// A path found in no pak is probed (probe_loose: a replacement installed or removed there later rebuilds the pak;
+// ZZtaii's Slotsloader fork 1.10.9, MIT). loose_game_path: wide calls with the long-path prefix.
 struct GameFiles {
     PakWriter* writer = nullptr;
     std::vector<PakReader*> paks;
@@ -4892,12 +5087,14 @@ struct GameFiles {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return true;
         for (auto* pk : paks) if (pk->find(h)) return true;
+        probe_loose(p);
         return !loose_game_path(p).empty();
     }
     std::vector<uint8_t> load(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return writer->get(h);
         for (auto* pk : paks) if (auto* e = pk->find(h)) return pk->read(*e);
+        probe_loose(p);
         std::string full = loose_game_path(p);
         return full.empty() ? std::vector<uint8_t>{} : read_file_long(full);
     }
@@ -10253,6 +10450,51 @@ static std::string variant_choices_fingerprint() {
     return buf;
 }
 
+// The game files probed by the last build (g_loose_probes), one "state<TAB>pak path" per line beside the registry;
+// none: no file. Their digest ends the saved fingerprint (nothing when there are none: a build that probed nothing
+// keeps the fingerprint of a loader without probes); at launch it is computed again from their state then.
+static const char* LOOSE_PROBES_FILE = "loose_probes.tsv";
+static std::string loose_probes_digest(const std::map<std::string, std::string>& probes) {
+    if (probes.empty()) return {};
+    std::string all;
+    for (auto& [p, state] : probes) { all += p; all += '\t'; all += state; all += '\n'; }
+    char buf[64];
+    snprintf(buf, sizeof buf, ";loose:%zu:%016llx", probes.size(), (unsigned long long)fnv1a64(all));
+    return buf;
+}
+static std::map<std::string, std::string> load_loose_probes(const std::string& path) {
+    std::map<std::string, std::string> out;
+    const std::string text = read_text_file(path);
+    for (size_t at = 0; at < text.size(); ) {
+        size_t e = text.find('\n', at);
+        if (e == std::string::npos) e = text.size();
+        std::string line = text.substr(at, e - at);
+        at = e + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto tab = line.find('\t');
+        if (tab == std::string::npos || tab == 0 || tab + 1 >= line.size()) continue;
+        out[line.substr(tab + 1)] = line.substr(0, tab);
+    }
+    return out;
+}
+static std::map<std::string, std::string> current_loose_probes(const std::map<std::string, std::string>& saved) {
+    std::map<std::string, std::string> now;
+    for (auto& sp : saved) now[sp.first] = loose_probe_state(sp.first);
+    return now;
+}
+static bool save_loose_probes(const std::string& path, const std::map<std::string, std::string>& probes) {
+    if (probes.empty())
+        return GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES || DeleteFileA(path.c_str());
+    const std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = true;
+    for (auto& [p, state] : probes) ok = fprintf(f, "%s\t%s\n", state.c_str(), p.c_str()) > 0 && ok;
+    ok = fclose(f) == 0 && ok;
+    if (!ok || !MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp.c_str()); return false; }
+    return true;
+}
+
 // ============================================================================
 // Fingerprint (paks + costume_mods folders)
 // ============================================================================
@@ -10457,7 +10699,7 @@ static void save_pak_sources(const std::string& file, const std::string& header,
 // made before the update, hid Arjun and C. Viper's Outfit 4). Same output as make_static_structural.py
 // (checked byte for byte by costumes/tools/structural_test). The shipped copies stay as the fallback.
 
-static const char* VER_SCENE_FMT = "natives/stm/product/flow/version_update/ver_02_%04d/esf.scn.20";
+static const char* VER_SCENE_FMT = "natives/stm/product/flow/version_update/ver_%02d_%04d/esf.scn.20";
 static const uint32_t SLOT_RECORD_ID_BASE = 5000;
 static const uint32_t SLOT_SORT_NO_BASE = 101;
 static const int SLOTS_PER_FIGHTER = 100;   // costume_slot_index() blocks
@@ -10510,13 +10752,17 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
     st.files.push_back({ ESF_ROOT, std::move(root) });
 
     // Version scenes: a fighter goes in the first one that has its folders (a later one can add an outfit
-    // to an older fighter: ver_02_0500 has C. Viper's Outfit 4, she stays in ver_02_0300)
+    // to an older fighter: ver_02_0500 has C. Viper's Outfit 4, she stays in ver_02_0300). Probed in game
+    // version order, ver_02_0300 to ver_09_9900 by hundreds (the seasons' scenes: 0300, 0400, 0500): 797
+    // lookups, at a build only. A scene there that cannot be read fails the whole build (the shipped
+    // copies are used): left out, its fighters would get no slot. From ZZtaii's Slotsloader fork 1.9.7, MIT.
     std::set<std::string> in_scene(root_dirs.begin(), root_dirs.end());
-    for (int num = 300; num < 2000; num += 100) {
+    for (int ver = 20300; ver <= 99900; ver += 100) {   // ver_MM_mmmm = MM * 10000 + mmmm
         char p[128];
-        snprintf(p, sizeof p, VER_SCENE_FMT, num);
+        snprintf(p, sizeof p, VER_SCENE_FMT, ver / 10000, ver % 10000);
+        if (!base_pak.find(pak_path_hash(std::string_view(p)))) continue;
         std::vector<uint8_t> scn;
-        if (!load(p, scn)) continue;
+        if (!load(p, scn)) return fail(std::string(p) + ": cannot be read");
         std::vector<std::string> dirs;
         for (auto& [dir, costumes] : scene_costume_folders(scn)) {
             if (seen.count(dir)) continue;
@@ -10530,7 +10776,7 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
         st.files.push_back({ p, std::move(scn) });
     }
     for (int f : fighters)
-        if (!in_scene.count(dir_of(f))) logf("  WARN: fighter %d is in the costume table but in no fighter scene: its slots cannot load\n", f);
+        if (!in_scene.count(dir_of(f))) logf("  WARN: fighter %d is in the costume table but in no fighter scene: no slots for it\n", f);
 
     // Costume table: 100 records per fighter, ids and sort numbers by fighter block (costume_slot_index)
     std::vector<std::vector<uint8_t>> guids(SLOTS_PER_FIGHTER);
@@ -10543,6 +10789,7 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
     }
     std::vector<CostumeSlotRecord> add;
     for (int f : fighters) {
+        if (!in_scene.count(dir_of(f))) continue;   // no folder to load its slots from: no record either (fork 1.9.7)
         const int idx = costume_slot_index(f);
         for (int so = 0; so < SLOTS_PER_FIGHTER; so++) {
             const uint32_t id = SLOT_RECORD_ID_BASE + (uint32_t)(idx * SLOTS_PER_FIGHTER + so);
@@ -10654,6 +10901,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     std::string game_dir = w2a(game_dir_w);
     if (game_dir.empty()) return 1;
     g_game_dir = game_dir;
+    g_loose_probes.clear();
 
     // Derive paths
     std::string data_dir = game_dir + "\\reframework\\data\\SF6_Costumes_Data\\loader";
@@ -10730,15 +10978,20 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
 
     // 3. Classify patch paks
     logf("Scanning patch paks...\n");
-    std::vector<PakInfo> our_paks, our_stubs, mod_paks;
+    std::vector<PakInfo> our_paks, our_stubs, mod_paks, unreadable_paks;
     int stage_pak_num = 0;
-    classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num);
+    classify_patch_paks(pak_dir, our_paks, our_stubs, mod_paks, stage_pak_num, unreadable_paks);
     drop_temp_paks(pak_dir);
     int top_foreign = stage_pak_num;   // our pak goes above these
     for (auto& pi : mod_paks) top_foreign = std::max(top_foreign, pi.num);
+    for (auto& pi : unreadable_paks) top_foreign = std::max(top_foreign, pi.num);
     drop_stale_stubs(our_stubs, top_foreign);
     if (stage_pak_num)
         logf("  patch_%03d: stage slots pak, not a costume mod (the costume pak goes above it)\n", stage_pak_num);
+    for (auto& pi : unreadable_paks)
+        logf("  patch_%03d: cannot be read (in use by another program?), kept as another mod's pak (the costume pak goes above it)\n",
+             pi.num);
+    fill_patch_row_holes(pak_dir, top_foreign);
 
     // 3a. Check if costume_mods folder exists (quick existence check)
     std::string costume_mods_dir = game_dir + "\\reframework\\costume_mods";
@@ -10878,6 +11131,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         snprintf(h, sizeof(h), "%016llx", (unsigned long long)fnv1a64(k));
         new_fp += std::string(";nsfwkw=") + h;
     }
+    // Compared with the saved one: new_fp, then the game files the last build probed, as they are now (probe_loose)
+    const std::string probes_path = registry_dir + "\\" + LOOSE_PROBES_FILE;
+    const std::string check_fp = new_fp + loose_probes_digest(current_loose_probes(load_loose_probes(probes_path)));
     const bool options_missing = g_rto_layout != RtoLayout::Off
         && GetFileAttributesA((registry_dir + "\\" + RTO_FILE).c_str()) == INVALID_FILE_ATTRIBUTES;
     int target_num = top_foreign + 1;
@@ -10897,17 +11153,23 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         const size_t mt = reg_check.fingerprint.rfind(";meta=");
         const bool meta_same = mt != std::string::npos && reg_check.fingerprint.compare(mt, std::string::npos, meta_tag) == 0;
         if (mt != std::string::npos) reg_check.fingerprint.erase(mt);
-        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && !meta_same) {
+        // variants.json (read by the Slotsloader Manager) is written by a build only: missing, the same mods are
+        // built again like for another meta id, the pak in place kept. From ZZtaii's Slotsloader fork 1.10.0, MIT.
+        const bool variants_missing = GetFileAttributesA(variants_path.c_str()) == INVALID_FILE_ATTRIBUTES;
+        if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && meta_same && variants_missing)
+            logf("  variants.json missing: rebuilding\n");
+        if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && (!meta_same || variants_missing)) {
             uint32_t target_entries = 0;
             if (our_paks.size() == 1 && _stricmp(our_paks[0].path.c_str(), target_path.c_str()) == 0
                 && classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
                 keep_pak = true;
                 keep_entries = target_entries;
-                logf("  same mods, same pak (%s), files beside it from another loader version: they are written again\n",
-                     LOADER_PAK_ID);
+                if (!meta_same)
+                    logf("  same mods, same pak (%s), files beside it from another loader version: they are written again\n",
+                         LOADER_PAK_ID);
             }
         }
-        if (reg_check.fingerprint == new_fp && !new_fp.empty() && !options_missing && meta_same) {
+        if (reg_check.fingerprint == check_fp && !new_fp.empty() && !options_missing && meta_same && !variants_missing) {
             // Check our pak exists (the real one: a marker-only placeholder holds no costume)
             uint32_t target_entries = 0;
             if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
@@ -11446,8 +11708,16 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
              writer.previous_hits(), writer.previous_bytes() / 1048576.0);
     if (write_pak) save_pak_sources(sources_path, pak_sources_header(game_fp, target_path), writer.lasting_sources());
 
-    // 10. Save registry with fingerprint
-    registry.fingerprint = new_fp + meta_tag;
+    // 10. Save registry with fingerprint (and the game files this build probed: probe_loose)
+    if (!save_loose_probes(probes_path, g_loose_probes))
+        logf("  WARN: could not write %s: the pak is built again at the next launch\n", probes_path.c_str());
+    if (!g_loose_probes.empty()) {
+        size_t loose = 0;
+        for (auto& lp : g_loose_probes) if (lp.second.compare(0, 6, "loose:") == 0) loose++;
+        logf("  %zu game files outside the model folders this pak depends on (%zu of them loose files in its natives "
+             "folder) are watched for changes\n", g_loose_probes.size(), loose);
+    }
+    registry.fingerprint = new_fp + loose_probes_digest(g_loose_probes) + meta_tag;
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);

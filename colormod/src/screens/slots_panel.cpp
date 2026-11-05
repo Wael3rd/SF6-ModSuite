@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "../common.hpp"
+#include "../perf.hpp"
 
 namespace screens::slots_panel {
 namespace {
@@ -43,6 +44,7 @@ void release(int side) {
 
 bool slots_holds(int side) {
     look();
+    perf::Scope t(perf::SlotsClaim);
     return g_claim && g_claim(side, kWhoDi, -1) == 1;
 }
 

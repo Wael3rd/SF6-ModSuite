@@ -41,6 +41,12 @@ const char* const kNames[kCount] = {
     "DipanelTickAll",
     "FeedDiState", "FeedDrCol",
     "VfxRelayReload", "VfxPageRefresh", "ScanCommit",
+    "ProvScan", "ProvTick", "ProvSnap", "ProvBuild",
+    "SetupResolve", "SetupInject", "SetupJournal",
+    "ScrGuideFlags", "ScrResolve", "ScrDipanel", "ScrRows", "ScrFsTick", "ScrTcsTick", "ScrMenus", "ScrGuideList",
+    "TrkMenus", "TrkCamera", "TrkDots", "SlotsClaim",
+    "ScrSelChange", "ScrSaveState",
+    "PageQuery", "SetupFiles", "SetupLockWait",
 };
 
 std::atomic<bool> g_on{ false };

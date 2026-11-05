@@ -300,6 +300,11 @@ do not run in the core's `LateUpdateBehavior` (only `on_page_shown(page, 0)` at 
 thread-safe and must never call the menu's update methods back (R4); any `pm_*` function may be called from them.
 They are SEH-guarded and a fault counts on the client's breaker; a disabled or unregistered client is skipped.
 
+`on_confirm` (core 0.9.5, appended to `SF6CorePmCallbacks`; an older core copies the struct up to its own size and
+never calls it) is the exception: the decide input (keyboard F, a pad's south button) read raw on one of the client's
+focused spin rows, sent on the **game thread** from the core's frame, at the press edge. Details: `PAUSE_MENU.md`,
+"Callbacks".
+
 ## Function list (increment 9 -- GUI material texture, ADR-0019, appended, core 0.8.1)
 
 A `via.gui.Material` shows its textures through named material variables (the stage strip's cells: element

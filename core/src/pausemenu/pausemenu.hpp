@@ -31,6 +31,9 @@ struct Calls {
     void (*page_shown)(Owner owner, int64_t page, bool shown) = nullptr;
     void (*hints)(void* focused_menu_data, std::vector<Hint>& out) = nullptr;   // every client with a provider
     bool (*any_hints)() = nullptr;                                               // a provider exists
+    // 0.9.5: Confirm on a spin row (on_confirm), called on the game thread from frame() (the engine lock released)
+    void (*confirm)(Owner owner, int64_t row) = nullptr;
+    bool (*any_confirm)() = nullptr;                                             // a client has on_confirm: the input is read
 };
 
 // The check of each hooked method's code (R18), on a thread of its own (the type database is static; its result is
@@ -47,7 +50,8 @@ bool ready();                     // installed and not switched off by faults
 // reference engine's own text hook did (its Lua lock). A no-op while the engine is off. Any thread.
 void text_barrier();
 
-// Game thread, every core frame: training and pause state, the menu-close edge, the install pass.
+// Game thread, every core frame: training and pause state, the menu-close edge, the install pass, the Confirm on a
+// focused spin row (0.9.5: the decide input read raw, sent through Calls::confirm after the engine lock).
 void frame(uint64_t frame);
 
 // The option-build purge (options.cpp): may this DynamicData of a primary tab (a DYNAMIC row) be removed? Only a row

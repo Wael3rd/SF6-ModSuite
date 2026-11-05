@@ -1,4 +1,5 @@
 #include "color_mods.hpp"
+#include "live_internal.hpp"
 
 #include <windows.h>
 
@@ -212,6 +213,7 @@ bool write_text(const fs::path& p, const std::string& s) {      // through a tem
         if (!f) return false;
     }
     fs::rename(tmp, p, ec);
+    live::files_changed();
     if (ec) { fs::remove(tmp, ec); return false; }
     return true;
 }
@@ -308,6 +310,7 @@ MigrateReport migrate_legacy(const fs::path& data_dir, void (*log)(const std::st
         if (has(src)) {
             fs::create_directories(dest.parent_path(), ec);
             fs::rename(src, dest, ec);
+            live::files_changed();
             if (ec) { say("color_mods: cannot move " + src.string() + ": " + ec.message()); ++rep.failed; continue; }
             ++rep.moved;
         }
@@ -319,7 +322,7 @@ MigrateReport migrate_legacy(const fs::path& data_dir, void (*log)(const std::st
         const std::string fname = dest.filename().string(), ok_from = override_key(from, fname), ok_to = override_key(to, fname);
         if (!ok_from.empty() && ok_from != ok_to) {
             const fs::path a = overrides / (ok_from + ".user.2"), b = overrides / (ok_to + ".user.2");
-            if (has(a) && !has(b)) { fs::rename(a, b, ec); if (!ec) ++rep.renamed_overrides; }
+            if (has(a) && !has(b)) { fs::rename(a, b, ec); live::files_changed(); if (!ec) ++rep.renamed_overrides; }
         }
     }
     // what names a colour by its path: the remembered selections, the squares of the editor's colours
@@ -377,6 +380,7 @@ SyncReport sync(const fs::path& root, void (*log)(const std::string&)) {
         }
         { std::ofstream m(part / kComplete, std::ios::binary); }
         fs::rename(part, fin, ec);
+        live::files_changed();
         if (ec) {
             say("color_mods: archive " + fname + " extracted but its cache folder could not be finalised: " + ec.message());
             fs::remove_all(part, ec);

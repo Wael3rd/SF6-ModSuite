@@ -6,7 +6,8 @@
 // Groups: the rows and their texts (the shipped locale.json, English and French), the loadout spin (labels, value, the
 // core's wrap), the sub-page memory (RecordType), the hints, the action queue (order, threads), the actions on fakes
 // (every ticker, confirmation text and dialog of RMT's Manager page), then the actions on the real files engine
-// (model::files::Engine on a scratch folder under --work, a fake game): Save As, Save, Open, Reset, Rename, Erase.
+// (model::files::Engine on a scratch folder under --work, a fake game): Save As, Save, Open, Reset, Rename, Erase; and the
+// drill details dialog's texts in every language of the shipped locale.json (src/ui/details_logic.*).
 // Exit code 0 only when every check passed.
 #include <algorithm>
 #include <cstdio>
@@ -25,6 +26,7 @@
 #include "model/labels.hpp"
 #include "model/locale.hpp"
 #include "model/luajson.hpp"
+#include "ui/details_logic.hpp"
 #include "ui/manager_logic.hpp"
 
 namespace fs = std::filesystem;
@@ -67,6 +69,7 @@ std::string join(const std::vector<std::string>& v) {
 
 // ---- the translator: the shipped locale.json through the P1 model -------------------------------------------------------------
 model::locale::Locale g_loc;
+std::vector<std::string> g_langs;                // the language blocks of the shipped file
 Tr translator() {
     return [](const std::string& key, const std::vector<std::string>& args) { return g_loc.T(key, args); };
 }
@@ -132,17 +135,108 @@ struct FakeScreen final : Screen {
 bool has(const std::vector<std::string>& v, const std::string& x) { return std::find(v.begin(), v.end(), x) != v.end(); }
 
 // ---- groups ----------------------------------------------------------------------------------------------------------------------
+// The drill details dialog's keys (rsm.cancel, rsm.details_*, rsm.source_*) in every language block, formatted with their
+// arguments (a template string.format refuses comes back as it is: the arguments then never show)
+void test_details_texts() {
+    begin("P5 drill details texts (locale.json, every language)");
+    const Tr T = translator();
+    check(g_langs.size() >= 14, "14 languages", std::to_string(g_langs.size()));
+    const char* plain[] = { "cancel", "source_community", "source_local", "source_local_short", "details_more_slots", "details_edit",
+                            "details_confirm", "edit_drill_name", "details_help", "see_details", "details_saved_one", "details_md_help", "details_show_desc",
+                            "details_md_newline", "details_md_heading", "details_md_emphasis", "details_md_violet", "details_md_magenta",
+                            "details_md_purple", "details_md_blue", "details_md_list" };
+    const char* md_words[] = { "details_md_newline", "details_md_heading", "details_md_emphasis", "details_md_violet", "details_md_magenta",
+                               "details_md_purple", "details_md_blue", "details_md_list" };
+    const std::string tags[] = { "<COLOR preset=\"FGM_Cmn_2\">", "<COLOR preset=\"FGM_Cmn_1\">", "<COLOR preset=\"FGM_Cmn_0\">", "</COLOR>",
+                                 "<HLBGN Arg0 = \"3\">", "<HLEND Arg0 = \"3\">" };
+    for (const std::string& l : g_langs) {
+        g_loc.set_lang(l);
+        for (const char* k : plain) {
+            const std::string v = T(k, {});
+            check(!v.empty() && v != k && g_loc.lookup(std::string("rsm.") + k).has_value(), l + " rsm." + k, v);
+        }
+        const std::string h = ui::details::header_text(T, 0, 2);
+        check(h.find("1/2") != std::string::npos && h != "DETAILS_PAGE", l + " header page 1/2", h);
+        check(h.find("15") == std::string::npos && h.find("SLOT") == std::string::npos, l + " header: the page only", h);
+        const std::string sv = ui::details::saved_text(T, 14);
+        check(sv.find("14") != std::string::npos && sv != "DETAILS_SAVED", l + " 14 slots saved", sv);
+        const std::string s1 = ui::details::saved_text(T, 1);
+        check(!s1.empty() && s1 != sv && s1.find('%') == std::string::npos, l + " one slot saved", s1);
+        check(!g_loc.lookup("rsm.details_header").has_value() && !g_loc.lookup("rsm.details_header_one").has_value(), l + " no old header keys");
+        const std::string sl = T("details_slot", { "27" });
+        check(sl.find("27") != std::string::npos && sl != "details_slot", l + " slot label", sl);
+        const std::string au = T("details_author", { "Chris_F" }), so = T("details_source", { "drillcodes.com" });
+        check(au.find("Chris_F") != std::string::npos, l + " author line", au);
+        check(so.find("drillcodes.com") != std::string::npos, l + " source line", so);
+        for (const char* k : { "details_page", "details_saved", "details_slot", "details_author", "details_source", "details_md_note" })
+            check(g_loc.lookup(std::string("rsm.") + k).has_value(), l + " has rsm." + k);
+        eq(ui::details::short_source(T, "drillcodes.com"), std::string("DrillCodes"), l + " DrillCodes as a name");
+        eq(ui::details::frame_text("Akuma", ui::details::frame_author("Chris_F (drillcodes)", "", "community"),
+                                   ui::details::short_source(T, "community", "Chris_F (drillcodes)"), 0),
+           std::string("Akuma - Chris_F - DrillCodes"), l + " a Community import of a drill code: DrillCodes, the author bare");
+        check(T("details_show_desc", {}) != T("details_md_help", {}) && T("details_edit", {}) != T("edit_drill_name", {}),
+              l + " the R entry's two labels and the two edits differ", T("details_show_desc", {}));
+        const std::string ge = ui::details::guide_entries(T, false, "", false, true);
+        check(ge.find(T("details_show_desc", {})) != std::string::npos && ge.find(T("details_md_help", {})) == std::string::npos
+              && ge.find(T("details_edit", {})) != std::string::npos, l + " guide, the help shown: Show Drill Description", ge);
+        const std::string fr = ui::details::frame_text("Ryu", "Wael3rd_PC", ui::details::short_source(T, ""), 0);
+        check(fr.rfind("Ryu - Wael3rd_PC - ", 0) == 0 && fr.size() > 19, l + " top-left box line", fr);
+        // the Markdown help: the translated words (as rendered), the syntax as typed, only verified tags, no [ ]
+        const std::string help = ui::details::help_text(T);
+        bool words = true;
+        for (const char* k : md_words) if (help.find(T(k, {})) == std::string::npos) words = false;
+        check(words && help.find(T("details_md_help", {})) != std::string::npos, l + " help: every translated word", help.substr(0, 80));
+        bool syntax = true;
+        for (const char* s : { "\n/n  =  ", "\n# Title  =  ", "\n**text**  =  ", "\n{violet}text{/}  =  ", "\n{magenta}text{/}  =  ",
+                               "\n{purple}text{/}  =  ", "\n{blue}text{/}  =  ", "\n- item  =  " })
+            if (help.find(s) == std::string::npos) syntax = false;
+        check(syntax, l + " help: every syntax as typed");
+        const std::string note = T("details_md_note", { "1000" });
+        check(note.find("1000") != std::string::npos && note.find('%') == std::string::npos && help.find(note) != std::string::npos,
+              l + " help: the note with its 1000", note);
+        bool tags_ok = help.find('[') == std::string::npos && help.find(']') == std::string::npos;
+        int spans = 0;
+        for (size_t i = help.find('<'); tags_ok && i != std::string::npos; i = help.find('<', i + 1)) {
+            const size_t e = help.find('>', i);
+            const std::string tag = e == std::string::npos ? std::string() : help.substr(i, e - i + 1);
+            if (std::find(std::begin(tags), std::end(tags), tag) == std::end(tags)) tags_ok = false;
+            else if (tag[1] != '/' && tag.rfind("<HLEND", 0) != 0) ++spans;
+        }
+        check(tags_ok && spans == 7, l + " help: 7 spans of verified tags only, no [ ]", std::to_string(spans));
+    }
+    g_loc.set_lang("en");
+    eq(ui::details::header_text(T, 1, 2), std::string("PAGE 2/2"), "en header");
+    eq(ui::details::saved_text(T, 14), std::string("14 SLOTS SAVED"), "en saved count");
+    eq(ui::details::saved_text(T, 1), std::string("1 SLOT SAVED"), "en one slot saved");
+    eq(ui::details::frame_text("Ryu", "Wael3rd_PC", ui::details::short_source(T, ""), 0), std::string("Ryu - Wael3rd_PC - Local"), "en top-left box");
+    eq(ui::details::short_source(T, "community"), std::string("Community"), "en Community");
+    eq(T("details_md_help", {}), std::string("Markdown Help"), "en guide: the Markdown help");
+    eq(ui::details::row_text(T("details_slot", { "7" }), "Fireball", 64, 0), std::string("Slot 7 - Fireball - 64F"), "en slot row");
+    eq(ui::details::detail_text(T, "Do it.", "Chris_F", ui::details::source_label(T, "community")),
+       std::string("Do it.\n\nAuthor: Chris_F\nSource: Community"), "en description box");
+    eq(ui::details::source_label(T, ""), std::string("Local file"), "en local file");
+    eq(T("open", {}), std::string("Open drill"), "en left button: the Manager's own label");
+    eq(T("cancel", {}), std::string("Cancel"), "en right button");
+    eq(T("details_more_slots", {}), std::string("Show More Slots"), "en guide: the slot pages");
+    eq(T("details_edit", {}), std::string("Edit Drill Description"), "en guide: the edit");
+    eq(T("details_show_desc", {}), std::string("Show Drill Description"), "en guide: R while the Markdown help is shown");
+    eq(T("details_confirm", {}), std::string("Confirm"), "en guide: confirm");
+    eq(T("edit_drill_name", {}), std::string("Edit Drill Name"), "en Drill row hint: the rename");
+    eq(T("details_help", {}), std::string("Up / down: scroll the description"), "en key guide: the help line");
+    eq(T("see_details", {}), std::string("See Details"), "en Drill row hint: the details");
+}
+
 void test_texts() {
     begin("P5 rows and texts (locale.json)");
     const Tr T = translator();
     g_loc.set_lang("en");
-    const char* titles[] = { "Loadout", "Open loadout", "Save loadout", "Save loadout as", "Reset loadout", "Erase loadout",
-                             "Share loadout", "Download Loadouts" };
-    const char* guides[] = { "Loadout (set of recordings) of the current character. Left / right to select.",
-                             "Open the selected loadout into the 30 slots.", "Save the 30 slots into the selected loadout.",
-                             "Save the 30 slots into a new loadout: type its name.", "Back to the open loadout (its file read again).",
-                             "Erase the selected loadout.", "Share the loaded loadout with the community.",
-                             "Browse and download loadouts shared by others." };
+    const char* titles[] = { "Drill", "Open drill", "Save drill", "Save drill as", "Reset drill", "Erase drill",
+                             "Share drill", "Download Drills" };
+    const char* guides[] = { "Drill (set of recordings) of the current character. Left / right to select.",
+                             "Open the selected drill into the 30 slots.", "Save the 30 slots into the selected drill.",
+                             "Save the 30 slots into a new drill: type its name.", "Back to the open drill (its file read again).",
+                             "Erase the selected drill.", "Share the loaded drill with the community.",
+                             "Browse and download drills shared by others." };
     for (int i = 0; i < kRowCount; ++i) {
         const RowText t = row_text((Row)i, T);
         eq(t.title, std::string(titles[i]), "en title of row " + std::to_string(i + 1));
@@ -152,15 +246,15 @@ void test_texts() {
     eq(std::string(kPageGuide), std::string("Recording slot manager (SF6 Tools)."), "page guide (English, as v1.6)");
     g_loc.set_lang("fr");
     eq(page_title(T), std::string("Gestion"), "fr page title");
-    check(row_text(kOpen, T).title != "Open loadout" && !row_text(kOpen, T).title.empty(), "fr Open row translated", row_text(kOpen, T).title);
-    eq(row_text(kShare, T).title, std::string("Share loadout"), "fr Share row stays English (hard-coded in v1.6)");
-    eq(row_text(kDownload, T).guide, std::string("Browse and download loadouts shared by others."), "fr Download guide stays English");
+    check(row_text(kOpen, T).title != "Open drill" && !row_text(kOpen, T).title.empty(), "fr Open row translated", row_text(kOpen, T).title);
+    eq(row_text(kShare, T).title, std::string("Share drill"), "fr Share row stays English (hard-coded in v1.6)");
+    eq(row_text(kDownload, T).guide, std::string("Browse and download drills shared by others."), "fr Download guide stays English");
     g_loc.set_lang("es-419");                                       // the near language of es-419 is es
     check(!row_text(kSave, T).title.empty() && row_text(kSave, T).title != "save", "es-419 Save row resolved", row_text(kSave, T).title);
     g_loc.set_lang("nl");                                           // no block: English
-    eq(row_text(kErase, T).title, std::string("Erase loadout"), "nl falls back to English");
+    eq(row_text(kErase, T).title, std::string("Erase drill"), "nl falls back to English");
     g_loc.set_lang("en");
-    eq(T("opened", { "Ryu_Test" }), std::string("Loadout opened: Ryu_Test"), "formatted ticker");
+    eq(T("opened", { "Ryu_Test" }), std::string("Drill opened: Ryu_Test"), "formatted ticker");
     eq(T("no_such_key", {}), std::string("no_such_key"), "missing key: the bare key (RMT T)");
     // the button rows map to their actions, the spin to none
     check(!act_of_row(kLoadout).has_value(), "the spin has no decide");
@@ -170,7 +264,7 @@ void test_texts() {
 }
 
 void test_spin() {
-    begin("P5 loadout spin");
+    begin("P5 drill spin");
     eq(join(spin_labels({})), std::string(kNoFile), "empty list: the no-file entry");
     eq(join(spin_labels({ kNoFile, "A", "B" })), std::string("-- Select File -- | A | B"), "labels as the dropdown");
     const std::string long_name(80, 'x');
@@ -193,7 +287,7 @@ void test_spin() {
     // the core wraps (_Num modulo the count): D from the last option gives option 0, Q from option 0 the last one
     const size_t n = 4;
     eq(dropdown_of_spin((int32_t)((3 + 1) % n), n), 1, "D from the last: -- Select File -- (observed in v1.6)");
-    eq(dropdown_of_spin((int32_t)((0 + n - 1) % n), n), 4, "Q from the first: the last loadout");
+    eq(dropdown_of_spin((int32_t)((0 + n - 1) % n), n), 4, "Q from the first: the last drill");
     eq(dropdown_of_spin(2, n), 3, "option 2 = dropdown index 3");
     eq(dropdown_of_spin(99, n), 4, "out of range: clamped");
     eq(dropdown_of_spin(-1, n), 1, "negative: clamped");
@@ -343,16 +437,16 @@ void test_actions_fake() {
     {   // Open
         FakeLoadouts f; FakeScreen s; Runner r(f, s, translator());
         r.run({ Act::Open, 0 });
-        check(s.tickers == std::vector<std::string>{ "No loadout selected" } && !has(f.calls, "import_selected"), "Open without a selection");
+        check(s.tickers == std::vector<std::string>{ "No drill selected" } && !has(f.calls, "import_selected"), "Open without a selection");
         f.sel = "Ryu_Test";
         r.run({ Act::Open, 0 });
         check(f.native_action && has(f.calls, "import_selected"), "Open: native action on, import");
         check(s.count("check_slots") == 1 && s.count("rows_dirty") == 1, "Open: CheckMenuSlotData and the rows redrawn");
-        eq(s.tickers.back(), std::string("Loadout opened: Ryu_Test"), "Open ticker");
+        eq(s.tickers.back(), std::string("Drill opened: Ryu_Test"), "Open ticker");
         check(s.count("confirm") == 0, "Open asks nothing");
         f.import_res = "Allocating slots... (Loaded later)";
         r.run({ Act::Open, 0 });
-        eq(s.tickers.back(), std::string("Loadout opened: Ryu_Test (allocating...)"), "Open with allocation");
+        eq(s.tickers.back(), std::string("Drill opened: Ryu_Test (allocating...)"), "Open with allocation");
         f.import_res = "Load Failed: Ryu_Test.json";
         r.run({ Act::Open, 0 });
         eq(s.tickers.back(), std::string("Open failed: Load Failed: Ryu_Test.json"), "Open failed");
@@ -362,9 +456,9 @@ void test_actions_fake() {
         f.export_tk = "Ryu File Saved";
         r.run({ Act::Save, 0 });
         eq(s.last_confirm, std::string("Save the 30 slots into 'Ryu'?"), "Save without a selection: the character's name");
-        eq(s.last_confirm_title, std::string("Save loadout"), "Save box title (rsm.save, RMT:116)");
+        eq(s.last_confirm_title, std::string("Save drill"), "Save box title (rsm.save, RMT:116)");
         check(has(f.calls, "export_selected"), "Save: export after Yes");
-        check(s.tickers == std::vector<std::string>{ "Ryu File Saved", "Loadout saved: Ryu" }, "Save tickers: MAIN's, then the page's",
+        check(s.tickers == std::vector<std::string>{ "Ryu File Saved", "Drill saved: Ryu" }, "Save tickers: MAIN's, then the page's",
               join(s.tickers));
         f.sel = "Combo A"; f.export_res = "Error: No RecFunc"; f.export_tk.clear();
         r.run({ Act::Save, 0 });
@@ -384,11 +478,11 @@ void test_actions_fake() {
         r.run({ Act::SaveAs, 0 });
         eq(s.last_input_initial, std::string("Old"), "Save As proposes the selected name");
         eq(s.last_max, kNameMax, "64 bytes at most");
-        eq(s.last_input_title, std::string("Save loadout as"), "dialog title");
+        eq(s.last_input_title, std::string("Save drill as"), "dialog title");
         eq(s.last_confirm, std::string("Save the 30 slots into 'Test <A>'?"), "Save As box text");
-        eq(s.last_confirm_title, std::string("Save loadout as"), "Save As box title (rsm.save_as, RMT:1615)");
+        eq(s.last_confirm_title, std::string("Save drill as"), "Save As box title (rsm.save_as, RMT:1615)");
         check(has(f.calls, "export_as(Test <A>)") && s.count("list_changed") == 1, "export_as with the typed text, the spin synced");
-        check(s.tickers == std::vector<std::string>{ "Ryu_Test A File Saved", "Loadout saved as: Test <A>" }, "Save As tickers", join(s.tickers));
+        check(s.tickers == std::vector<std::string>{ "Ryu_Test A File Saved", "Drill saved as: Test <A>" }, "Save As tickers", join(s.tickers));
         f.sel.clear();
         s.input_text = "";
         const size_t c0 = s.count("confirm");
@@ -403,36 +497,36 @@ void test_actions_fake() {
     {   // Reset
         FakeLoadouts f; FakeScreen s; Runner r(f, s, translator());
         r.run({ Act::Reset, 0 });
-        check(s.tickers == std::vector<std::string>{ "No loadout open" } && s.count("confirm") == 0, "Reset with nothing open");
+        check(s.tickers == std::vector<std::string>{ "No drill open" } && s.count("confirm") == 0, "Reset with nothing open");
         f.loaded = "Ryu_Test.json";                                 // Lua defect 4 kept: the name carries ".json" after Open
         r.run({ Act::Reset, 0 });
         eq(s.last_confirm, std::string("Reload 'Ryu_Test.json'? The current slots are lost."), "Reset box text");
-        eq(s.last_confirm_title, std::string("Reset loadout"), "Reset box title (rsm.reset, RMT:127)");
+        eq(s.last_confirm_title, std::string("Reset drill"), "Reset box title (rsm.reset, RMT:127)");
         check(f.native_action && has(f.calls, "reopen_loaded") && s.count("check_slots") == 1 && s.count("rows_dirty") == 1, "Reset: reopen");
-        eq(s.tickers.back(), std::string("Loadout reset: Ryu_Test.json"), "Reset ticker");
+        eq(s.tickers.back(), std::string("Drill reset: Ryu_Test.json"), "Reset ticker");
         f.reopen_res = "Allocating slots";
         r.run({ Act::Reset, 0 });
-        eq(s.tickers.back(), std::string("Loadout reset: Ryu_Test.json (allocating...)"), "Reset with allocation");
-        f.reopen_res = "No loadout loaded";
+        eq(s.tickers.back(), std::string("Drill reset: Ryu_Test.json (allocating...)"), "Reset with allocation");
+        f.reopen_res = "No drill loaded";
         r.run({ Act::Reset, 0 });
-        eq(s.tickers.back(), std::string("Reset failed: No loadout loaded"), "Reset failed");
+        eq(s.tickers.back(), std::string("Reset failed: No drill loaded"), "Reset failed");
     }
     {   // Erase
         FakeLoadouts f; FakeScreen s; Runner r(f, s, translator());
         r.run({ Act::Erase, 0 });
-        check(s.tickers == std::vector<std::string>{ "No loadout selected" }, "Erase without a selection");
+        check(s.tickers == std::vector<std::string>{ "No drill selected" }, "Erase without a selection");
         f.sel = "Combo A";
         r.run({ Act::Erase, 0 });
         eq(s.last_confirm, std::string("Erase 'Combo A'?"), "Erase box text");
-        eq(s.last_confirm_title, std::string("Erase loadout"), "Erase box title (rsm.erase, RMT:141)");
+        eq(s.last_confirm_title, std::string("Erase drill"), "Erase box title (rsm.erase, RMT:141)");
         const std::vector<std::string> want{ "erase_selected", "invalidate", "ensure" };
         check(std::search(f.calls.begin(), f.calls.end(), want.begin(), want.end()) != f.calls.end(), "erase, then the list read again",
               join(f.calls));
         check(s.count("list_changed") == 1 && s.count("rows_dirty") == 1 && s.count("check_slots") == 0, "Erase: spin synced, rows redrawn");
-        eq(s.tickers.back(), std::string("Loadout erased: Combo A"), "Erase ticker");
-        f.erase_res = "No loadout selected";
+        eq(s.tickers.back(), std::string("Drill erased: Combo A"), "Erase ticker");
+        f.erase_res = "No drill selected";
         r.run({ Act::Erase, 0 });
-        eq(s.tickers.back(), std::string("Erase failed: No loadout selected"), "Erase failed");
+        eq(s.tickers.back(), std::string("Erase failed: No drill selected"), "Erase failed");
     }
     {   // Rename (T on the page)
         FakeLoadouts f; FakeScreen s; Runner r(f, s, translator());
@@ -443,13 +537,13 @@ void test_actions_fake() {
         eq(s.last_input_initial, std::string("Old"), "Rename proposes the selected name");
         check(s.count("confirm") == 0, "Rename asks no confirmation");
         check(has(f.calls, "rename_selected(New)") && s.count("list_changed") == 1, "rename_selected, spin synced");
-        check(s.tickers == std::vector<std::string>{ "Ryu_New File Saved", "Loadout renamed: New" }, "Rename tickers", join(s.tickers));
+        check(s.tickers == std::vector<std::string>{ "Ryu_New File Saved", "Drill renamed: New" }, "Rename tickers", join(s.tickers));
         s.input_text = ""; f.rename_tk.clear();
         r.run({ Act::Rename, 0 });
         eq(s.tickers.back(), std::string("Rename failed: nil"), "empty name: 'Rename failed: nil' (as v1.6)");
-        f.rename_res = "No loadout selected"; s.input_text = "Z";
+        f.rename_res = "No drill selected"; s.input_text = "Z";
         r.run({ Act::Rename, 0 });
-        eq(s.tickers.back(), std::string("Rename failed: No loadout selected"), "Rename failed");
+        eq(s.tickers.back(), std::string("Rename failed: No drill selected"), "Rename failed");
     }
     {   // one dialog at a time (RMT naming / confirm_box)
         FakeLoadouts f; FakeScreen s; Runner r(f, s, translator());
@@ -494,10 +588,10 @@ void test_actions_fake() {
         f.sel = "Ryu_Test";
         r.run({ Act::Open, 0 });
         eq(s.tickers.back(), g_loc.T("opened", { "Ryu_Test" }), "fr Open ticker from locale.json");
-        check(s.tickers.back() != "Loadout opened: Ryu_Test", "fr ticker is not the English one", s.tickers.back());
+        check(s.tickers.back() != "Drill opened: Ryu_Test", "fr ticker is not the English one", s.tickers.back());
         r.run({ Act::Erase, 0 });
         eq(s.last_confirm_title, g_loc.T("erase", {}), "fr box title from locale.json (the row's title, as RMT's T(\"erase\"))");
-        check(s.last_confirm_title != "Erase loadout", "fr box title is not the English one", s.last_confirm_title);
+        check(s.last_confirm_title != "Erase drill", "fr box title is not the English one", s.last_confirm_title);
         g_loc.set_lang("en");
     }
 }
@@ -548,7 +642,10 @@ struct EngineLoadouts final : Loadouts {
     std::string export_selected(std::string* tk) override { return e.export_selected(tk); }
     std::string export_as(const std::string& n, std::string* tk) override { return e.export_as(json(n), tk); }
     std::string erase_selected() override { return e.erase_selected(); }
-    std::string rename_selected(const std::string& n, std::string* tk) override { return e.rename_selected(json(n), tk); }
+    std::string rename_selected(const std::string& n, std::string* tk) override {   // as the DLL's port: the file renamed
+        if (tk) tk->clear();
+        return e.rename_file(json(n));
+    }
     void invalidate() override { e.invalidate(); }
     bool ensure() override { return e.ensure(1); }
 };
@@ -577,13 +674,13 @@ void test_actions_engine(const fs::path& work) {
     FakeScreen s;
     Runner r(L, s, translator());
     r.run({ Act::Ensure, 0 });
-    eq(join(spin_labels(L.dropdown())), std::string(kNoFile), "a character without loadouts: the no-file entry only");
+    eq(join(spin_labels(L.dropdown())), std::string(kNoFile), "a character without drills: the no-file entry only");
     eq(spin_value(L.dropdown_index(), spin_labels(L.dropdown()).size()), 0, "value 0");
     // Save As "Alpha"
     s.input_text = "Alpha";
     r.run({ Act::SaveAs, 0 });
     check(fs::exists(root / "SF6_RecordingSlotManager_data" / "Ryu" / "Ryu_Alpha.json"), "Save As wrote Ryu/Ryu_Alpha.json (the character prefix)");
-    eq(s.tickers.back(), std::string("Loadout saved as: Alpha"), "Save As ticker");
+    eq(s.tickers.back(), std::string("Drill saved as: Alpha"), "Save As ticker");
     auto labels = spin_labels(L.dropdown());
     const size_t ia = index_of(labels, "Alpha");
     check(ia != (size_t)-1, "Alpha in the spin", join(labels));
@@ -591,21 +688,21 @@ void test_actions_engine(const fs::path& work) {
     // Save onto it
     r.run({ Act::Save, 0 });
     eq(s.last_confirm, std::string("Save the 30 slots into 'Alpha'?"), "Save box on the selection");
-    eq(s.tickers.back(), std::string("Loadout saved: Alpha"), "Save ticker");
+    eq(s.tickers.back(), std::string("Drill saved: Alpha"), "Save ticker");
     // Open: the slots emptied first, then the pack brings them back
     for (auto& sl : live.s) { sl.valid = false; sl.frames = 0; }
     r.run({ Act::Open, 0 });
-    eq(s.tickers.back(), std::string("Loadout opened: Alpha"), "Open ticker");
+    eq(s.tickers.back(), std::string("Drill opened: Alpha"), "Open ticker");
     check(live.s[0].valid && live.s[0].frames == 20 && live.s[2].frames == 22, "Open restored the three slots");
     check(s.count("check_slots") >= 1 && s.count("rows_dirty") >= 1, "Open: the rows follow");
     // Reset (the open loadout)
     r.run({ Act::Reset, 0 });
-    check(s.last_confirm.find("Alpha") != std::string::npos, "Reset box names the open loadout", s.last_confirm);
-    check(s.tickers.back().rfind("Loadout reset: ", 0) == 0, "Reset ticker", s.tickers.back());
+    check(s.last_confirm.find("Alpha") != std::string::npos, "Reset box names the open drill", s.last_confirm);
+    check(s.tickers.back().rfind("Drill reset: ", 0) == 0, "Reset ticker", s.tickers.back());
     // Rename to Beta
     s.input_text = "Beta";
     r.run({ Act::Rename, 0 });
-    eq(s.tickers.back(), std::string("Loadout renamed: Beta"), "Rename ticker");
+    eq(s.tickers.back(), std::string("Drill renamed: Beta"), "Rename ticker");
     labels = spin_labels(L.dropdown());
     check(index_of(labels, "Beta") != (size_t)-1 && index_of(labels, "Alpha") == (size_t)-1, "the spin shows Beta, not Alpha", join(labels));
     check(!fs::exists(root / "SF6_RecordingSlotManager_data" / "Ryu" / "Ryu_Alpha.json") ||
@@ -615,18 +712,58 @@ void test_actions_engine(const fs::path& work) {
     r.run({ Act::Select, dropdown_of_spin(0, labels.size()) });
     eq(L.selected_name(), std::string(), "option 0 = nothing selected");
     r.run({ Act::Erase, 0 });
-    eq(s.tickers.back(), std::string("No loadout selected"), "Erase with nothing selected");
+    eq(s.tickers.back(), std::string("No drill selected"), "Erase with nothing selected");
     r.run({ Act::Select, dropdown_of_spin((int32_t)index_of(labels, "Beta"), labels.size()) });
     eq(L.selected_name(), std::string("Beta"), "Beta selected again");
     // Erase
     r.run({ Act::Erase, 0 });
-    eq(s.tickers.back(), std::string("Loadout erased: Beta"), "Erase ticker");
+    eq(s.tickers.back(), std::string("Drill erased: Beta"), "Erase ticker");
     labels = spin_labels(L.dropdown());
     eq(join(labels), std::string(kNoFile), "the spin back to the no-file entry");
     std::ifstream f(root / "SF6_RecordingSlotManager_data" / "Ryu" / "Ryu_Beta.json", std::ios::binary);
     const std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     eq(body, std::string("null"), "the erased file holds null (json.dump_file of {})");
     check(!r.dialog_open(), "no dialog left");
+
+    f.close();                                                      // (an open file cannot be replaced on Windows)
+
+    // Edit Drill Name (T): the file renamed, its content kept (not the game's slots), names checked
+    begin("P5 Edit Drill Name on the files engine (scratch data)");
+    const fs::path ryu = root / "SF6_RecordingSlotManager_data" / "Ryu";
+    s.input_text = "Gamma";
+    r.run({ Act::SaveAs, 0 });
+    s.input_text = "Delta";
+    r.run({ Act::SaveAs, 0 });                                      // Delta selected now
+    const std::string delta_before = model::luajson::load_file(ryu / "Ryu_Delta.json").dump();
+    for (auto& sl : live.s) { sl.valid = false; sl.frames = 0; } // the game's slots emptied: a rename must not save them
+    s.input_text = "  Echo: <x>?  ";
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Drill renamed:   Echo: <x>?  "), "rename ticker (the typed name)");
+    check(!fs::exists(ryu / "Ryu_Delta.json"), "the old file is gone");
+    check(fs::exists(ryu / "Ryu_Echo x.json"), "Ryu_Echo x.json: trimmed, Windows' forbidden characters dropped, prefix added");
+    eq(model::luajson::load_file(ryu / "Ryu_Echo x.json").dump(), delta_before, "the content kept (not the emptied game slots)");
+    labels = spin_labels(L.dropdown());
+    eq(L.selected_name(), std::string("Echo: <x>?"), "the renamed drill still selected, its display name kept");
+    check(index_of(labels, "Echo: <x>?") != (size_t)-1 && index_of(labels, "Delta") == (size_t)-1, "the spin shows the new name", join(labels));
+    eq(spin_value(L.dropdown_index(), labels.size()), (int32_t)index_of(labels, "Echo: <x>?"), "the spin's value on it");
+    s.input_text = "gamma";
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Rename failed: Name already used: Gamma"), "a name another drill has (any case): refused");
+    check(fs::exists(ryu / "Ryu_Echo x.json") && fs::exists(ryu / "Ryu_Gamma.json"), "both files untouched");
+    s.input_text = "???";
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Rename failed: No name"), "nothing left after the cleaning: refused");
+    s.input_text = "Beta";                                          // the erased drill's name is free again
+    r.run({ Act::Rename, 0 });
+    eq(s.tickers.back(), std::string("Drill renamed: Beta"), "onto an erased drill's name");
+    eq(model::luajson::load_file(ryu / "Ryu_Beta.json").dump(), delta_before, "the erased file replaced by the drill");
+    labels = spin_labels(L.dropdown());
+    check(index_of(labels, "Beta") != (size_t)-1, "Beta listed again", join(labels));
+    r.run({ Act::Select, dropdown_of_spin(0, labels.size()) });
+    s.input_text = "Zeta";
+    const size_t before = s.count("text_input");
+    r.run({ Act::Rename, 0 });
+    check(s.count("text_input") == before, "on \"-- Select File --\": no dialog");
 }
 
 }  // namespace
@@ -647,6 +784,7 @@ int main(int argc, char** argv) {
     const json file = model::luajson::load_file(repo / "data" / "SF6_CRSM_data" / "locale.json");
     if (file.is_null()) { std::fprintf(stderr, "locale.json not found under %s\n", repo.string().c_str()); return 2; }
     g_loc.load(file);
+    for (auto it = file.begin(); it != file.end(); ++it) if (it.key() != "_readme" && it->is_object()) g_langs.push_back(it.key());
     std::printf("[P5] Manager page\n");
     test_texts();
     test_spin();
@@ -656,6 +794,7 @@ int main(int argc, char** argv) {
     test_queue();
     test_actions_fake();
     test_actions_engine(work);
+    test_details_texts();
 
     int checks = 0, fails = 0;
     std::printf("\n%-60s %8s %8s\n", "group", "checks", "failed");

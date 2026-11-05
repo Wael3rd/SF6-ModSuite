@@ -7,6 +7,9 @@
 
 #include <array>
 #include <cmath>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <cstdio>
 #include <fstream>
 #include <filesystem>
@@ -304,8 +307,34 @@ std::optional<chips::Pair> entry_chip(const Opt& f, const Opt& c, const Entry& e
     return p;
 }
 
+// state.json written by a background thread: the same bytes (colour::save_state, temp file then rename) from a copy of
+// the state taken now; the last state handed over is the one on disk at the end, as before. Written in the frame, it
+// cost 3-6 ms at each selection change while browsing (28/10 perf logs). Read only at the next start (and by the
+// colour folder migration, before any selection). Without the thread: written here, as before.
+struct StateWriter { std::mutex mx; std::condition_variable cv; std::optional<json> next; int state = 0; };   // 0 / 1 running / -1
+StateWriter& g_sw = *new StateWriter();                        // never destroyed (the thread may outlive static destruction)
 void save_state() {
-    colour::save_state(kStateFile, g_state);
+    perf::Scope timed(perf::ScrSaveState);
+    if (g_sw.state == 0) {
+        try {
+            std::thread([] {
+                for (;;) {
+                    json s;
+                    {
+                        std::unique_lock<std::mutex> lk(g_sw.mx);
+                        g_sw.cv.wait(lk, [] { return g_sw.next.has_value(); });
+                        s = std::move(*g_sw.next);
+                        g_sw.next.reset();
+                    }
+                    colour::save_state(kStateFile, s);
+                }
+            }).detach();
+            g_sw.state = 1;
+        } catch (...) { g_sw.state = -1; }
+    }
+    if (g_sw.state < 0) { colour::save_state(kStateFile, g_state); return; }
+    { std::lock_guard<std::mutex> lk(g_sw.mx); g_sw.next = g_state; }   // a state not written yet is replaced: the last wins
+    g_sw.cv.notify_one();
 }
 
 void set_color(MO* ctrl, std::optional<uint32_t> n, const std::string& why, bool fresh) {   // dbg.set_color
@@ -408,7 +437,16 @@ std::optional<bool> bar_pad(MO* part, int32_t player) {
 std::string L(const char* key) { return dialogs::locale::get(key, {}); }
 bool di_active(int side) { return nb("screens_dipanel") && screens::dipanel::mode::active(side); }   // dbg.di_panel.active
 
+// whether a type is app.UIPartsInputGuideList, by type (its full name was built as a std::string for every part)
+bool is_guide_list_type(API::TypeDefinition* td) {
+    static std::unordered_map<API::TypeDefinition*, bool> known;
+    if (!td) return false;
+    auto it = known.find(td);
+    if (it == known.end()) it = known.emplace(td, std::string(td->get_full_name()) == "app.UIPartsInputGuideList").first;
+    return it->second;
+}
 void find_guide_list() {
+    perf::Scope timed(perf::ScrGuideList);
     fsm.guides.clear();
     for (MO* ag : agents("InputGuide")) {
         MO* cm = call_obj(ag, "get_ControlMain");
@@ -419,7 +457,7 @@ void find_guide_list() {
         for (int32_t k = 0; k < n; ++k) {
             MO* part = list_item(lst, k);
             auto* td = part ? part->get_type_definition() : nullptr;
-            if (!(td && std::string(td->get_full_name()) == "app.UIPartsInputGuideList")) continue;
+            if (!is_guide_list_type(td)) continue;
             MO* ctrl = field_obj(part, "<Control>k__BackingField");
             MO* btn = ctrl ? find(ctrl, "c_guideBtn") : nullptr;
             MO* c = btn ? call_obj(btn, "get_Child") : nullptr;
@@ -552,6 +590,7 @@ void resolve() {
 }
 
 void on_selection_changed(Menu& m, int64_t k, int64_t fighter, int64_t costume) {
+    perf::Scope timed(perf::ScrSelChange);
     cmn::journal("P%d selection -> %lld (fighter %lld costume %lld)", m.side, (long long)k, (long long)fighter, (long long)costume);
     json& sel = sel_of(m.side);
     lj::set(sel, "rw", k); lj::set(sel, "fighter", fighter); lj::set(sel, "costume", costume);
@@ -788,21 +827,23 @@ void tick_training_settings() {
 // ---- tick() ------------------------------------------------------------------------------------------------------------
 void tick() {
     if (g_F % 3 != 0) return;
-    if (nb("screens_guide")) screens::guide::set_flags(fsm.visible, fsm.tcs_guide);
-    resolve();
+    { perf::Scope t(perf::ScrGuideFlags); if (nb("screens_guide")) screens::guide::set_flags(fsm.visible, fsm.tcs_guide); }
+    { perf::Scope t(perf::ScrResolve); resolve(); }
     if (nb("screens_dipanel")) {
+        perf::Scope t(perf::ScrDipanel);
         const uint64_t a1 = addr(g_menus[0].agent), a2 = addr(g_menus[1].agent);
         screens::dipanel::mode::tick(1, a1); screens::dipanel::mode::tick(2, a2);
     }
     if (nb("screens_rows")) {
+        perf::Scope t(perf::ScrRows);
         const int side = (g_menus[1].active && !g_menus[0].active) ? 2 : 1;
         const bool suppress = ed_active() || dialogs::options::driver::window_open();
         const uint64_t a = addr(fsm.agent);
         screens::rows::host(fsm.visible, a, (int)g_list_f.value_or(0), (int)g_list_c.value_or(0), side, suppress);
     }
-    tick_fighter_settings();
-    tick_training_settings();
-    for (Menu& m : g_menus) tick_menu(m);
+    { perf::Scope t(perf::ScrFsTick); tick_fighter_settings(); }
+    { perf::Scope t(perf::ScrTcsTick); tick_training_settings(); }
+    { perf::Scope t(perf::ScrMenus); for (Menu& m : g_menus) tick_menu(m); }
     // the fighter each side is choosing (to_apply: the popup first, then the select menus seen in the last 60 frames)
     int64_t f[3] = { 0, 0, 0 };
     std::vector<const ToApply*> list;
@@ -1031,8 +1072,10 @@ bool write_data(const std::string& rel, const std::vector<uint8_t>& bytes) {    
     std::error_code ec;
     std::filesystem::create_directories(p.parent_path(), ec);
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    engine::live::files_changed();
     if (!f) { cmn::journal("save error %s", rel.c_str()); return false; }
     f.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size());
+    engine::live::files_changed();
     return (bool)f;
 }
 int64_t data_size(const std::string& rel) {            // file_size (-1 = missing)

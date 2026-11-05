@@ -176,6 +176,10 @@ bool PakReader::open(const char* path) {
     }
 
     entries_.reserve(hdr.count + hdr.count / 4); // ~25% slack for unordered_map
+    // Turned-off rows (zeros over the hash) and the hashes around them (ZZtaii's Slotsloader fork 1.10.6, MIT)
+    uint64_t last = 0;
+    bool sorted = true;
+    size_t open_from = 0;   // first of the turned-off rows whose next entry is not read yet
     for (uint32_t i = 0; i < hdr.count; i++) {
         auto& d = table[i];
         PakEntry e;
@@ -186,14 +190,31 @@ bool PakReader::open(const char* path) {
         e.decompressed_size = d.decompressed_size;
         e.attributes        = d.attributes;
         e.checksum          = d.checksum;
-        entries_[e.combined_hash()] = e;
+        const uint64_t h = e.combined_hash();
+        entries_[h] = e;
+        if (h == 0) { turned_off_.push_back({last, UINT64_MAX, e}); continue; }
+        if (h < last) sorted = false;
+        for (; open_from < turned_off_.size(); open_from++) turned_off_[open_from].before = h;
+        last = h;
     }
+    if (!sorted) turned_off_.clear();
     return true;
 }
 
 void PakReader::close() {
     if (fp_) { std::fclose(fp_); fp_ = nullptr; }
     entries_.clear();
+    turned_off_.clear();
+}
+
+std::vector<const PakEntry*> PakReader::turned_off_candidates(uint64_t hash) const {
+    std::vector<const PakEntry*> out;
+    if (hash == 0 || entries_.count(hash)) return out;
+    for (auto& t : turned_off_)
+        if (t.after < hash && hash < t.before) out.push_back(&t.e);
+    for (auto* o : over_)
+        for (auto* e : o->turned_off_candidates(hash)) out.push_back(e);
+    return out;
 }
 
 const PakEntry* PakReader::find(uint64_t hash) const {
@@ -208,6 +229,7 @@ PakReader* PakReader::owner_of(const PakEntry& e) {
     for (auto* o : over_) {
         auto it = o->entries_.find(e.combined_hash());
         if (it != o->entries_.end() && &it->second == &e) return o;
+        for (auto& t : o->turned_off_) if (&t.e == &e) return o;
     }
     return nullptr;
 }

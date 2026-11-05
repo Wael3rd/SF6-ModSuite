@@ -21,7 +21,7 @@ spins and adds the clients' key-guide hints. The engine is a port of a Lua engin
 ## Client model
 
 ```c
-SF6CorePmCallbacks cb = { sizeof cb, user, on_decide, spin_value, on_spin, on_page_shown, hints };
+SF6CorePmCallbacks cb = { sizeof cb, user, on_decide, spin_value, on_spin, on_page_shown, hints, on_confirm };
 api->pm_set_callbacks(client, &cb);                     /* the engine is installed at the next frame */
 SF6CorePmPageDesc pd = { sizeof pd, 4 /* Recording Settings */, 0 /* first */, "My page", "Guide line" };
 int64_t page = api->pm_page(client, &pd);
@@ -66,6 +66,7 @@ api->pm_set_options(client, spin, labels, 3);
 | `on_spin(row, index)` | the player moved a spin | the menu's job thread, inside `Function` |
 | `on_page_shown(page, shown)` | 1: the page was built (its strip selected it); 0: another page of its strip was built, the menu closed or the page was removed | the menu's job thread (1), the game thread (0 on close) |
 | `hints(focused, out, max)` | each frame of the menu, for the focused row (any row, the game's included) | the menu's job thread, in `GetGuideData` |
+| `on_confirm(row)` (core 0.9.5) | the decide input (keyboard F, a pad's south button) went down on one of the client's spin rows | **the game thread**, from the core's frame, before the clients' frame callbacks |
 
 - **Synchronous** (ADR-0016 point 4): the menu closes or stays open at once after a decide, and a decide may run game
   calls that must happen on the menu's thread. The game runs its UI jobs on several threads at once: **the client must
@@ -75,6 +76,20 @@ api->pm_set_options(client, spin, labels, 3);
 - **Faults.** Each call is SEH-guarded and a fault counts on the client's breaker (ADR-0008). A client disabled by its
   breaker or unregistered is skipped: its spins show the value the core kept, its buttons do nothing.
 - **No `spin_value`?** The core keeps the value itself (the last `on_spin`).
+- **Confirm on a spin row** (core 0.9.5, `on_confirm`, appended to the struct: an older core copies the struct up to
+  its own size and never calls it; a client that needs to know reads `get_version`). The game gives a spin row no
+  decide of its own: `TrainingMenuFunc.Function` is never called for a decide on a spin row (a hook counted none on F
+  over a spin row, one over a button row) and the game's guide shows no Confirm there. So the core reads the decide
+  input raw on its frame: keyboard F (the game window's key messages, all up when it loses the focus) or the south
+  button of any connected pad (`via.hid.GamePadButton.RDown`: A / Cross). Read only while some live client sets
+  `on_confirm`, the menu is up, one of the core's pages is shown (live check), no option window is open and the menu's
+  focused row (`UIFlowTrainingMenu.Param.get_SelectChildIndex`, its list entry) is one of the core's spin rows; then
+  sent to that row's client at the press edge, the same row focused on the frame before: a key held while the focus
+  arrives, or the press that moved it, sends nothing, and a held key never sends it again. Called after the engine
+  lock is released, SEH-guarded and counted on the client's breaker like the others. The core does not know the
+  client's own dialogs (a message box, a text input, a dialog the client opened over the menu): the client ignores a
+  Confirm while one of them is up. Keyboard F and pad A / Cross are the game's default decide; a remapped decide is
+  not followed. Counted in `pm_status` ("spin confirms").
 - **Hints.** Up to 8 per client and focused row; `button` is the game's digital config id (decide 90, cancel 91, X 92,
   Y 93, LB 94, RB 95, LT 96, RT 97: `app.InputAssign.Digital.ConfigId` `UI_*`), the text is copied before the callback
   returns. The core appends them to the game's own guide data in `GetGuideData`'s post-hook (R26); the game lays the bar
@@ -88,7 +103,8 @@ api->pm_set_options(client, spin, labels, 3);
   first frame after a `pm_set_callbacks`: the engine's client and types, then, once the code check has ended, one hook
   per frame; the frame never waits for the check), then the state: training (flow 3 or 9 and `TrainingManager._tData`, checked every
   60 frames), menu up (`PauseManager._CurrentPauseTypeBit` other than 64 / 2112, or an option window), the menu-close
-  edge (pages "not shown", the menu's param let go), the **install pass** (every 60 frames at phase 33, once training
+  edge (pages "not shown", the menu's param let go), the Confirm on a focused spin row (core 0.9.5, only while a client
+  sets `on_confirm`: sent after the frame, the engine lock released), the **install pass** (every 60 frames at phase 33, once training
   has run 300 frames, menu closed: rule 10) and the scan for the game's own DYNAMIC rows (every 60 frames, menu closed).
 - The install pass builds what is missing (row data, option arrays, page data typed like the strip's pages, texts),
   puts the pages into their strips, rebuilds a page's rows array after a row was added or removed, re-installs after

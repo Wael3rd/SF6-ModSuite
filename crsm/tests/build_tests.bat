@@ -1,8 +1,8 @@
 @echo off
 rem crsm\tests\build_tests.bat -- builds the offline benches of the Recording Manager into build\crsm_tests\
 rem   p3_bench.exe     the layers files / replay / reversal / record on fakes (src\model\*.cpp, the DLL's pure model)
-rem   ui_bench.exe     the pure logic of the DLL's screens (src\ui\logic.cpp)
-rem   p5_bench.exe     the Manager page's game-free logic (src\ui\manager_logic.cpp)
+rem   ui_bench.exe     the pure logic of the DLL's screens (src\ui\logic.cpp, src\ui\details_logic.cpp)
+rem   p5_bench.exe     the Manager page's game-free logic (src\ui\manager_logic.cpp; the drill details' texts)
 rem   integ_bench.exe  the screens + Manager page integration, the owner rule, the standalone claim, settings.json
 rem   codecache_bench.exe  the code scan's cache (src\mech\codecheck_cache.hpp)
 rem Headers as crsm\build.bat: nlohmann/json from colormod\third_party. No game, no user data; never touches the game folder.
@@ -28,11 +28,11 @@ cl %COMMON% /Od /I tests tests\p3_bench.cpp tests\p3_tests.cpp %MODEL% /Fe:"%OUT
 if errorlevel 1 exit /b 1
 rem ui_bench.exe: the P4 bench (the pure logic of the DLL's screens: windows, cursor, fit, text dialog, Community dialog)
 if not exist "%OUT%\ui" mkdir "%OUT%\ui"
-cl %COMMON% /Od tests\ui_bench.cpp src\ui\logic.cpp %MODEL% /Fe:"%OUT%\ui_bench.exe" /Fo:"%OUT%\ui\\" /link /nologo
+cl %COMMON% /Od tests\ui_bench.cpp src\ui\logic.cpp src\ui\details_logic.cpp %MODEL% /Fe:"%OUT%\ui_bench.exe" /Fo:"%OUT%\ui\\" /link /nologo
 if errorlevel 1 exit /b 1
 rem p5_bench.exe: the P5 tests (the Manager page's game-free logic, ui\manager_logic.cpp, on fakes and on the files engine)
 if not exist "%OUT%\p5" mkdir "%OUT%\p5"
-cl %COMMON% /Od tests\p5_bench.cpp src\ui\manager_logic.cpp %MODEL% /Fe:"%OUT%\p5_bench.exe" /Fo:"%OUT%\p5\\" /link /nologo
+cl %COMMON% /Od tests\p5_bench.cpp src\ui\manager_logic.cpp src\ui\details_logic.cpp src\ui\logic.cpp %MODEL% /Fe:"%OUT%\p5_bench.exe" /Fo:"%OUT%\p5\\" /link /nologo
 if errorlevel 1 exit /b 1
 rem integ_bench.exe: the P4 + P5 integration (owner rule, the one key reader, tickers, refresh after a download)
 if not exist "%OUT%\integ" mkdir "%OUT%\integ"

@@ -274,6 +274,12 @@ std::unordered_map<ElKey, Block, ElHash> g_by_el;
 std::unordered_map<ContKey, Block, ContHash> g_by_cont;
 std::vector<Block*> g_blocks;                                     // every block of the three maps (refresh_pages)
 size_t g_refresh_i = 0;
+// refresh_pages' page verdicts are taken on a background thread (VirtualQuery touches no game object; one can take
+// milliseconds: Windows computes a region's size from its page table, and the game's heap regions are huge). The game
+// thread hands over a copy of a due block's addresses, never a Block pointer; it applies the verdict when it comes back,
+// only if the relay is still the same (g_relay_gen), the block is not dead and nobody (a hook) took its verdict meanwhile.
+uint64_t g_relay_gen = 0;                                         // +1 at each relay swap (under g_mx)
+std::vector<uint8_t> g_inflight;                                  // per g_blocks index: a request is out (under g_mx)
 std::atomic<bool> g_any_mgr{ false };                             // a manager block exists (W or V): else paint_for_manager has nothing to do
 uint64_t g_last_mgr = 0; ElKey g_last_el{0, -1, -1, -1}; ContKey g_last_cont{0, -1};
 std::unordered_set<uint64_t> g_blacklisted_mgrs;
@@ -378,10 +384,12 @@ void swap_relay(ReloadJob& j) {
     for (auto& kv : j.v_by_mgr) if (!kv.second.empty()) g_v_by_mgr[kv.first] = std::move(kv.second);
     g_sampled.swap(j.sampled);
     g_blocks.clear();
+    ++g_relay_gen;                                                // verdicts on their way are for the old blocks
     for (auto& kv : g_by_mgr) g_blocks.push_back(&kv.second);
     for (auto& kv : g_by_el) g_blocks.push_back(&kv.second);
     for (auto& kv : g_by_cont) g_blocks.push_back(&kv.second);
     g_refresh_i = 0;
+    g_inflight.assign(g_blocks.size(), 0);
     g_any_mgr.store(!g_by_mgr.empty() || !g_v_by_mgr.empty(), std::memory_order_relaxed);
     if (g_vhist.size() > 20000) g_vhist.clear();                 // borne : des adresses mortes s y accumulent au fil des rechargements
     g_last_mgr = 0; g_last_el = ElKey{0, -1, -1, -1}; g_last_cont = ContKey{0, -1};
@@ -439,23 +447,110 @@ void reload_relay() {
     g_reload = ReloadJob{};
 }
 
-// The page verdicts of the blocks in use, taken again every kPageRefreshFrames on the game thread (within
-// kRefreshBudgetMs per call), so that the effect hooks rarely have to (see Block).
+// The page verdicts of the blocks in use, taken again every kPageRefreshFrames, so that the effect hooks rarely have
+// to (see Block). Same schedule as before: a block is due when its verdict is kPageRefreshFrames old. Its verdict is
+// now taken by the verdict thread (same checks as take_verdict, on a copy of its addresses) and dated with the frame
+// and time of the request, or of the thread's region answers if they are older: never younger than its oldest page
+// check. Without the thread (it could not start): taken here as before, within kRefreshBudgetMs per call.
 constexpr double kRefreshBudgetMs = 0.1;
+// The thread keeps its region answers (memguard::Held, its own) across requests while they are kHeldFrames frames /
+// kHeldMs young: the blocks due together share regions, a region is asked once.
+constexpr uint64_t kHeldFrames = 10;
+constexpr ULONGLONG kHeldMs = 200;
+struct VerdictReq { uint64_t gen = 0; size_t idx = 0; uint64_t was_frame = 0; ULONGLONG was_ms = 0; uint64_t frame = 0; ULONGLONG ms = 0; std::vector<std::pair<uint64_t, uint64_t>> w; };
+struct VerdictRes { uint64_t gen = 0; size_t idx = 0; uint64_t was_frame = 0; ULONGLONG was_ms = 0; uint64_t frame = 0; ULONGLONG ms = 0; bool ok = true, objs = true; };
+std::mutex g_vt_mx;
+std::condition_variable g_vt_cv;
+std::deque<VerdictReq> g_vt_todo;
+std::vector<VerdictRes> g_vt_done;
+int g_vt_state = 0;                                               // game thread: 0 not started, 1 running, -1 could not start
+
+void verdict_thread() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    memguard::mark_background_thread();
+    memguard::Held held;
+    bool live = false;
+    uint64_t held_frame = 0;
+    ULONGLONG held_ms = 0;
+    for (;;) {
+        VerdictReq r;
+        {
+            std::unique_lock<std::mutex> lk(g_vt_mx);
+            g_vt_cv.wait(lk, [] { return !g_vt_todo.empty(); });
+            r = std::move(g_vt_todo.front());
+            g_vt_todo.pop_front();
+        }
+        if (cmn::closing()) continue;                             // the game is closing: nothing more is checked
+        const ULONGLONG now = GetTickCount64();
+        if (!live || r.frame - held_frame > kHeldFrames || now - held_ms > kHeldMs) {
+            held.clear();
+            live = true; held_frame = r.frame; held_ms = r.ms;      // the answers asked from now on: younger than this
+        }
+        VerdictRes v{ r.gen, r.idx, r.was_frame, r.was_ms, held_frame, held_ms, true, true };
+        for (auto& [a, obj] : r.w) {                              // take_verdict's loop
+            if (!((a & 3) == 0 && (held.state(a) & 2) != 0)) { v.ok = false; break; }   // dword_writable
+            if (obj && v.objs)                                    // range_readable(obj, 8)
+                for (uint64_t pg = obj & ~0xFFFULL; pg < obj + 8; pg += 0x1000) if (!(held.state(pg) & 1)) { v.objs = false; break; }
+        }
+        std::lock_guard<std::mutex> lk(g_vt_mx);
+        g_vt_done.push_back(v);
+    }
+}
+
 void refresh_pages() {
     std::lock_guard<std::mutex> lk(g_mx);
     if (g_blocks.empty()) return;
-    perf::Scope timed(perf::VfxPageRefresh);
-    init_budget();
-    const int64_t t0 = budget_now();
-    const uint64_t fr = cmn::frame();
-    for (size_t n = 0; n < g_blocks.size(); ++n) {
-        if (g_refresh_i >= g_blocks.size()) g_refresh_i = 0;
-        Block& b = *g_blocks[g_refresh_i++];
-        if (b.dead || (b.pages_ms && fr - b.pages_frame < kPageRefreshFrames)) continue;
-        take_verdict(b);
-        if (over_ms(t0, kRefreshBudgetMs)) break;
+    if (g_vt_state == 0) {
+        try { std::thread(verdict_thread).detach(); g_vt_state = 1; }
+        catch (...) { g_vt_state = -1; err("verdict thread could not start: page verdicts taken on the game thread"); }
     }
+    const uint64_t fr = cmn::frame();
+    if (g_vt_state < 0) {                                         // as before the thread
+        perf::Scope timed(perf::VfxPageRefresh);
+        init_budget();
+        const int64_t t0 = budget_now();
+        for (size_t n = 0; n < g_blocks.size(); ++n) {
+            if (g_refresh_i >= g_blocks.size()) g_refresh_i = 0;
+            Block& b = *g_blocks[g_refresh_i++];
+            if (b.dead || (b.pages_ms && fr - b.pages_frame < kPageRefreshFrames)) continue;
+            take_verdict(b);
+            if (over_ms(t0, kRefreshBudgetMs)) break;
+        }
+        return;
+    }
+    std::vector<VerdictRes> done;
+    { std::lock_guard<std::mutex> vl(g_vt_mx); done.swap(g_vt_done); }
+    const int64_t t0 = perf::begin();                             // VfxPageRefresh: the calls that hand over or apply
+    bool did = !done.empty();
+    for (auto& v : done) {
+        if (v.gen != g_relay_gen || v.idx >= g_blocks.size()) continue;   // for blocks of a former relay
+        g_inflight[v.idx] = 0;
+        Block& b = *g_blocks[v.idx];
+        if (b.dead || b.pages_frame != v.was_frame || b.pages_ms != v.was_ms) continue;   // a hook took it meanwhile: it wins
+        b.pages_ok = v.ok;
+        b.objs_ok = v.ok && v.objs;
+        b.pages_frame = v.frame;
+        b.pages_ms = v.ms;
+    }
+    std::deque<VerdictReq> out;
+    ULONGLONG now = 0;
+    for (size_t i = 0; i < g_blocks.size(); ++i) {
+        Block& b = *g_blocks[i];
+        if (g_inflight[i] || b.dead || (b.pages_ms && fr - b.pages_frame < kPageRefreshFrames)) continue;
+        if (!now) now = GetTickCount64();
+        VerdictReq r;
+        r.gen = g_relay_gen; r.idx = i; r.was_frame = b.pages_frame; r.was_ms = b.pages_ms; r.frame = fr; r.ms = now;
+        r.w.reserve(b.w.size());
+        for (auto& w : b.w) r.w.emplace_back(w.addr, w.obj);
+        out.push_back(std::move(r));
+        g_inflight[i] = 1;
+    }
+    if (!out.empty()) {
+        did = true;
+        { std::lock_guard<std::mutex> vl(g_vt_mx); for (auto& r : out) g_vt_todo.push_back(std::move(r)); }
+        g_vt_cv.notify_one();
+    }
+    if (did) perf::end(perf::VfxPageRefresh, t0);
 }
 
 // Appele DEPUIS requestEffect / addMaterialEffect du jeu, sur le thread du jeu, avant que l effet existe.
@@ -732,6 +827,7 @@ void walk_job(WalkJob& j) {
 }
 void walk_thread() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    memguard::mark_background_thread();
     for (;;) {
         std::unique_ptr<WalkJob> j;
         {
@@ -915,7 +1011,7 @@ void scan_step() {
 
 // ---- la file de dwords (_memwrite.txt) ----------------------------------------------------------------------------
 uint64_t g_applied = 0, g_refused = 0;
-constexpr double kQueueBudgetMs = 0.5;            // apply() runs twice per frame (Update + LateUpdate)
+constexpr double kQueueBudgetMs = 0.25;           // apply() runs twice per frame (Update + LateUpdate); was 0.5
 void apply_queue() {
     // take new lines from the input
     {
@@ -929,7 +1025,12 @@ void apply_queue() {
     init_budget();
     const int64_t t0 = budget_now();
     int n = 0, stale = 0;
+    bool first = true;
     while (!g_pending_queue.empty()) {
+        // the budget looked at before every line after the first, refused ones too (was: after every 4th applied line;
+        // a line's page check can cost a VirtualQuery, 1.2 ms in one call at a fight start, 24/10 perf logs)
+        if (!first && (double)(budget_now() - t0) >= kQueueBudgetMs * g_ticks_per_ms) break;
+        first = false;
         const std::string raw = std::move(g_pending_queue.front());
         g_pending_queue.pop_front();
         const auto p = split(raw);
@@ -950,7 +1051,6 @@ void apply_queue() {
             hist_push(addr, val);
         }
         ++n;
-        if ((n & 3) == 0 && (double)(budget_now() - t0) >= kQueueBudgetMs * g_ticks_per_ms) break;
     }
     g_applied += n;
     if (stale) { g_queue_stale += stale; err("queue: %d line(s) refused, the address no longer holds what the script read", stale); }

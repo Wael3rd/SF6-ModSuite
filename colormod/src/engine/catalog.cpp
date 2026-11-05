@@ -1,4 +1,5 @@
 #include "catalog.hpp"
+#include "live_internal.hpp"
 
 #include "color_mods.hpp"
 
@@ -53,7 +54,8 @@ void Catalog::build(const fs::path& data_dir) {
     data_dir_ = data_dir;
     lists_.clear();
     trees_.clear();
-    static const std::regex name_rx(R"(^esf(\d\d\d)_(\d\d\d)_cmd_(\d\d\d)\.user\.2$)");
+    // letters of any case, as color_mods::is_colour_name keeps them from an archive (some packs ship "_CMD_")
+    static const std::regex name_rx(R"(^esf(\d\d\d)_(\d\d\d)_cmd_(\d\d\d)\.user\.2$)", std::regex::icase);
     std::error_code ec;
     auto add = [&](const fs::path& file, const std::string& rel) {
         const std::string fname = file.filename().string();
@@ -140,8 +142,10 @@ bool Catalog::set_override(const std::string& key, const rsz::NodeRef& tree) {
     const fs::path p = data_dir_ / (std::string(kOverridesRel) + key + ".user.2");
     fs::create_directories(p.parent_path(), ec);
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    live::files_changed();
     if (!f) return false;
     if (tree) { auto bytes = rsz::serialize(tree); f.write((const char*)bytes.data(), (std::streamsize)bytes.size()); }
+    live::files_changed();
     overrides_[key] = tree;
     override_known_[key] = true;
     return true;

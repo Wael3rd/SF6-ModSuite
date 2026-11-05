@@ -350,6 +350,17 @@ typedef struct SF6CorePmCallbacks {
     /* hints for the focused row (any row, the game's included: its
      * app.training.TrainingMenuData); returns how many of out[0..max-1] it filled */
     uint32_t (SF6CORE_CALL *hints)(void* user, void* focused_menu_data, SF6CorePmHint* out, uint32_t max);
+    /* Core 0.9.5 (appended: an older core copies the struct up to its own
+     * size and never calls it). Confirm on a spin row: the decide input
+     * (keyboard F, a pad's south button A / Cross) went down while one of the
+     * client's spin rows had the focus on its shown page, the same row focused
+     * on the frame before. The game gives a spin row no decide of its own, so
+     * the core reads that input raw, only while a client sets this member.
+     * Runs on the GAME THREAD, from the core's frame (before the clients' frame
+     * callbacks), unlike the callbacks above. Press edge only: a held key never
+     * sends it again. The core does not know the client's own dialogs: the
+     * client ignores it while one of them is over the menu. NULL = none. */
+    void     (SF6CORE_CALL *on_confirm)(void* user, int64_t row);
 } SF6CorePmCallbacks;
 
 /*

@@ -93,6 +93,17 @@ enum Id : int {
     FeedDiState, FeedDrCol,
     // vfx engine: relay reload slices, rolling page re-check of the relay blocks, background scan hand-off / commit
     VfxRelayReload, VfxPageRefresh, ScanCommit,
+    // vfx providers: DataInstanceMap scan, the 30-frame static tick, provider walks (budgeted slices), lines / parts built
+    ProvScan, ProvTick, ProvSnap, ProvBuild,
+    // SetupDecide's parts: who wears what (should_inject), the colour data written (inject), the journal line
+    SetupResolve, SetupInject, SetupJournal,
+    // ScreensTick's parts (every 3 frames), the tracker's paints, editor_tick's guide reads, the Slots Loader claim calls
+    ScrGuideFlags, ScrResolve, ScrDipanel, ScrRows, ScrFsTick, ScrTcsTick, ScrMenus, ScrGuideList,
+    TrkMenus, TrkCamera, TrkDots, SlotsClaim,
+    ScrSelChange, ScrSaveState,
+    // VirtualQuery calls (memguard, any thread), the colour files' stat / read (live::file_tree), the wait for the
+    // colour patch lock in the SetupColor hooks
+    PageQuery, SetupFiles, SetupLockWait,
     kCount
 };
 

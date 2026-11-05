@@ -10,6 +10,7 @@
 
 #include "common.hpp"
 #include "dialogs.hpp"
+#include "drill_details.hpp"
 #include "dump.hpp"
 #include "game/gm.hpp"
 #include "gx.hpp"
@@ -83,6 +84,7 @@ void run_dialogs_hand_back() {                   // a text dialog up when the UI
     std::lock_guard lk(g_lock);
     try { dlg::hand_back(); } catch (...) {}
     try { com::hand_back(); } catch (...) {}
+    try { details::hand_back(); } catch (...) {}
 }
 
 void run_hand_back() {
@@ -125,8 +127,8 @@ void standalone_tick(uint64_t fr) {
     cmn::refresh_status();
 }
 
-// The screens waiting on the pause (under g_lock): the menu seen open by the windows or the Manager page, a dialog or the
-// Community dialog (dialogs::busy), the picker.
+// The screens waiting on the pause (under g_lock): the menu seen open by the windows or the Manager page, a dialog, the
+// Community dialog or the drill details (dialogs::busy), the picker.
 bool screens_need_pause() {
     return windows::needs_pause() || ui::manager::needs_pause() || ui::dialogs::busy() || reversal_ui::needs_pause();
 }
@@ -158,6 +160,7 @@ void frame_fn(uint64_t fr) {
         { PERF_SUB(p2, "UI:dialogs"); dlg::frame(paused); }  // finished text dialogs, queued requests, the message box poll (paused)
         { PERF_SUB(p3, "UI:ticker"); ticker::frame(); }
         { PERF_SUB(p4, "UI:community_dialog"); com::frame(); }
+        { PERF_SUB(p9, "UI:drill_details"); details::frame(st.training, paused); }
         { PERF_SUB(p5, "UI:windows"); windows::frame(st.training, paused); }
         { PERF_SUB(p6, "UI:reversal_ui"); reversal_ui::frame(paused); }
         { PERF_SUB(p7, "UI:hud"); hud::frame(); }
@@ -200,6 +203,7 @@ std::string status() {
         s += "; hud: " + hud::status();
         s += "; dialogs: " + dlg::status();
         s += "; community: " + com::status();
+        s += "; drill details: " + details::status();
         s += "; ticker: " + ticker::status();
         s += "; " + ui::lang::status();
     }
@@ -272,6 +276,7 @@ void hook_specs(std::vector<mech::hooks::Spec>& out) {
     dlg::specs(out);
     ticker::specs(out);
     com::specs(out);
+    details::specs(out);
     hud::specs(out);
 }
 

@@ -28,7 +28,7 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "2.2.1";              // 2.2.1: lighter game-thread work (status, switch files, training entry); 2.2.0: Arjun, packs carry the training setup, pack descriptions; 2.1.3: the UI claimed at the first frame without a CRSM Lua; 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
+constexpr const char* kVersion = "2.2.6";              // 2.2.6: drill details dialog (F / pad A on the Drill row), Markdown descriptions, needs Native Core 0.9.5 (on_confirm); 2.2.5: "loadout" texts renamed "drill", downloaded Test drills recognised; 2.2.4: descriptions shown in full (Manager help line follows the spin, Community dialog area grown, Like / Sort on the guide row); 2.2.3: the first Community list of a session links the Steam account; 2.2.2: a pad's L1 / R1 / Y / X do what A / E / T / R do in the Community dialog, with the pad's glyphs when the game's guide shows a pad's, and the dialog built before its window opens (a slow list answer left nothing open); 2.2.1: lighter game-thread work (status, switch files, training entry); 2.2.0: Arjun, packs carry the training setup, pack descriptions; 2.1.3: the UI claimed at the first frame without a CRSM Lua; 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
 constexpr const char* kClientId = "SF6_CRSMNative";
 // The game's working directory is the game folder (convention of the other native mods).
 constexpr const char* kDataDir = "reframework/data/SF6_CRSMNative_data";
@@ -74,6 +74,10 @@ std::atomic<bool> g_lua_called{false};        // a Lua called the bridge (ui_cla
 // Closing guard: the game window got WM_CLOSE / WM_DESTROY / WM_NCDESTROY / WM_ENDSESSION. Once set, every
 // per-frame entry point and every pre-hook returns immediately (a WM_CLOSE the user cancels is lifted after 30 s).
 std::array<std::atomic<bool>, 256> g_keys{};      // key_down(): REFramework's m_last_keys, from the window's messages
+std::array<std::atomic<bool>, 256> g_scans{};     // scan_down(): the same keys by scancode
+std::array<std::atomic<uint32_t>, 256> g_presses{};   // key_presses(): fresh presses by virtual key (and the mouse buttons)
+std::atomic<int64_t> g_wheel{0};                  // wheel_total(): WM_MOUSEWHEEL deltas summed
+std::atomic<void*> g_hwnd{nullptr};               // cursor_client(): the window whose messages we see (the game's)
 std::atomic<bool> g_closing{false};
 std::atomic<bool> g_closing_final{false};
 std::atomic<int64_t> g_closing_tick{0};
@@ -198,11 +202,36 @@ void status_tick() {
     bgwriter::write((std::string(kDataDir) + "/status.json").c_str(), j.dump(4, ' ', false, nlohmann::json::error_handler_t::replace));
 }
 
-bool on_message_cb(void*, unsigned int msg, unsigned long long wparam, long long) {
+bool on_message_cb(void* hwnd, unsigned int msg, unsigned long long wparam, long long lparam) {
     PERF_TOP(pm, "OnMessage");
-    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) { if (wparam < 256) g_keys[(size_t)wparam].store(true); return true; }
-    if (msg == WM_KEYUP || msg == WM_SYSKEYUP) { if (wparam < 256) g_keys[(size_t)wparam].store(false); return true; }
-    if (msg == WM_KILLFOCUS) { for (auto& k : g_keys) k.store(false); return true; }
+    if (hwnd && g_hwnd.load(std::memory_order_relaxed) != hwnd) g_hwnd.store(hwnd, std::memory_order_relaxed);
+    if (msg == WM_MOUSEWHEEL) {                  // (seen only: the game gets it as before)
+        g_wheel.fetch_add((int64_t)GET_WHEEL_DELTA_WPARAM((WPARAM)wparam), std::memory_order_relaxed);
+        return true;
+    }
+    const size_t sc = (size_t)((lparam >> 16) & 0xFF);
+    const bool extended = ((lparam >> 24) & 1) != 0;
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
+        if (wparam < 256) {
+            if (!(lparam & (1LL << 30))) g_presses[(size_t)wparam].fetch_add(1);   // (bit 30: down before, an auto-repeat)
+            g_keys[(size_t)wparam].store(true);
+        }
+        if (!extended) g_scans[sc].store(true);
+        return true;
+    }
+    if (msg == WM_KEYUP || msg == WM_SYSKEYUP) {
+        if (wparam < 256) g_keys[(size_t)wparam].store(false);
+        if (!extended) g_scans[sc].store(false);
+        return true;
+    }
+    if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) {
+        const size_t vk = msg == WM_LBUTTONDOWN ? VK_LBUTTON : VK_RBUTTON;
+        g_presses[vk].fetch_add(1);
+        g_keys[vk].store(true);
+        return true;
+    }
+    if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) { g_keys[msg == WM_LBUTTONUP ? VK_LBUTTON : VK_RBUTTON].store(false); return true; }
+    if (msg == WM_KILLFOCUS) { for (auto& k : g_keys) k.store(false); for (auto& k : g_scans) k.store(false); return true; }
     const char* name = nullptr;
     bool final_msg = false;
     if (msg == WM_CLOSE) name = "WM_CLOSE";
@@ -447,6 +476,20 @@ void journal(const char* fmt, ...) {
 }
 void append_file(const char* path, std::string text) { bgwriter::append(path, std::move(text)); }
 bool key_down(int vk) { return vk >= 0 && vk < 256 && g_keys[(size_t)vk].load(std::memory_order_relaxed); }
+bool scan_down(int sc) { return sc >= 0 && sc < 256 && g_scans[(size_t)sc].load(std::memory_order_relaxed); }
+uint32_t key_presses(int vk) { return vk >= 0 && vk < 256 ? g_presses[(size_t)vk].load(std::memory_order_relaxed) : 0; }
+int64_t wheel_total() { return g_wheel.load(std::memory_order_relaxed); }
+bool cursor_client(int* x, int* y, int* w, int* h) {
+    HWND wnd = static_cast<HWND>(g_hwnd.load(std::memory_order_relaxed));
+    POINT p{};
+    RECT r{};
+    if (!wnd || !GetCursorPos(&p) || !ScreenToClient(wnd, &p) || !GetClientRect(wnd, &r) || r.right <= 0 || r.bottom <= 0) return false;
+    *x = p.x;
+    *y = p.y;
+    *w = r.right;
+    *h = r.bottom;
+    return true;
+}
 
 void refresh_status() { bgwriter::write((std::string(kDataDir) + "/status.json").c_str(), status_json().dump(4)); }
 

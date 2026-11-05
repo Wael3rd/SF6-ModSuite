@@ -30,6 +30,7 @@
 #include <ctime>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "perf.hpp"
@@ -38,7 +39,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.3";
+static constexpr const char* CORE_VERSION = "0.9.5";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2037,11 +2038,26 @@ SF6CoreStatus SF6CORE_CALL api_opt_group_place(SF6CoreClient*, int64_t, int32_t,
 // Closing guard: window message callback (0.7.2)
 // ========================================================================
 
+// The game window's keyboard as REFramework's own is_key_down reads it (0.9.5: the pause menu's Confirm on a spin row
+// reads F): WM_KEYDOWN / WM_KEYUP, all up when the window loses the focus; a key typed in another application is not
+// seen. Written on the window's thread, read on the game thread.
+static std::atomic<bool> s_keys[256] = {};
+bool core_key_down(int vk) { return vk >= 0 && vk < 256 && s_keys[vk].load(std::memory_order_relaxed); }
+
 static bool on_message(void* /*hwnd*/, unsigned int msg,
                        unsigned long long wparam, long long /*lparam*/) {
     bool final_msg = false;
     const char* name = nullptr;
     switch (msg) {
+    case 0x0100: case 0x0104:                    // WM_KEYDOWN / WM_SYSKEYDOWN
+        if (wparam < 256) s_keys[wparam].store(true, std::memory_order_relaxed);
+        return true;
+    case 0x0101: case 0x0105:                    // WM_KEYUP / WM_SYSKEYUP
+        if (wparam < 256) s_keys[wparam].store(false, std::memory_order_relaxed);
+        return true;
+    case 0x0008:                                 // WM_KILLFOCUS
+        for (auto& k : s_keys) k.store(false, std::memory_order_relaxed);
+        return true;
     case 0x0010: name = "WM_CLOSE";     break;
     case 0x0002: name = "WM_DESTROY";   final_msg = true; break;
     case 0x0082: name = "WM_NCDESTROY"; final_msg = true; break;
@@ -2688,9 +2704,63 @@ void reframework_plugin_required_version(REFrameworkPluginVersion* v) {
     v->game_name = nullptr;
 }
 
-// The game's 60 fps limiter sleeps in timer ticks: without a 1 ms request (the game makes it itself in
-// most sessions) the tick is 15.6 ms and the game runs at 45 fps. Once per process; no timeEndPeriod,
-// Windows releases the request at process exit.
+// The 1 ms timer the game's 60 fps limiter needs. Windows 11 can ignore a process's timer requests even with
+// its window in the foreground: the sessions stuck at 45 fps were sessions where it ignored the game's (and a
+// request made at start, ours included), and the limiter slept on the 15.6 ms default tick. A request Windows
+// ignored stays ignored; a new kernel request made later is honoured. During the game's first minute the
+// timer requests of the game, Media Foundation (the movies) and the audio made it ignored again several
+// times. So a background thread checks every second how long Sleep(1) takes in this process (about 1-2 ms
+// when the request is honoured, 15.6 when not) and asks the kernel again only then. Nothing released,
+// Windows does it at process exit.
+using NtSetTimerResolution_t = LONG (NTAPI*)(ULONG desired, BOOLEAN set, PULONG current);
+static NtSetTimerResolution_t s_nt_set_timer = nullptr;
+
+// This process's kernel request, made again: released, then set (timeBeginPeriod only counts a period the
+// process already holds and does not reach the kernel)
+static void renew_timer_request() {
+    ULONG cur = 0;
+    s_nt_set_timer(10000, FALSE, &cur);
+    s_nt_set_timer(10000, TRUE, &cur);
+}
+
+// Shortest of three Sleep(1) in a row, in ms. A first Sleep(1) ends on a timer tick, so each of the three
+// after it lasts a whole tick (alone, a Sleep(1) lasts anything up to 15.6 ms when the request is ignored).
+static double sleep1_ms() {
+    LARGE_INTEGER freq, a, b;
+    QueryPerformanceFrequency(&freq);
+    Sleep(1);
+    double best = 1e9;
+    for (int i = 0; i < 3; ++i) {
+        QueryPerformanceCounter(&a);
+        Sleep(1);
+        QueryPerformanceCounter(&b);
+        double ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)freq.QuadPart;
+        if (ms < best) best = ms;
+    }
+    return best;
+}
+
+static void timer_watch() {
+    constexpr double kHonouredMs = 5.0;       // Sleep(1) under this: the 1 ms timer is honoured
+    constexpr unsigned kMaxLogged = 20;
+    unsigned renewed = 0;
+    double ms = sleep1_ms();
+    core_log(SF6CORE_LOG_INFO, nullptr, "timer: Sleep(1) takes %.1f ms at start (%s)", ms,
+             ms < kHonouredMs ? "1 ms timer honoured" : "Windows ignores the 1 ms request");
+    for (;;) {
+        if (ms >= kHonouredMs) {
+            renew_timer_request();
+            double after = sleep1_ms();
+            if (++renewed <= kMaxLogged)
+                core_log(after < kHonouredMs ? SF6CORE_LOG_INFO : SF6CORE_LOG_WARN, nullptr,
+                         "timer: Windows was ignoring the game's 1 ms timer (Sleep(1) took %.1f ms): asked again, "
+                         "now %.1f ms%s", ms, after, renewed == kMaxLogged ? " (not logged any more)" : "");
+        }
+        Sleep(1000);
+        ms = sleep1_ms();
+    }
+}
+
 static void request_timer_resolution() {
     static std::atomic<bool> s_done{false};
     if (s_done.exchange(true)) return;
@@ -2703,13 +2773,30 @@ static void request_timer_resolution() {
         core_log(SF6CORE_LOG_INFO, nullptr, "timer: not requested (timer_off.txt present)");
         return;
     }
+    // Windows' documented opt-out (always honour this process's timer requests); alone it did not stop the
+    // 45 fps sessions, the check below does
+    PROCESS_POWER_THROTTLING_STATE pt = {};
+    pt.Version     = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    pt.ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    pt.StateMask   = 0;
+    SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &pt, sizeof(pt));
+
+    // Our count in winmm: a timeEndPeriod of the game's cannot take the period away
     MMRESULT rc = timeBeginPeriod(1);
-    if (rc == TIMERR_NOERROR)
-        core_log(SF6CORE_LOG_INFO, nullptr,
-                 "timer: 1 ms resolution requested (the game's 60 fps limiter needs it; "
-                 "reframework/data/sf6core/timer_off.txt turns this off)");
-    else
+    if (rc != TIMERR_NOERROR) {
         core_log(SF6CORE_LOG_WARN, nullptr, "timer: timeBeginPeriod(1) failed (%u)", (unsigned)rc);
+        return;
+    }
+    core_log(SF6CORE_LOG_INFO, nullptr,
+             "timer: 1 ms resolution requested, checked every second (the game's 60 fps limiter needs it; "
+             "reframework/data/sf6core/timer_off.txt turns this off)");
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    s_nt_set_timer = ntdll ? (NtSetTimerResolution_t)GetProcAddress(ntdll, "NtSetTimerResolution") : nullptr;
+    if (!s_nt_set_timer) {
+        core_log(SF6CORE_LOG_WARN, nullptr, "timer: NtSetTimerResolution not found, no check");
+        return;
+    }
+    std::thread(timer_watch).detach();
 }
 
 extern "C" __declspec(dllexport)
@@ -2781,10 +2868,10 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     if (param->functions->on_message) {
         param->functions->on_message(on_message);
         core_log(SF6CORE_LOG_INFO, nullptr,
-                 "registered on_message (closing guard)");
+                 "registered on_message (closing guard, raw keys)");
     } else {
         core_log(SF6CORE_LOG_WARN, nullptr,
-                 "on_message not available (closing guard disabled)");
+                 "on_message not available (closing guard and raw keys disabled)");
     }
 
     // Initialize Lua bridge (increment 3)

@@ -389,7 +389,7 @@ void test_wire() {
         check(!body.contains("file_path"), "wire: the path is not sent");
     }
     a = ask(c, C({{"cmd", "share"}, {"char", "Ken"}, {"file_path", slash(g_work / "wire" / "missing.json")}}));
-    check(a.done && !a.ok && a.data["error"] == "cannot read the loadout file", "share of an unreadable pack");
+    check(a.done && !a.ok && a.data["error"] == "cannot read the drill file", "share of an unreadable pack");
 
     // build errors become answers (they never reach the network)
     a = ask(c, C({{"cmd", "nope"}}));
@@ -435,7 +435,7 @@ void test_wire() {
         for (int i = 0; i < 2000 && !first.done; ++i) { c.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
         check(first.done && first.ok && !c.busy(), "first answered, not busy any more");
     }
-    {   // a real Worker answers { "items": [] } for a character nobody shared: an empty (truthy) table, "0 loadouts"
+    {   // a real Worker answers { "items": [] } for a character nobody shared: an empty (truthy) table, "0 drills"
         std::vector<std::string> tk;
         Page::Env env;
         env.root = slash(g_work / "wire" / "game") + "/";
@@ -445,8 +445,8 @@ void test_wire() {
         Page pg(c, env);
         pg.open();
         for (int i = 0; i < 500 && c.busy(); ++i) { c.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
-        check_eq(tk, std::vector<std::string>{ "Community: 0 loadouts" }, "Page: { items = [] } is '0 loadouts', not a failure");
-        check(pg.rows().empty() && pg.title() == "New  Ken Loadouts\n<ICON KeyA>   Page 1/1   <ICON KeyE>", "Page: empty list, title");
+        check_eq(tk, std::vector<std::string>{ "Community: 0 drills" }, "Page: { items = [] } is '0 drills', not a failure");
+        check(pg.rows().empty() && pg.title() == "New  Ken Drills\n<ICON KeyA>   Page 1/1   <ICON KeyE>", "Page: empty list, title");
     }
     stub.stop();
     a = ask(c, C({{"cmd", "list"}, {"char", "Ken"}}), 500, 17);
@@ -544,7 +544,7 @@ void test_fixes() {
         m = share_verdict(true, C({{"error", "No changes: content is identical to v1"}}), "P");
         check(m.key == "com_share_dup" && m.en == "Already shared: nothing changed", "share 409: Already shared");
         m = share_verdict(true, C({{"error", "File too large (max 1 MB)"}}), "P");
-        check(m.key == "com_share_big" && m.en == "Loadout too large to share", "share 413: too large");
+        check(m.key == "com_share_big" && m.en == "Drill too large to share", "share 413: too large");
         m = share_verdict(true, C({{"error", "Upload limit reached (20 per day)"}}), "P");
         check(m.key == "com_share_limit" && m.en == "Share limit reached, try again later", "share 429: limit");
         m = share_verdict(true, C({{"error", "Missing required fields: char, name, cfn, player, file"}}), "P");
@@ -664,15 +664,15 @@ void test_fixes() {
 
         // 4: a share refused by the Worker
         auto share_with = [&](const std::string& answer) { tk.clear(); body = answer; pg.share("Ken", "Mine.json", "Mine"); pump(); return tk; };
-        check_eq(share_with(R"({"ok":true,"id":"a","version":1,"action":"created"})"), std::vector<std::string>{ "Sharing loadout...", "Loadout shared: Mine" }, "share ok: Loadout shared");
-        check_eq(share_with(R"({"error":"No changes: content is identical to v1"})"), std::vector<std::string>{ "Sharing loadout...", "Already shared: nothing changed" }, "share 409: no 'Loadout shared'");
-        check_eq(share_with(R"j({"error":"File too large (max 1 MB)"})j"), std::vector<std::string>{ "Sharing loadout...", "Loadout too large to share" }, "share 413");
-        check_eq(share_with(R"j({"error":"Upload limit reached (20 per day)"})j"), std::vector<std::string>{ "Sharing loadout...", "Share limit reached, try again later" }, "share 429");
-        check_eq(share_with(R"({"error":"cfn and value are bad"})"), std::vector<std::string>{ "Sharing loadout...", "Share refused: cfn and value are bad" }, "share 400: Share refused: <reason>");
-        check_eq(share_with(R"({})"), std::vector<std::string>{ "Sharing loadout...", "Share failed: unexpected server answer" }, "share: empty answer");
+        check_eq(share_with(R"({"ok":true,"id":"a","version":1,"action":"created"})"), std::vector<std::string>{ "Sharing drill...", "Drill shared: Mine" }, "share ok: Drill shared");
+        check_eq(share_with(R"({"error":"No changes: content is identical to v1"})"), std::vector<std::string>{ "Sharing drill...", "Already shared: nothing changed" }, "share 409: no 'Drill shared'");
+        check_eq(share_with(R"j({"error":"File too large (max 1 MB)"})j"), std::vector<std::string>{ "Sharing drill...", "Drill too large to share" }, "share 413");
+        check_eq(share_with(R"j({"error":"Upload limit reached (20 per day)"})j"), std::vector<std::string>{ "Sharing drill...", "Share limit reached, try again later" }, "share 429");
+        check_eq(share_with(R"({"error":"cfn and value are bad"})"), std::vector<std::string>{ "Sharing drill...", "Share refused: cfn and value are bad" }, "share 400: Share refused: <reason>");
+        check_eq(share_with(R"({})"), std::vector<std::string>{ "Sharing drill...", "Share failed: unexpected server answer" }, "share: empty answer");
         translate = true;
-        check_eq(share_with(R"({"error":"No changes: x"})"), std::vector<std::string>{ "Sharing loadout...", "[fr] com_share_dup" }, "share 409 through the locale");
-        check_eq(share_with(R"({"error":"nope"})"), std::vector<std::string>{ "Sharing loadout...", "[fr] com_share_refused nope" }, "share refused through the locale, %s = the reason");
+        check_eq(share_with(R"({"error":"No changes: x"})"), std::vector<std::string>{ "Sharing drill...", "[fr] com_share_dup" }, "share 409 through the locale");
+        check_eq(share_with(R"({"error":"nope"})"), std::vector<std::string>{ "Sharing drill...", "[fr] com_share_refused nope" }, "share refused through the locale, %s = the reason");
         translate = false;
 
         // 5: a download answer without error and without file; a list answer without items
@@ -745,6 +745,24 @@ void test_fixes() {
             const auto sl = stub.take_log();
             const json sb = sl.size() == 1 ? json::parse(sl[0].body, nullptr, false) : json();
             check(sb.is_object() && sb.value("description", std::string()) == std::string(1000, 'x'), "share: the pack's description, 1000 characters");
+        }
+        // 10: a test row (the drillcodes imports): the list names it "<name> [TEST]", the download answer "<name>"; the
+        // downloaded copy must still mark the row (DL), refuse a second download and allow a like
+        {
+            json t = item("id-3", "Throw Slop Simulator [TEST]", "Chris_F (drillcodes)", 1, 0, 0, 4, "2026-10-24 10:00:00", "", false);
+            const std::string test_list = json::object({ {"items", json::array({ t })} }).dump();
+            body = test_list; pg.fetch(1); pump();
+            check(pg.rows().size() == 1 && pg.rows()[0].label.find("DL</color>") == std::string::npos, "test row: not downloaded yet, no DL mark");
+            check(pg.download_prompt(1, &msg), "test row: download prompt");
+            body = json::object({ {"name", "Throw Slop Simulator"}, {"file", json::array({ C({{"id", 1}, {"empty", true}}) })} }).dump();
+            pg.download_confirmed(); pump();
+            check(fs::exists(root / "game/SF6_RecordingSlotManager_data/Ken/Throw Slop Simulator.json"), "test row: the pack written under the stored name");
+            body = test_list; pg.fetch(1); pump();
+            check(pg.rows().size() == 1 && pg.rows()[0].label.find("<color 00FF00>DL</color>") != std::string::npos, "test row: the DL mark after the download");
+            tk.clear();
+            check(!pg.download_prompt(1, &msg) && !tk.empty() && tk.back() == "Already downloaded (v1)", "test row: a second download refused");
+            tk.clear(); body = R"({"ok":true,"action":"voted","new_value":1})"; pg.vote(1); pump();
+            check_eq(tk, std::vector<std::string>{ "Liked" }, "test row: like allowed (downloaded)");
         }
         c.stop();
         stub.stop();
@@ -949,11 +967,16 @@ void test_auth_flow() {
     auto list = [&] { return ask(c, C({{"cmd", "list"}, {"char", "Ken"}, {"sort", "recent"}, {"page", "1"}, {"voter_cfn", "Alpha"}}), 3000, 5); };
     auto bearer_of = [](const StubReq& r) { auto a = r.h.find("authorization"); return a == r.h.end() ? std::string() : a->second; };
 
+    tickets.fail = true;                         // the session's first list asks a ticket (2.2.3): none here
     Answer a = list();
     auto lg = stub.take_log();
-    check(a.ok && lg.size() == 1 && bearer_of(lg[0]).empty() && tickets.gets == 0, "a read without a token: sent as is, no ticket asked");
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]).empty() && tickets.gets == 1, "first list, no Steam ticket: the list goes out without a token");
     check(!lg.empty() && lg[0].h["x-client-version"] == "2.1.0" && lg[0].target.find("voter_cfn") == std::string::npos, "x-client-version, no voter_cfn");
     check(c.worker().token_state() == 0, "token state: none");
+    a = list();
+    lg = stub.take_log();
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]).empty() && tickets.gets == 1, "a read without a token: sent as is, no second try in the session");
+    tickets.fail = false;
 
     a = vote("Alpha");
     lg = stub.take_log();
@@ -977,7 +1000,7 @@ void test_auth_flow() {
     a = vote("Alpha");
     Answer b = list();
     lg = stub.take_log();
-    check(a.ok && b.ok && lg.size() == 2 && bearer_of(lg[0]) == "Bearer " + kTok1 && bearer_of(lg[1]) == "Bearer " + kTok1 && tickets.gets == 1,
+    check(a.ok && b.ok && lg.size() == 2 && bearer_of(lg[0]) == "Bearer " + kTok1 && bearer_of(lg[1]) == "Bearer " + kTok1 && tickets.gets == 2,
           "the token is reused: no new ticket; reads carry it too (my_vote)");
 
     { std::lock_guard<std::mutex> lk(sm); valid.clear(); next_token = kTok2; }
@@ -1043,6 +1066,48 @@ void test_auth_flow() {
     a = vote("Alpha");
     tickets.delay_ms = 0;
     check(a.done && a.ok && a.data["action"] == "voted", "a slow Steam ticket (3.5 s) does not time the write out");
+    c.stop();
+    stub.stop();
+}
+
+// 2.2.3: the first list of a session links the Steam account running the game (a tester who never wrote, a changed account)
+void test_auth_session_link() {
+    section("auth: the first list of a session links the Steam account");
+    Stub stub;
+    stub.handler = [](const StubReq& r) {
+        StubResp s;
+        if (r.target == "/auth/steam/ticket") { s.body = C({{"ok", true}, {"token", kTok3}, {"verified", true}, {"cfn", "Beta"}}).dump(); return s; }
+        if (r.target.rfind("/api/list", 0) == 0) { s.body = R"({"items":[],"total":0})"; return s; }
+        s.body = R"({"ok":true,"action":"voted","new_value":1,"score":1})";
+        return s;
+    };
+    check(stub.start(), "link stub starts");
+    const fs::path dir = g_work / "auth_link";
+    fs::remove_all(dir);
+    const fs::path cfgp = dir / "config.json", tp = dir / "identity.json";
+    write_cfg(cfgp, stub.base(), "K");
+    std::string err;
+    auth::save_token(slash(tp), auth::Token{ kTok2, stub.base(), "Alpha", "ticket", "x", "2.1.0" }, &err);   // another account's
+    FakeTickets tickets;
+    tickets.bytes = { 0x14, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef };
+    Client c;
+    c.configure(slash(cfgp));
+    c.worker().set_tickets(&tickets);
+    c.start();
+    auto list = [&] { return ask(c, C({{"cmd", "list"}, {"char", "Ken"}, {"sort", "recent"}, {"page", "1"}}), 3000, 5); };
+    auto bearer_of = [](const StubReq& r) { auto a = r.h.find("authorization"); return a == r.h.end() ? std::string() : a->second; };
+
+    Answer a = list();
+    auto lg = stub.take_log();
+    check(a.ok && lg.size() == 2 && lg[0].target == "/auth/steam/ticket" && bearer_of(lg[0]).empty() &&
+          lg[1].target.rfind("/api/list", 0) == 0 && bearer_of(lg[1]) == "Bearer " + kTok3, "first list: a ticket, then the list with the new token");
+    check(auth::load_token(slash(tp), stub.base()) == kTok3 && tickets.released_count() == 1, "...identity.json holds the new account's token, ticket released");
+    a = list();
+    lg = stub.take_log();
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]) == "Bearer " + kTok3 && tickets.gets == 1, "second list: no new ticket");
+    a = ask(c, C({{"cmd", "vote"}, {"id", "L1"}, {"cfn", "Beta"}, {"value", 1}}), 3000, 5);
+    lg = stub.take_log();
+    check(a.ok && lg.size() == 1 && bearer_of(lg[0]) == "Bearer " + kTok3 && tickets.gets == 1, "a write after it reuses the token");
     c.stop();
     stub.stop();
 }
@@ -1296,6 +1361,7 @@ int main(int argc, char** argv) {
     test_fixes();
     test_auth_pure();
     test_auth_flow();
+    test_auth_session_link();
     test_auth_page();
     test_steam_engine();
 

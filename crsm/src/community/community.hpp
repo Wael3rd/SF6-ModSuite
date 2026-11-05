@@ -44,5 +44,8 @@ std::string status();
 bool on();
 Client& client();
 Identity identity(const std::string& banner_cfn);
+// The CFN the Worker linked to the Steam-verified token (identity.json's cfn, from the ticket's answer), "" when there is
+// no token file or its cfn is not a public CFN (auth::public_cfn). A small file read: not for every frame.
+std::string linked_cfn();
 
 }  // namespace community

@@ -15,14 +15,17 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "ll_common.hpp"
 
 #include "../common.hpp"
+#include "../perf.hpp"
 
 namespace screens::tracker {
 namespace {
@@ -151,6 +154,23 @@ int64_t cursor_of(uint64_t param_addr) {
     return r.exception_thrown ? -1 : (int64_t)(int32_t)r.dword;
 }
 
+// ll::find_method_noargs by (type, name), resolved once (it walked the type's methods by name at every call: per
+// child, per block, per dot, at every paint). A type's methods never change: the same Method as before.
+API::Method* noargs(API::TypeDefinition* td, const char* name) {
+    static std::map<std::pair<API::TypeDefinition*, std::string>, API::Method*> memo;
+    if (!td) return nullptr;
+    const auto key = std::make_pair(td, std::string(name));
+    auto it = memo.find(key);
+    if (it == memo.end()) it = memo.emplace(key, ll::find_method_noargs(td, name)).first;
+    return it->second;
+}
+bool is_texture_type(API::TypeDefinition* td) {          // get_full_name() == "via.gui.Texture", by type
+    static std::unordered_map<API::TypeDefinition*, bool> memo;
+    auto it = memo.find(td);
+    if (it == memo.end()) it = memo.emplace(td, std::string(td->get_full_name()) == "via.gui.Texture").first;
+    return it->second;
+}
+
 void paint_menu(int side) {
     auto& d = g_menu[side];
     if (!d.active || !d.text_addr) return;
@@ -201,7 +221,7 @@ void paint_camera() {
     auto* agent = reinterpret_cast<MO*>(cam.agent_addr);
     if (!API::get()->sdk()->managed_object->is_managed_object(agent)) return;
 
-    auto* get_cm = ll::find_method_noargs(agent->get_type_definition(), "get_ControlMain");
+    auto* get_cm = noargs(agent->get_type_definition(), "get_ControlMain");
     if (!get_cm) return;
     std::vector<void*> noargs;
     auto rc = get_cm->invoke(agent, noargs);
@@ -215,7 +235,7 @@ void paint_camera() {
         if (c01) {
             void* ref_t = api_p->ui_find_cached(c01, "e_text_0");
             if (ref_t) {
-                auto* fs_m = ll::find_method_noargs(
+                auto* fs_m = ::screens::tracker::noargs(
                     reinterpret_cast<MO*>(ref_t)->get_type_definition(), "get_FontSize");
                 if (fs_m) {
                     auto fr = fs_m->invoke(reinterpret_cast<MO*>(ref_t), noargs);
@@ -235,22 +255,21 @@ void paint_camera() {
         // hide textures in the block (camera-Y arrows)
         if (b.hide_textures) {
             auto* blk_mo = reinterpret_cast<MO*>(blk);
-            auto* get_child = ll::find_method_noargs(blk_mo->get_type_definition(), "get_Child");
+            auto* get_child = ::screens::tracker::noargs(blk_mo->get_type_definition(), "get_Child");
             if (get_child) {
                 auto cr = get_child->invoke(blk_mo, noargs);
                 void* c = cr.exception_thrown ? nullptr : cr.ptr;
                 while (c) {
                     auto* c_mo = reinterpret_cast<MO*>(c);
-                    auto tn = std::string(c_mo->get_type_definition()->get_full_name());
-                    if (tn == "via.gui.Texture") {
-                        auto* gv = ll::find_method_noargs(c_mo->get_type_definition(), "get_Visible");
+                    if (is_texture_type(c_mo->get_type_definition())) {
+                        auto* gv = ::screens::tracker::noargs(c_mo->get_type_definition(), "get_Visible");
                         if (gv) {
                             auto vr = gv->invoke(c_mo, noargs);
                             if (!vr.exception_thrown && vr.dword)
                                 api_p->ui_set_visible(cl(), c, 0);
                         }
                     }
-                    auto* gn = ll::find_method_noargs(c_mo->get_type_definition(), "get_Next");
+                    auto* gn = ::screens::tracker::noargs(c_mo->get_type_definition(), "get_Next");
                     if (!gn) break;
                     auto nr = gn->invoke(c_mo, noargs);
                     c = nr.exception_thrown ? nullptr : nr.ptr;
@@ -259,7 +278,7 @@ void paint_camera() {
         }
 
         if (!cam.show) {
-            auto* gv = ll::find_method_noargs(
+            auto* gv = ::screens::tracker::noargs(
                 reinterpret_cast<MO*>(blk)->get_type_definition(), "get_Visible");
             if (gv) {
                 auto vr = gv->invoke(reinterpret_cast<MO*>(blk), noargs);
@@ -324,7 +343,7 @@ void paint_dots() {
     auto* agent = ll::read_field_object(param, "<Agent>k__BackingField");
     if (!agent) return;
 
-    auto* get_cm = ll::find_method_noargs(agent->get_type_definition(), "get_ControlMain");
+    auto* get_cm = noargs(agent->get_type_definition(), "get_ControlMain");
     if (!get_cm) return;
     std::vector<void*> noargs;
     auto rc = get_cm->invoke(agent, noargs);
@@ -341,7 +360,7 @@ void paint_dots() {
         for (auto* pn : prefab_names) {
             void* p = api_p->ui_find_cached(ctrl, pn);
             if (!p) continue;
-            auto* gv = ll::find_method_noargs(
+            auto* gv = ::screens::tracker::noargs(
                 reinterpret_cast<MO*>(p)->get_type_definition(), "get_ActualVisible");
             if (!gv) continue;
             auto vr = gv->invoke(reinterpret_cast<MO*>(p), noargs);
@@ -372,6 +391,7 @@ void paint_dots() {
 
 void tick_all() {
     std::lock_guard lk(g_mx);
+    perf::Scope tm(perf::TrkMenus);
     for (int s : { 1, 2, 11, 12 }) {
         paint_menu(s);
         // the training popup's chips are painted once per Lua push (the Lua repaints each tick only while an entry
@@ -379,8 +399,8 @@ void tick_all() {
         if (s >= 11) g_menu[s].active = false;
     }
     paint_fs_setup();
-    if (g_camera.dirty) { paint_camera(); g_camera.dirty = false; }
-    if (g_dots.dirty) { paint_dots(); g_dots.dirty = false; }
+    if (g_camera.dirty) { perf::Scope t(perf::TrkCamera); paint_camera(); g_camera.dirty = false; }
+    if (g_dots.dirty) { perf::Scope t(perf::TrkDots); paint_dots(); g_dots.dirty = false; }
 }
 
 }  // namespace

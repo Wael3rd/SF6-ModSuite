@@ -29,7 +29,7 @@ CRLF = chr(13) + chr(10)
 sys.path.insert(0, HERE)
 from make_fluffy_package import CHARACTERS      # the 32 character folders of costume_mods, reused for color_mods
 CRSM = os.path.join(REPO, "crsm")
-CRSM_MIN_CORE = "0.8.0"       # the Native Core's training pause-menu service (pm_*), needed by the Recording Manager
+CRSM_MIN_CORE = "0.9.5"       # 0.9.5: on_confirm (Confirm on spin rows, the drill details dialog); 0.8.0: the Native Core's training pause-menu service (pm_*), needed by the Recording Manager
 CRSM_OWNERS = ("community", "files", "replay", "reversal", "record", "ui")
 CRSM_CONFIG_REL = "crsm/package/config.json"
 G_CRSM_CONFIG = "reframework/data/SF6_Community_data/config.json"
@@ -57,8 +57,9 @@ CORE_README = CRLF.join([
     "",
     "The shared native-UI core of the SF6 mods of this release: reframework/plugins/sf6core_native.dll.",
     "Install it once; the mods that need it (SF6 Color Mod, SF6 Recording Manager) register with it at startup. On its own it",
-    "changes nothing in the game, except that it asks Windows for a 1 ms timer at start, as the game itself normally does",
-    "(without it some sessions ran at 45 fps): an empty reframework/data/sf6core/timer_off.txt turns this off.",
+    "changes nothing in the game, except that it makes sure Windows gives the game the 1 ms timer its 60 fps limiter needs",
+    "(Windows 11 sometimes ignored the game's request: sessions stuck at 45 fps); it checks this every second and asks",
+    "again when needed. An empty reframework/data/sf6core/timer_off.txt turns this off.",
     "",
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
     "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",

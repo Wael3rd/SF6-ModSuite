@@ -173,6 +173,11 @@ void Engine::mark_erased(const std::string& filename) {
     write_json(model::store::erased_path(model::chars::get_char_name(fid_)), model::store::erased_save(erased_));
 }
 
+void Engine::unmark_erased(const std::string& filename) {
+    if (!erased_.erase(filename)) return;
+    write_json(model::store::erased_path(model::chars::get_char_name(fid_)), model::store::erased_save(erased_));
+}
+
 void Engine::load_names() {
     names_.clear();
     if (fid_ == -1) return;
@@ -559,7 +564,7 @@ std::string Engine::export_selected(std::string* ticker) {
 }
 
 std::string Engine::erase_selected() {
-    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No loadout selected"; return status_; }
+    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No drill selected"; return status_; }
     const std::string name = custom_file_input_;
     write_json(model::store::pack_path(model::chars::get_char_name(fid_), name), json::object());
     mark_erased(name);
@@ -573,7 +578,7 @@ std::string Engine::erase_selected() {
 }
 
 std::string Engine::rename_selected(const json& new_name, std::string* ticker) {
-    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No loadout selected"; return status_; }
+    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No drill selected"; return status_; }
     const std::string old_name = custom_file_input_;
     const std::string res = export_as(new_name, ticker);
     if (res.find("Saved") == std::string::npos) return res;
@@ -589,10 +594,39 @@ std::string Engine::rename_selected(const json& new_name, std::string* ticker) {
     return status_;
 }
 
+std::string Engine::rename_file(const json& name_in) {
+    if (fid_ == -1 || custom_file_input_.empty()) { status_ = "No drill selected"; return status_; }
+    const std::string typed = (name_in.is_null() || (name_in.is_boolean() && !name_in.get<bool>())) ? std::string() : lua_tostring(name_in);
+    const model::pack::TypedName tn = model::pack::typed_name(typed);
+    if (tn.file.empty()) { status_ = "No name"; return status_; }
+    const std::string char_name = model::chars::get_char_name(fid_);
+    const std::string old_file = custom_file_input_;
+    const std::string new_file = model::pack::save_filename(tn.file, char_name);
+    const bool same = model::pack::same_file_name(new_file, old_file);
+    if (!same) {
+        for (const std::string& f : cached_file_list_)
+            if (model::pack::same_file_name(f, new_file)) { status_ = "Name already used: " + display_name(f); return status_; }
+    }
+    if (new_file != old_file) {                                 // (a change of case only: renamed too)
+        std::error_code ec;
+        fs::rename(abs(model::store::pack_path(char_name, old_file)), abs(model::store::pack_path(char_name, new_file)), ec);
+        if (ec) { status_ = "Cannot rename " + old_file + ": " + ec.message(); return status_; }
+        unmark_erased(new_file);                                // (an erased drill's name: free, its emptied file replaced)
+        set_display_name(old_file, nullptr);
+        if (loaded_file_name_ == old_file || loaded_file_name_ + ".json" == old_file) loaded_file_name_ = lutil::strip_json_ext(new_file);
+    }
+    set_display_name(new_file, &tn.display);
+    custom_file_input_ = new_file;
+    refresh_file_list();
+    refresh_filtered_list();                                    // (the selection follows custom_file_input_)
+    status_ = "Renamed: " + old_file + " -> " + new_file;
+    return status_;
+}
+
 std::string Engine::reopen_loaded() {
     if (fid_ == -1) { status_ = "No character"; return status_; }
     std::string name = loaded_file_name_;
-    if (name.empty()) { status_ = "No loadout loaded"; return status_; }
+    if (name.empty()) { status_ = "No drill loaded"; return status_; }
     if (!lutil::ends_with(name, ".json")) name += ".json";
     const json data = load_json(model::store::pack_path(model::chars::get_char_name(fid_), name));
     if (data.is_null()) { status_ = "Load Failed: " + name; return status_; }

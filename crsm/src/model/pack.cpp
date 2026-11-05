@@ -1,5 +1,6 @@
 #include "pack.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 #include "luajson.hpp"
@@ -88,6 +89,17 @@ TypedName typed_name(const std::string& typed) {
     return r;
 }
 
+bool same_file_name(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+        if (x != y) return false;
+    }
+    return true;
+}
+
 std::string backup_filename(const std::string& char_name, const std::tm& when) {
     char b[32];
     std::snprintf(b, sizeof(b), "%04d%02d%02d_%02d%02d%02d", when.tm_year + 1900, when.tm_mon + 1, when.tm_mday, when.tm_hour, when.tm_min, when.tm_sec);
@@ -105,7 +117,10 @@ bool BackupGate::allow(int fighter_id, double now_seconds) {
     return true;
 }
 
-std::string description(const json& data) {
+namespace {
+
+// info.<key> of the entry whose id is 1, a string ("" otherwise)
+std::string info_string(const json& data, const char* key) {
     if (!data.is_array()) return "";
     for (const json& e : data) {
         if (!e.is_object()) continue;
@@ -113,10 +128,64 @@ std::string description(const json& data) {
         if (id == e.end() || !id->is_number() || id->get<double>() != 1.0) continue;
         const auto info = e.find("info");
         if (info == e.end() || !info->is_object()) return "";
-        const auto d = info->find("description");
+        const auto d = info->find(key);
         return (d != info->end() && d->is_string()) ? d->get<std::string>() : std::string();
     }
     return "";
+}
+
+}  // namespace
+
+std::string description(const json& data) { return info_string(data, "description"); }
+std::string author(const json& data) { return info_string(data, "author"); }
+std::string source(const json& data) { return info_string(data, "source"); }
+
+bool with_description(const json& data, const std::string& desc, json* out) {
+    if (!data.is_array() || !out) return false;
+    json copy = data;
+    for (json& e : copy) {
+        if (!e.is_object()) continue;
+        const auto id = e.find("id");
+        if (id == e.end() || !id->is_number() || id->get<double>() != 1.0) continue;
+        json& info = e["info"];
+        if (!info.is_object()) info = json::object();
+        info["description"] = desc;
+        *out = std::move(copy);
+        return true;
+    }
+    return false;
+}
+
+std::vector<SlotSummary> slot_summaries(const json& data) {
+    std::vector<SlotSummary> out;
+    if (!data.is_array()) return out;
+    for (const json& e : data) {
+        if (!e.is_object()) continue;
+        const auto id = e.find("id");
+        if (id == e.end() || !id->is_number()) continue;
+        const double v = id->get<double>();
+        if (v < 1 || v > kSlotTotal || v != (double)(int)v) continue;
+        const int n = (int)v;
+        if (std::any_of(out.begin(), out.end(), [n](const SlotSummary& s) { return s.id == n; })) continue;
+        SlotSummary s;
+        s.id = n;
+        if (const auto nm = e.find("name"); nm != e.end() && nm->is_string()) s.name = nm->get<std::string>();
+        const auto tl = e.find("timeline");
+        const auto in = e.find("inputs");
+        if (tl != e.end() && tl->is_array()) {
+            std::vector<std::string> lines;
+            for (const json& l : *tl) if (l.is_string()) lines.push_back(l.get<std::string>());
+            s.frames = timeline::entry_frames(lines);
+        } else if (in != e.end() && in->is_array()) {
+            s.frames = (int64_t)in->size();
+        }
+        const auto em = e.find("empty");
+        const bool has_data = (tl != e.end() && tl->is_array()) || (in != e.end() && in->is_array());
+        s.empty = (em != e.end() && lutil::truthy(*em)) || !has_data;
+        out.push_back(std::move(s));
+    }
+    std::sort(out.begin(), out.end(), [](const SlotSummary& a, const SlotSummary& b) { return a.id < b.id; });
+    return out;
 }
 
 }  // namespace model::pack

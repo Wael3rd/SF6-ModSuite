@@ -77,8 +77,25 @@ std::unordered_map<std::string, CachedTree> g_files;
 
 }  // namespace
 
+// The answer of one file check is kept for the rest of the frame: a fighter's dressing calls file_tree for the same
+// files several times in one frame (6 SetupColor in one frame, 28/10 perf logs), each one two file system calls
+// (size, write time). Any write, move or delete of a colour file by this DLL forgets them (files_changed).
+std::atomic<uint64_t> g_files_gen{ 1 };
+struct FileMemo { uint64_t frame = 0, gen = 0; rsz::NodeRef tree; };
+std::unordered_map<std::string, FileMemo> g_file_memo;
+rsz::NodeRef file_tree_checked(const std::string& path);
 rsz::NodeRef file_tree(const std::string& path) {                  // Lua: read_tree (empty / missing / unreadable = nil)
     if (path.empty()) return nullptr;
+    perf::Scope timed(perf::SetupFiles);
+    const uint64_t fr = cmn::frame(), gen = g_files_gen.load(std::memory_order_acquire);
+    FileMemo& m = g_file_memo[path];
+    if (m.frame == fr && m.gen == gen && fr != 0) return m.tree;
+    rsz::NodeRef t = file_tree_checked(path);
+    m.frame = fr; m.gen = gen; m.tree = t;
+    return t;
+}
+void files_changed() { g_files_gen.fetch_add(1, std::memory_order_acq_rel); }
+rsz::NodeRef file_tree_checked(const std::string& path) {
     std::error_code ec;
     const uintmax_t size = std::filesystem::file_size(path, ec);
     if (ec || size == 0) return nullptr;
@@ -397,7 +414,9 @@ std::unordered_map<MO*, uint64_t> g_diag_parts;   // SetupPartsColor-without-pat
 int pre_setup_color(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     perf::Scope timed(perf::HookSetupColor);
+    const int64_t tw = perf::begin();
     std::lock_guard lk(g_mx);
+    perf::end(perf::SetupLockWait, tw);
     g_diag_ctrl = nullptr;
     try {
         if (argc >= 2) {
@@ -433,7 +452,9 @@ void post_restore(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
 }
 void post_setup_color(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
     perf::Scope timed(perf::HookSetupColor);
+    const int64_t tw = perf::begin();
     std::lock_guard lk(g_mx);
+    perf::end(perf::SetupLockWait, tw);
     if (cmn::closing()) { try { restore(false); } catch (...) { drop_pending(); } return; }
     try {
         if (g_diag_ctrl && ret_val && ((uintptr_t)*ret_val & 0xFF) == 0)

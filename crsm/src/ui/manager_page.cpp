@@ -1,5 +1,6 @@
 #include "ui/manager_page.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -18,9 +19,12 @@
 #include "model/luajson.hpp"
 #include "model/pack.hpp"
 #include "model/store.hpp"
+#include "ui/details_logic.hpp"
 #include "ui/dialogs.hpp"
+#include "ui/drill_details.hpp"
 #include "ui/dump.hpp"
 #include "ui/gx.hpp"
+#include "ui/internal.hpp"
 #include "ui/lang.hpp"
 #include "ui/logic.hpp"
 #include "ui/manager_logic.hpp"
@@ -52,7 +56,15 @@ std::array<std::string, 2> g_hint_text;       // under g_mx: edit_name, delete_n
 mgr::Queue g_queue;
 std::atomic<uint64_t> g_rows_epoch{0};
 std::atomic<bool> g_rt_high{false};           // RecordType written above 1: the closed-menu safety watches it
-std::atomic<uint64_t> g_decides{0}, g_spins{0}, g_hints{0}, g_rt_writes{0}, g_actions{0};
+std::atomic<uint64_t> g_decides{0}, g_spins{0}, g_hints{0}, g_rt_writes{0}, g_actions{0}, g_confirms{0};
+std::atomic<bool> g_details_due{false};       // Confirm on the Drill row (the core's on_confirm): the details on the frame
+// The Confirm is taken only once the decide input (F, pad A / Cross) has been seen up on a frame with no dialog of CRSM up
+// (a text dialog, a box, the Community dialog, the drill details) or asked: the F / A that closes one (the drill's new
+// name confirmed in the text dialog: the Drill row has the focus behind it) never opens the details (Wael 04/11).
+// Written by this page's frame callback, read by cb_confirm (the core's frame, before it): the game thread both.
+std::atomic<bool> g_confirm_armed{true};
+std::atomic<uint64_t> g_confirm_unarmed{0};
+std::atomic<bool> g_edit_due{false};          // T / pad Y in the details: the description edited on the frame
 std::mutex g_claim_mx;                        // claim(): the Lua loader's thread
 std::atomic<bool> g_ready{false};             // start() found the core's pm service and files native: the page can be asked
 std::atomic<bool> g_claimed{false};           // claim() ran (the page asked, or refused once)
@@ -66,9 +78,33 @@ uint64_t g_lang_seen = 0;
 uint64_t g_list_seen = 0;                     // the files layer's list_version the spin last followed
 // the Loadout row's guide: the selected loadout's info.description (docs/PACK_FORMAT.md) in place of the row's own help
 std::string g_guide_key = "\x01";            // char/file#list_version of the last look ("\x01" = look again)
-std::string g_guide_shown;                    // the description guide given to the core, "" = the row's own guide
 struct PackDesc { std::filesystem::file_time_type t{}; uintmax_t size = 0; std::string desc; };
 std::map<std::string, PackDesc> g_pack_desc;  // by pack path: a pack is read again only when it changed
+// The game reads the focused row's guide into its help line at a focus and when the spin moves, in its own handling of the
+// press, and not again while the row keeps the focus: a guide given from the frame callback came one move late (27/10:
+// the help line always showed the previous loadout's). So the guides of the spin's neighbours are made ahead on the frame
+// (g_spin_guide) and cb_on_spin (inside the game's Function for the press) gives the new one to the core at the move.
+std::mutex g_guide_mx;                        // leaf lock, held across pm_set_texts only (the core calls no callback under it)
+std::string g_guide_given;                    // under g_guide_mx: the Loadout row's guide as the core has it now
+std::map<int32_t, std::string> g_spin_guide;  // under g_mx: spin option -> its guide, the options near the selected one
+constexpr int32_t kGuideNear = 2;             // options made ahead on each side (a held key moves one option a press)
+std::atomic<uint64_t> g_guide_at_spin{0};
+// The Drill row's help line: the description whole (no "…" cut), on one line; the game's own ScrollText part scrolls a
+// help line longer than the bar by itself (in game 04/11: "it works"), so nothing more is written. help_pages_on.txt (the
+// data folder) gives the fallback instead (logic::help_pages): the guide given to the core is page 1 (the game writes it
+// at a focus or a spin move), the next pages are written every kHelpPageFrames into the help line shown now (the live
+// InputGuide's p_ScrollText_0 / e_text, found again at each write), only while the Drill row has the focus (cb_hints says
+// so at each focus), no dialog is up and the menu is up, and only over our own page or the guide the game wrote (an
+// empty read: a text set by its message id). Back to page 1 at each focus or spin move; a write at a page change only.
+std::vector<std::string> g_help_pages;        // frame thread: the selected drill's line or pages (one or none: no cycling)
+size_t g_help_page = 0;
+uint64_t g_help_next = 0;
+uint64_t g_help_focus_seen = 0;
+std::atomic<uint64_t> g_help_focus{0};        // +1 at each focus / spin move on the Drill row (cb_hints, the menu's threads)
+std::atomic<bool> g_drill_focused{false};
+bool g_help_paged = false;                    // help_pages_on.txt, read when the pages are made
+uint64_t g_help_writes = 0;
+constexpr const char* kHelpPagesFile = "reframework/data/SF6_CRSMNative_data/help_pages_on.txt";
 
 bool live() { return cmn::owns(F::Ui) && !cmn::closing() && g_page.load() >= 0; }
 model::files::Engine& eng() { return mech::files::engine(); }
@@ -123,10 +159,11 @@ public:
         cmn::journal("ui: manager erase_selected -> %s", r.c_str());
         return r;
     }
-    std::string rename_selected(const std::string& name, std::string* tk) override {
+    std::string rename_selected(const std::string& name, std::string* tk) override {   // the file renamed, its content kept
         Lock lk(mech::lock());
-        const std::string r = eng().rename_selected(model::files::json(name), tk);
-        cmn::journal("ui: manager rename_selected -> %s", r.c_str());
+        if (tk) tk->clear();
+        const std::string r = eng().rename_file(model::files::json(name));
+        cmn::journal("ui: manager rename (Edit Drill Name) -> %s", r.c_str());
         return r;
     }
     void invalidate() override { Lock lk(mech::lock()); eng().invalidate(); }
@@ -209,12 +246,15 @@ void retext() {
     perf::counted(g_api)->pm_set_texts(g_client, page, mgr::page_title(tr).c_str(), nullptr);
     for (int i = 0; i < mgr::kRowCount; ++i) {
         const mgr::RowText t = mgr::row_text((mgr::Row)i, tr);
+        if (i != mgr::kLoadout) { perf::counted(g_api)->pm_set_texts(g_client, g_rows[i].load(), t.title.c_str(), t.guide.c_str()); continue; }
+        std::lock_guard gl(g_guide_mx);
+        g_guide_given = t.guide;
         perf::counted(g_api)->pm_set_texts(g_client, g_rows[i].load(), t.title.c_str(), t.guide.c_str());
     }
     std::lock_guard lk(g_mx);
     g_hint_text = { tr("edit_name", {}), tr("delete_name", {}) };
     g_guide_key = "\x01";                     // the Loadout row has its own guide again: the description is put back
-    g_guide_shown.clear();
+    g_spin_guide.clear();
 }
 
 // info.description of the pack at `path` ("" when none), read once per change of the file
@@ -244,10 +284,11 @@ gm::MO* find_help_text(gm::MO* e, const std::string& shown, int depth, int* left
     return nullptr;
 }
 
-// The help line shown now, from `before` to `after`: the game takes a row's guide into its help text when the row gets the
-// focus only, so a guide changed while the Loadout row is focused (left / right) is written into the shown text too
-// (through the core's ui_set_text: compared first, R7). Only when the help shows exactly our previous guide (the Loadout
-// row focused): another row's help is never touched.
+// The help line shown now, from `before` to `after`, for a guide changed without a spin move (a save, a rename, a
+// download while the Loadout row keeps the focus): written into the shown text (through the core's ui_set_text: compared
+// first, R7) when a text under the menu's agent shows exactly our previous guide; another row's help is never touched.
+// (27/10: never found there; the help line at the bottom of the screen may belong to another agent. The guide is right
+// from the row's next focus or spin move either way.)
 void help_line_now(const std::string& before, const std::string& after) {
     if (before == after || !perf::counted(g_api)->pm_page_shown(g_page.load())) return;
     gm::MO* agent = ui::gx::pause_agent();
@@ -257,34 +298,76 @@ void help_line_now(const std::string& before, const std::string& after) {
     if (t) ui::gx::set_text(t, after);
     if (t && ui::dump::on())                                     // the help line's place and size (dump_on.txt)
         cmn::append_file("reframework/data/SF6_CRSMNative_data/dump.txt", "[Manager] help line: " + ui::gx::describe_text(t) + "\n");
-    cmn::journal("ui: manager help line %s", t ? "rewritten in place" : "not shown (the Loadout row not focused): at its next focus");
+    cmn::journal("ui: manager help line %s", t ? "rewritten in place" : "not found under the menu's agent: right at the row's next focus or move");
 }
 
-// The Loadout row's guide (its bottom help line): the selected loadout's description when it has one, its paragraphs on
-// one line (" | ") cut at kHelpLineEm with "…", else the row's own help. Given to the core when it changes (pm_set_texts:
-// the row's guide in place, as the language change does) and written into the help line shown now (help_line_now).
+// The help line of the loadout at `path` ("" = no file): its description without its Markdown markers, its paragraphs on
+// one line (" | "), whole (the game scrolls it); help_pages_on.txt: in pages of kHelpLineEm
+std::vector<std::string> help_pages_for(const std::filesystem::path& path) {
+    const std::string desc = path.empty() ? std::string() : pack_desc(path);
+    if (desc.empty()) return {};
+    return ui::logic::help_pages(ui::details::strip_markdown(desc), g_help_paged ? ui::logic::kHelpLineEm : 1e9);
+}
+
+// The guide of the loadout at `path`: its help line (its first page), else the row's own help `base`
+std::string guide_for(const std::filesystem::path& path, const std::string& base) {
+    const std::vector<std::string> pages = help_pages_for(path);
+    return pages.empty() ? base : pages[0];
+}
+
+// The Loadout row's guide to the core (pm_set_texts: the row's guide in place, as the language change does) when it is not
+// the one the core has. Any thread: the frame callback and cb_on_spin (the menu's job thread; pm_* allowed there).
+bool give_guide(const std::string& guide, std::string* before) {
+    std::lock_guard lk(g_guide_mx);
+    if (guide == g_guide_given) return false;
+    if (before) *before = g_guide_given;
+    g_guide_given = guide;
+    perf::counted(g_api)->pm_set_texts(g_client, g_rows[mgr::kLoadout].load(), nullptr, guide.c_str());
+    return true;
+}
+
+// The Loadout row's guide (its bottom help line): the selected loadout's description when it has one, else the row's own
+// help (guide_for). Made when the selection or the list changed, with the guides of the kGuideNear options on each side
+// of the selected one for cb_on_spin (the spin wraps around: so do they). Given to the core when it changes: normally
+// already done by cb_on_spin at the move; otherwise here, and written into the help line shown now (help_line_now).
 void loadout_guide(uint64_t list_version) {
+    if (g_queue.selects() != 0) return;       // a move not applied yet (its guide given at the move): looked at next frame
     std::string ch, file;
     std::filesystem::path path;
+    std::vector<std::pair<int32_t, std::filesystem::path>> near;
     {
         Lock lk(mech::lock());
         const auto c = eng().char_name();
         ch = c ? *c : std::string();
         file = eng().selected_file();
         if (!ch.empty() && !file.empty()) path = eng().abs(model::store::pack_path(ch, file));
+        const std::vector<std::string>& files = eng().files();
+        const int32_t n = (int32_t)std::clamp<size_t>(eng().dropdown().size(), 1, mgr::kSpinCapacity);   // the spin's options
+        const int32_t cur = mgr::spin_value(eng().dropdown_index(), (size_t)n);
+        for (int32_t d = -kGuideNear; d <= kGuideNear; ++d) {
+            const int32_t j = ((cur + d) % n + n) % n;       // option j = dropdown entry j + 1 = files()[j - 1] (0: no file)
+            if (d == 0 || j == cur) continue;
+            std::filesystem::path p;
+            if (!ch.empty() && j >= 1 && (size_t)j <= files.size()) p = eng().abs(model::store::pack_path(ch, files[(size_t)j - 1]));
+            near.emplace_back(j, std::move(p));
+        }
     }
-    const std::string key = ch + "/" + file + "#" + std::to_string(list_version);   // (a save, a download: a new version)
+    const std::string key = ch + "/" + file + "#" + std::to_string(list_version);   // (a move, a save, a download: a new version)
     if (key == g_guide_key) return;
     g_guide_key = key;
-    const std::string desc = path.empty() ? std::string() : pack_desc(path);
+    std::error_code ec;
+    g_help_paged = std::filesystem::exists(kHelpPagesFile, ec);
+    g_help_pages = help_pages_for(path);           // the pages in turn from page 1 (help_tick)
+    g_help_page = 0;
+    g_help_next = cmn::frame() + ui::logic::kHelpPageFrames;
     const std::string base = mgr::row_text(mgr::kLoadout, tr).guide;
-    const std::string guide = desc.empty() ? std::string() : ui::logic::desc_line(desc, ui::logic::kHelpLineEm);
-    if (guide == g_guide_shown) return;
-    const std::string before = g_guide_shown.empty() ? base : g_guide_shown;
-    const std::string after = guide.empty() ? base : guide;
-    g_guide_shown = guide;
-    perf::counted(g_api)->pm_set_texts(g_client, g_rows[mgr::kLoadout].load(), nullptr, after.c_str());
-    cmn::journal("ui: manager Loadout guide: %s", guide.empty() ? "its own help" : "the loadout's description");
+    const std::string after = guide_for(path, base);
+    std::map<int32_t, std::string> ahead;
+    for (const auto& [j, p] : near) ahead[j] = guide_for(p, base);
+    { std::lock_guard lk(g_mx); g_spin_guide = std::move(ahead); }
+    std::string before;
+    if (!give_guide(after, &before)) return;
+    cmn::journal("ui: manager Loadout guide (frame): %s", after == base ? "its own help" : "the loadout's description");
     try { help_line_now(before, after); } catch (...) { cmn::fault(F::Ui, "help line"); }
 }
 
@@ -349,13 +432,37 @@ int32_t SF6CORE_CALL cb_spin_value(void*, int64_t) {
 void SF6CORE_CALL cb_on_spin(void*, int64_t row, int32_t index) {
     try {
         if (!live() || row != g_rows[mgr::kLoadout].load()) return;
-        std::lock_guard lk(g_mx);
-        const int idx1 = mgr::dropdown_of_spin(index, g_labels.size());
-        g_sel = idx1 - 1;
-        ++g_sel_seq;
-        g_queue.push(Action{ Act::Select, idx1 });                  // set_dropdown_index(i + 1) on the frame callback
-        g_spins.fetch_add(1);
+        std::string guide;
+        bool ahead = false;
+        {
+            std::lock_guard lk(g_mx);
+            const int idx1 = mgr::dropdown_of_spin(index, g_labels.size());
+            g_sel = idx1 - 1;
+            ++g_sel_seq;
+            g_queue.push(Action{ Act::Select, idx1 });              // set_dropdown_index(i + 1) on the frame callback
+            g_spins.fetch_add(1);
+            if (const auto it = g_spin_guide.find(index); it != g_spin_guide.end()) { guide = it->second; ahead = true; }
+        }
+        // the new option's guide to the core now, before the game reads it into the help line (g_guide_mx: no lock of ours
+        // held but it; the core holds none while a callback runs)
+        if (ahead && give_guide(guide, nullptr) && g_guide_at_spin.fetch_add(1) < 3)
+            cmn::journal("ui: manager Loadout guide given at the spin move (option %d)", (int)index);   // (the first 3 only)
     } catch (...) { cmn::fault(F::Ui, "on_spin"); }
+}
+
+// Confirm (F, pad A / Cross) on the Drill row: the core reads it raw (core 0.9.5; the game gives a spin row no decide) and
+// calls this on the game thread, from its frame. The dialog is asked from this page's frame callback (details_open).
+void SF6CORE_CALL cb_confirm(void*, int64_t row) {
+    try {
+        if (!live() || row != g_rows[mgr::kLoadout].load()) return;
+        if (!g_confirm_armed.load() || ui::dialogs::busy()) {   // a press begun under a dialog, or closing one: not a Confirm
+            g_confirm_armed.store(false);
+            if (g_confirm_unarmed.fetch_add(1) < 3) cmn::journal("ui: manager Confirm on the Drill row ignored (a dialog was up)");
+            return;
+        }
+        g_confirms.fetch_add(1);
+        g_details_due.store(true);
+    } catch (...) { cmn::fault(F::Ui, "on_confirm"); }
 }
 
 void SF6CORE_CALL cb_page_shown(void*, int64_t page, int32_t shown) {
@@ -370,10 +477,29 @@ void SF6CORE_CALL cb_page_shown(void*, int64_t page, int32_t shown) {
     } catch (...) { cmn::fault(F::Ui, "on_page_shown"); }
 }
 
+constexpr int32_t kButtonDecide = 90;            // app.InputAssign.Digital.ConfigId UI_DECIDE (the game draws the device's glyph)
+
 uint32_t SF6CORE_CALL cb_hints(void*, void* focused, SF6CorePmHint* out, uint32_t max) {
     try {
         if (!live() || !focused || !out || max == 0) return 0;
-        const bool own = SF6CORE_HAS(g_api, pm_row_of) && perf::counted(g_api)->pm_row_of(g_client, focused) >= 0;
+        const int64_t row = SF6CORE_HAS(g_api, pm_row_of) ? perf::counted(g_api)->pm_row_of(g_client, focused) : -1;
+        const bool drill = row >= 0 && row == g_rows[mgr::kLoadout].load();   // (the game builds the guide at each focus /
+        g_drill_focused.store(drill);                                          //  spin move: the help line pages restart)
+        if (drill) g_help_focus.fetch_add(1);
+        if (row >= 0 && row == g_rows[mgr::kLoadout].load()) {   // "See Details" (Confirm), "Edit Drill Name" (T / pad Y):
+            thread_local std::array<std::string, 2> texts;        //  a drill selected only (read by the core before this returns)
+            {
+                std::lock_guard lk(g_mx);
+                if (g_sel <= 0) return 0;                         // option 0: "-- Select File --"
+            }
+            texts = { tr("see_details", {}), tr("edit_drill_name", {}) };
+            const int32_t buttons[2] = { kButtonDecide, mgr::kButtonY };
+            uint32_t n = 0;
+            for (; n < 2 && n < max; ++n) { out[n].button = buttons[n]; out[n].text = texts[n].c_str(); }
+            g_hints.fetch_add(n);
+            return n;
+        }
+        const bool own = row >= 0;
         int64_t ft = -1;
         const bool known = !own && gm::get_int(static_cast<gm::MO*>(focused), "_FuncType", &ft);
         const std::vector<mgr::HintSpec> hs = mgr::hints_for(own, known, ft);
@@ -433,6 +559,117 @@ void game_page_body(bool replay) {
         after = g_mem.page();
     }
     if (after != before) cmn::journal("ui: sub-page memory: %s -> %s", mgr::page_name(before), mgr::page_name(after));
+}
+
+// ---- the drill details (Confirm on the Drill row) --------------------------------------------------------------------------------
+// The selected drill's details in the game's image dialog (ui/drill_details); "Open drill" there = this page's Open.
+// No drill selected: what Open does then ("No drill selected"), and no dialog. Ignored while a dialog of CRSM is up (a
+// text dialog's typed F, a box's decide) or asked.
+void details_open() {
+    if (ui::dialogs::busy() || g_runner.dialog_open()) { cmn::journal("ui: manager Confirm on the Drill row ignored (a dialog is up)"); return; }
+    std::string ch, name, title;
+    std::filesystem::path path;
+    {
+        Lock lk(mech::lock());
+        const auto c = eng().char_name();
+        ch = c ? *c : std::string();
+        name = eng().selected_name();
+        const std::string file = eng().selected_file();
+        if (!ch.empty() && !file.empty()) path = eng().abs(model::store::pack_path(ch, file));
+        const std::vector<std::string> labels = mgr::spin_labels(eng().dropdown());
+        const int32_t i = mgr::spin_value(eng().dropdown_index(), labels.size());
+        title = (size_t)i < labels.size() ? labels[(size_t)i] : name;
+    }
+    if (name.empty() || path.empty()) { g_screen.ticker(tr("none_selected", {})); return; }
+    const nlohmann::json data = model::luajson::load_file(path);
+    ui::details::Drill d;
+    d.title = title;
+    d.character = ch;
+    d.source = model::pack::source(data);
+    d.author = model::pack::author(data);
+    d.description = model::pack::description(data);
+    // the player's own drill without an author: the top-left box names the player as the Community names their shares
+    if (d.author.empty() && ui::details::origin(d.source) == ui::details::Origin::Local) {
+        try { d.own_name = ui::com::share_name(); } catch (...) { cmn::fault(F::Ui, "drill details: the share name"); }
+    }
+    d.slots = model::pack::slot_summaries(data);
+    const size_t n = d.slots.size();
+    const char* who = !d.author.empty() ? "info.author" : !d.own_name.empty() ? "the share name" : "none";
+    const bool asked = ui::details::request(std::move(d), [] {     // (the dialog's end, the UI frame callback: run here next)
+        if (live()) g_queue.push(Action{ Act::Open, 0 });
+    }, [] { g_edit_due.store(true); });
+    cmn::journal("ui: manager drill details %s (%zu slot entries, author: %s)", asked ? "asked" : "refused (one is up, or the UI is off)", n, who);
+}
+
+// T / pad Y in the drill details: the selected drill's description edited in the game's text dialog (the one of the slot
+// names and Save As), on one line with each line break shown as "/n", at most details::kDescMaxUnits (the Community
+// Worker's limit), over the details dialog (in game 04/11: it draws over it, Esc closes only it), which shows the new
+// text in place after (details::edit_done, OK or not). OK: "/n" (or a
+// typed "\n") back to line breaks, written into the drill file's info.description (its info made when missing, the rest kept), in the
+// files layer's format (luajson::dump_file: the bytes of its writer) under mech::lock, as Save; the help line's
+// description cache dropped.
+void details_edit() {
+    std::string rel;
+    nlohmann::json data;
+    {
+        Lock lk(mech::lock());
+        const auto c = eng().char_name();
+        const std::string file = eng().selected_file();
+        if (c && !c->empty() && !file.empty()) {
+            rel = model::store::pack_path(*c, file);
+            data = model::luajson::load_file(eng().abs(rel));
+        }
+    }
+    if (rel.empty() || !data.is_array()) { cmn::journal("ui: manager description edit: no drill file"); ui::details::edit_done(false, ""); return; }
+    const std::string initial = ui::details::edit_text(model::pack::description(data));
+    ui::dialogs::text_input("drill description", initial, ui::details::kDescMaxUnits, [rel, initial](bool ok, const std::string& text) {
+        bool written = false;
+        std::string desc;
+        try {
+            if (ok) {
+                desc = ui::details::edit_result(text);
+                std::string err;
+                {
+                    Lock lk(mech::lock());
+                    nlohmann::json out;               // (the files layer's bytes, through a temporary file: a failed
+                    const std::filesystem::path path = eng().abs(rel);   //  dump leaves the drill as it was)
+                    if (model::pack::with_description(model::luajson::load_file(path), desc, &out))
+                        written = model::luajson::dump_file(path, out, &err);
+                    g_pack_desc.erase(eng().abs(rel).string());
+                }
+                g_guide_key = "\x01";               // the Drill row's help line made again from the file
+                cmn::journal("ui: manager description edit: %zu bytes %s%s", desc.size(), written ? "written" : "NOT written",
+                             err.empty() ? "" : (" (" + err + ")").c_str());
+            } else {
+                cmn::journal("ui: manager description edit cancelled: nothing changed");
+            }
+        } catch (...) { cmn::fault(F::Ui, "description edit"); }
+        ui::details::edit_done(written, desc);       // the details dialog shows it, takes its keys again
+    });
+    cmn::journal("ui: manager description edit asked (%zu bytes)", initial.size());
+}
+
+// The help line's next page (help_pages_on.txt only), every kHelpPageFrames, while the Drill row has the focus and no
+// dialog is up (see g_help_pages)
+void help_tick(uint64_t fr, bool up) {
+    if (g_help_pages.size() < 2) return;
+    if (const uint64_t f = g_help_focus.load(); f != g_help_focus_seen) {   // a focus / spin move: the game wrote page 1
+        g_help_focus_seen = f;
+        g_help_page = 0;
+        g_help_next = fr + ui::logic::kHelpPageFrames;
+        return;
+    }
+    if (fr < g_help_next) return;
+    g_help_next = fr + ui::logic::kHelpPageFrames;
+    if (!up || !g_drill_focused.load() || ui::dialogs::busy() || g_runner.dialog_open() || !page_shown()) return;
+    gm::MO* t = ui::gx::input_guide_help();
+    if (!t) return;
+    const std::string cur = ui::gx::msg(t);           // ours (a page of this drill) or the game's own (by message id: empty)
+    const bool ours = cur.empty() || cur == "nil" || std::find(g_help_pages.begin(), g_help_pages.end(), cur) != g_help_pages.end();
+    if (!ours) return;
+    g_help_page = (g_help_page + 1) % g_help_pages.size();
+    ui::gx::set_text(t, g_help_pages[g_help_page]);
+    if (g_help_writes++ == 0) cmn::journal("ui: manager help line in %zu pages, 4 s each", g_help_pages.size());
 }
 
 // ---- frame callback (game thread) ------------------------------------------------------------------------------------------------
@@ -533,12 +770,28 @@ void frame_body(uint64_t fr) {
         if (a.act != Act::Select && a.act != Act::Ensure) cmn::journal("ui: manager %s", mgr::act_name(a.act));
         g_runner.run(a);
     }
+    // the Drill row's Confirm armed again once the decide input is up with no dialog (cb_confirm): read only while unarmed
+    if (ui::dialogs::busy() || g_runner.dialog_open()) g_confirm_armed.store(false);
+    else if (!g_confirm_armed.load()) {
+        bool held = cmn::key_down(0x46);                            // F
+        if (!held) { std::lock_guard lk(ui::lock()); held = ui::windows::pad_held().south; }   // pad A / Cross
+        if (!held) g_confirm_armed.store(true);
+    }
+    if (g_edit_due.exchange(false)) {                               // (never left waiting: the details take their keys back)
+        bool asked = false;
+        if (up) { try { details_edit(); asked = true; } catch (...) { cmn::fault(F::Ui, "description edit"); } }
+        if (!asked) ui::details::edit_done(false, "");
+    }
+    if (g_details_due.exchange(false) && up) {
+        try { details_open(); } catch (...) { cmn::fault(F::Ui, "drill details"); }
+    }
     ready_tick(fr, up);
     // the files layer's labels (no game read): when its list or index changed (list_version follows both), when an action
     // asked, and once a second (was: every frame while the menu was up, 4.5 us a frame for the same labels)
     uint64_t lv = 0;
     { Lock lk(mech::lock()); lv = eng().list_version(); }
     if (g_list_dirty || lv != g_list_seen || fr % 60 == 45) { g_list_seen = lv; sync(); loadout_guide(lv); }
+    try { help_tick(fr, up); } catch (...) { cmn::fault(F::Ui, "help line pages"); }
     if (g_rt_high && !up && fr % 30 == 7 && !mech::pause_now().up()) rt_safety();
 }
 
@@ -577,12 +830,13 @@ std::string status() {
         mem = g_mem.page() == mgr::PageMemory::Page::None ? "the game's memory" : mgr::page_name(g_mem.page());
         labels = g_labels.size();
     }
-    char b[320];
+    char b[416];
     std::snprintf(b, sizeof(b), "native, page %lld (8 rows), %zu loadout labels, reopen on %s, %s, %llu decides, %llu spins, %llu actions, "
-                  "%llu hints, %llu RecordType writes, queue %zu",
+                  "%llu hints, %llu RecordType writes, %llu guides at a move, %llu Confirms on the Drill row, queue %zu",
                   (long long)g_page.load(), labels, mem, ui::lang::status().c_str(), (unsigned long long)g_decides.load(),
                   (unsigned long long)g_spins.load(), (unsigned long long)g_actions.load(), (unsigned long long)g_hints.load(),
-                  (unsigned long long)g_rt_writes.load(), g_queue.size());
+                  (unsigned long long)g_rt_writes.load(), (unsigned long long)g_guide_at_spin.load(),
+                  (unsigned long long)g_confirms.load(), g_queue.size());
     return b;
 }
 
@@ -594,6 +848,7 @@ bool build_page() {
     cb.on_spin = cb_on_spin;
     cb.on_page_shown = cb_page_shown;
     cb.hints = cb_hints;
+    cb.on_confirm = cb_confirm;                                     // core 0.9.5 (an older core ignores it: no details)
     const SF6CoreStatus cst = perf::counted(g_api)->pm_set_callbacks(g_client, &cb);
     if (cst != SF6CORE_OK) {
         cmn::decline(F::Ui, ("pm_set_callbacks refused (" + std::to_string((int)cst) + ")").c_str());
@@ -625,6 +880,7 @@ bool build_page() {
             return false;
         }
         g_rows[i].store(row);
+        if (i == mgr::kLoadout) { std::lock_guard gl(g_guide_mx); g_guide_given = t.guide; }
     }
     const char* first[] = { mgr::kNoFile };
     perf::counted(g_api)->pm_set_options(g_client, g_rows[mgr::kLoadout].load(), first, 1);

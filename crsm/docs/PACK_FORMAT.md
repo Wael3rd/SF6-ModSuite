@@ -1,6 +1,6 @@
-# Loadout pack format
+# Drill pack format
 
-A loadout ("pack") is `reframework/data/SF6_RecordingSlotManager_data/<Char>/<file>.json`: what Save / Save As write,
+A drill ("pack") is `reframework/data/SF6_RecordingSlotManager_data/<Char>/<file>.json`: what Save / Save As write,
 what Open imports, what the Community stores and serves as it is. Code: `src/model/pack.*` (entries, validation, split),
 `src/model/setup.*` (the `active` flags and the training block), `src/model/files.cpp` (export, import, backup).
 
@@ -85,29 +85,73 @@ its id, not by its place.
   zero. `IsGuardSwitching` is a JSON boolean. Not carried: `CpuLevel`, the counter's `StyleNo` (ranges unknown), the
   gauges (`ParameterSetting`) and the start position (`SelectMenu.StartLocation`).
 
-## The loadout's metadata (entry 1, key `info`)
+## The drill's metadata (entry 1, key `info`)
 
 ```json
 "info": { "author": "Chris_F (drillcodes)", "description": "Pick Ken and throw him. He will auto break it. Then, STOP THE SLOP", "source": "community" }
 ```
 
 - Carried like the training block: a key of the entry whose id is 1, ignored by every older reader.
-- `description`: the loadout's text for the player (what to do in a drill), free text, may hold line breaks. `""` or absent
+- `description` may use a light Markdown (the source is stored, never game tags), shown in colour in the drill details
+  dialog only (`ui::details::markdown`), and without its markers everywhere else (the Manager's help line, the Community
+  dialog's description area: `strip_markdown`):
+
+  | Typed | Shown in the drill details |
+  |---|---|
+  | a line break (`/n` or `\n` in the editor) | a line break |
+  | `# ` at a line's start | the rest of the line light violet (a heading) |
+  | `**text**` | magenta |
+  | `- ` at a line's start | kept as it is (a bullet) |
+  | `{violet}text{/}`, `{magenta}`, `{purple}`, `{blue}` | light violet, magenta, dark purple, the game's blue highlight |
+
+  One colour at a time (a span opened inside another closes it), a span still open at the line's end closes there, an
+  unknown `{word}` and a `{/}` that closes nothing stay as typed. The user's `<` / `>` (and `[` / `]`, which the game's
+  texts do not draw) become `(` / `)` before the conversion: the only game tags are the converter's
+  (`<COLOR preset="FGM_Cmn_2">` light violet, `FGM_Cmn_1` magenta, `FGM_Cmn_0` dark purple, `</COLOR>`,
+  `<HLBGN Arg0 = "3">` / `<HLEND Arg0 = "3">` blue; an unknown tag crashed the game's text renderer).
+- `description`: the drill's text for the player (what to do), free text, may hold line breaks. `""` or absent
   = none. `author`: who made it, as the source names them. `source`: where the pack came from: `"community"` (a
   Community download), `"drillcodes.com"` (a drill code converted by CRSM). Other keys may be added; a writer keeps
   the keys it does not know.
 - Written by a Community download (`community::with_info`): the description of the download answer (`/api/download/:id`,
   else the list item's), the author shown in the list (`author_cfn`, else `uploader_name`), source `"community"`. An
   `info` already in the stored file keeps its other keys, and its description when the server sends none.
-- Read by the screens: the Community list shows the focused loadout's description in the dialog's description area,
-  above the "Like / Sort" line (2 lines at most, cut with "…"); the Manager page's Loadout row shows the selected
-  loadout's description as its help line, its paragraphs on one line joined with " | " (cut with "…"), in place of the
-  row's own help. Share sends the shared pack's description to the Worker (cut to 1000 characters).
+- Read by the screens: the Community list shows the focused drill's description in the dialog's description area,
+  above the "Like / Sort" line (2 lines at most, cut with "…"); the Manager page's Drill row shows the selected
+  drill's description as its help line, its paragraphs on one line joined with " | ", whole (the game's help line
+  scrolls a long one by itself; `SF6_CRSMNative_data/help_pages_on.txt`: in pages that fit the line, shown 4 s each in
+  turn with a counter "(1/3)" instead), in place of the
+  row's own help. Share sends the shared pack's description to the Worker (cut to 1000 characters). Confirm (F, pad
+  A / Cross) on the Drill row opens the drill details (the game's image dialog, Native Core 0.9.5): the drill's name,
+  "<Character> - <Author> - <Source>" and "14 SLOTS SAVED" in its top-left box (`source`: "community" = Community,
+  "drillcodes.com" = DrillCodes, none or anything else = Local; the author is `author`, else for a Local drill the name
+  the Community shows for the player's shares, the CFN a share sends). An `author` ending with " (drillcodes)" (any
+  case, spaces after it allowed: the Community's label of a drill it imported from drillcodes.com, the author cut to 19
+  characters + that suffix, stored as it is with `source` "community") is read at display time as that author without the
+  suffix and the source DrillCodes: "Akuma - Chris_F - DrillCodes", "Author: Chris_F", "Source: drillcodes.com"
+  (`ui::details::drillcodes_author`; the Community list keeps the label). Then its saved slots under "PAGE 1/2"
+  (`empty` false: "Slot 7 - <name> - 64F", the frames being the timeline's run lengths summed, else the inputs' count;
+  10 a page), and the whole description (its paragraphs kept, scrolled 18 lines at a time: Up / Down, the pad's d-pad /
+  left stick, or the mouse wheel over the text or its scroll bar, 3 lines a notch, only when there is a scroll bar), then
+  "Author: ..." and "Source: ...". Readers: `model::pack::author`, `source`, `slot_summaries`. The key guide at the
+  bottom shows the dialog's entries: "[F] Confirm", "[A] / [E] Show More Slots" (more than one page), "[T] Edit Drill
+  Description", "[R] Markdown Help" ("[R] Show Drill Description" while the help is shown; pad Y / X), and Back; its help
+  line ("Up / down: scroll the description") goes through the game's own help-line part
+  (`app.UIPartsScrollText.SetText`), which scrolls it only when it is wider than the line, as for the game's own helps.
+  R (pad X) there shows the Markdown help (each syntax as typed and
+  what it does, drawn by that syntax) in the description's place, R again the description where it was. T (pad Y) there edits the description in the game's text dialog
+  (one line: each line break shown as "/n", "/n" or a typed "\n" a line break again at the OK; 1000 characters at
+  most, the Worker's count): written into this file's `info.description` (`info` made when missing, `author`, `source` and the rest kept,
+  `model::pack::with_description`). A Community drill's edit stays local until it is shared again.
 - Save / Save As (the export, `src/model/files.cpp`) build the pack from the game's slots, and carry the `info` of the
   loaded pack (the last one opened, or saved, in this session for this dummy), read from its file just before the
   write: Save over the loaded file keeps it, Save As (and Rename) copy it to the new file, Save over another selected
   file gives that file the loaded pack's `info` (the recordings are the loaded pack's). No pack loaded, or the loaded
   file without `info`: no `info`, as before.
+
+The drill's name (its file) changes with T (pad Y) on the Manager page ("Edit Drill Name"): the file is renamed and keeps
+its content (`files::Engine::rename_file`: the name typed as Save As takes it, refused when another drill of the
+character has that file name). The Lua UI's rename saves the game's slots under the new name and empties the old file.
 
 ## Export (Save, Save As)
 
@@ -116,7 +160,7 @@ its id, not by its place.
   categories is valid (a user who does not use reversals does not hand his empty setup to every importer), with 10 rows
   per category when CRSM's rows 11-30 are all empty, 30 otherwise. The reversal part needs the reversal layer native
   (it owns the map and rows 11-30); a Lua reversal layer gives a block without it. `dummy` always (every field the
-  game gives, as it is: the dummy's settings are part of how the author plays the loadout).
+  game gives, as it is: the dummy's settings are part of how the author plays the drill).
 - `info` on entry 1: the loaded pack's (see above).
 
 ## Import (Open, reopen, a Community download)
