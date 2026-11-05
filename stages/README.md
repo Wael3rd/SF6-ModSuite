@@ -47,6 +47,25 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
   pack); that folder can be deleted at any time.
 - Without stage mods, no stage is changed and nothing is hooked.
 
+### Tiles and variations (Battle Settings and Training), in test
+
+- The loader guesses what each mod is from the files it replaces: a **tile** is another stage built over a vanilla
+  one (it replaces the stage's root prop scene, its arena mesh, ships collision, or adds 20 or more new files: the
+  Suzaku Castle or Medieval Town ports over the Training Room, NULSPACE, Aokigahara); a **variation** only tweaks
+  its stage (lighting, colours, a few textures). The guess and its reason are in `registry.json` (`kind`,
+  `kind_reason`).
+- `reframework\stage_mods\stage_slots.ini` corrects the guess and the names, one section per mod (its name, or
+  its archive / folder name): `kind=tile` or `kind=variation`, `name=...`. It is written as a commented template
+  the first time; changes apply at the next start without rebuilding anything.
+- **Battle Settings > Other > Stage Settings** and **Training > Change Stage** show each tile as an entry of its
+  own after the game's stages, with its picture and name. On a stage with variations, LT / RT (the child tab keys;
+  LB / RB when the screen uses those) cycle them; the name shows `<LT> Training Room · Red <RT>`.
+- Each menu keeps its own choice: Battle Settings' is used for online battles, Training's when Training loads its
+  stage, the replay picker's for replays, the stage select screen's (UP / DOWN) for the battles it starts. The game,
+  the opponent and the replay files only ever get the vanilla stage (the Training Room for a tile over it).
+- Pictures: the mod's own stage-select picture and thumbnail when it ships them, else cut from its screenshot,
+  else the stage's own picture with the mod's name.
+
 ## Limits
 
 - **The choice is local, and it applies to every load of that stage**: training, arcade, replays, and online
@@ -128,6 +147,6 @@ Development notes (engine facts, test status, open items): [docs/DEV_NOTES.md](d
 
 ## Third party
 
-`stages/loader/third_party`: stb_image, stb_image_write, stb_dxt (public domain or MIT). bcdec (MIT, used by
-`textest` only) and the pak, archive and decompression code come from `common/`. See
+`stages/loader/third_party`: stb_image, stb_image_write, stb_dxt (public domain or MIT). bcdec (MIT: a mod's own menu
+pictures, and `textest`) and the pak, archive and decompression code come from `common/`. See
 [THIRD_PARTY.md](../THIRD_PARTY.md).

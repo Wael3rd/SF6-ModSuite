@@ -16,7 +16,8 @@ deflate and zip handling used when a costume mod is delivered as an archive.
 ## bcdec — `common/third_party/bcdec.h`
 
 [bcdec](https://github.com/iOrange/bcdec) by Sergii Kudlai, dual licensed MIT or public domain (Unlicense).
-Decodes the block-compressed colour masks of costume materials, used to compute the colour swatches.
+Decodes the block-compressed colour masks of costume materials, used to compute the colour swatches. The stage slots
+use it to decode a stage mod's own menu pictures (tex_StageImage / tex_StageThumb) into their previews.
 
 ## stb_image, stb_image_write, stb_dxt — `stages/loader/third_party/`
 
