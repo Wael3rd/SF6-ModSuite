@@ -11,7 +11,8 @@
 //
 // The stage grids (Battle Settings > Other > Stage Settings, Training's Change Stage: both are app.UIPartsStageSelectSimple,
 // read 05/11 from the game's code) get the TILES of registry.json as entries of their own and cycle a vanilla entry's
-// VARIATIONS with a pair of keys (stages.hpp, stages_logic.hpp; section "Stage grids" below). Each menu keeps its own
+// VARIATIONS with the pad's X button (the game's binding of it on the keyboard), with a "<key> Stage Variation" entry after
+// the guide bar's own (stages.hpp, stages_logic.hpp; section "Stage grids" below). Each menu keeps its own
 // choice per stage, applied when that menu's stage loads (section "Per-menu choice"). The game only ever holds vanilla
 // ids: a tile entry is the vanilla id of its stage once more in the grid's list, so the save data, the opponent, the
 // server and the replay files see the vanilla stage; only this PC loads the tile.
@@ -24,7 +25,9 @@
 #include "codecheck_rt.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 
 #pragma comment(lib, "user32.lib")   // MapVirtualKeyW (keyboard hints)
@@ -737,19 +740,26 @@ template <perf::Id ID> void post_vs(void**, REFrameworkTypeDefinitionHandle, uns
 //     opens on it and Decide's "already chosen" test stays right.
 //   - Decide (default state only; Random's state toggles the random checks): the entry of grid.SelectedIndex is the menu's
 //     choice for its stage (a tile's key, or the variation cycled on the vanilla entry).
-//   - Pictures and names: the entries' cells, the preview's picture and name, rewritten by the frame for 2 s after each
-//     build / refresh / focus / key (compare-before-write): a tile shows its own pictures and name, a vanilla entry its
-//     cycled variation's picture and "<L> Training Room · Red <R>".
-//   - The cycle keys: LT / RT (UIAgent.InputChildTabBack / Next) of the grid's agent unless its screen uses them, else LB /
-//     RB, else none (stages_logic.hpp pick_keys).
+//   - Pictures and names: the entries' cells (UIPartsStageSelectSimpleSelectItem.mTexThumbnail, a via.gui.Texture: its
+//     getter is getTexture), the preview's picture and name, rewritten by the frame for 2 s after each build / refresh /
+//     focus / key (compare-before-write; the game sets its picture again when its own load ends): a tile shows its own
+//     pictures and name, a vanilla entry its cycled variation's picture and one name line (stages_logic.hpp
+//     variation_label) in the game's own text.
+//   - The chosen mark: the game's, on one cell (SetSelectIndex marks the cell of ConvertStageIdToGridIndex(decided id),
+//     answered above); during Decide that index is the one of the choice from before (DecideGuard), so a tile confirmed
+//     over its own stage is marked at once.
+//   - The variation key: the pad's X button / its keyboard key (app.InputAssign.Digital.Id 341), read by the frame while
+//     the grid's cells have the focus: one press, the next variation (wrapping). The guide bar's "<key> Stage Variation":
+//     a copy of the bar's item template after its entries, while the focused entry has variations (and for the replay
+//     picker, replay_variation_hint).
 // Every hook is installed only after the R18 code check of its method (codecheck_rt.hpp, cache codecheck_stages.txt).
 
 namespace sl = stagelogic;
 
 constexpr const char* kCodecheckCache = "reframework/data/SF6_CostumeSlots_data/codecheck_stages.txt";
 
-enum Hook : size_t { kSetupList, kGetList, kConvert, kDecide, kUpdateList, kSelChanged, kChildBack, kChildNext, kTabBack,
-                     kTabNext, kBattleDesc, kTrainStage, kReplayDesc, kHooks };
+enum Hook : size_t { kSetupList, kGetList, kConvert, kDecide, kUpdateList, kSelChanged, kBattleDesc, kTrainStage, kReplayDesc,
+                     kHooks };
 codecheck::Batch g_check;
 bool g_check_started = false, g_hooks_done = false;
 bool g_hooked[kHooks] = {};
@@ -768,9 +778,9 @@ struct GridState {
     int menu = -1;                     // sl::kBattle / sl::kTraining
     std::vector<sl::Slot> slots;       // its entries once the tiles are in (empty: none inserted)
     std::map<uint32_t, int> cycle;     // vanilla stage -> variation shown on its entry (0: the vanilla look)
-    uintptr_t owner = 0;               // its UIAgent (the cycle keys' filter)
-    int keys = sl::kKeysNone;
-    bool keys_known = false;
+    bool on_screen = false;            // shown (looked at every frame while it lives: the variation key, the hint)
+    bool focused = false;              // its cells have the focus
+    int focus_log = -1;                // the focus check's last logged answer
     uint32_t until = 0, cap = 0, next = 0;
     std::string cell_pic;              // name of the picture control under each item (learnt from the first cell found)
     std::string cell_text;             // name of the stage-name text under each item, if the cells have one (learnt)
@@ -787,6 +797,10 @@ struct SetupFlag { uintptr_t obj = 0; int menu = -1; };
 thread_local SetupFlag tl_setup;
 struct ConvertArgs { uintptr_t obj = 0; int32_t id = 0; };
 thread_local ConvertArgs tl_convert;
+// Inside the game's Decide (pre to post, this thread, this frame): the choice of the decided stage from before it, which
+// its "already chosen" test must see (stages_logic.hpp decide_marks_now)
+struct DecideGuard { uintptr_t obj = 0; uint32_t base = 0; std::string before; uint32_t frame = 0; bool on = false; };
+thread_local DecideGuard tl_decide;
 thread_local uintptr_t tl_replay_map = 0;
 std::atomic<int32_t> g_replay_stage{-1};
 
@@ -844,30 +858,16 @@ std::string lower_s(std::string s) {
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     return s;
 }
-// The texture a via.gui.Texture shows: its resource path (lower case), "" none
+// The texture a via.gui.Texture shows: its resource path (lower case), "" none. The getter is getTexture() (no
+// get_Texture: asked by that name, every picture read "" and no cell nor the preview was ever written, 05/11).
 std::string shown_pic(Obj* tex_ctrl) {
-    Obj* h = tex_ctrl ? call_obj(tex_ctrl, "get_Texture") : nullptr;
+    Obj* h = tex_ctrl ? call_obj(tex_ctrl, "getTexture") : nullptr;
     return lower_s(res_path(h));
 }
 
-// Key symbols of an app.InputAssign.Digital.Id for the device in use (the game's own icons)
+// Key symbols of an app.InputAssign.Digital.Id per guide mode (the game's own icons): symbol_of below; asked again for
+// each new grid (the bindings may have changed)
 std::map<std::pair<int, int>, std::string> g_key_symbols;
-std::string key_symbol_id(int id) {
-    if (id < 0) return {};
-    auto* gm = api().get_managed_singleton("app.InputGuideManager");
-    if (!gm) return {};
-    int mode = kModeKeyboard;
-    if (Obj* modes = get_obj(gm, "_Modes")) {
-        auto r = call(modes, "get_Item", { arg_i32(0) });
-        if (!r.exception_thrown && static_cast<int32_t>(r.dword) > 0) mode = static_cast<int32_t>(r.dword);
-    }
-    auto k = std::make_pair(mode, id);
-    auto it = g_key_symbols.find(k);
-    if (it != g_key_symbols.end()) return it->second;
-    Method* m = method_of(gm->get_type_definition(), "GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)", 4);
-    std::string s = str(call_obj(m, gm, { arg_i32(id), arg_i32(mode), arg_i32(0), arg_i32(0) }));
-    return g_key_symbols[k] = s;
-}
 
 Obj* grid_alive(uintptr_t p) {
     Obj* o = reinterpret_cast<Obj*>(p);
@@ -976,10 +976,17 @@ void post_convert(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long
     if (!a.obj || !ret_val || g_closing.load(std::memory_order_relaxed)) return;
     std::lock_guard<std::recursive_mutex> lk(g_mx);
     if (a.obj != g_grid.obj || g_grid.slots.empty() || g_grid.menu < 0 || a.id < 0) return;
-    const auto& choice = g_state.menu[g_grid.menu];
-    auto c = choice.find(static_cast<uint32_t>(a.id));
-    if (c == choice.end() || !is_tile(c->first, c->second)) return;
-    const int idx = sl::entry_index(g_grid.slots, c->first, c->second);
+    const uint32_t base = static_cast<uint32_t>(a.id);
+    std::string key;
+    if (tl_decide.on && tl_decide.obj == a.obj && tl_decide.base == base && tl_decide.frame == g_frame) {
+        key = tl_decide.before;                                // Decide's own test: the choice from before it
+    } else {
+        const auto& choice = g_state.menu[g_grid.menu];
+        auto c = choice.find(base);
+        if (c != choice.end()) key = c->second;
+    }
+    if (key.empty() || !is_tile(base, key)) return;            // the stage's own entry: the game's answer (its first)
+    const int idx = sl::entry_index(g_grid.slots, base, key);
     if (idx >= 0) *ret_val = reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint32_t>(idx)));
 }
 
@@ -1006,6 +1013,10 @@ int pre_decide(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned
                 auto& choice = g_state.menu[g_grid.menu];
                 const auto old = choice.find(s.base);
                 g_decided = { true, g_grid.menu, s.base, key, old != choice.end() ? old->second : std::string() };
+                // the game's "already chosen" test sees the choice from before (the mark moves at once, 05/11)
+                tl_decide = { g_grid.obj, s.base, g_decided.before, g_frame, true };
+                if (sl::decide_marks_now(g_grid.slots, s.base, g_decided.before, sel))
+                    logf("stages: grid (%s): entry %d confirmed: the game marks it now", sl::menu_key(g_grid.menu), sel);
                 if (key.empty()) choice.erase(s.base); else choice[s.base] = key;
                 // Training: served at once (its reload follows); Battle Settings: when an online battle is set up (at once
                 // when that hook was refused)
@@ -1021,24 +1032,11 @@ int pre_decide(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned
     perf::end(perf::HkStgGrid, pt);
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
+void post_decide(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { tl_decide = {}; }
 
 // UpdateList / SelectionChangedEvent of our grid: the frame looks at it again
 int pre_grid_dirty(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (argc >= 2 && !g_closing.load(std::memory_order_relaxed) && reinterpret_cast<uintptr_t>(argv[1]) == g_grid.obj && g_grid.obj) {
-        g_grid_event.store(true);
-        post(EV_STAGE_GRID);
-    }
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-}
-
-template <int Keys, int Step>
-int pre_cycle_key(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (argc < 3 || g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    const uintptr_t owner = g_grid.owner;
-    if (!owner || reinterpret_cast<uintptr_t>(argv[1]) != owner || g_grid.keys != Keys) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    const uint32_t flag = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(argv[2])) & 0xF;
-    if (flag & (kTrigger | kRepeat)) {
-        g_cycle_pending.fetch_add(Step);
         g_grid_event.store(true);
         post(EV_STAGE_GRID);
     }
@@ -1092,34 +1090,6 @@ void post_replay_desc(void**, REFrameworkTypeDefinitionHandle, unsigned long lon
 
 // ---- the frame: keys of the grid's screen, cycle, Training's reload, pictures and names ----
 
-// The pair of cycle keys the grid's screen leaves free (its input delegates' type and the agent's switched-off inputs)
-void learn_keys(Obj* grid) {
-    g_grid.keys_known = true;
-    Obj* owner = m_owner ? call_obj(m_owner, grid) : nullptr;
-    g_grid.owner = reinterpret_cast<uintptr_t>(owner);
-    if (!owner) { g_grid.keys = sl::kKeysNone; logf("stages: grid (%s): no agent found: no cycle keys", sl::menu_key(g_grid.menu)); return; }
-    Obj* dels = call_obj(owner, "get_InputDelegates");
-    bool child_taken = false, tab_taken = false;
-    for (TD* t = dels ? dels->get_type_definition() : nullptr; t; t = t->get_parent_type()) {
-        if (t->get_full_name() == "app.UIAgentInputDelegates") break;
-        for (auto* m : t->get_methods()) {
-            const char* n = m ? m->get_name() : nullptr;
-            if (!n) continue;
-            if (!strcmp(n, "EventChildTabBack") || !strcmp(n, "EventChildTabNext")) child_taken = true;
-            if (!strcmp(n, "EventTabBack") || !strcmp(n, "EventTabNext")) tab_taken = true;
-        }
-    }
-    auto r = call(owner, "get_DisableSystemInputFlags");
-    const uint32_t off = r.exception_thrown ? 0 : r.dword;
-    int k = sl::pick_keys(child_taken, (off & 32) != 0, tab_taken, (off & 16) != 0);
-    if (k == sl::kKeysChildTab && !(g_hooked[kChildBack] && g_hooked[kChildNext])) k = (!tab_taken && !(off & 16)) ? sl::kKeysTab : sl::kKeysNone;
-    if (k == sl::kKeysTab && !(g_hooked[kTabBack] && g_hooked[kTabNext])) k = sl::kKeysNone;
-    g_grid.keys = k;
-    logf("stages: grid (%s): cycle keys %s (screen delegates %s: child tabs %s, tabs %s; switched off 0x%X)", sl::menu_key(g_grid.menu),
-         sl::keys_name(k), dels ? dels->get_type_definition()->get_full_name().c_str() : "-", child_taken ? "used" : "free",
-         tab_taken ? "used" : "free", off);
-}
-
 // Training: a choice on the stage already loaded (Training Room -> a tile over it) is no change of stage for the game
 // (it compares the ids: read 05/11), so its stage is set again through the menu's own ChangeStage.
 void training_reload(const Decided& d) {
@@ -1146,7 +1116,8 @@ Obj* find_ctrl(Obj* root, const char* type, P pred, int depth = 0) {
     return nullptr;
 }
 bool is_stage_pic(const std::string& p) {
-    return p.find("area_image/ess/") != std::string::npos || p.find("_stageslots/") != std::string::npos;
+    return p.find("area_image/ess/") != std::string::npos || p.find("_stageslots/") != std::string::npos ||
+           p.find("tex_stageimage_") != std::string::npos || p.find("tex_stagethumb_") != std::string::npos;
 }
 int pic_kind(const std::string& p) {   // 1 image, 2 thumbnail, 0 not known
     if (p.find("tex_stagethumb") != std::string::npos || p.find("/thumb.tex") != std::string::npos) return 2;
@@ -1191,19 +1162,18 @@ bool grid_work() {
     bool ok = false;
     const bool shown = m_is_show && call_bool(grid, "IsShow", {}, &ok);
     if (ok && !shown) return false;                          // set up but not on screen yet
-    if (!g_grid.keys_known) learn_keys(grid);
     Obj* scroll = obj_field(grid, f_scroll);
     Ret rs = scroll ? call(m_sel_index, scroll) : Ret{};
     const int focus = scroll && !rs.exception_thrown ? static_cast<int32_t>(rs.dword) : -1;
     bool done = true;
 
-    // the cycle keys: the focused vanilla entry's variations
+    // the variation key: the focused vanilla entry's next variation (one press, one step, wrapping)
     const int step = g_cycle_pending.exchange(0);
     if (step && focus >= 0 && focus < static_cast<int>(g_grid.slots.size())) {
         const sl::Slot& s = g_grid.slots[static_cast<size_t>(focus)];
         const int n = static_cast<int>(variations_of(s.base).size());
         if (!s.tile && n > 0) {
-            g_grid.cycle[s.base] = sl::cycle(g_grid.cycle[s.base], n, step > 0 ? 1 : -1);
+            g_grid.cycle[s.base] = sl::cycle(g_grid.cycle[s.base], n, 1);
             logf("stages: grid (%s): stage %u shows variation %d of %d", sl::menu_key(g_grid.menu), s.base, g_grid.cycle[s.base], n);
         }
     }
@@ -1214,15 +1184,20 @@ bool grid_work() {
         const sl::Slot& s = g_grid.slots[static_cast<size_t>(focus)];
         Obj* ptex = get_obj(preview, "mTexThumbnail");
         Obj* ptext = get_obj(preview, "mTextStageName");
-        if (!g_grid.preview_pic && ptex) g_grid.preview_pic = pic_kind(shown_pic(ptex));
+        if (!g_grid.preview_pic && ptex) {
+            g_grid.preview_pic = pic_kind(shown_pic(ptex));
+            if (g_grid.preview_pic)
+                logf("stages: grid (%s): preview picture: %s", sl::menu_key(g_grid.menu), g_grid.preview_pic == 2 ? "thumbnails" : "4:1 images");
+            else done = false;                                 // its picture not loaded yet: looked at again
+        }
         const int cyc = s.tile ? 0 : g_grid.cycle[s.base];
         const Look l = look_of(s, cyc, g_grid.preview_pic == 2);
         if (g_grid.preview_pic) done = show_pic(ptex, l) && done;
         const int nvar = s.tile ? 0 : static_cast<int>(variations_of(s.base).size());
+        // one name line in the game's own text (its font and shadow): a tile's name, a variation's (stages_logic.hpp
+        // variation_label), the stage's own name back on its vanilla look
         std::string name = l.name;
-        if (!s.tile && nvar > 0)
-            name = sl::cycle_label(key_symbol_id(sl::key_left_id(g_grid.keys)), vanilla_name(s.base), l.v ? l.v->name : std::string(),
-                                   key_symbol_id(sl::key_right_id(g_grid.keys)));
+        if (!s.tile && nvar > 0) name = sl::variation_label(vanilla_name(s.base), l.v ? l.v->name : std::string(), l.v ? l.v->bundle : std::string());
         if (ptext && !name.empty() && (s.tile || nvar > 0)) set_text(ptext, name);
     }
 
@@ -1288,6 +1263,407 @@ bool grid_work() {
     return done;
 }
 
+// ---- the variation key (the game's binding of the pad's X button) --------------------------------------------------------
+// Read as the replay picker reads its keys (replay_tab.cpp): while the game window is in front, the keyboard key the game
+// binds to app.InputAssign.Digital.Id 341 (its symbol, at its QWERTY place: stages_logic.hpp qwerty_scan) or the X button
+// (via.hid.GamePadButton RLeft) of the merged pad. A press is the key going down.
+bool window_in_front() {
+    HWND w = GetForegroundWindow();
+    DWORD pid = 0;
+    if (w) GetWindowThreadProcessId(w, &pid);
+    return pid == GetCurrentProcessId();
+}
+bool scan_down(unsigned sc) {
+    const UINT vk = sc ? MapVirtualKeyW(sc, MAPVK_VSC_TO_VK) : 0;
+    return vk && (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0;
+}
+int guide_mode_now() {
+    int mode = kModeKeyboard;
+    auto* gm = api().get_managed_singleton("app.InputGuideManager");
+    if (Obj* modes = gm ? get_obj(gm, "_Modes") : nullptr) {
+        auto r = call(modes, "get_Item", { arg_i32(0) });
+        if (!r.exception_thrown && static_cast<int32_t>(r.dword) > 0) mode = static_cast<int32_t>(r.dword);
+    }
+    return mode;
+}
+std::string symbol_of(int id, int mode) {
+    auto k = std::make_pair(mode, id);
+    auto it = g_key_symbols.find(k);
+    if (it != g_key_symbols.end()) return it->second;
+    auto* gm = api().get_managed_singleton("app.InputGuideManager");
+    if (!gm) return {};
+    Method* m = method_of(gm->get_type_definition(), "GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)", 4);
+    return g_key_symbols[k] = str(call_obj(m, gm, { arg_i32(id), arg_i32(mode), arg_i32(0), arg_i32(0) }));
+}
+struct VarKey {
+    bool init = false;
+    Method* merged = nullptr;
+    Method* button = nullptr;
+    uint32_t pad_bit = 64;                // via.hid.GamePadButton.RLeft
+    unsigned sc = 0;                      // the keyboard key (scan code), 0 none
+    uint32_t sc_at = 0;
+    bool sc_known = false;
+} g_vk;
+bool variation_key_now() {
+    if (!g_vk.init) {
+        g_vk.init = true;
+        TD* pad = api().tdb()->find_type("via.hid.GamePad");
+        g_vk.merged = pad ? method_of(pad, "get_MergedDevice", 0) : nullptr;
+        if (TD* btn = api().tdb()->find_type("via.hid.GamePadButton"))
+            if (auto* f = btn->find_field("RLeft")) g_vk.pad_bit = static_cast<uint32_t>(f->get_data<int32_t>(nullptr));
+    }
+    if (!window_in_front()) return false;
+    if (!g_vk.sc_known || g_frame - g_vk.sc_at >= 120) {          // the binding can change while the game runs
+        g_vk.sc_at = g_frame;
+        const std::string sym = symbol_of(sl::kVariationKeyId, kModeKeyboard);
+        const unsigned sc = sl::qwerty_scan(sym);
+        if (!g_vk.sc_known || sc != g_vk.sc)
+            logf("stages: variation key: keyboard %s (scan code 0x%X), pad X (bit %u)", sym.empty() ? "-" : sym.c_str(), sc, g_vk.pad_bit);
+        g_vk.sc = sc;
+        g_vk.sc_known = true;
+    }
+    if (scan_down(g_vk.sc)) return true;
+    void* s = api().get_native_singleton("via.hid.GamePad");
+    Obj* dev = (s && g_vk.merged) ? call_obj(g_vk.merged, reinterpret_cast<Obj*>(s)) : nullptr;
+    if (!dev) return false;
+    if (!g_vk.button) g_vk.button = method_of(dev->get_type_definition(), "get_Button", 0);
+    const Ret r = call(g_vk.button, dev);
+    return !r.exception_thrown && (r.dword & g_vk.pad_bit) != 0;
+}
+
+// ---- the guide bar's hint "<key> Stage Variation" -------------------------------------------------------------------------
+// A copy of the bar's item template (e_text_0 of c_guideBtn: the element the game duplicates for each entry, so its font,
+// size, colour and icons), as fs_name.cpp's outfit name, placed after the bar's last entry, one entry's gap away. Never the
+// bar's own text (it has one writer: the game, or the Color Mod on Fighter Settings).
+//   - R19: the copy is made inside the guide list's own update (post-hook of app.UIPartsInputGuideList.OnLateUpdate, that
+//     list only), asked by the frame; at most one per bar (it lives and dies with the bar's tree); 3 refusals: no more.
+//   - R35: found again by name under its live parent each pass; every write through the core.
+//   - R31: the copy keeps the template's animation; its place and text are written again every pass (10 frames).
+// Shown while a stage grid has the focus on a stage with variations (here), or while the replay picker asks (replay_tab.cpp).
+const char* kHintName = "e_text_slots_stagehint";      // not "p_...": never taken for a UI part (R20)
+constexpr int kHintMaxRefused = 3;
+constexpr uint32_t kHintPass = 10;
+std::mutex g_hint_mx;
+struct HintReq { uintptr_t part = 0; uint32_t frame = 0; } g_hint_req;
+std::atomic<bool> g_hint_req_on{ false };
+std::atomic<int> g_hint_refused{ 0 }, g_hint_status{ 1000 };
+std::atomic<uintptr_t> g_hint_made_parent{ 0 };
+thread_local uintptr_t tl_hint_part = 0;
+bool g_hint_hook_tried = false, g_hint_hooked = false;
+struct HintBar { Obj* agent = nullptr; Obj* part = nullptr; Obj* btn = nullptr; Obj* parent = nullptr; } g_hbar;
+struct Hint {
+    bool shown = false;
+    std::string written;
+    uintptr_t styled = 0;
+    int cp = -1;
+    uint32_t bar_at = 0, pass_at = 0;
+    int status_log = 1000;
+    bool lost_logged = false;
+} g_hint;
+uint32_t g_hint_replay_at = 0;                          // the frame the replay picker last asked for it (0 never)
+
+// c_guideBtn's item template and its entries (texts e_text_0_g_* / e_text_0_d_*)
+Obj* bar_template(Obj* btn, std::vector<Obj*>* entries) {
+    Obj* tmpl = nullptr;
+    int n = 0;
+    for (Obj* c = btn ? call_obj(btn, "get_Child") : nullptr; c && n < 64; c = call_obj(c, "get_Next"), ++n) {
+        const std::string nm = str(call_obj(c, "get_Name"));
+        if (nm == "e_text_0") tmpl = c;
+        else if (entries && (nm.rfind("e_text_0_g_", 0) == 0 || nm.rfind("e_text_0_d_", 0) == 0)) entries->push_back(c);
+    }
+    return tmpl;
+}
+void hint_make_copy(uintptr_t part) {
+    {
+        std::lock_guard<std::mutex> lk(g_hint_mx);
+        if (!g_hint_req.part || g_hint_req.part != part || g_frame - g_hint_req.frame > 2) return;
+        g_hint_req = HintReq{};
+        g_hint_req_on.store(false, std::memory_order_release);
+    }
+    const SF6CoreAPI* a = slots::ui::core();
+    Obj* ctrl = get_obj(reinterpret_cast<Obj*>(part), "<Control>k__BackingField");
+    Obj* btn = ctrl ? reinterpret_cast<Obj*>(a->ui_find_child(ctrl, "c_guideBtn", 8)) : nullptr;
+    std::vector<Obj*> entries;
+    Obj* tmpl = bar_template(btn, &entries);
+    Obj* parent = btn ? call_obj(btn, "get_Parent") : nullptr;
+    if (!parent || !(tmpl || !entries.empty())) { ++g_hint_refused; g_hint_status.store(-3000, std::memory_order_release); return; }
+    if (a->ui_find_child(parent, kHintName, 0)) return;
+    void* c = nullptr;
+    const SF6CoreStatus st = a->ui_clone_control(slots::ui::client(), tmpl ? tmpl : entries.front(), parent, kHintName, &c);
+    g_hint_status.store(st == SF6CORE_OK && !c ? -1000 : static_cast<int>(st), std::memory_order_release);
+    if (st != SF6CORE_OK || !c) { ++g_hint_refused; return; }
+    g_hint_made_parent.store(reinterpret_cast<uintptr_t>(parent), std::memory_order_release);
+    SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 1;          // via.gui.MaskType.NonTarget: no mask of the new parent clips it
+    a->obj_invoke(slots::ui::client(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
+    a->ui_set_visible(slots::ui::client(), c, 0);                // placed and shown by the next frame
+}
+int pre_hint_late(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_hint_req_on.load(std::memory_order_acquire) && !g_closing.load(std::memory_order_relaxed))
+        tl_hint_part = reinterpret_cast<uintptr_t>(argv[1]);
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_hint_late(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const uintptr_t p = tl_hint_part;
+    tl_hint_part = 0;
+    if (!p || !g_hint_req_on.load(std::memory_order_acquire) || g_closing.load(std::memory_order_relaxed)) return;
+    try { hint_make_copy(p); } catch (...) { ++g_hint_refused; g_hint_status.store(-2000, std::memory_order_release); }
+}
+// The hook on the guide list's update runs every frame for every guide bar: put the first time a hint is wanted
+bool hint_hook() {
+    if (g_hint_hook_tried) return g_hint_hooked;
+    g_hint_hook_tried = true;
+    const SF6CoreAPI* a = slots::ui::core();
+    if (!a || !slots::ui::client() || !SF6CORE_HAS(a, ui_clone_control) || !SF6CORE_HAS(a, ui_agents)) {
+        logf("stages: the core has no ui_clone_control (0.8.2+): no Stage Variation hint in the guide bar");
+        return false;
+    }
+    auto* td = api().tdb()->find_type("app.UIPartsInputGuideList");
+    Method* m = td ? method_of(td, "OnLateUpdate", 0) : nullptr;
+    g_hint_hooked = m && m->get_function_raw() && m->add_hook(pre_hint_late, post_hint_late, false);
+    logf("stages: guide bar hint %s", g_hint_hooked ? "on (the copy is made in app.UIPartsInputGuideList.OnLateUpdate)"
+                                                    : "off (app.UIPartsInputGuideList.OnLateUpdate not hooked)");
+    return g_hint_hooked;
+}
+
+bool agent_visible(Obj* ag) {
+    Obj* cm = ag ? call_obj(ag, "get_ControlMain") : nullptr;
+    bool ok = false;
+    const bool v = cm && call_bool(cm, "get_ActualVisible", {}, &ok);
+    return ok && v;
+}
+// The visible bar with entries (as fs_name.cpp finds it)
+bool hint_find_bar(HintBar& b) {
+    b = HintBar{};
+    const SF6CoreAPI* a = slots::ui::core();
+    void* buf[4] = {};
+    const uint32_t n = a->ui_agents("InputGuide", buf, 4);
+    for (uint32_t i = 0; i < n && i < 4; ++i) {
+        Obj* ag = reinterpret_cast<Obj*>(buf[i]);
+        if (!agent_visible(ag)) continue;
+        Obj* lst = get_obj(get_obj(ag, "_PartsManager"), "_List");
+        for (int k = 0, cnt = list_count(lst); k < cnt; ++k) {
+            Obj* part = list_item(lst, k);
+            if (!part || type_name(part) != "app.UIPartsInputGuideList") continue;
+            Obj* ctrl = get_obj(part, "<Control>k__BackingField");
+            Obj* btn = ctrl ? reinterpret_cast<Obj*>(a->ui_find_child(ctrl, "c_guideBtn", 8)) : nullptr;
+            std::vector<Obj*> entries;
+            bar_template(btn, &entries);
+            if (entries.empty()) break;                         // this bar shows nothing: next agent
+            Obj* parent = call_obj(btn, "get_Parent");
+            if (!parent) break;
+            b = { ag, part, btn, parent };
+            return true;
+        }
+    }
+    return false;
+}
+bool hint_bar_live() {
+    if (!g_hbar.agent) return false;
+    void* buf[4] = {};
+    const uint32_t n = slots::ui::core()->ui_agents("InputGuide", buf, 4);
+    for (uint32_t i = 0; i < n && i < 4; ++i)
+        if (buf[i] == g_hbar.agent) return agent_visible(g_hbar.agent) && alive(g_hbar.parent) && alive(g_hbar.btn);
+    return false;
+}
+void* hint_copy() { return g_hbar.parent ? slots::ui::core()->ui_find_child(g_hbar.parent, kHintName, 0) : nullptr; }
+void hint_hide(const char* why) {
+    if (!g_hint.shown) return;
+    if (hint_bar_live())
+        if (void* c = hint_copy()) slots::ui::core()->ui_set_visible(slots::ui::client(), c, 0);
+    g_hint.shown = false;
+    logf("stages: guide bar hint hidden (%s)", why);
+}
+
+bool floats_of(Obj* o, const char* m, float* out, int n) {
+    const Ret r = call(o, m);
+    if (r.exception_thrown) return false;
+    std::memcpy(out, r.bytes.data(), sizeof(float) * static_cast<size_t>(n));
+    return true;
+}
+struct Geo { float x = 0, y = 0, z = 0, sx = 1, sy = 1; int cp = 0; };
+bool geo_of(Obj* o, Geo& g) {
+    float p[3], s[3];
+    if (!floats_of(o, "get_Position", p, 3)) return false;
+    g.x = p[0]; g.y = p[1]; g.z = p[2];
+    if (floats_of(o, "get_Scale", s, 3)) { g.sx = s[0]; g.sy = s[1]; }
+    const Ret r = call(o, "get_ControlPoint");
+    g.cp = r.exception_thrown ? 0 : static_cast<int>(r.dword);
+    if (g.cp < 0 || g.cp > 10 || g.cp % 4 > 2) g.cp = 0;
+    return true;
+}
+float drawn_width(Obj* o) {
+    float s[2] = {};
+    return floats_of(o, "get_DisplaySize", s, 2) && std::isfinite(s[0]) && s[0] > 0 ? s[0] : 0.0f;
+}
+double glyph_count(const std::string& s) {     // a tag such as <ICON KeyF> counted as two (its glyph and a space)
+    double n = 0;
+    bool tag = false;
+    for (unsigned char ch : s) {
+        if (ch == '<') { tag = true; n += 2; continue; }
+        if (tag) { if (ch == '>') tag = false; continue; }
+        if ((ch & 0xC0) != 0x80) n += 1;
+    }
+    return n;
+}
+
+// One pass: the copy asked for, or placed after the bar's last entry, written and shown
+void hint_pass(const std::string& text) {
+    const SF6CoreAPI* a = slots::ui::core();
+    SF6CoreClient* cl = slots::ui::client();
+    std::vector<Obj*> entries;
+    bar_template(g_hbar.btn, &entries);
+    void* c = hint_copy();
+    if (!c) {
+        g_hint.shown = false;
+        if (g_hint_refused.load() >= kHintMaxRefused) return;
+        if (g_hint_made_parent.load(std::memory_order_acquire) == reinterpret_cast<uintptr_t>(g_hbar.parent)) {
+            if (!g_hint.lost_logged) { g_hint.lost_logged = true; logf("stages: the hint's copy under this bar is not found by name: no other copy"); }
+            return;                                             // never a second copy under one parent
+        }
+        std::lock_guard<std::mutex> lk(g_hint_mx);
+        g_hint_req = { reinterpret_cast<uintptr_t>(g_hbar.part), g_frame };
+        if (!g_hint_req_on.exchange(true, std::memory_order_acq_rel)) logf("stages: guide bar hint: copy of the bar's item template asked");
+        return;
+    }
+    // the bar's entries in c_guideBtn's space: the right end of the last one, the gap the game leaves between two
+    Geo b;
+    if (!geo_of(g_hbar.btn, b)) { hint_hide("the bar's place unread"); return; }
+    struct Span { double l, r; Geo g; Obj* o; };
+    std::vector<Span> spans;
+    for (Obj* e : entries) {
+        bool ok = false;
+        if (!call_bool(e, "get_Visible", {}, &ok) || !ok) continue;
+        const std::string msg = str(call_obj(e, "get_Message"));
+        Geo g;
+        const float w = drawn_width(e);
+        if (msg.empty() || !(w > 0) || !geo_of(e, g)) continue;
+        const double l = g.x - (g.cp % 4) * 0.5 * w * g.sx;
+        spans.push_back({ l, l + w * g.sx, g, e });
+    }
+    if (spans.empty()) { hint_hide("the bar shows no entry"); return; }
+    std::sort(spans.begin(), spans.end(), [](const Span& p, const Span& q) { return p.l < q.l; });
+    // the key free on this screen? Its symbol among the bar's own entries means the screen uses it too (once per bar)
+    static uintptr_t s_checked = 0;
+    if (s_checked != reinterpret_cast<uintptr_t>(g_hbar.parent)) {
+        s_checked = reinterpret_cast<uintptr_t>(g_hbar.parent);
+        const std::string sym = text.substr(0, text.find(' '));
+        std::string all;
+        for (const Span& sp : spans) all += (all.empty() ? "" : " | ") + str(call_obj(sp.o, "get_Message"));
+        const bool used = !sym.empty() && all.find(sym) != std::string::npos;
+        logf("stages: guide bar entries '%s': %s", all.c_str(), used ? "they show the variation key too: WARNING, the screen may use it"
+                                                                      : "the variation key is not among them");
+    }
+    double gap = 0;
+    for (size_t i = 1; i < spans.size(); ++i) {
+        const double d = spans[i].l - spans[i - 1].r;
+        if (d > 0 && (gap <= 0 || d < gap)) gap = d;
+    }
+    const Span& last = spans.back();
+    if (gap <= 0) {                                          // one text holding every entry: six spaces (the bar's separator)
+        const double gl = glyph_count(str(call_obj(last.o, "get_Message")));
+        gap = gl > 0 ? (last.r - last.l) / gl * 6 : 40;
+    }
+    const float x = static_cast<float>(b.x + b.sx * (last.r + gap));
+    const float y = static_cast<float>(b.y + b.sy * last.g.y);
+    const int cp = (last.g.cp / 4) * 4;                      // the entry's row, its left point
+    if (reinterpret_cast<uintptr_t>(c) != g_hint.styled) {  // a new copy
+        g_hint.styled = reinterpret_cast<uintptr_t>(c);
+        g_hint.written.clear();
+        g_hint.cp = -1;
+    }
+    if (cp != g_hint.cp) {
+        SF6CoreArg pc{}; pc.type = SF6CORE_ARG_I64; pc.v.i = cp;
+        if (a->obj_invoke(cl, c, "set_ControlPoint(via.gui.ControlPoint)", &pc, 1, nullptr) == SF6CORE_OK) g_hint.cp = cp;
+    }
+    if (text != g_hint.written && a->ui_set_text(cl, c, text.c_str()) == SF6CORE_OK) g_hint.written = text;
+    a->ui_set_scale(cl, c, b.sx * last.g.sx, b.sy * last.g.sy, 1.0f);
+    a->ui_set_position(cl, c, x, y, last.g.z);
+    a->ui_set_force_invisible(cl, c, 0);                    // the template's lock, copied with it
+    a->ui_set_visible(cl, c, 1);
+    if (!g_hint.shown) { g_hint.shown = true; logf("stages: guide bar hint shown '%s' (after the bar's %zu entries, x %.0f)", text.c_str(), spans.size(), x); }
+}
+
+// Every frame the hint may be wanted: shown with `text`, or hidden
+void hint_frame(bool want, const std::string& text, const char* why_not) {
+    const int st = g_hint_status.load(std::memory_order_acquire);
+    if (st != g_hint.status_log) {
+        g_hint.status_log = st;
+        logf("stages: guide bar hint copy %s (status %d)", st == SF6CORE_OK ? "made" : "not made", st);
+    }
+    if (!want) { hint_hide(why_not); return; }
+    if (!hint_hook()) return;
+    if (!hint_bar_live() || g_frame - g_hint.bar_at > 60) {
+        g_hint.bar_at = g_frame;
+        HintBar nb;
+        const bool ok = hint_find_bar(nb);
+        if (!ok || nb.parent != g_hbar.parent) { hint_hide("the guide bar changed"); g_hint.pass_at = 0; g_hint.lost_logged = false; }
+        if (!ok) return;
+        g_hbar = nb;
+    }
+    if (g_hint.pass_at && g_frame - g_hint.pass_at < kHintPass && text == g_hint.written && g_hint.shown) return;
+    g_hint.pass_at = g_frame;
+    hint_pass(text);
+}
+
+// ---- every frame a grid lives: on screen, focus, the variation key, the hint ----
+// The grid has the focus when its agent's focused item is the grid or under it (no answer: shown is all we know)
+bool grid_has_focus(Obj* grid, Obj* scroll) {
+    Obj* owner = m_owner ? call_obj(m_owner, grid) : nullptr;
+    Obj* f = owner ? call_obj(owner, "GetFocusItem") : nullptr;
+    if (!f) return true;
+    for (int d = 0; f && d < 8; ++d) {
+        if (f == grid || f == scroll) return true;
+        f = call_obj(f, "get_Parent");
+    }
+    return false;
+}
+uintptr_t g_grid_seen = 0;                                   // the grid the frame last looked at (a new one: symbols again)
+bool g_key_was = false;
+void grid_frame() {
+    bool on = false, focus = false, tile = false;
+    int nvar = 0;
+    {                                                        // the grid, under the lock
+        std::lock_guard<std::recursive_mutex> lk(g_mx);
+        Obj* grid = grid_alive(g_grid.obj);
+        if (grid && !g_grid.slots.empty()) {
+            if (g_grid.obj != g_grid_seen) { g_grid_seen = g_grid.obj; g_key_symbols.clear(); }
+            const Ret rv = m_is_show ? call(m_is_show, grid) : Ret{};
+            on = !m_is_show || rv.exception_thrown || rv.byte != 0;
+            if (on) {
+                Obj* scroll = obj_field(grid, f_scroll);
+                focus = grid_has_focus(grid, scroll);
+                const Ret rs = scroll ? call(m_sel_index, scroll) : Ret{};
+                const int sel = scroll && !rs.exception_thrown ? static_cast<int32_t>(rs.dword) : -1;
+                if (sel >= 0 && sel < static_cast<int>(g_grid.slots.size())) {
+                    const sl::Slot& s = g_grid.slots[static_cast<size_t>(sel)];
+                    tile = s.tile;
+                    nvar = s.tile ? 0 : static_cast<int>(variations_of(s.base).size());
+                }
+            }
+        }
+        g_grid.on_screen = on;
+        if (on && (focus ? 1 : 0) != g_grid.focus_log) {
+            g_grid.focus_log = focus ? 1 : 0;
+            logf("stages: grid (%s): its cells %s the focus", sl::menu_key(g_grid.menu), focus ? "have" : "do not have");
+        }
+        g_grid.focused = on && focus;
+    }
+    // the key: one step per press, on a stage with variations
+    const bool down = g_grid.focused && variation_key_now();
+    if (down && !g_key_was && !tile && nvar > 0) {
+        g_cycle_pending.fetch_add(1);
+        open_grid_window();
+    }
+    g_key_was = down;
+    // the hint: the grid's, else the replay picker's
+    const bool replay_asks = g_hint_replay_at && g_frame - g_hint_replay_at <= 1;
+    const std::string sym = (g_grid.focused || replay_asks) ? symbol_of(sl::kVariationKeyId, guide_mode_now()) : std::string();
+    const bool grid_want = sl::variation_hint(g_grid.focused, tile, nvar, !sym.empty());
+    const bool replay_want = replay_asks && !sym.empty();
+    const char* why = !on ? "no stage grid on screen" : !g_grid.focused ? "the grid has not the focus" : tile ? "a tile" : "no variation";
+    hint_frame(grid_want || replay_want, sl::variation_hint_text(sym), why);
+}
+
 void grid_tick(uint32_t ev) {
     if ((ev & EV_STAGE_GRID) || g_grid_event.exchange(false)) {
         std::lock_guard<std::recursive_mutex> lk(g_mx);
@@ -1311,6 +1687,7 @@ void grid_tick(uint32_t ev) {
         logf("stages: grid (%s): stage %u -> %s", sl::menu_key(d.menu), d.base, d.key.empty() ? "vanilla look" : d.key.c_str());
         if (d.menu == sl::kTraining) training_reload(d);
     }
+    grid_frame();
     if (!g_grid.until) return;
     if (g_frame >= g_grid.until || g_frame >= g_grid.cap) { g_grid.until = 0; return; }
     if (g_frame < g_grid.next) return;
@@ -1323,7 +1700,6 @@ void start_grid_check() {
     auto* tdb = api().tdb();
     t_simple = tdb->find_type("app.UIPartsStageSelectSimple");
     TD* t_gui = tdb->find_type("app.helper.hGUI");
-    TD* t_agent = tdb->find_type("app.UIAgent");
     TD* t_scroll = tdb->find_type("app.UIPartsScrollGrid");
     TD* t_list = tdb->find_type("System.Collections.Generic.List`1<System.UInt32>");
     TD* t_item = tdb->find_type("via.gui.SelectItem");
@@ -1362,10 +1738,6 @@ void start_grid_check() {
     add(t_simple, "Decide", 0, "app.UIPartsStageSelectSimple.Decide()", grid_ok);
     add(t_simple, "UpdateList", 0, "app.UIPartsStageSelectSimple.UpdateList()", grid_ok);
     add(t_simple, "SelectionChangedEvent", 0, "app.UIPartsStageSelectSimple.SelectionChangedEvent()", grid_ok);
-    add(t_agent, "InputChildTabBack", 1, "app.UIAgent.InputChildTabBack(InputDigitalFlag)", grid_ok);
-    add(t_agent, "InputChildTabNext", 1, "app.UIAgent.InputChildTabNext(InputDigitalFlag)", grid_ok);
-    add(t_agent, "InputTabBack", 1, "app.UIAgent.InputTabBack(InputDigitalFlag)", grid_ok);
-    add(t_agent, "InputTabNext", 1, "app.UIAgent.InputTabNext(InputDigitalFlag)", grid_ok);
     add(t_session, "SetupBattleDesc", 2, "app.network.FGBattleSession.SetupBattleDesc(BattleDesc,Boolean)", true);
     add(t_training, "SetStage", 1, "app.training.TrainingManager.SetStage(StageDesc)", true);
     add(t_replay, "setupDesc", 0, "app.battle.ReplayFlowMap.setupDesc()", f_map_desc && f_desc_stage && f_stage_id);
@@ -1382,13 +1754,9 @@ void install_grid_hooks() {
         { kSetupList, pre_setup_list, post_setup_list },
         { kGetList, nullptr, post_get_list },
         { kConvert, pre_convert, post_convert },
-        { kDecide, pre_decide, nullptr },
+        { kDecide, pre_decide, post_decide },
         { kUpdateList, pre_grid_dirty, nullptr },
         { kSelChanged, pre_grid_dirty, nullptr },
-        { kChildBack, pre_cycle_key<sl::kKeysChildTab, -1>, nullptr },
-        { kChildNext, pre_cycle_key<sl::kKeysChildTab, 1>, nullptr },
-        { kTabBack, pre_cycle_key<sl::kKeysTab, -1>, nullptr },
-        { kTabNext, pre_cycle_key<sl::kKeysTab, 1>, nullptr },
         { kBattleDesc, nullptr, post_battle_desc },
         { kTrainStage, pre_training_stage, nullptr },
         { kReplayDesc, pre_replay_desc, post_replay_desc },
@@ -1398,7 +1766,7 @@ void install_grid_hooks() {
     for (auto& h : hooks) {
         const auto& e = g_check.entry(h.id);
         Method* m = g_check.method(h.id);
-        const bool grid_part = h.id <= kTabNext;
+        const bool grid_part = h.id <= kSelChanged;
         if (!m) { logf("hook %s: not found (game update?)", e.label.c_str()); continue; }
         if (!g_check.unique(h.id)) {
             logf("hook %s: REFUSED (R18): %d other method(s) enter its code, e.g. %s", e.label.c_str(), e.shared, g_check.other_label(h.id).c_str());
@@ -1441,6 +1809,7 @@ std::vector<Entry> entries() {
         e.key = v ? v->key : std::string();
         const std::string& vn = vanilla_name(base);
         e.name = v ? v->name : (vn.empty() ? ess_of(base) : vn);
+        e.bundle = v ? v->bundle : std::string();
         e.has_own_picture = v && (!v->preview.empty() || !v->thumb.empty());
         e.banner = v && !v->preview.empty() ? v->preview : vanilla_pic(base, false);
         e.thumb = v && !v->thumb.empty() ? v->thumb : vanilla_pic(base, true);
@@ -1483,6 +1852,15 @@ void choose_replay_stage(int32_t base_id) {
 }
 int32_t replay_stage() { return g_replay_stage.load(); }
 
+bool variation_key_down() { return g_variant_count && variation_key_now(); }
+
+void replay_variation_hint() {
+    if (!g_variant_count) return;
+    const bool asked = g_hint_replay_at && g_frame - g_hint_replay_at <= 2;
+    g_hint_replay_at = g_frame;
+    if (!asked) post(EV_STAGE_GRID);                     // the stages' frame runs while it is asked (busy)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Module entry points
 // ---------------------------------------------------------------------------------------------
@@ -1521,6 +1899,7 @@ void install_hooks() {
 bool busy() {
     if (!g_variant_count) return false;
     if ((g_check_started && !g_hooks_done) || g_grid.until != 0 || g_decided.pending || g_cycle_pending.load() != 0) return true;
+    if (g_grid.on_screen || g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2)) return true;   // the key, the hint
     return (g_scr.active && (g_scr.need || g_scr.settle > 0 || g_strip.until != 0)) || g_vs.until != 0 || g_scr.check_until != 0;
 }
 
