@@ -90,6 +90,13 @@ public:
     // Slotsloader fork (1.9.9), MIT.
     void forget(uint64_t hash) { entries_.erase(hash); }
 
+    // Entries a replacement mod manager turned off (zeros over the hash) that can have held this hash,
+    // in this pak then the added ones. The game's tables are sorted by hash and a turned-off entry
+    // keeps its row, so only those between the two entries around the hash can. Empty when the
+    // table is not sorted, or when this pak has the hash. read() reads them like any other entry.
+    // From ZZtaii's Slotsloader fork (1.10.6), MIT.
+    std::vector<const PakEntry*> turned_off_candidates(uint64_t hash) const;
+
     // Returns the raw (possibly compressed) blob.
     std::vector<uint8_t> read_raw(const PakEntry& e);
 
@@ -103,6 +110,9 @@ private:
     FILE*    fp_ = nullptr;
     EntryMap entries_;
     std::vector<PakReader*> over_;
+    // A turned-off entry and the hashes of the entries around it (0 / UINT64_MAX at the table's ends)
+    struct TurnedOff { uint64_t after, before; PakEntry e; };
+    std::vector<TurnedOff> turned_off_;
 
     PakReader* owner_of(const PakEntry& e);
 };

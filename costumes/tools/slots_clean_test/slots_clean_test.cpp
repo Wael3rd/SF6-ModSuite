@@ -94,6 +94,7 @@ static Game make_game(const char* name, const std::vector<std::string>& listed) 
     put(g.root + "\\reframework\\data\\SF6_Costumes_Data\\loader\\vanilla_costume_index.tsv", "shipped");
     put(g.root + "\\reframework\\data\\SF6_Costumes_Data\\registry.json", "{}");
     put(g.root + "\\reframework\\data\\SF6_Costumes_Data\\outfits.json", "{}");
+    put(g.root + "\\reframework\\data\\SF6_Costumes_Data\\loose_probes.tsv", "none\tnatives/stm/product/model/1.tex.241101895\n");
     put(g.root + "\\reframework\\data\\SF6_Costumes_Data\\fluffy_location.txt", g.fluffy);
     put(g.root + "\\reframework\\data\\SF6_StageSlots_Data\\loader\\stage_paths.txt", "shipped");
     put(g.root + "\\reframework\\data\\SF6_StageSlots_Data\\loader\\variants.tsv", "#fingerprint\tx\n");
@@ -120,6 +121,7 @@ static bool has(const std::string& s, const char* t) { return s.find(t) != std::
 
 static const char* STATE[] = {
     "\\reframework\\data\\SF6_Costumes_Data\\registry.json", "\\reframework\\data\\SF6_Costumes_Data\\outfits.json",
+    "\\reframework\\data\\SF6_Costumes_Data\\loose_probes.tsv",
     "\\reframework\\data\\SF6_StageSlots_Data\\registry.json", "\\reframework\\data\\SF6_StageSlots_Data\\loader\\variants.tsv",
 };
 static const char* KEPT[] = {
@@ -283,10 +285,11 @@ static std::string row_of(const std::string& game, bool* unbroken) {
 
 static std::string g_build, g_row_game, g_base_pak;
 
-static void run_loader(const char* which) {   // "costume" or "stage"
+static void run_loader(const char* which, const std::string& build = {}) {   // "costume" or "stage"
+    const std::string& b = build.empty() ? g_build : build;
     std::string cmd = std::string(which) == "costume"
-        ? "\"" + g_build + "\\costume_loader.exe\" \"" + g_row_game + "\" --base-pak \"" + g_base_pak + "\""
-        : "\"" + g_build + "\\stagetest.exe\" \"" + g_row_game + "\"";
+        ? "\"" + b + "\\costume_loader.exe\" \"" + g_row_game + "\" --base-pak \"" + g_base_pak + "\""
+        : "\"" + b + "\\stagetest.exe\" \"" + g_row_game + "\"";
     system(("cmd /c \"" + cmd + " > \"" + g_work + "\\row_" + which + ".txt\" 2>&1\"").c_str());
 }
 
@@ -305,7 +308,112 @@ static void expect_said(const char* which, const char* text, bool want = true) {
     check(got == want, text);
 }
 
-static int run_row_test(const char* build, const char* work, const char* game, const char* mod_archive) {
+// ---------------------------------------------------------------------------------------------
+// Fixtures made of the game's own files (read from the base pak given, never written), for the fixes ported from
+// ZZtaii's Slotsloader fork 1.10.5 - 1.10.9 (MIT); his tests/*.py describe the same cases on a synthetic game.
+// ---------------------------------------------------------------------------------------------
+
+static PakReader g_game_pak;   // the game's re_chunk_000.pak, read only
+
+static std::vector<uint8_t> game_bytes(const std::string& p) {
+    auto* e = g_game_pak.find(pak_path_hash(std::string_view(p)));
+    return e ? g_game_pak.read(*e) : std::vector<uint8_t>{};
+}
+
+static void put_bin(const std::string& path, const std::vector<uint8_t>& d) {
+    make_dirs(path);
+    FILE* f = fopen(path.c_str(), "wb");
+    if (f) { if (!d.empty()) fwrite(d.data(), 1, d.size(), f); fclose(f); }
+}
+
+static std::vector<uint8_t> bytes_of(const std::string& s) { return std::vector<uint8_t>(s.begin(), s.end()); }
+
+static std::string lower(std::string s) { for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
+
+// Printable UTF-16LE strings of a resource, '@' and spaces in front taken off
+static std::vector<std::string> u16_strings(const std::vector<uint8_t>& d) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i + 1 < d.size(); i += 2) {
+        std::string s;
+        size_t j = i;
+        while (j + 1 < d.size() && d[j + 1] == 0 && d[j] >= 0x20 && d[j] < 0x7f) { s += (char)d[j]; j += 2; }
+        if (s.size() >= 4) {
+            const size_t a = s.find_first_not_of("@ ");
+            if (a != std::string::npos) out.push_back(s.substr(a));
+        }
+        i = j;
+    }
+    return out;
+}
+
+// Every occurrence of `from` in d (UTF-16LE) replaced by `to` (same length)
+static void u16_replace(std::vector<uint8_t>& d, const std::string& from, const std::string& to) {
+    std::vector<uint8_t> f, t;
+    for (char c : from) { f.push_back((uint8_t)c); f.push_back(0); }
+    for (char c : to) { t.push_back((uint8_t)c); t.push_back(0); }
+    for (size_t i = 0; i + f.size() <= d.size(); i += 2)
+        if (memcmp(d.data() + i, f.data(), f.size()) == 0) memcpy(d.data() + i, t.data(), t.size());
+}
+
+// The costume pak in the row (the real one, not a placeholder)
+static std::string costume_pak_path() {
+    for (int n = 1; n < 100; n++) {
+        const std::string p = g_row_game + "\\" + pak_name(n);
+        uint32_t e = 0;
+        if (exists(p) && classify_patch_pak(p.c_str(), &e) == PatchPakKind::Costume && e > 1) return p;
+    }
+    return {};
+}
+
+// A file of our costume pak, or empty (absent: *found false)
+static std::vector<uint8_t> costume_file(const std::string& p, bool* found = nullptr) {
+    PakReader r;
+    if (found) *found = false;
+    if (!r.open(costume_pak_path().c_str())) return {};
+    auto* e = r.find(pak_path_hash(std::string_view(lower(p))));
+    if (!e) return {};
+    if (found) *found = true;
+    return r.read(*e);
+}
+
+// The slot the last costume run made for the given model folder ("esf001/001"): its folder and number, from the
+// log line "  slot: esf001/v06 -> folder 006, ..." of the outfit made from that folder (the fixture's)
+struct FixtureSlot { std::string folder, scene; };
+static FixtureSlot fixture_slot(const std::string& fd) {
+    FixtureSlot s;
+    const std::string out = slurp(g_work + "\\row_costume.txt");
+    const std::string key = "  slot: " + fd + "/v";
+    for (size_t at = out.find(key); at != std::string::npos; at = out.find(key, at + 1)) {
+        const std::string v = out.substr(at + key.size(), 2);
+        const size_t f = out.find("-> folder ", at);
+        if (f == std::string::npos) break;
+        s.folder = out.substr(f + 10, 3);
+        s.scene = "natives/stm/product/charparam/esf/" + fd + "/" + fd + "v" + v + ".scn.20";
+    }
+    return s;
+}
+
+// The game files the loader names in its log are read: SF6_COSTUME_TEST_TURNED_OFF lists those that read as
+// turned off (PakReader::forget)
+static void turned_off(const std::vector<std::string>& paths) {
+    const std::string off = g_work + "\\turned_off.txt";
+    std::string text;
+    for (auto& p : paths) text += p + "\n";
+    put(off, text);
+    SetEnvironmentVariableA("SF6_COSTUME_TEST_TURNED_OFF", paths.empty() ? nullptr : off.c_str());
+}
+
+// A pak with rows in the given order (hash, data): a turned-off row has hash 0, as a mod manager's PAK method
+// leaves it (the row and its data stay, zeros over the hash)
+static void write_rows(const std::string& path, const std::vector<std::pair<uint64_t, std::vector<uint8_t>>>& rows) {
+    make_dirs(path);
+    PakWriter w;
+    for (auto& [h, d] : rows) w.add_uncompressed(h, d);
+    w.write(path.c_str());
+}
+
+static int run_row_test(const char* build, const char* work, const char* game, const char* mod_archive,
+                        const char* previous) {
     g_build = build; g_work = work; g_base_pak = std::string(game) + "\\re_chunk_000.pak";
     g_row_game = g_work + "\\row\\game";
     copy_tree(std::string(game) + "\\reframework\\data\\SF6_Costumes_Data\\loader", g_row_game + "\\reframework\\data\\SF6_Costumes_Data\\loader");
@@ -452,15 +560,342 @@ static int run_row_test(const char* build, const char* work, const char* game, c
     expect_said("costume", "structural files built from the game");
     expect_said("costume", "no fighter scene", false);
 
+    const std::string data_dir = g_row_game + "\\reframework\\data\\SF6_Costumes_Data";
+    const std::string probes = data_dir + "\\loose_probes.tsv";
+    auto win = [](std::string p) { for (auto& c : p) if (c == '/') c = '\\'; return p; };
+    auto remove_tree = [](const std::string& dir) { system(("cmd /c rmdir /s /q \"" + dir + "\" 2>nul").c_str()); };
+    auto is_ref = [](const std::string& l, const char* ext) {
+        const size_t n = strlen(ext);
+        return l.size() > n && l.compare(l.size() - n, n, ext) == 0;
+    };
+
+    printf("[16] turned-off rows (zeros over the hash): the candidates of a hash are the rows between its neighbours\n");
+    {
+        const std::string r1p = g_work + "\\rows\\sorted.pak", r2p = g_work + "\\rows\\unsorted.pak";
+        const std::string r3p = g_work + "\\rows\\two.pak", r4p = g_work + "\\rows\\under.pak";
+        const uint64_t a = 0x1000, b = 0x2000, c = 0x3000;
+        write_rows(r1p, {{a, bytes_of("A")}, {0, bytes_of("turned off")}, {c, bytes_of("C")}});
+        write_rows(r2p, {{c, bytes_of("C")}, {0, bytes_of("turned off")}, {a, bytes_of("A")}});
+        write_rows(r3p, {{a, bytes_of("A")}, {0, bytes_of("one")}, {0, bytes_of("two")}, {c, bytes_of("C")}});
+        write_rows(r4p, {{a, bytes_of("A")}});
+        PakReader r1, r2, r3, r4;
+        check(r1.open(r1p.c_str()) && r2.open(r2p.c_str()) && r3.open(r3p.c_str()) && r4.open(r4p.c_str()), "row paks read");
+        auto c1 = r1.turned_off_candidates(b);
+        check(c1.size() == 1 && r1.read(*c1[0]) == bytes_of("turned off"), "a hash between the rows around it: that row, read");
+        check(r1.turned_off_candidates(a - 1).empty() && r1.turned_off_candidates(c + 1).empty(), "a hash outside that gap: none");
+        check(r1.turned_off_candidates(a).empty(), "a hash the pak has: none");
+        check(r2.turned_off_candidates(b).empty(), "a table not sorted: none");
+        check(r3.turned_off_candidates(b).size() == 2, "two turned-off rows in the gap: both");
+        r4.add_overlay(&r1);
+        auto c4 = r4.turned_off_candidates(b);
+        check(c4.size() == 1 && r4.read(*c4[0]) == bytes_of("turned off"), "a turned-off row of a pak read over it: read through the pak");
+    }
+
+    printf("[17] an extra outfit whose mod ships its own colour list (fork 1.10.6); mod-only files at a shared path and at model/ (fork 1.10.9)\n");
+    check(g_game_pak.open(g_base_pak.c_str()), "the game's pak read");
+    const std::string mroot = g_row_game + "\\reframework\\costume_mods\\Ryu\\ZZ Colour Fixture\\";
+    auto mod_file = [&](const std::string& p, const std::vector<uint8_t>& d) { put_bin(mroot + win(p), d); };
+    const std::string c1_scene = "natives/stm/product/charparam/esf/esf001/esf001v00.scn.20";
+    const std::string c2_scene = "natives/stm/product/charparam/esf/esf001/esf001v01.scn.20";
+    // The body mesh and material file a scene names in a model folder ("esf001/001/01/")
+    auto body_of = [&](const std::vector<uint8_t>& scene, const std::string& part, std::string& mesh_p, std::string& mdf_p) {
+        for (auto& s : u16_strings(scene)) {
+            const std::string l = lower(s);
+            if (l.find("product/model/esf/" + part) != 0) continue;
+            if (mesh_p.empty() && is_ref(l, ".mesh")) mesh_p = "natives/stm/" + l + ".230110883";
+            if (mdf_p.empty() && is_ref(l, ".mdf2")) mdf_p = "natives/stm/" + l + ".31";
+        }
+    };
+    const auto scene0 = game_bytes(c1_scene);
+    std::string mesh_p, mdf_p;
+    body_of(scene0, "esf001/001/01/", mesh_p, mdf_p);
+    auto mesh = game_bytes(mesh_p);
+    const auto mdf = game_bytes(mdf_p);
+    check(!scene0.empty() && !mesh.empty() && !mdf.empty(), "Ryu's Outfit 1 scene, body mesh and material file read from the game");
+    if (!mesh.empty()) mesh.back() ^= 0x5A;   // not the game's own mesh
+    const std::string list_p = "natives/stm/product/model/esf/esf001/001/esf001_001_ccvd.user.2";
+    const auto list0 = game_bytes(list_p);
+    std::vector<std::string> cmd_names;   // the colours the game's list names: "esf001_001_cmd_000.user"
+    for (auto& s : u16_strings(list0)) {
+        const std::string l = lower(s);
+        if (l.find("_cmd_") != std::string::npos && is_ref(l, ".user")) cmd_names.push_back(l.substr(l.rfind('/') + 1));
+    }
+    // The mod's colours: Outfit 2's under Outfit 1's names (other bytes, same layout); the second one with
+    // MaterialData's signature of before the game update that changed it (0x4D532A61)
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> mod_cmds;
+    for (size_t k = 0; k < cmd_names.size() && mod_cmds.size() < 2; k++) {
+        std::string c2 = cmd_names[k];
+        c2.replace(0, 11, "esf001_002_");
+        auto d = game_bytes("natives/stm/product/model/esf/esf001/002/" + c2 + ".2");
+        if (!d.empty() && d != game_bytes("natives/stm/product/model/esf/esf001/001/" + cmd_names[k] + ".2"))
+            mod_cmds.push_back({cmd_names[k], d});
+    }
+    check(!list0.empty() && mod_cmds.size() == 2, "the outfit's colour list and two colours of Outfit 2 read from the game");
+    bool stale = false;
+    if (mod_cmds.size() == 2) {
+        auto& d = mod_cmds[1].second;
+        const uint8_t type[4] = {0xF4, 0xF1, 0x32, 0x9E};
+        uint8_t now[4] = {};
+        for (size_t i = 0; i + 8 <= d.size() && !stale; i++)
+            if (memcmp(d.data() + i, type, 4) == 0) { memcpy(now, d.data() + i + 4, 4); stale = true; }
+        const uint8_t old[4] = {0x61, 0x2A, 0x53, 0x4D};
+        if (stale && memcmp(now, old, 4) != 0) {
+            for (size_t i = 0; i + 8 <= d.size(); i++)
+                if (memcmp(d.data() + i, type, 4) == 0 && memcmp(d.data() + i + 4, now, 4) == 0) memcpy(d.data() + i + 4, old, 4);
+        } else stale = false;
+    }
+    check(stale, "a colour file of the mod given the old MaterialData signature");
+    const std::string dep = "natives/stm/product/model/esf/esf001/002/01/zz_slotsloader_shared.tex.241101895";
+    const std::string rootdep = "natives/stm/product/model/zz_slotsloader_root.tex.241101895";
+    const auto dep_mod = bytes_of("SF6 Slots Loader test: a mod-only file at a shared path (the outfit's copy)");
+    const auto root_mod = bytes_of("SF6 Slots Loader test: a mod-only file in product/model/ (the outfit's copy)");
+    mod_file(mesh_p, mesh);
+    mod_file(mdf_p, mdf);
+    mod_file(list_p, list0);
+    for (auto& [n, d] : mod_cmds) mod_file("natives/stm/product/model/esf/esf001/001/" + n + ".2", d);
+    mod_file(dep, dep_mod);
+    mod_file(rootdep, root_mod);
+    run_loader("costume");  expect_row("fixture added, costume run", "1M 2S 3C");
+    expect_said("costume", "slots checked, 0 left out");
+    FixtureSlot slot = fixture_slot("esf001");
+    check(!slot.folder.empty(), "the fixture outfit has a slot");
+    std::string sdir = "esf001/" + slot.folder + "/";
+    {
+        bool found = false;
+        const auto scene = costume_file(slot.scene, &found);
+        std::string list_ref;
+        int lists = 0, own = 0;
+        for (auto& s : u16_strings(scene)) {
+            const std::string l = lower(s);
+            if (l.find("ccvd.user") == std::string::npos) continue;
+            lists++;
+            if (l.find("/" + sdir + "esf001_001_ccvd.user") != std::string::npos) { own++; list_ref = l; }
+        }
+        check(found && lists > 0 && own == lists, "the slot's scene names the colour list pointed at the slot's colours");
+        const auto list = costume_file("natives/stm/" + list_ref + ".2", &found);
+        int cmds = 0, in_slot = 0;
+        for (auto& s : u16_strings(list)) {
+            const std::string l = lower(s);
+            if (l.find("_cmd_") == std::string::npos) continue;
+            cmds++;
+            if (l.find("/" + sdir) != std::string::npos) in_slot++;
+        }
+        check(found && cmds > 0 && in_slot == cmds, "that list names the slot's colours");
+        if (!mod_cmds.empty())
+            check(costume_file("natives/stm/product/model/esf/" + sdir + mod_cmds[0].first + ".2") == mod_cmds[0].second,
+                  "the slot's colour holds the mod's bytes");
+    }
+    expect_said("costume", "mod files brought to the current type signatures");
+    expect_said("costume", "  colour files: the game's", false);
+    check(costume_file(dep) == dep_mod, "no loose file: the shared mod-only file is the outfit's copy in the pak");
+    check(costume_file(rootdep) == root_mod, "no loose file: the model/ mod-only file is the outfit's copy in the pak");
+    check(has(slurp(probes), ("none\t" + rootdep + "\n").c_str()), "the model/ file is watched (none)");
+    check(!has(slurp(probes), dep.c_str()), "the shared file is not (the fingerprint walks model/esf)");
+    check(has(slurp(data_dir + "\\outfits.json"), "\"loader\": \"") && has(slurp(data_dir + "\\outfits.json"), "\",\n  \"loose_files_kept\": true,\n  \"pak\": "),
+          "outfits.json says loose_files_kept, after loader");
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+
+    printf("[18] a replacement puts a loose file at those paths, changes it, removes it (fork 1.10.9)\n");
+    const std::string loose_dep = g_row_game + "\\" + win(dep), loose_root = g_row_game + "\\" + win(rootdep);
+    bool in_pak = false;
+    put(loose_dep, "LOOSE REPLACEMENT, FIRST");
+    run_loader("costume");  expect_row("loose file at the shared path", "1M 2S 3C");
+    expect_said("costume", "Up to date (fingerprint match", false);
+    expect_said("costume", ("mod-only dependency left to the game folder's loose file: " + dep).c_str());
+    costume_file(dep, &in_pak);
+    check(!in_pak, "the shared path is left to the loose file");
+    check(costume_file(rootdep) == root_mod, "the model/ file is still the outfit's");
+    expect_said("costume", "slots checked, 0 left out");
+    check(slurp(loose_dep) == "LOOSE REPLACEMENT, FIRST", "the loose file is not touched");
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+    put(loose_dep, "LOOSE REPLACEMENT, SECOND VERSION");
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match", false);
+    costume_file(dep, &in_pak);
+    check(!in_pak, "replacement changed: still left to it");
+    DeleteFileA(loose_dep.c_str());
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match", false);
+    check(costume_file(dep) == dep_mod, "replacement removed: the outfit's copy is back");
+    put(loose_root, "LOOSE REPLACEMENT AT MODEL/");
+    run_loader("costume");  expect_row("loose file at the model/ path", "1M 2S 3C");
+    expect_said("costume", "Up to date (fingerprint match", false);
+    expect_said("costume", ("mod-only dependency left to the game folder's loose file: " + rootdep).c_str());
+    costume_file(rootdep, &in_pak);
+    check(!in_pak, "the model/ path is left to the loose file");
+    check(has(slurp(probes), ("loose:" + std::to_string(slurp(loose_root).size()) + ":").c_str()), "its probe says loose");
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+    DeleteFileA(loose_root.c_str());
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match", false);
+    check(costume_file(rootdep) == root_mod, "removed: the outfit's copy is back");
+    check(has(slurp(probes), ("none\t" + rootdep + "\n").c_str()), "its probe says none again");
+    remove_tree(g_row_game + "\\natives");   // empty folders: nothing of the fingerprint
+    run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+
+    printf("[19] the game colour file the signatures come from, turned off by a replacement (fork 1.10.8)\n");
+    const std::string ref = "natives/stm/product/model/esf/esf001/001/esf001_001_cmd_000.user.2";
+    const uint64_t rh = pak_path_hash(std::string_view(ref));
+    turned_off({ref});
+    write_rows(dlc, {{rh - 1, bytes_of("before")}, {0, game_bytes(ref)}, {rh + 1, bytes_of("after")}});
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("turned off, its row kept", "1M 2S 3C");
+    expect_said("costume", ("colour files: the game's " + ref + " is turned off in the pak (a replacement installed over it): "
+                            "read from its turned-off entry").c_str());
+    expect_said("costume", "mod files brought to the current type signatures");
+    DeleteFileA(dlc.c_str());
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("gone", "1M 2S 3C");
+    expect_said("costume", ("colour files: the game's " + ref + " is missing (a replacement installed over it): signatures read from").c_str());
+    expect_said("costume", "mod files brought to the current type signatures");
+    {
+        std::vector<std::string> every;
+        for (int f = 0; f < 100; f++) {
+            char p[96];
+            snprintf(p, sizeof p, "natives/stm/product/model/esf/esf%03d/001/esf%03d_001_cmd_000.user.2", f, f);
+            every.push_back(p);
+        }
+        turned_off(every);
+    }
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("no fighter's colour file", "1M 2S 3C");
+    expect_said("costume", "WARN: no game colour file could be read");
+    expect_said("costume", "mod files brought to the current type signatures", false);
+    turned_off({});
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_said("costume", "  colour files: the game's", false);
+
+    printf("[20] the outfit's scene, turned off by a replacement: read from its turned-off row (fork 1.10.6)\n");
+    const uint64_t sh = pak_path_hash(std::string_view(c1_scene));
+    const auto scene1 = game_bytes(c2_scene);
+    check(!scene1.empty(), "Ryu's Outfit 2 scene read from the game");
+    turned_off({c1_scene});
+    write_rows(dlc, {{sh - 1, bytes_of("before")}, {0, scene0}, {sh + 1, bytes_of("after")}});
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("scene turned off, its row kept", "1M 2S 3C");
+    expect_said("costume", ("scene: the game's " + c1_scene + " is turned off in the pak (a replacement installed over it): "
+                            "read from its turned-off entry").c_str());
+    expect_said("costume", "slots checked, 0 left out");
+    slot = fixture_slot("esf001");
+    costume_file(slot.scene, &in_pak);
+    check(!slot.folder.empty() && in_pak, "the slot has its scene");
+    write_rows(dlc, {{sh - 1, bytes_of("before")}, {0, scene1}, {sh + 1, bytes_of("after")}});
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("another outfit's scene in that row", "1M 2S 3C");
+    expect_said("costume", "read from its turned-off entry", false);
+    expect_said("costume", "slot scene missing");
+    write_rows(dlc, {{sh - 1, bytes_of("before")}, {0, scene0}, {0, scene0}, {sh + 1, bytes_of("after")}});
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("two rows of that outfit's folder", "1M 2S 3C");
+    expect_said("costume", "read from its turned-off entry", false);
+    expect_said("costume", "slot scene missing");
+    write_rows(dlc, {{sh + 1, bytes_of("after")}, {0, scene0}, {sh - 1, bytes_of("before")}});
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_row("a table not sorted", "1M 2S 3C");
+    expect_said("costume", "read from its turned-off entry", false);
+    expect_said("costume", "slot scene missing");
+    turned_off({});
+    DeleteFileA(dlc.c_str());
+    DeleteFileA(registry.c_str());
+    run_loader("costume");  expect_said("costume", "slots checked, 0 left out");
+
+    printf("[21] a donor's colour files in the outfit's folder follow the slot (fork 1.10.7)\n");
+    {
+        auto donor = game_bytes("natives/stm/product/model/esf/esf002/001/esf002_001_ccvd.user.2");
+        std::vector<std::string> names;   // "esf002_001_cmd_000.user"
+        for (auto& s : u16_strings(donor)) {
+            const std::string l = lower(s);
+            if (l.find("_cmd_") != std::string::npos && is_ref(l, ".user")) names.push_back(l.substr(l.rfind('/') + 1));
+        }
+        u16_replace(donor, "esf002/001/", "esf001/001/");   // in the host's folder, as Female Ryu C1 ships it
+        int moved = 0;
+        for (auto& s : u16_strings(donor)) if (lower(s).find("esf001/001/esf002_001_cmd_") != std::string::npos) moved++;
+        check(!names.empty() && moved > 0, "a donor's colour list (esf002 Outfit 1) read from the game, put in Ryu's folder");
+        mod_file("natives/stm/product/model/esf/esf001/001/esf002_001_ccvd.user.2", donor);
+        for (auto& n : names)
+            mod_file("natives/stm/product/model/esf/esf001/001/" + n + ".2", game_bytes("natives/stm/product/model/esf/esf002/001/" + n + ".2"));
+        run_loader("costume");  expect_row("donor files added", "1M 2S 3C");
+        expect_said("costume", "slots checked, 0 left out");
+        slot = fixture_slot("esf001");
+        sdir = "esf001/" + slot.folder + "/";
+        bool found = false;
+        const auto list = costume_file("natives/stm/product/model/esf/" + sdir + "esf002_001_ccvd.user.2", &found);
+        int cmds = 0, in_slot = 0, there = 0;
+        for (auto& s : u16_strings(list)) {
+            const std::string l = lower(s);
+            if (l.find("_cmd_") == std::string::npos) continue;
+            cmds++;
+            if (l.find("/" + sdir) == std::string::npos) continue;
+            in_slot++;
+            bool f = false;
+            costume_file("natives/stm/" + l + ".2", &f);
+            if (f) there++;
+        }
+        check(found && cmds > 0 && in_slot == cmds, "the slot's copy of the donor's list names the slot's copies of its colours");
+        check(there == cmds, "those copies are in the pak");
+        // The host's list as the mod ships it, copied under the slot's name: the colours the mod ships follow too
+        const auto host = costume_file("natives/stm/product/model/esf/" + sdir + "esf001_" + slot.folder + "_ccvd.user.2", &found);
+        int followed = 0;
+        for (auto& [n, d] : mod_cmds) {
+            std::string sn = n;
+            sn.replace(0, 11, "esf001_" + slot.folder + "_");
+            for (auto& s : u16_strings(host)) if (lower(s).find(sdir + sn) != std::string::npos) { followed++; break; }
+        }
+        check(found && followed == (int)mod_cmds.size(), "with a donor's list, the host's colours the mod ships follow the slot too");
+        DeleteFileA((mroot + win("natives/stm/product/model/esf/esf001/001/esf002_001_ccvd.user.2")).c_str());
+        for (auto& n : names) DeleteFileA((mroot + win("natives/stm/product/model/esf/esf001/001/" + n + ".2")).c_str());
+        run_loader("costume");  expect_said("costume", "slots checked, 0 left out");
+    }
+
+    printf("[22] a main and five add-ons that each replace its body mesh (fork 1.10.5): options of one outfit here\n");
+    {
+        const std::string oroot = g_row_game + "\\reframework\\costume_mods\\Ryu\\ZZ Overrides\\";
+        std::string m2, d2;
+        body_of(game_bytes(c2_scene), "esf001/002/01/", m2, d2);
+        auto mesh2 = game_bytes(m2);
+        const auto mdf2 = game_bytes(d2);
+        check(!mesh2.empty() && !mdf2.empty(), "Ryu's Outfit 2 body mesh and material file read from the game");
+        mesh2.back() ^= 0x11;
+        put(oroot + "00 Main\\modinfo.ini", "name=Fixture Main\r\n");
+        put_bin(oroot + "00 Main\\" + win(m2), mesh2);
+        put_bin(oroot + "00 Main\\" + win(d2), mdf2);
+        for (int k = 1; k <= 5; k++) {
+            const std::string dir = oroot + "0" + std::to_string(k) + " Option " + std::to_string(k) + "\\";
+            put(dir + "modinfo.ini", "name=Option " + std::to_string(k) + "\r\nAddonFor=Fixture Main\r\n");
+            auto m = mesh2;
+            m[m.size() - 2] ^= uint8_t(k);
+            put_bin(dir + win(m2), m);
+        }
+        run_loader("costume");  expect_row("overrides added", "1M 2S 3C");
+        expect_said("costume", "Fixture Main: 5 add-ons as runtime options");
+        expect_said("costume", "too many to combine", false);
+        remove_tree(oroot.substr(0, oroot.size() - 1));
+    }
+
+    if (previous) {
+        printf("[23] an install built by the previous build: this one says Up to date; built afresh, the same pak byte for byte\n");
+        remove_tree(mroot.substr(0, mroot.size() - 1));
+        DeleteFileA(registry.c_str());
+        DeleteFileA(probes.c_str());
+        run_loader("costume", previous);  expect_row("previous build", "1M 2S 3C");
+        const std::string before = slurp(costume_pak_path());
+        check(!has(slurp(data_dir + "\\outfits.json"), "loose_files_kept"), "the previous build does not say loose_files_kept");
+        run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+        DeleteFileA(registry.c_str());
+        DeleteFileA((data_dir + "\\pak_sources.tsv").c_str());
+        run_loader("costume");  expect_row("this build, from scratch", "1M 2S 3C");
+        check(!before.empty() && slurp(costume_pak_path()) == before, "the same pak byte for byte");
+        check(has(slurp(data_dir + "\\outfits.json"), "\"loose_files_kept\": true"), "this build says loose_files_kept");
+    }
+
     printf("\n%d checks, %d failed\n", g_checks, g_fail);
     printf(g_fail ? "FAIL\n" : "PASS\n");
     return g_fail ? 1 : 0;
 }
 
 int main(int argc, char** argv) {
-    if (argc >= 6 && std::string(argv[1]) == "--row") return run_row_test(argv[2], argv[3], argv[4], argv[5]);
+    if (argc >= 6 && std::string(argv[1]) == "--row")
+        return run_row_test(argv[2], argv[3], argv[4], argv[5], argc >= 7 ? argv[6] : nullptr);
     if (argc >= 3 && argv[1][0] != '-') return run_clean_tests(argv[1], argv[2]);
     printf("usage: slots_clean_test <SF6_SlotsClean.exe> <work dir>\n"
-           "       slots_clean_test --row <build dir> <work dir> <game dir (read only)> <costume mod archive>\n");
+           "       slots_clean_test --row <build dir> <work dir> <game dir (read only)> <costume mod archive>"
+           " [<previous build dir>]\n");
     return 2;
 }
