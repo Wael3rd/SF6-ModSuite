@@ -1890,38 +1890,30 @@ float drawn_width(void* t, float region) {
     return ds[0];
 }
 // A line's fit (per copy): the text it shows, the bytes of it kept (then "..."), the frame that was written
-struct SumFit { std::string key, full; size_t len = 0; bool by_id = false; uint32_t since = 0; };
+struct SumFit { std::string full; size_t len = 0; uint32_t since = 0; };
 std::map<std::string, SumFit> g_sum_fit;
-// A line: `text` (or the game's message `guid`) at the game's size, cut with "..." when it is wider than its region, as
-// measured on what the game drew (the layout is the game's: measured from the next frame on; a new cut, measured again)
-void put_line_text(void* t, const std::string& name, const std::string& text, const uint8_t* guid) {
+// A line: `text` at the game's size, cut with "..." when it is wider than its region, as measured on what the game drew
+// (the layout is the game's: measured from the next frame on; a new cut, measured again). Always written as text, never
+// by a message id: a copy shows one line then another, and a text written over a message id leaves the id behind, so the
+// core's compare would skip the same id later and keep the old text (the stage agent's finding, 05/11).
+void put_line_text(void* t, const std::string& name, const std::string& text) {
     const float region = kSumRegionW * kSumScale;
-    const std::string key = guid ? std::string(reinterpret_cast<const char*>(guid), 16) : text;
     SumFit& f = g_sum_fit[name];
-    if (f.key != key || f.since == 0) { f = SumFit{}; f.key = key; f.full = text; f.len = text.size(); f.by_id = guid != nullptr; f.since = g_frame; }
-    if (f.by_id) A()->ui_set_message_id(C(), t, guid);
-    else A()->ui_set_text(C(), t, cut_utf8(f.full, f.len).c_str());
+    if (f.full != text || f.since == 0) { f.full = text; f.len = text.size(); f.since = g_frame; }
+    A()->ui_set_text(C(), t, cut_utf8(f.full, f.len).c_str());
     if (g_frame < f.since + 2) { g_dirty = true; return; }
     const float drawn = drawn_width(t, region);
     if (drawn < 0 || drawn <= region + 0.5f) return;
-    if (f.by_id) {                                 // the game's name is too long: its text, cut
-        f.full = str(call_obj(static_cast<Obj*>(t), "get_Message"));
-        f.by_id = false;
-        f.len = f.full.size();
-        if (f.full.empty()) return;
-    }
     const size_t next = fit_length(f.len, drawn, region);
     if (next != f.len) { f.len = next; f.since = g_frame; g_dirty = true; }
 }
-// `guid`: the game's message shown by its id (the player's language), otherwise `text`
-void put_sum_text(void* title, const std::string& name, bool head, const std::string& text, const uint8_t* guid, float x, float y,
-                  uint32_t col, bool on) {
+void put_sum_text(void* title, const std::string& name, bool head, const std::string& text, float x, float y, uint32_t col, bool on) {
     void* t = copy_of(title, name);
     if (!t) return;
     if (on) {
         if (g_styled.insert(reinterpret_cast<uintptr_t>(t)).second) style_sum_text(t, head);
         if (head) A()->ui_set_text(C(), t, text.c_str());
-        else put_line_text(t, name, text, guid);
+        else put_line_text(t, name, text);
         A()->ui_set_color(C(), t, col);
         place(t, x, y);
     }
@@ -1929,7 +1921,7 @@ void put_sum_text(void* title, const std::string& name, bool head, const std::st
 }
 // The summary: the title pill and its heading, then the items (names, lines, a picture: text = its path) where
 // summary_layout puts them
-struct SumItem { SumKind kind; std::string text; const uint8_t* guid = nullptr; };
+struct SumItem { SumKind kind; std::string text; };
 void render_summary(void* title, bool on, const char* heading, const std::vector<SumItem>& items) {
     style_pill(title);
     if (void* c = copy_of(title, "e_ro_pill")) {
@@ -1937,7 +1929,7 @@ void render_summary(void* title, bool on, const char* heading, const std::vector
         show(c, on);
     }
     if (on) log_pill(title);
-    put_sum_text(title, "e_ro_sumtitle", true, heading, nullptr, sum_x(kSumTitleX), sum_y(kSumTitleY), kColSumTitle, on);
+    put_sum_text(title, "e_ro_sumtitle", true, heading, sum_x(kSumTitleX), sum_y(kSumTitleY), kColSumTitle, on);
     std::vector<SumKind> kinds;
     for (const SumItem& it : items) kinds.push_back(it.kind);
     const std::vector<float> ys = summary_layout(kinds);
@@ -1949,21 +1941,24 @@ void render_summary(void* title, bool on, const char* heading, const std::vector
         if (it.kind == SumKind::Picture) { pic = it.text; pic_y = ys[i]; continue; }
         if (t >= kSumTexts) continue;
         const bool name = it.kind == SumKind::Name;
-        put_sum_text(title, cname("sum", t++), false, it.text, it.guid, sum_x(name ? kSumNameX : kSumLineX), sum_y(ys[i]),
+        put_sum_text(title, cname("sum", t++), false, it.text, sum_x(name ? kSumNameX : kSumLineX), sum_y(ys[i]),
                      name ? kColSumName : kColSumLine, true);
     }
-    for (; t < kSumTexts; ++t) put_sum_text(title, cname("sum", t), false, std::string(), nullptr, 0, 0, 0, false);
+    for (; t < kSumTexts; ++t) put_sum_text(title, cname("sum", t), false, std::string(), 0, 0, 0, false);
     put_stage_picture(title, "e_ro_sumpic", pic, sum_x(kSumPicX), sum_y(pic_y), kSumPicW * kSumScale, kSumPicH * kSumScale, kColText,
                       on && !pic.empty());
 }
-// The chosen stage as the summary names it: a tile, its name; a variation, the banner's one name line; a stage of the game, its
-// name by the game's message; Default (or a stage no longer listed), the Default cell's picture and "Default"
-void stage_summary(std::string& pic, std::string& name, const uint8_t*& guid) {
-    guid = nullptr;
+// The chosen stage as the summary names it, always as text: a tile, its name; a stage of the game, its name (the stage
+// slots' one, else the game's message as text, as cell_name); with a variation, the banner's one name line; Default (or a
+// stage no longer listed), the Default cell's picture and "Default"
+void stage_summary(std::string& pic, std::string& name) {
     const int cell = stage_cell_of_choice();
     if (cell <= 0 || cell > static_cast<int>(g_stages.size())) { pic = kStageDefaultImage; name = "Default"; return; }
     const StageEntry& e = g_stages[static_cast<size_t>(cell - 1)];
-    const std::string stage = e.name.empty() ? "Stage " + std::to_string(e.id) : e.name;
+    std::string stage = e.name;
+    if (e.key.empty() && e.named && (stage.empty() || stage.rfind("ess", 0) == 0))
+        if (std::string m = message_text(e.guid); !m.empty()) stage = m;
+    if (stage.empty()) stage = "Stage " + std::to_string(e.id);
     pic = e.banner;
     name = stage;
     if (!e.key.empty()) return;
@@ -1971,9 +1966,7 @@ void stage_summary(std::string& pic, std::string& name, const uint8_t*& guid) {
         const StageVar& var = g_stage_vars[e.id][static_cast<size_t>(v - 1)];
         pic = var.banner;
         name = stagelogic::variation_label(stage, var.name, var.bundle);   // the banner's one name line
-        return;
     }
-    if (e.named) guid = e.guid;
 }
 // The option rows' levels: "Replay Settings": Replay Outfit Settings (a line per character set to On, or Default), Stage
 // Settings (the stage's picture and name)
@@ -1983,10 +1976,9 @@ std::vector<SumItem> grid_summary() {
     for (const std::string& l : summary_lines(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, cut_utf8(l, kSumLineMax) });
     v.push_back({ SumKind::Name, kListLabels[1] });
     std::string pic, name;
-    const uint8_t* guid = nullptr;
-    stage_summary(pic, name, guid);
+    stage_summary(pic, name);
     v.push_back({ SumKind::Picture, pic });
-    v.push_back({ SumKind::Line, cut_utf8(name, kSumLineMax), guid });
+    v.push_back({ SumKind::Line, cut_utf8(name, kSumLineMax) });
     return v;
 }
 
