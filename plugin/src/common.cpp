@@ -120,6 +120,50 @@ bool set_obj(Obj* o, const char* name, Obj* v) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The game's text language
+// ---------------------------------------------------------------------------------------------
+
+static const char* lang_code(int32_t v) {
+    switch (v) {
+    case 0: return "ja"; case 1: return "en"; case 2: return "fr"; case 3: return "it"; case 4: return "de";
+    case 5: return "es"; case 6: return "ru"; case 7: return "pl"; case 8: return "nl"; case 9: case 10: return "pt";
+    case 11: return "ko"; case 12: return "zh-Hant"; case 13: return "zh-Hans"; case 21: return "ar"; case 32: return "es-419";
+    default: return nullptr;
+    }
+}
+
+std::string game_language() {
+    auto* tdb = api().tdb();
+    int32_t val = 0;
+    bool got = false;
+    Method* opt_get = tdb->find_method("app.Option", "GetOptionValue");
+    API::Field* list_f = tdb->find_field("app.Option", "LanguageList");
+    if (opt_get && list_f) {
+        auto ri = opt_get->invoke(nullptr, std::vector<void*>{ arg_i32(611) });           // app.Option.ValueType.DispLanguage
+        void* slot = ri.exception_thrown ? nullptr : list_f->get_data_raw(nullptr, false);
+        Obj* arr = slot ? *reinterpret_cast<Obj**>(slot) : nullptr;
+        const int32_t idx = static_cast<int32_t>(ri.dword);
+        if (arr && idx >= 0) {
+            TD* td = arr->get_type_definition();
+            auto rl = call(method_of(td, "get_Length", 0), arr);
+            const int32_t n = rl.exception_thrown ? 0 : static_cast<int32_t>(rl.dword);
+            if (idx < n) {
+                auto rv = call(method_of(td, "get_Item(System.Int32)", 1), arr, { arg_i32(idx) });
+                if (!rv.exception_thrown) { val = static_cast<int32_t>(rv.dword); got = true; }
+            }
+        }
+    }
+    if (!got) {
+        if (Method* sys = tdb->find_method("via.SystemService", "get_Language")) {
+            auto r = sys->invoke(nullptr, std::vector<void*>{});
+            if (!r.exception_thrown) { val = static_cast<int32_t>(r.dword); got = true; }
+        }
+    }
+    const char* c = got ? lang_code(val) : nullptr;
+    return c ? c : "en";
+}
+
+// ---------------------------------------------------------------------------------------------
 // Methods
 // ---------------------------------------------------------------------------------------------
 

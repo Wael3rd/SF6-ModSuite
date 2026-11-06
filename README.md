@@ -83,11 +83,12 @@ the fighters; a fighter set to On is shown in replays in the costume and colour 
 the Color Mod's RW / MC colours), with a live 3D preview; R / pad X opens the Costume options of that outfit, as in
 Edit Character. Off (Default) shows the outfit you really wore, taken from a local journal of your online matches
 (`replay_journal.jsonl`, written from the first match played with 1.20.0); older replays show what they recorded.
-*Stage Settings* picks the stage shown in replays, modded stages included. *Battle BGM* picks the music of replays: the same
-values as the game's row, with Character and Opponent meaning player 1's and player 2's music; T or the pad's Y opens the game's
-Character Music screen (those playlists are the game's own, shared with online). All of it applies on your PC only: the replay
-file is never changed, and neither are your own outfit, colour and costume options, nor your online music setting. The choices
-are in
+*Stage Settings* picks the stage shown in replays, modded stages included. *Replay Music* picks the music of replays: the same
+values as the game's Battle BGM row, with Character and Opponent meaning player 1's and player 2's music; T or the pad's Y opens
+the game's Character Music screen (those playlists are the game's own, shared with online). Its last value, *Custom*, plays a list
+of your own: T opens the game's playlist dialog on that list, and a replay picks one of its tracks at random (an empty list
+behaves as Random). All of it applies on your PC only: the replay file is never changed, and neither are your own outfit, colour
+and costume options, your online music setting, or the game's playlists when on Custom. The choices are in
 `reframework\data\SF6_CostumeSlots_data\replay_outfits.json`. The Settings tab needs the SF6 Native Core 0.8.2 or newer
 (without it the tab is not added; the log says so).
 

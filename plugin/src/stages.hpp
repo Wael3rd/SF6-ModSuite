@@ -69,7 +69,7 @@ void replay_variation_hint();
 // without stage slots: the key held down now; "<key> <label>" in the guide bar, called every frame it is wanted.
 bool replay_key_down();
 void replay_guide_hint(const char* label);
-// Battle Settings' key of its "Character Music" entry (app.InputAssign.Digital.Id 295: T, the pad's Y), for the Battle BGM row
+// Battle Settings' key of its "Character Music" entry (app.InputAssign.Digital.Id 295: T, the pad's Y), for the Replay Music row
 // of Replays > Settings: held down now; "<key> <label>" in the guide bar, called every frame it is wanted.
 bool replay_music_key_down();
 void replay_music_hint(const char* label);

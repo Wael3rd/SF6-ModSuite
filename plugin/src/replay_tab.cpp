@@ -1,7 +1,7 @@
 // SF6 Slots — "Settings": a 6th tab of the Replays menu (agent CFNReplayTop), after Search.
 //
 // Laid out and working like Battle Settings > Other (read 05/11): three option rows on the left, "Replay Outfit Settings",
-// "Stage Settings" and Battle BGM (Up / Down, wrapping; Confirm goes into the focused row's page; Back (Esc, the tab-back key,
+// "Stage Settings" and Replay Music (Up / Down, wrapping; Confirm goes into the focused row's page; Back (Esc, the tab-back key,
 // pad B / L1) goes back to Search), the divider line, and on the right the focused row's page:
 //   - Replay Outfit Settings, as Opponent Outfit Settings:
 //     - the grid: the character portraits (4 columns, the game's order, "On" over a character whose replays get a chosen
@@ -27,11 +27,12 @@
 //     chosen cell's yellow corner triangle. The choice is the replay menu's own
 //     (stages::choose(kReplay), never Battle Settings' nor Training's): the replay keeps a vanilla stage id, the stage
 //     slots serve the chosen tile / variation when the replay's description is set up.
-//   - Battle BGM, as the game's row (its words, its values: replay_bgm.hpp), nothing on the right: Left / Right its value;
-//     T / pad Y on any value ("<key> Character Music" in the guide bar) opens the game's own Character Music screen
-//     (replay_music.cpp): its playlists are the save's, shared with online; only the row's value is ours. While it runs:
-//     our copies, the tab bar and the description give way, no input here; Back on it comes back to the row. On the row's
-//     last value, Custom (ours), the entry reads "Custom Music List" and T opens the game's playlist dialog alone.
+//   - Replay Music, as the game's Battle BGM row (its values, in its words: replay_bgm.hpp), nothing on the right: Left / Right
+//     its value; T / pad Y on any value (the game's "<key> Character Music" in the guide bar) opens the game's own Character
+//     Music screen (replay_music.cpp): its playlists are the save's, shared with online; only the row's value is ours. While it
+//     runs: our copies, the tab bar and the description give way, no input here; Back on it comes back to the row. On the row's
+//     last value, Custom (ours), the entry reads "Custom Music List" and T opens the game's playlist dialog alone, on the list
+//     of ours, which Back saves. The words of ours: replay_words.hpp.
 //   - The summary panel on the right of the pages, as Battle Settings' (the title pill, the fighters' outfit lines, the
 //     stage's picture and line, the music), drawn from the same choices.
 // The game picks the colours with a grid of colour boxes (several at once); a choice here is one colour, hence the
@@ -87,6 +88,7 @@
 #include "replay_logic.hpp"
 #include "replay_music.hpp"
 #include "replay_tab.hpp"
+#include "replay_words.hpp"
 #include "colormod_link.hpp"
 #include "rto.hpp"
 #include "stages.hpp"
@@ -122,10 +124,10 @@ constexpr float kLineX = 739, kLineY = 150, kLineLen = 703, kLineW = 5;
 // divider's line (the middle of its 5 units: the outfit page's began at 731, left of the squares), its top and bottom those of
 // the outfit page (the stage page's sat at 155 - 860), its right end 1691.
 constexpr float kBoxL = kLineX - kLineW / 2, kBoxT = 150, kBoxR = 1691, kBoxB = 852;
-constexpr int kListRows = 3;                                // the option rows: Replay Outfit Settings, Stage Settings, Battle BGM
+constexpr int kListRows = 3;                                // the option rows: Replay Outfit Settings, Stage Settings, Replay Music
 constexpr int kBgmRow = 2;
-const char* const kListLabels[kListRows] = { "Replay Outfit Settings", "Stage Settings", kBgmTitleEnglish };   // the last: bgm_title()
-// the Battle BGM row, in its 640 x 58 (the game's p_Spin_2, 05/11 on Wael's 59.png): the value's centre at (450, 29), the arrows'
+const char* const kListLabels[kListRows] = { "Replay Outfit Settings", "Stage Settings", nullptr };   // the last: bgm_title()
+// the Replay Music row, in its 640 x 58 (the game's p_Spin_2, 05/11 on Wael's 59.png): the value's centre at (450, 29), the arrows'
 // centres at (302, 29) and (599, 29)
 constexpr float kListValueX = 450, kListValueW = 262, kListArrowL = 302, kListArrowR = 599;
 // Stage Settings' page (c_StageSelect > p_StageSelectSimple_0_h, read 05/11): the banner 776 x 194 at (760, 184), its name
@@ -226,8 +228,7 @@ const char* const kDescGrid = "Set which outfit each character will appear in du
 const char* const kDescPage = "Set which outfit and color this character will appear in during replays.";
 const char* const kDescStage = "Set which stage is shown during replays.";
 const char* const kDescBgm = "Set which music plays during replays.";
-const char* const kMusicHint = "Character Music";     // the guide bar's entry, as on Battle Settings
-const char* const kCustomHint = "Custom Music List";  // ...on the row's Custom value
+const char* const kMusicHintEnglish = "Character Music";   // the guide bar's entry when the game's text is not found
 const char* const kOptionsHint = "Costume options";   // the guide bar's entry, as on Edit Character
 const char* const kOptionsName = "Costume Options";   // the summary's heading
 const char* const kRowTemplateAgent = "Resident_Cmn_CertifiedMatch";
@@ -259,7 +260,9 @@ std::vector<std::string> g_hidden;                // agents hidden for our page 
 std::vector<Fighter> g_cat;
 Choices g_choices;
 OptionStore g_options;                            // the costume options saved per fighter and outfit, for replays
-BgmChoice g_bgm;                                  // the Battle BGM row
+BgmChoice g_bgm;                                  // the Replay Music row
+std::string g_lang = "en";                        // the game's text language, read on entering the tab
+std::string g_music_hint;                         // the game's own "Character Music" in that language
 std::map<int, Choice> g_last_on;                  // per character, the outfit it had before being turned Off
 int g_cursor = 0, g_top_row = 0;                  // the focused cell (catalog index), the first grid row shown
 // The page's level, as on Battle Settings > Other: the option row (the grid shown dimmed), the grid, a character's page
@@ -332,7 +335,7 @@ const std::vector<Copy>& copies() {
     for (int r = 0; r < kListRows; ++r) v.push_back({ cname("lrow", r), kRow });   // the option rows
     for (int r = 0; r < kRows; ++r) v.push_back({ cname("row", r), kRow });
     for (int r = 0; r < kRows; ++r) { v.push_back({ cname("arl", r), kLeftArrow }); v.push_back({ cname("arr", r), kRightArrow }); }
-    v.push_back({ "e_ro_larl", kLeftArrow });      // the Battle BGM option row's arrows
+    v.push_back({ "e_ro_larl", kLeftArrow });      // the Replay Music option row's arrows
     v.push_back({ "e_ro_larr", kRightArrow });
     for (int r = 0; r < kListRows; ++r) v.push_back({ cname("llbl", r), kLabel });
     for (int r = 0; r < kRows; ++r) v.push_back({ cname("rlbl", r), kLabel });
@@ -728,15 +731,19 @@ std::string message_text(const uint8_t guid[16]) {
     }
     return m ? str(call_obj(m, nullptr, { const_cast<uint8_t*>(guid) })) : std::string();
 }
-// The Battle BGM row's words: the game's own, as text (copies show one text then another: never by a message id, see
-// put_line_text), English when a message is not found
-std::string bgm_word(const char* guid, const char* english) {
+// The Replay Music row's words, as text (copies show one text then another: never by a message id, see put_line_text): its name
+// and Custom ours, by language (replay_words.hpp); the game's values its own, English when a message is not found
+std::string bgm_title() { return word(Word::ReplayMusic, g_lang); }
+std::string bgm_value() {
+    if (g_bgm.mode == BgmMode::Custom) return word(Word::Custom, g_lang);
     uint8_t g[16];
-    std::string m = parse_guid(guid, g) ? message_text(g) : std::string();
-    return m.empty() ? english : m;
+    std::string m = parse_guid(bgm_value_guid(g_bgm.mode), g) ? message_text(g) : std::string();
+    return m.empty() ? bgm_value_english(g_bgm.mode) : m;
 }
-std::string bgm_title() { return bgm_word(kBgmTitleGuid, kBgmTitleEnglish); }
-std::string bgm_value() { return bgm_word(bgm_value_guid(g_bgm.mode), bgm_value_english(g_bgm.mode)); }
+// The summary's line: the value, with Custom's number of tracks
+std::string bgm_summary_line() {
+    return g_bgm.mode == BgmMode::Custom ? bgm_custom_line(bgm_value(), g_bgm.list.size()) : bgm_value();
+}
 // A cell's name, always as text: the banner's name has one writer mode (a message id there left its id behind under a
 // written text, and the core's compare then skipped the next stage's id: Wael 05/11, "moving keeps the old name")
 std::string cell_name(int cell) {
@@ -1242,6 +1249,12 @@ void input() {
     if (g_music_open.load()) {
         if (replaymusic::up()) return;
         g_music_open.store(false);
+        std::vector<uint32_t> marked;              // Back on the dialog: what it has marked is the list
+        if (replaymusic::take_custom_list(marked) && marked != g_bgm.list) {
+            g_bgm.list = marked;
+            save_choices();
+            logf("replay tab: Custom list, %zu track%s", marked.size(), marked.size() == 1 ? "" : "s");
+        }
         prime_keys();
         g_dirty = true;
         return;
@@ -1256,7 +1269,7 @@ void input() {
         if (k_down.step(k.down)) { g_list_row = (g_list_row + 1) % kListRows; g_dirty = true; }
         const bool music_press = k_music.press(k.music);
         if (g_list_row == kBgmRow) {               // its value; T / pad Y: the game's Character Music screen, on Custom its dialog alone
-            BgmChoice next = g_bgm;
+            BgmChoice next = g_bgm;                // (the list stays whatever the value)
             if (k_left.step(k.left)) next.mode = bgm_cycle(next.mode, -1);
             if (k_right.step(k.right)) next.mode = bgm_cycle(next.mode, 1);
             if (!(next == g_bgm)) {
@@ -1266,8 +1279,9 @@ void input() {
                 logf("replay tab: music -> %s", bgm_value_english(g_bgm.mode));
             }
             const bool custom = g_bgm.mode == BgmMode::Custom;
-            stages::replay_music_hint(custom ? kCustomHint : kMusicHint);
-            if (music_press && (custom ? replaymusic::open_custom_list() : replaymusic::open_character_music())) { g_music_open.store(true); g_dirty = true; }
+            stages::replay_music_hint(custom ? word(Word::CustomMusicList, g_lang) : g_music_hint.c_str());
+            if (music_press && (custom ? replaymusic::open_custom_list(g_bgm.list, word(Word::CustomMusicList, g_lang))
+                                       : replaymusic::open_character_music())) { g_music_open.store(true); g_dirty = true; }
             return;
         }
         if (ok && g_list_row == 0 && f) { g_level.store(kLevelGrid); g_dirty = true; }
@@ -1650,7 +1664,7 @@ void put_row(void* title, int r, const char* label, const std::string& value, bo
 // focused / entered row; entered: its grid has the focus). A row's look, as the game's Other list: the focused row selected (SELECT: blue bar,
 // light material, its marker); the row whose grid has the focus "entered" (the game's p_GroupItem stays SELECT with its
 // blue bar hidden, its material dark, its bevel shown, its small marker, its text light); the other rows plain (DEFAULT,
-// darkened 20 %). Every piece written each time: the copies keep what was written to them. The Battle BGM row: its value and
+// darkened 20 %). Every piece written each time: the copies keep what was written to them. The Replay Music row: its value and
 // arrows as the game's p_Spin_2; `side`: false while it has the focus, nothing on the right then (the game's).
 void render_list(void* title, bool on, int focus, bool entered, bool side) {
     for (int r = 0; r < kListRows; ++r) {
@@ -2035,7 +2049,7 @@ void stage_summary(std::string& pic, std::string& name) {
     }
 }
 // The option rows' levels: "Replay Settings": Replay Outfit Settings (a line per character set to On, or Default), Stage
-// Settings (the stage's picture and name), Battle BGM (its value)
+// Settings (the stage's picture and name), Replay Music (its value)
 std::vector<SumItem> grid_summary() {
     std::vector<SumItem> v;
     v.push_back({ SumKind::Name, kListLabels[0] });
@@ -2046,7 +2060,7 @@ std::vector<SumItem> grid_summary() {
     v.push_back({ SumKind::Picture, pic });
     v.push_back({ SumKind::Line, cut_utf8(name, kSumLineMax) });
     v.push_back({ SumKind::Name, bgm_title() });
-    v.push_back({ SumKind::Line, cut_utf8(bgm_value(), kSumLineMax) });
+    v.push_back({ SumKind::Line, cut_utf8(bgm_summary_line(), kSumLineMax) });
     return v;
 }
 
@@ -2173,6 +2187,10 @@ void enter(Obj* main) {
     build_catalog();                              // each time: the NSFW setting may have changed
     load_faces();
     load_choices();
+    g_lang = game_language();                     // each time: the game's Options may have changed it
+    g_music_hint = replaymusic::guide_text(stagelogic::kCharaMusicKeyId);
+    if (g_music_hint.empty()) g_music_hint = kMusicHintEnglish;
+    g_bgm.list = bgm_keep_owned(g_bgm.list, replaymusic::owned_tracks());   // kept in the file until a change is saved
     g_stages = stage_list();                      // each time: the stage list may grow (stage_list())
     load_stage_pictures();
     sync_stage_slots();                           // the stage slots' replay choice: the file's (edited by hand, another PC)
@@ -2191,6 +2209,7 @@ void leave(Obj* main, const char* why) {
     rto::replay_preview_end();
     g_options_open = false;
     g_music_open.store(false);
+    replaymusic::forget();
     g_desc_keep = false;
     preview::stop(why);
     restore_page();
@@ -2210,6 +2229,7 @@ void down() {                                      // the screen went: nothing o
     rto::replay_preview_end();
     g_options_open = false;
     g_music_open.store(false);
+    replaymusic::forget();
     g_desc_keep = false;
     preview::stop("the Replays screen closed");
     if (g_ours.load() || !g_hidden.empty()) leave(nullptr, "the Replays screen closed");
@@ -2275,6 +2295,7 @@ void tick() {
         logf("replay tab: Replays screen up");
         colormod::clear(SF6CM_SCOPE_REPLAY);      // a replay played from here is over (the Color Mod drops them too)
         rto::replay_wear_clear();                 // its costume options too: the player's own choices again
+        replaymusic::arm_replay(nullptr, {});     // its Custom list too
     }
     g_up = true;
     g_top_addr.store(reinterpret_cast<uintptr_t>(agent), std::memory_order_release);
@@ -2326,6 +2347,7 @@ void tick() {
 }  // namespace
 
 void frame() {
+    replaymusic::frame();                         // its hooks' check, whatever the screen: they must be in before a replay
     if (!g_init) { g_init = true; try { init(); } catch (...) { logf("replay tab: EXCEPTION at init"); } }
     if (!g_ok) return;
     if (!g_up && !g_ours.load() && !g_leaving && (g_frame % kPollEvery) != 0) return;

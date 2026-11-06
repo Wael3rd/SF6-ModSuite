@@ -11,12 +11,13 @@
 //     it does for an outfit picked on a select screen. The replay's own data (ReplayInfo) is never written. Never in a
 //     live battle (IsNetwork, or no replay being played). A forced fighter's Color Mod entry (RW / MC, on colour 1) or
 //     its game colour is asked of the Color Mod for this replay (colormod_link.hpp); the forced stage is written too, and
-//     the Battle BGM row's music (Rule.BgmType: this replay's description only, the player's online setting is the save's
-//     MatchingSelectBgm, never touched). Its costume options are told to the runtime options (rto.hpp, the player's own
-//     choices stay as they are).
+//     the Replay Music row's music (Rule.BgmType: this replay's description only, the player's online setting is the save's
+//     MatchingSelectBgm, never touched; Custom's list: replay_music.cpp). Its costume options are told to the runtime options
+//     (rto.hpp, the player's own choices stay as they are).
 #include "slots.hpp"
 #include "replay_outfits.hpp"
 #include "colormod_link.hpp"
+#include "replay_music.hpp"
 #include "rto.hpp"
 
 #include <ctime>
@@ -33,7 +34,7 @@ std::mutex g_mx;                                    // everything below: the hoo
 std::vector<RegSlot> g_reg;   uint64_t g_reg_stamp = 0;
 std::map<int, Forced> g_forced; uint64_t g_forced_stamp = 0;
 int g_stage = -1;                                   // the forced stage (StageDesc.StageId), -1: the replay's own
-BgmChoice g_bgm;                                    // the Battle BGM row
+BgmChoice g_bgm;                                    // the Replay Music row
 std::map<std::string, Entry> g_journal; uint64_t g_journal_stamp = 0;
 std::string g_last_written;                         // the last journal key written (one line per match)
 std::mutex g_list_mx;                               // g_list_methods (read before g_mx is taken)
@@ -301,8 +302,15 @@ void dress_replay(Obj* map) {
         } else line += ", stage: no StageDesc (left alone)";
     }
     // The music: the game picks it from the description when it loads the battle (BattleFlowMap.loadBgmPrefab, one byte,
-    // app.EBgmSet). Random: left as the game set it.
-    if (const int set = bgm_set(g_bgm); set >= 0) {
+    // app.EBgmSet). Random: left as the game set it. Custom: its tracks still owned, Player1 with that list in place of its
+    // playlist for this flow map's load; none left, or no swap: as Random.
+    BgmChoice music = g_bgm;
+    if (music.mode == BgmMode::Custom) {
+        music.list = replaymusic::can_swap() ? bgm_keep_owned(music.list, replaymusic::owned_tracks()) : std::vector<uint32_t>{};
+        line += ", Custom list " + std::to_string(music.list.size());
+    }
+    replaymusic::arm_replay(music.mode == BgmMode::Custom && !music.list.empty() ? map : nullptr, music.list);
+    if (const int set = bgm_set(music); set >= 0) {
         Obj* rule = get_obj(desc, "Rule");
         auto* p = rule ? static_cast<uint8_t*>(field_ptr(rule, "BgmType")) : nullptr;
         if (p) {

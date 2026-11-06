@@ -2,6 +2,7 @@
 // Build and run: build_replay_logic_test.bat (prints "all ok" and exits 0 when every check passes).
 #define _CRT_SECURE_NO_WARNINGS
 #include "../src/replay_logic.hpp"
+#include "../src/replay_words.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -316,6 +317,52 @@ int main() {
         bb.mode = BgmMode::Opponent;  check(bgm_set(bb) == 2, "bgm: Opponent is P2 (EBgmSet.Player2)");
         bb.mode = BgmMode::Stage;     check(bgm_set(bb) == 0, "bgm: Stage (EBgmSet.Stage)");
         bb.mode = BgmMode::Custom;    check(bgm_set(bb) == -1, "bgm: Custom with no list behaves as Random");
+        bb.list = { 70034001 };       check(bgm_set(bb) == 1, "bgm: Custom with a list is Player1, whose list the load gets replaced");
+        bb.mode = BgmMode::Random;    check(bgm_set(bb) == -1, "bgm: a list kept under another value changes nothing");
+        bb.mode = BgmMode::Stage;     check(bgm_set(bb) == 0, "bgm: ...nor under Stage");
+
+        // the list in the file
+        {
+            const Choices ncw;
+            BgmChoice cw; cw.mode = BgmMode::Custom; cw.list = { 70034001, 70034002 };
+            const std::string ct = to_json(ncw, StageChoice{}, OptionStore{}, cw);
+            check(ct.find("\"bgm\": {\"mode\": \"custom\", \"list\": [70034001, 70034002]}") != std::string::npos, "bgm: the list as the file holds it");
+            Choices cc; BgmChoice cb;
+            check(from_json(ct, cc, nullptr, nullptr, &cb) && cb == cw, "bgm: the list survives the file");
+            cw.mode = BgmMode::Random;
+            check(from_json(to_json(ncw, StageChoice{}, OptionStore{}, cw), cc, nullptr, nullptr, &cb) && cb == cw, "bgm: left Custom, the list is kept (Random)");
+            cw.mode = BgmMode::Stage;
+            check(from_json(to_json(ncw, StageChoice{}, OptionStore{}, cw), cc, nullptr, nullptr, &cb) && cb == cw, "bgm: left Custom, the list is kept (Stage)");
+            BgmChoice ce; ce.mode = BgmMode::Custom;
+            check(to_json(ncw, StageChoice{}, OptionStore{}, ce).find("list") == std::string::npos, "bgm: an empty list: no key");
+            check(from_json("{\"version\":1,\"fighters\":{},\"bgm\":{\"mode\":\"custom\"}}", cc, nullptr, nullptr, &cb) && cb.mode == BgmMode::Custom && cb.list.empty(),
+                  "bgm: Custom with no list loads");
+            check(from_json("{\"version\":1,\"fighters\":{},\"bgm\":{\"mode\":\"custom\",\"list\":[5,5,\"x\",-1,0,7,4294967296]}}", cc, nullptr, nullptr, &cb) &&
+                  cb.list == std::vector<uint32_t>{ 5, 7 }, "bgm: in the list, each track once, only what can be a track");
+            std::string many = "{\"version\":1,\"fighters\":{},\"bgm\":{\"mode\":\"custom\",\"list\":[1";
+            for (int i = 2; i <= 40; ++i) many += "," + std::to_string(i);
+            check(from_json(many + "]}}", cc, nullptr, nullptr, &cb) && cb.list.size() == kBgmListMax, "bgm: at most what the dialog takes");
+        }
+        // the tracks owned
+        check(bgm_keep_owned({ 1, 2, 3 }, { 3, 1, 9 }) == std::vector<uint32_t>{ 1, 3 }, "bgm: a track no longer owned is left out, the order kept");
+        check(bgm_keep_owned({ 1, 2 }, { 8 }).empty(), "bgm: none owned: an empty list, which plays as Random");
+        check(bgm_keep_owned({ 1, 2 }, {}) == std::vector<uint32_t>{ 1, 2 }, "bgm: what is owned not read: the list as it is");
+        check(bgm_keep_owned({ 4, 4 }, { 4 }) == std::vector<uint32_t>{ 4 }, "bgm: each track once");
+        // the swap: only on the getter's own copy
+        {
+            int lists[2] = { 0, 0 };          // two lists at two addresses
+            check(bgm_swap_allowed(&lists[0], &lists[1]), "bgm: the swap on the getter's copy");
+            check(!bgm_swap_allowed(&lists[1], &lists[1]), "bgm: never on the save's own list");
+            check(!bgm_swap_allowed(nullptr, &lists[1]), "bgm: no list, no swap");
+            check(bgm_swap_allowed(&lists[0], nullptr), "bgm: a fighter with nothing in the save: its copy");
+        }
+        check(bgm_custom_line("Custom", 3) == "Custom (3)" && bgm_custom_line("Custom", 0) == "Custom (0)", "bgm: the summary's line");
+        // the words by language
+        check(std::string(word(Word::ReplayMusic, "en")) == "Replay Music" && std::string(word(Word::Custom, "en")) == "Custom" &&
+              std::string(word(Word::CustomMusicList, "en")) == "Custom Music List", "words: English");
+        check(std::string(word(Word::ReplayMusic, "fr")) == "Musique des replays" && std::string(word(Word::Custom, "fr")) == "Personnalis\xC3\xA9" "e" &&
+              std::string(word(Word::CustomMusicList, "fr")) == "Liste personnalis\xC3\xA9" "e", "words: French");
+        check(std::string(word(Word::ReplayMusic, "ja")) == "Replay Music" && std::string(word(Word::Custom, "")) == "Custom", "words: another language: English");
 
         const Choices no_c;
         check(to_json(no_c).find("bgm") == std::string::npos && to_json(no_c) == to_json(no_c, StageChoice{}, OptionStore{}, BgmChoice{}),
@@ -342,7 +389,7 @@ int main() {
         // a System.Guid's bytes in memory
         uint8_t bg[16] = {};
         const uint8_t want[16] = { 0x31, 0x7b, 0x1a, 0x27, 0xf2, 0xb6, 0x21, 0x43, 0xbd, 0x51, 0xc2, 0xe7, 0xb6, 0xc8, 0x62, 0xf6 };
-        check(parse_guid(kBgmTitleGuid, bg) && std::equal(bg, bg + 16, want), "bgm: a GUID's text to its bytes in memory");
+        check(parse_guid("271a7b31-b6f2-4321-bd51-c2e7b6c862f6", bg) && std::equal(bg, bg + 16, want), "bgm: a GUID's text to its bytes in memory");
         check(bgm_value_guid(BgmMode::Custom) == nullptr && !parse_guid(bgm_value_guid(BgmMode::Custom), bg) && std::string(bgm_value_english(BgmMode::Custom)) == "Custom",
               "bgm: Custom's word is ours, no message");
         check(!parse_guid("271a7b31-b6f2-4321-bd51", bg) && !parse_guid("271a7b31xb6f2-4321-bd51-c2e7b6c862f6", bg) && !parse_guid(nullptr, bg) &&

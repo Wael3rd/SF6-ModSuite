@@ -126,6 +126,7 @@ Elem list_elem(Obj* list, int i);
 
 // ---- strings ----
 std::string str(Obj* s);                          // System.String -> UTF-8
+std::string game_language();                      // the game's text language: "en", "fr", ... ("en" when not read). Game thread.
 Obj* new_string(const std::string& utf8);         // UTF-8 -> System.String
 std::string type_name(Obj* o);
 
