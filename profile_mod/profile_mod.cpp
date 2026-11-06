@@ -138,7 +138,15 @@ void set_i64(void* c, const char* sig, int64_t v) {
     g_core->obj_invoke(g_client, c, sig, &a, 1, nullptr);
 }
 
-// The game's text language, as the Slots Loader's common.cpp: "fr" or anything else
+// The game's text language, as the Slots Loader's common.cpp
+const char* lang_code(int32_t v) {
+    switch (v) {
+    case 0: return "ja"; case 1: return "en"; case 2: return "fr"; case 3: return "it"; case 4: return "de";
+    case 5: return "es"; case 6: return "ru"; case 7: return "pl"; case 9: case 10: return "pt";
+    case 11: return "ko"; case 12: return "zh-Hant"; case 13: return "zh-Hans"; case 21: return "ar"; case 32: return "es-419";
+    default: return "en";
+    }
+}
 std::string game_language() {
     auto* tdb = API::get()->tdb();
     Method* get = tdb->find_method("app.Option", "GetOptionValue");
@@ -158,7 +166,7 @@ std::string game_language() {
             auto r = sys->invoke(nullptr, std::vector<void*>{});
             if (!r.exception_thrown) val = static_cast<int32_t>(r.dword);
         }
-    return val == 2 ? "fr" : "en";                                              // via.Language.French
+    return lang_code(val);
 }
 
 // ---- the key ----

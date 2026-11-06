@@ -7,7 +7,7 @@ if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -pro
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 cd /d "%~dp0"
 if not exist obj mkdir obj
-cl /nologo /std:c++20 /EHa /O2 /MD /W4 /Fo"obj\\" /Fe"net_test.exe" net_test.cpp /link winhttp.lib
+cl /nologo /utf-8 /std:c++20 /EHa /O2 /MD /W4 /Fo"obj\\" /Fe"net_test.exe" net_test.cpp /link winhttp.lib
 if errorlevel 1 exit /b 1
 .\net_test.exe
 exit /b %errorlevel%

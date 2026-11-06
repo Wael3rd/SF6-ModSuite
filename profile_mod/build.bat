@@ -9,7 +9,7 @@ if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -pro
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 cd /d "%~dp0"
 if not exist ..\build\profile_mod mkdir ..\build\profile_mod
-cl /nologo /std:c++20 /EHa /O2 /W4 /LD /I ..\plugin\include /I ..\core\include /Fo..\build\profile_mod\ profile_mod.cpp /Fe..\build\profile_mod\profile_mod.dll /link /opt:ref winhttp.lib user32.lib
+cl /nologo /utf-8 /std:c++20 /EHa /O2 /W4 /LD /I ..\plugin\include /I ..\core\include /Fo..\build\profile_mod\ profile_mod.cpp /Fe..\build\profile_mod\profile_mod.dll /link /opt:ref winhttp.lib user32.lib
 if errorlevel 1 exit /b 1
 echo OK: build\profile_mod\profile_mod.dll
 exit /b 0

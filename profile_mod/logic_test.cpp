@@ -67,7 +67,15 @@ int main() {
     check(qwerty_scan("<ICON KeyR>") == 0x13, "R's scan code");
     check(qwerty_scan("<ICON BtnL>") == 0, "a pad icon: no key");
     check(std::string(word_name("fr")) == "Pseudo Steam" && std::string(word_id("fr")) == "ID Steam", "French");
-    check(std::string(word_name("en")) == "Steam Name" && std::string(word_id("ja")) == "Steam ID", "English, and anything else");
+    check(std::string(word_name("en")) == "Steam Name" && std::string(word_name("nl")) == "Steam Name", "English, and anything else");
+    {
+        const char* langs[] = { "en", "fr", "ja", "zh-Hans", "it", "de", "es", "es-419", "ru", "pl", "pt", "ko", "zh-Hant", "ar" };
+        bool all = true;
+        for (const char* l : langs) all = all && std::string(words_of(l).lang) == l && *word_name(l) && *word_id(l) && *word_unavailable(l);
+        check(all, "the 14 languages have the 3 words");
+        // the source is read as UTF-8 (/utf-8): the German word's u with diaeresis is these two bytes
+        check(std::string(word_unavailable("de")).find("\xC3\xBC") != std::string::npos, "the words are UTF-8");
+    }
 
     // the HTML page, made-up pages and names
     {

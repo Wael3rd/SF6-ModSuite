@@ -190,8 +190,29 @@ inline unsigned qwerty_scan(const std::string& symbol) {
 }
 
 // The guide bar's words, by the game's language
-inline const char* word_name(const std::string& lang) { return lang == "fr" ? "Pseudo Steam" : "Steam Name"; }
-inline const char* word_id(const std::string& lang) { return lang == "fr" ? "ID Steam" : "Steam ID"; }
-inline const char* word_unavailable(const std::string& lang) { return lang == "fr" ? "Pseudo indisponible" : "Name unavailable"; }
+struct Words { const char* lang; const char* name; const char* id; const char* unavailable; };
+inline constexpr Words kWords[] = {
+    { "en",      "Steam Name",      "Steam ID",    "Name unavailable" },
+    { "fr",      "Pseudo Steam",    "ID Steam",    "Pseudo indisponible" },
+    { "ja",      "Steam名",         "Steam ID",    "名前を取得できません" },
+    { "zh-Hans", "Steam昵称",       "Steam ID",    "无法获取名称" },
+    { "it",      "Nome Steam",      "ID Steam",    "Nome non disponibile" },
+    { "de",      "Steam-Name",      "Steam-ID",    "Name nicht verfügbar" },
+    { "es",      "Nombre de Steam", "ID de Steam", "Nombre no disponible" },
+    { "es-419",  "Nombre de Steam", "ID de Steam", "Nombre no disponible" },
+    { "ru",      "Имя в Steam",     "Steam ID",    "Имя недоступно" },
+    { "pl",      "Nazwa Steam",     "ID Steam",    "Nazwa niedostępna" },
+    { "pt",      "Nome na Steam",   "ID Steam",    "Nome indisponível" },
+    { "ko",      "Steam 이름",      "Steam ID",    "이름을 확인할 수 없음" },
+    { "zh-Hant", "Steam暱稱",       "Steam ID",    "無法取得名稱" },
+    { "ar",      "اسم Steam",       "معرّف Steam", "الاسم غير متاح" },
+};
+inline const Words& words_of(const std::string& lang) {
+    for (const Words& w : kWords) if (lang == w.lang) return w;
+    return kWords[0];
+}
+inline const char* word_name(const std::string& lang) { return words_of(lang).name; }
+inline const char* word_id(const std::string& lang) { return words_of(lang).id; }
+inline const char* word_unavailable(const std::string& lang) { return words_of(lang).unavailable; }
 
 }  // namespace psn
