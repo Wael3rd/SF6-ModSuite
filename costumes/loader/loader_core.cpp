@@ -9385,8 +9385,9 @@ static void finalize_units(ScanOutputs& o) {
             for (size_t y = x + 1; y < adds.size(); ++y)
                 if (units_overlap(g_units[adds[x]], g_units[adds[y]])) apart = false;
         // Separate downloads put with their costume in one sub-folder (each add-on its own archive or
-        // folder, not options of one mod) are all meant to be worn: only the complete outfit is made
-        bool separate = adds.size() >= 2 && apart;
+        // folder, not options of one mod) are all meant to be worn: only the complete outfit is made.
+        // One outfit per variant (Manager mode): not so, the Manager's Slotsloader fork lists each add-on and all of them
+        bool separate = g_rto_layout != RtoLayout::Off && adds.size() >= 2 && apart;
         for (size_t x = 0; x < adds.size() && separate; ++x) {
             if (!user_grouped(g_units[adds[x]], b)) separate = false;
             for (size_t y = x + 1; y < adds.size() && separate; ++y)
@@ -11196,7 +11197,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
         new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
     new_fp += variant_choices_fingerprint();   // empty while every variant is on
-    if (g_manager_mode) new_fp += ";manager_mode";   // a change of mode rebuilds (normal mode: unchanged)
+    // A change of mode rebuilds (normal mode: unchanged). 2: a costume's add-ons in one sub-folder each give an outfit too; a pak
+    // built before that (test packages of this branch only) is built again
+    if (g_manager_mode) new_fp += ";manager_mode2";
     if (g_swap_repairs) new_fp += "|swap_repairs";    // turning them on or off rebuilds
     if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)
         std::string k;

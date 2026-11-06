@@ -67,4 +67,8 @@ manifest back.
 `slots_clean_test.exe --row-manager <build dir> <scratch folder> <game folder> <costume mod archive>` runs cases 7-22, 25 and
 24 with Manager mode on from the start (the first run must say so): the fork's fixes of cases 16-21 must hold there too.
 Case 22 then gives the five combined outfits only (one sub-folder of separate mods: the main alone is not made). Case 25 is
-short there: two mods in one sub-folder are not handled together (that rule belongs to the runtime options).
+different there: two mods in one sub-folder are not handled together (that rule belongs to the runtime options), and a costume
+with two add-ons that replace no same file, three archives in one sub-folder (Ingrid's FlyIn_DT_Book), gives one outfit per
+add-on and one with both, as the fork lists them. Each of the three rows of `variants.json` is then turned off by itself with
+`variant_choices.json`: its outfit goes, the outfits that stay keep their numbers (the "Outfit V" of a row is its place in the
+fighter's list, which moves; a variant turned on again is a new outfit, as promise 2 of the contract says).

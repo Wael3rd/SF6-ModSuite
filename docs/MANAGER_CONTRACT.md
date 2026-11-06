@@ -68,6 +68,9 @@ Everything of contract 1, and:
      replacing the same files, are one variant each ("main + add-on"), however many there are (fork 1.10.5, MIT; Ingrid
      C1 Barefoot Stockings v2: the main and five outfits); other add-on sets keep the limit of three ("too many to
      combine": the main alone);
+   - a costume put in one sub-folder with add-ons that replace no same file (each its own archive or folder) gives one
+     outfit per add-on and one with all of them, up to three add-ons, each its row in `variants.json`; "only the complete
+     outfit", and "handled together", belong to the runtime options;
    - no NSFW detection by keywords;
    - character-swap repairs (ported from fork 1.10.4, MIT, `costumes/loader/swap_repairs.cpp`) while an empty
      `swap_repairs.txt` is in `SF6_Costumes_Data`. The Manager has no switch for it since 1.0.15: it writes the file at

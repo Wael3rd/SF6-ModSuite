@@ -13,6 +13,8 @@
   Barefoot Stockings v2), gave the main files alone ("too many to combine"); each option is now an outfit ("main +
   option"), however many there are. Other add-on sets keep the limit of three. Installed any other way, these options
   stay runtime options of one outfit, as in 1.17.0.
+- Manager mode, as the fork: a costume put in one sub-folder with add-ons that replace no same file, each its own archive or
+  folder, gives one outfit per add-on and one with all of them. Installed any other way, nothing changes.
 - `SlotsloaderContract=2` in `modinfo.ini` and `variants.json`.
 
 ## 1.20.0 (2026-11-05) — SF6 Mod Suite

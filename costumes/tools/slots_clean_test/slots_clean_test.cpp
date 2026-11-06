@@ -952,6 +952,73 @@ static int run_row_test(const char* build, const char* work, const char* game, c
         expect_said("costume", "retouch M. Bison", false);
         expect_said("costume", "slots checked, 0 left out");
         remove_tree(bison.substr(0, bison.size() - 1));
+
+        // A costume and two add-ons that replace no same file, each its own archive in one sub-folder (Ingrid's FlyIn_DT_Book): one
+        // outfit per add-on and one with both, as the fork lists them; "only the complete outfit" is the runtime options' rule
+        std::string head_p;
+        body_of(bscene, "esf026/000/00/", head_p, unused);
+        auto head = game_bytes(head_p);
+        check(!head.empty(), "M. Bison's head read from the game");
+        if (!head.empty()) head.back() ^= 0x21;
+        const std::string source = "M. Bison/ZZ Three", choices = data_dir + "\\variant_choices.json";
+        write_stored_zip(bison + "ZZ Three\\ZZ Body.zip", {{"ZZ Body/modinfo.ini", bytes_of("name=ZZ Body\r\n")}, {"ZZ Body/" + body_p, body}});
+        write_stored_zip(bison + "ZZ Three\\ZZ Hair.zip", {{"ZZ Hair/modinfo.ini", bytes_of("name=ZZ Hair\r\n")}, {"ZZ Hair/" + hair_p, hair}});
+        write_stored_zip(bison + "ZZ Three\\ZZ Head.zip", {{"ZZ Head/modinfo.ini", bytes_of("name=ZZ Head\r\n")}, {"ZZ Head/" + head_p, head}});
+        const std::string rows[3] = {"ZZ Body + ZZ Hair", "ZZ Body + ZZ Head", "ZZ Body + ZZ Hair + ZZ Head"};
+        auto slot_of_row = [&](const std::string& vj, const std::string& label) {   // "" when off or not listed
+            const std::string key = "{\"label\": \"" + label + "\", \"enabled\": true, \"slot\": \"";
+            const size_t at = vj.find(key);
+            return at == std::string::npos ? std::string() : vj.substr(at + key.size(), vj.find('"', at + key.size()) - at - key.size());
+        };
+        run_loader("costume");
+        expect_said("costume", "ZZ Body: put with its add-on(s) in one sub-folder, only the combined outfit is made");
+        expect_said("costume", "only the complete outfit (all of them) is made", false);
+        for (auto& r : rows) expect_said("costume", ("  variant: " + r).c_str());
+        expect_said("costume", "slots checked, 0 left out");
+        // Its outfit number, -1 when it has none. ("Outfit V" in variants.json is a place in the fighter's list: it moves when an
+        // outfit before it goes. The number stays while the outfit is there; a variant turned on again is a new outfit.)
+        auto number_of = [&](const std::string& label) {
+            const std::string oj = slurp(data_dir + "\\outfits.json");
+            const size_t at = oj.find("\"label\": \"" + label + "\"");
+            const size_t no = at == std::string::npos ? std::string::npos : oj.rfind("\"costume_no\": ", at);
+            return no == std::string::npos ? -1 : atoi(oj.c_str() + no + 14);
+        };
+        std::string vj = slurp(data_dir + "\\variants.json");
+        int numbers[3];
+        for (int k = 0; k < 3; k++) {
+            numbers[k] = number_of(rows[k]);
+            check(numbers[k] > 0 && !slot_of_row(vj, rows[k]).empty(), "a row with its outfit for each add-on and for both");
+        }
+        check(has(vj, ("{\"source\": \"" + source + "\"").c_str()) && !has(vj, "{\"label\": \"ZZ Body\""), "variants.json: under the sub-folder, no row for the costume alone");
+        check(!has(slurp(data_dir + "\\outfits.json"), "\"label\": \"ZZ Body\""), "outfits.json: no outfit for the costume alone");
+        run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
+        // Each row turned off by itself, the way the Manager writes it: its outfit goes, the others keep their numbers
+        for (int k = 0; k < 3; k++) {
+            put(choices, "{ \"version\": 1, \"archives\": { \"" + source + "\": { \"" + rows[k] + "\": false } } }\n");
+            run_loader("costume");
+            expect_said("costume", "Up to date (fingerprint match", false);
+            expect_said("costume", "  variants off (choice): 1 of 3 for M. Bison/ZZ Three");
+            expect_said("costume", "slots checked, 0 left out");
+            vj = slurp(data_dir + "\\variants.json");
+            check(has(vj, ("{\"label\": \"" + rows[k] + "\", \"enabled\": false, \"slot\": null}").c_str()), "variants.json: the row turned off has no outfit");
+            check(number_of(rows[k]) == -1, "outfits.json: the outfit turned off is gone");
+            numbers[k] = -1;
+            for (int o = 0; o < 3; o++) {
+                if (o == k) continue;
+                const int now = number_of(rows[o]);
+                check(now > 0 && !slot_of_row(vj, rows[o]).empty(), "the other rows have their outfits");
+                check(numbers[o] < 0 || now == numbers[o], "an outfit that stays keeps its number");
+                numbers[o] = now;
+            }
+        }
+        DeleteFileA(choices.c_str());
+        run_loader("costume");
+        expect_said("costume", "Up to date (fingerprint match", false);
+        vj = slurp(data_dir + "\\variants.json");
+        for (int k = 0; k < 3; k++)
+            check(number_of(rows[k]) > 0 && !slot_of_row(vj, rows[k]).empty() && (numbers[k] < 0 || number_of(rows[k]) == numbers[k]),
+                  "every row on again, with its outfit");
+        remove_tree(bison.substr(0, bison.size() - 1));
         run_loader("costume");  expect_row("M. Bison's fixtures removed", "1M 2S 3C");
     } else {
         printf("[25] several mods in one sub-folder of a character folder: handled together, retouches included\n");
@@ -1096,6 +1163,15 @@ static int run_row_test(const char* build, const char* work, const char* game, c
         check(has(outfits(), "\"label\": \"ZZ Body\""), "alone in its sub-folder: its own outfit");
         game_options("the loose hair: still an option of the game outfits");
         expect_said("costume", "ZZ Body (ZZ Hair)", false);
+
+        clean();   // the same layout gives three outfits in Manager mode (the other side of this case)
+        put_zip(bison + "ZZ Three\\ZZ Body.zip", "ZZ Body", body);
+        put_zip(bison + "ZZ Three\\ZZ Hair.zip", "ZZ Hair", hair_b);
+        put_zip(bison + "ZZ Three\\ZZ Head.zip", "ZZ Head", head);
+        no_game_options("a body and two add-ons that replace no same file: nothing on a game outfit");
+        expect_said("costume", "sub-folder ZZ Three: 3 mods, handled together");
+        expect_said("costume", "ZZ Body: 2 add-ons as runtime options");
+        check(has(outfits(), "\"label\": \"ZZ Body\"") && !has(outfits(), "\"label\": \"ZZ Body + "), "one outfit, its add-ons are options");
 
         clean();
         put_mod(bison + "ZZ Bundle\\A", "ZZ Bundle A", body, "NameAsBundle=ZZ Bundle\r\n");
