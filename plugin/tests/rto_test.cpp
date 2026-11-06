@@ -114,6 +114,12 @@ static int real_manifest(const char* file) {
 }
 
 int main(int argc, char** argv) {
+    {   // No outfit with options (a loader build with no modular mod): not used, as if there were no manifest (rto::init: off)
+        Manifest none; std::string e;
+        check(!parse_manifest(R"JSON({"format": "sf6-costume-options-1", "pak": "p", "layout": "one", "mods": [], "slots": []})JSON", none, e)
+                  && e == "no slot with options", "a manifest with no slots is not used");
+        check(none.slot_of(1, 5) == nullptr, "no slots: no outfit has options");
+    }
     Manifest m; std::string err;
     check(parse_manifest(kManifest, m, err), "manifest parsed");
     check(m.mods.size() == 1 && m.slots.size() == 1, "1 mod, 1 slot");
