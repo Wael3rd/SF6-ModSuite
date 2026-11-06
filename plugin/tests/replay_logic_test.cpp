@@ -307,18 +307,20 @@ int main() {
         check(static_cast<int>(BgmMode::Character) + 1 == 1 && static_cast<int>(BgmMode::Opponent) + 1 == 2 &&
               static_cast<int>(BgmMode::Stage) + 1 == 3 && static_cast<int>(BgmMode::Random) + 1 == 4, "bgm: the values in the game's order");
         check(BgmChoice{}.mode == BgmMode::Random, "bgm: Random by default");
-        check(bgm_cycle(BgmMode::Character, 1) == BgmMode::Opponent && bgm_cycle(BgmMode::Random, 1) == BgmMode::Character &&
-              bgm_cycle(BgmMode::Character, -1) == BgmMode::Random, "bgm: Left / Right wrap");
+        check(bgm_cycle(BgmMode::Character, 1) == BgmMode::Opponent && bgm_cycle(BgmMode::Random, 1) == BgmMode::Custom &&
+              bgm_cycle(BgmMode::Custom, 1) == BgmMode::Character && bgm_cycle(BgmMode::Character, -1) == BgmMode::Custom,
+              "bgm: Left / Right wrap, Custom after the game's values");
         BgmChoice bb;
         check(bgm_set(bb) == -1, "bgm: Random leaves the replay's description alone");
         bb.mode = BgmMode::Character; check(bgm_set(bb) == 1, "bgm: Character is P1 (EBgmSet.Player1)");
         bb.mode = BgmMode::Opponent;  check(bgm_set(bb) == 2, "bgm: Opponent is P2 (EBgmSet.Player2)");
         bb.mode = BgmMode::Stage;     check(bgm_set(bb) == 0, "bgm: Stage (EBgmSet.Stage)");
+        bb.mode = BgmMode::Custom;    check(bgm_set(bb) == -1, "bgm: Custom with no list behaves as Random");
 
         const Choices no_c;
         check(to_json(no_c).find("bgm") == std::string::npos && to_json(no_c) == to_json(no_c, StageChoice{}, OptionStore{}, BgmChoice{}),
               "bgm: Random writes no key: a file never touched stays as it was");
-        for (const BgmMode bm : { BgmMode::Character, BgmMode::Opponent, BgmMode::Stage }) {
+        for (const BgmMode bm : { BgmMode::Character, BgmMode::Opponent, BgmMode::Stage, BgmMode::Custom }) {
             BgmChoice bw; bw.mode = bm;
             const std::string bt = to_json(no_c, StageChoice{}, OptionStore{}, bw);
             Choices brc; BgmChoice brb;
@@ -341,6 +343,8 @@ int main() {
         uint8_t bg[16] = {};
         const uint8_t want[16] = { 0x31, 0x7b, 0x1a, 0x27, 0xf2, 0xb6, 0x21, 0x43, 0xbd, 0x51, 0xc2, 0xe7, 0xb6, 0xc8, 0x62, 0xf6 };
         check(parse_guid(kBgmTitleGuid, bg) && std::equal(bg, bg + 16, want), "bgm: a GUID's text to its bytes in memory");
+        check(bgm_value_guid(BgmMode::Custom) == nullptr && !parse_guid(bgm_value_guid(BgmMode::Custom), bg) && std::string(bgm_value_english(BgmMode::Custom)) == "Custom",
+              "bgm: Custom's word is ours, no message");
         check(!parse_guid("271a7b31-b6f2-4321-bd51", bg) && !parse_guid("271a7b31xb6f2-4321-bd51-c2e7b6c862f6", bg) && !parse_guid(nullptr, bg) &&
               !parse_guid("271a7b31-b6f2-4321-bd51-c2e7b6c862f6a", bg), "bgm: not a GUID: refused");
         for (const BgmMode bm : { BgmMode::Character, BgmMode::Opponent, BgmMode::Stage, BgmMode::Random })

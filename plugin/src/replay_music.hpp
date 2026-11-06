@@ -6,6 +6,9 @@ namespace slots::replaymusic {
 // The game's Character Music screen (app.UIFlowCharaBgmSetting), as T opens it on Battle Settings. What it changes is the game's
 // own: the fighters' playlists in the save, shared with online. Game thread. False: not started (the log says why).
 bool open_character_music();
+// The game's playlist dialog alone (app.UIFlowCharaBgmSelect), for the row's Custom value, no fighter list before it. Nothing it
+// does reaches the save: its parent screen is what writes. False: not started (the log says why).
+bool open_custom_list();
 // A screen started here is still running. Game thread, every frame while one was started.
 bool up();
 

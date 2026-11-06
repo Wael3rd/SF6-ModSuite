@@ -4,8 +4,9 @@
 // The row's values are the game's row's (Battle Settings > Other, read 06/11, its order: the spin's number + 1 is app.SelectBgm,
 // Self 1, Opponent 2, Stage 3, Random 4). A replay has no "self": Character is P1's fighter, Opponent P2's (Wael 06/11). Those
 // two play that fighter's playlist of the game's save, or its default music (app.battle.BattleFlowMap.loadBgmPrefab).
-// The file: "bgm": {"mode": "character" | "opponent" | "stage"}. No "bgm", or anything else in it: Random, what a replay does by
-// itself (app.battle.BattleRule.reset), and the replay's description is left as the game set it.
+// Then a value of ours, Custom: a list of tracks of our own (none yet: it behaves as Random).
+// The file: "bgm": {"mode": "character" | "opponent" | "stage" | "custom"}. No "bgm", or anything else in it: Random, what a replay
+// does by itself (app.battle.BattleRule.reset), and the replay's description is left as the game set it.
 #pragma once
 
 #include "json.hpp"
@@ -15,15 +16,15 @@
 
 namespace slots::replay {
 
-enum class BgmMode { Character = 0, Opponent, Stage, Random };   // the game's row's order
-constexpr int kBgmModes = 4;
+enum class BgmMode { Character = 0, Opponent, Stage, Random, Custom };   // the game's row's order, then ours
+constexpr int kBgmModes = 5;
 
 struct BgmChoice {
     BgmMode mode = BgmMode::Random;
     bool operator==(const BgmChoice& o) const { return mode == o.mode; }
 };
 
-// The row's words: the game's own messages (the player's language), English when one is not found
+// The row's words: the game's own messages (the player's language), English when one is not found; Custom, ours: no message
 constexpr const char* kBgmTitleGuid = "271a7b31-b6f2-4321-bd51-c2e7b6c862f6";
 constexpr const char* kBgmTitleEnglish = "Battle BGM";
 inline const char* bgm_value_guid(BgmMode m) {
@@ -31,6 +32,7 @@ inline const char* bgm_value_guid(BgmMode m) {
     case BgmMode::Character: return "b7753bc3-dc3c-41d0-942d-413078de7f87";
     case BgmMode::Opponent:  return "7a08b3b4-aa14-4857-b827-716af1438c91";
     case BgmMode::Stage:     return "300f754d-b308-4729-a60f-4783d57f2a94";
+    case BgmMode::Custom:    return nullptr;
     default:                 return "fa32e0d2-996e-4f4b-a183-7074d32bc72f";
     }
 }
@@ -39,6 +41,7 @@ inline const char* bgm_value_english(BgmMode m) {
     case BgmMode::Character: return "Character";
     case BgmMode::Opponent:  return "Opponent";
     case BgmMode::Stage:     return "Stage";
+    case BgmMode::Custom:    return "Custom";
     default:                 return "Random";
     }
 }
@@ -85,6 +88,7 @@ inline BgmChoice parse_bgm(const Json& root) {
     if (m->s == "character") b.mode = BgmMode::Character;
     else if (m->s == "opponent") b.mode = BgmMode::Opponent;
     else if (m->s == "stage") b.mode = BgmMode::Stage;
+    else if (m->s == "custom") b.mode = BgmMode::Custom;
     return b;
 }
 // The file's "bgm" entry; "" for the default, so a file never touched stays as it was
@@ -93,6 +97,7 @@ inline std::string bgm_json(const BgmChoice& b) {
     case BgmMode::Character: return "\"bgm\": {\"mode\": \"character\"}";
     case BgmMode::Opponent:  return "\"bgm\": {\"mode\": \"opponent\"}";
     case BgmMode::Stage:     return "\"bgm\": {\"mode\": \"stage\"}";
+    case BgmMode::Custom:    return "\"bgm\": {\"mode\": \"custom\"}";
     default:                 return std::string();
     }
 }

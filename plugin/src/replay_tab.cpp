@@ -30,7 +30,8 @@
 //   - Battle BGM, as the game's row (its words, its values: replay_bgm.hpp), nothing on the right: Left / Right its value;
 //     T / pad Y on any value ("<key> Character Music" in the guide bar) opens the game's own Character Music screen
 //     (replay_music.cpp): its playlists are the save's, shared with online; only the row's value is ours. While it runs:
-//     our copies, the tab bar and the description give way, no input here; Back on it comes back to the row.
+//     our copies, the tab bar and the description give way, no input here; Back on it comes back to the row. On the row's
+//     last value, Custom (ours), the entry reads "Custom Music List" and T opens the game's playlist dialog alone.
 //   - The summary panel on the right of the pages, as Battle Settings' (the title pill, the fighters' outfit lines, the
 //     stage's picture and line, the music), drawn from the same choices.
 // The game picks the colours with a grid of colour boxes (several at once); a choice here is one colour, hence the
@@ -226,6 +227,7 @@ const char* const kDescPage = "Set which outfit and color this character will ap
 const char* const kDescStage = "Set which stage is shown during replays.";
 const char* const kDescBgm = "Set which music plays during replays.";
 const char* const kMusicHint = "Character Music";     // the guide bar's entry, as on Battle Settings
+const char* const kCustomHint = "Custom Music List";  // ...on the row's Custom value
 const char* const kOptionsHint = "Costume options";   // the guide bar's entry, as on Edit Character
 const char* const kOptionsName = "Costume Options";   // the summary's heading
 const char* const kRowTemplateAgent = "Resident_Cmn_CertifiedMatch";
@@ -1253,7 +1255,7 @@ void input() {
         if (k_up.step(k.up)) { g_list_row = (g_list_row + kListRows - 1) % kListRows; g_dirty = true; }
         if (k_down.step(k.down)) { g_list_row = (g_list_row + 1) % kListRows; g_dirty = true; }
         const bool music_press = k_music.press(k.music);
-        if (g_list_row == kBgmRow) {               // its value; T / pad Y on any value: the game's Character Music screen
+        if (g_list_row == kBgmRow) {               // its value; T / pad Y: the game's Character Music screen, on Custom its dialog alone
             BgmChoice next = g_bgm;
             if (k_left.step(k.left)) next.mode = bgm_cycle(next.mode, -1);
             if (k_right.step(k.right)) next.mode = bgm_cycle(next.mode, 1);
@@ -1263,8 +1265,9 @@ void input() {
                 g_dirty = true;
                 logf("replay tab: music -> %s", bgm_value_english(g_bgm.mode));
             }
-            stages::replay_music_hint(kMusicHint);
-            if (music_press && replaymusic::open_character_music()) { g_music_open.store(true); g_dirty = true; }
+            const bool custom = g_bgm.mode == BgmMode::Custom;
+            stages::replay_music_hint(custom ? kCustomHint : kMusicHint);
+            if (music_press && (custom ? replaymusic::open_custom_list() : replaymusic::open_character_music())) { g_music_open.store(true); g_dirty = true; }
             return;
         }
         if (ok && g_list_row == 0 && f) { g_level.store(kLevelGrid); g_dirty = true; }
