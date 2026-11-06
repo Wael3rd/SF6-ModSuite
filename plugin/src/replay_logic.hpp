@@ -16,6 +16,7 @@
 #include "json.hpp"
 #include "replay_bgm.hpp"
 #include "replay_options.hpp"
+#include "words.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -48,7 +49,8 @@ struct Outfit {
 
 struct Fighter {
     int fid = 0;
-    std::string name;
+    std::string name;                 // as the game writes it in a line ("Ryu", its language)
+    std::string caption;              // as the game's grids and headers do ("RYU"); empty: grid_caption(name)
     std::vector<Outfit> outfits;      // game outfits (by costume number), then extra outfits (by name)
 };
 
@@ -152,8 +154,8 @@ inline Choice cycle_color(const Fighter& f, const Choice& c, int dir) {
 inline std::string color_label(int color) {
     char b[32];
     if (color >= 0 && color < 10) std::snprintf(b, sizeof b, "%02d", color + 1);
-    else if (color >= 100 && color < 200) std::snprintf(b, sizeof b, "EX %d", color - 99);
-    else if (color >= 200 && color < 300) std::snprintf(b, sizeof b, "DX %d", color - 199);
+    else if (color >= 100 && color < 200) return words::game_arg(words::G::ColorEx, std::to_string(color - 99));
+    else if (color >= 200 && color < 300) return words::game_arg(words::G::ColorDx, std::to_string(color - 199));
     else std::snprintf(b, sizeof b, "#%d", color);
     return b;
 }
@@ -166,7 +168,7 @@ inline std::string choice_color_label(const Outfit& o, const Choice& c) {
     return color_label(c.color);
 }
 
-// What a row shows on its right: "Default", or "<outfit name> - Color N"
+// A choice in one line, for the log: "Default", or "<outfit name> - Color N"
 inline std::string row_text(const Fighter& f, const Choice& c) {
     const int i = outfit_index(f, c);
     if (i < 0) return "Default";
@@ -194,9 +196,9 @@ inline size_t fit_length(size_t len, float drawn, float region) {
 // "Luke: Default", as its row
 inline std::string summary_line(const Fighter& f, const Choice& c) {
     const int i = outfit_index(f, c);
-    if (i < 0) return f.name + ": Default";
+    if (i < 0) return words::trf(words::W::FmtNameValue, { f.name, words::game(words::G::Default) });
     const Outfit& o = f.outfits[static_cast<size_t>(i)];
-    return f.name + ": " + o.name + ", " + choice_color_label(o, c);
+    return words::trf(words::W::FmtFighterOutfit, { f.name, o.name, choice_color_label(o, c) });
 }
 // The lines under "Replay Outfit Settings": one per character set to On (the catalog's order, the grid's), at most `max`
 // (the last one then says how many more); "Default" when none is On
@@ -206,11 +208,11 @@ inline std::vector<std::string> summary_lines(const std::vector<Fighter>& cat, c
         auto it = cs.find(f.fid);
         if (it != cs.end() && it->second.forced) on.push_back(summary_line(f, it->second));
     }
-    if (on.empty()) return { "Default" };
+    if (on.empty()) return { words::game(words::G::Default) };
     if (max > 0 && on.size() > max) {
         const size_t more = on.size() - (max - 1);
         on.resize(max - 1);
-        on.push_back("+ " + std::to_string(more) + " more");
+        on.push_back(words::trf(words::W::ReplayMore, { std::to_string(more) }));
     }
     return on;
 }
@@ -392,23 +394,9 @@ inline void order_fighters(std::vector<Fighter>& fs) {
     };
     std::stable_sort(fs.begin(), fs.end(), [&](const Fighter& a, const Fighter& b) { return rank(a.fid) < rank(b.fid); });
 }
-inline const char* fighter_name(int fid) {
-    switch (fid) {
-    case 1: return "Ryu";        case 2: return "Luke";      case 3: return "Kimberly";  case 4: return "Chun-Li";
-    case 5: return "Manon";      case 6: return "Zangief";   case 7: return "JP";        case 8: return "Dhalsim";
-    case 9: return "Cammy";      case 10: return "Ken";      case 11: return "Dee Jay";  case 12: return "Lily";
-    case 13: return "A.K.I.";    case 14: return "Rashid";   case 15: return "Blanka";   case 16: return "Juri";
-    case 17: return "Marisa";    case 18: return "Guile";    case 19: return "Ed";       case 20: return "E. Honda";
-    case 21: return "Jamie";     case 22: return "Akuma";    case 25: return "Sagat";    case 26: return "M. Bison";
-    case 27: return "Terry";     case 28: return "Mai";      case 29: return "Elena";    case 30: return "C. Viper";
-    case 31: return "Alex";      case 32: return "Ingrid";   case 33: return "Yasmine";  case 34: return "Arjun";
-    default: return nullptr;
-    }
-}
 // The game's outfit names by costume number (what Battle Settings shows)
 inline std::string game_outfit_name(int costume) {
-    if (costume == 4) return "DriveTech";
-    return "Outfit " + std::to_string(costume < 4 ? costume + 1 : costume);
+    return words::outfit_name(costume);
 }
 
 }  // namespace slots::replay

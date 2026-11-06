@@ -23,6 +23,7 @@
 // has the focus, via.hid.Mouse / via.hid.GamePad merged devices), never hooked or swallowed.
 #include "rto.hpp"
 #include "slots_ui.hpp"
+#include "words.hpp"
 
 #pragma comment(lib, "user32.lib")   // EnumWindows / GetCursorPos / ScreenToClient / GetAsyncKeyState
 
@@ -171,36 +172,10 @@ bool resolve() {
     return R.ok;
 }
 
-// ---- hint titles: the shared locale file, the game's text language (the Color Mod's dialogs/locale.cpp) ----
-const char* kLocale = "reframework/data/SF6_NativeLocale_data/locale.json";
-const char* kLocaleLegacy = "reframework/data/SF6_ColorSpinExtra_data/locale.json";
-
-const char* lang_near(const std::string& c) {
-    if (c == "es-419") return "es";
-    if (c == "zh-Hant") return "zh-Hans";
-    if (c == "pt") return "es";
-    return nullptr;
-}
-
+// ---- hint titles: the game's own words, in its language ----
 void load_titles() {
-    g_title_move = "Move"; g_title_zoom = "Zoom";
-    std::string text = read_file(kLocale);
-    Json root;
-    if (text.empty() || !json_parse(text, root) || root.kind != Json::Object) {
-        text = read_file(kLocaleLegacy);
-        if (text.empty() || !json_parse(text, root) || root.kind != Json::Object) return;
-    }
-    const std::string lang = game_language();
-    auto lookup = [&](const char* key, std::string& out) {
-        const char* close_lang = lang_near(lang);
-        for (const char* code : { lang.c_str(), close_lang, "en" }) {
-            const Json* t = code ? root.get(code) : nullptr;
-            const Json* v = t && t->kind == Json::Object ? t->get(key) : nullptr;
-            if (v && v->kind == Json::String) { out = v->s; return; }
-        }
-    };
-    lookup("hint.move", g_title_move);
-    lookup("hint.zoom", g_title_zoom);
+    g_title_move = words::game(words::G::HintMove);
+    g_title_zoom = words::game(words::G::HintZoom);
 }
 
 // ---- Win32 input: the game window (largest visible window of this process), cursor only while focused ----

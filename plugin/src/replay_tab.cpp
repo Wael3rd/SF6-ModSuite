@@ -32,7 +32,7 @@
 //     Music screen (replay_music.cpp): its playlists are the save's, shared with online; only the row's value is ours. While it
 //     runs: our copies, the tab bar and the description give way, no input here; Back on it comes back to the row. On the row's
 //     last value, Custom (ours), the entry reads "Custom Music List" and T opens the game's playlist dialog alone, on the list
-//     of ours, which Back saves. The words of ours: replay_words.hpp.
+//     of ours, which Back saves. The words: words.hpp (the game's own by GUID, ours by language).
 //   - The summary panel on the right of the pages, as Battle Settings' (the title pill, the fighters' outfit lines, the
 //     stage's picture and line, the music), drawn from the same choices.
 // The game picks the colours with a grid of colour boxes (several at once); a choice here is one colour, hence the
@@ -88,7 +88,7 @@
 #include "replay_logic.hpp"
 #include "replay_music.hpp"
 #include "replay_tab.hpp"
-#include "replay_words.hpp"
+#include "words.hpp"
 #include "colormod_link.hpp"
 #include "rto.hpp"
 #include "stages.hpp"
@@ -103,6 +103,11 @@ namespace slots::replaytab {
 namespace {
 
 using namespace slots::replay;
+using words::G;
+using words::W;
+using words::game;
+using words::tr;
+using words::trf;
 
 constexpr const char* kTop = "CFNReplayTop";
 constexpr int kSearch = 4;                        // app.UICFNReplayTop.TabType.SEARCH
@@ -110,7 +115,6 @@ constexpr uint32_t kPollEvery = 15;
 constexpr int kMaxRefused = 3;
 constexpr uint32_t kActFlags = 2 | 8;             // app.InputDigitalFlag Trigger | Repeat
 constexpr uint32_t kDirTabBack = 16, kDirTabNext = 32;   // app.UIPartsItemDirection
-constexpr const char* kTabLabel = "Settings";
 // layout, root space (1920 x 1080; c_title sits at the root's origin): Battle Settings > Other > Opponent Outfit
 // Settings' own places (read 05/11)
 constexpr int kCols = 4, kVisRows = 8, kCells = kCols * kVisRows, kRows = 3;
@@ -126,7 +130,9 @@ constexpr float kLineX = 739, kLineY = 150, kLineLen = 703, kLineW = 5;
 constexpr float kBoxL = kLineX - kLineW / 2, kBoxT = 150, kBoxR = 1691, kBoxB = 852;
 constexpr int kListRows = 3;                                // the option rows: Replay Outfit Settings, Stage Settings, Replay Music
 constexpr int kBgmRow = 2;
-const char* const kListLabels[kListRows] = { "Replay Outfit Settings", "Stage Settings", nullptr };   // the last: bgm_title()
+std::string list_label(int row) {                           // the option rows' names (the stage's: the game's own)
+    return row == 1 ? game(G::StageSettings) : tr(row == kBgmRow ? W::ReplayRowMusic : W::ReplayRowOutfits);
+}
 // the Replay Music row, in its 640 x 58 (the game's p_Spin_2, 05/11 on Wael's 59.png): the value's centre at (450, 29), the arrows'
 // centres at (302, 29) and (599, 29)
 constexpr float kListValueX = 450, kListValueW = 262, kListArrowL = 302, kListArrowR = 599;
@@ -154,7 +160,7 @@ constexpr int kSMarkLeg = 20;
 constexpr float kRowX = 156, kRowY = 210, kRowW = 740, kRowH = 58, kRowStep = 70, kRowMatH = 280;
 constexpr float kLabelX = 23, kMidY = 29, kLabelW = 320, kValueX = 524, kValueW = 300, kArrowL = 348, kArrowR = 700;
 constexpr float kFontLabel = 25, kFontValue = 23;
-constexpr size_t kValueMax = 24;                  // a longer outfit name is cut (it stays between the arrows)
+constexpr size_t kValueMax = 24;                  // units (words.hpp): a longer outfit name is cut (it stays between the arrows)
 // its fighter: the capture room's render target drawn 1:1 from x 320 (e_texture_rtt, 1920 x 1080 at 320, 0); the part
 // on screen: u 0 - 0.8333
 constexpr float kModelX = 320, kModelY = 0, kModelW = 1600, kModelH = 1080;
@@ -201,7 +207,7 @@ constexpr float kSumTitleRegionW = 430, kSumTitleRegionH = 37, kSumRegionW = 320
 constexpr float kFontSumTitle = 24, kFontSumLine = 23;
 constexpr int64_t kSumFontSlot = 8;
 constexpr int kSumTexts = 25, kSumMaxFighters = 20;   // 3 names + 20 outfit lines + the stage's line + the music's, the page's 6
-constexpr size_t kSumLineMax = 38;                 // at most, whatever is measured: stays on the screen (then cut to the region, put_line_text)
+constexpr size_t kSumLineMax = 38;                 // units (words.hpp), at most, whatever is measured: stays on the screen (then cut to the region, put_line_text)
 constexpr size_t kSumAlwaysFits = 15;              // bytes that fit the region whatever the letters (15 x the widest glyph, about 17 px)
 constexpr float kSumDrawRegionW = 1200;            // a line's region: wider than any line (never clips what is measured)
 constexpr float kSumOffScreen = -4000;             // a line while its cut is not settled
@@ -221,16 +227,7 @@ constexpr int64_t kPillSampler = 5;                // the game's Scale9Grids' Sa
 struct TextLook { uint32_t shadow; float dist, rot, blur, strength; bool glow; uint32_t glow_col; float glow_blur, glow_strength; };
 constexpr TextLook kSumTitleLook{ 0x54000000, 3, 45, 5, 2, false, 0x80000000, 10, 4 };
 constexpr TextLook kSumLineLook{ 0xCC000000, 0, 0, 3, 5, true, 0x80000000, 10, 4 };
-const char* const kSumTitleGrid = "Replay Settings";
-const char* const kSumTitlePage = "Outfit Settings (Replay)";
 constexpr float kFaceV0 = 0.125f, kFaceVH = 0.75f;   // the portrait's middle band (the cells' pictures are 4:3)
-const char* const kDescGrid = "Set which outfit each character will appear in during replays.";
-const char* const kDescPage = "Set which outfit and color this character will appear in during replays.";
-const char* const kDescStage = "Set which stage is shown during replays.";
-const char* const kDescBgm = "Set which music plays during replays.";
-const char* const kMusicHintEnglish = "Character Music";   // the guide bar's entry when the game's text is not found
-const char* const kOptionsHint = "Costume options";   // the guide bar's entry, as on Edit Character
-const char* const kOptionsName = "Costume Options";   // the summary's heading
 const char* const kRowTemplateAgent = "Resident_Cmn_CertifiedMatch";
 const char* const kArrowTemplateAgent = "StartMenuUI";
 
@@ -261,7 +258,6 @@ std::vector<Fighter> g_cat;
 Choices g_choices;
 OptionStore g_options;                            // the costume options saved per fighter and outfit, for replays
 BgmChoice g_bgm;                                  // the Replay Music row
-std::string g_lang = "en";                        // the game's text language, read on entering the tab
 std::string g_music_hint;                         // the game's own "Character Music" in that language
 std::map<int, Choice> g_last_on;                  // per character, the outfit it had before being turned Off
 int g_cursor = 0, g_top_row = 0;                  // the focused cell (catalog index), the first grid row shown
@@ -491,7 +487,7 @@ void build_catalog() {
                 if (m != mod_of.end()) o.mod_id = m->second;            // none known: the file names the slot by its number
                 auto l = label_of.find({ fid, cos });
                 const Json* nm = e.get("name");
-                o.name = l != label_of.end() && !l->second.empty() ? l->second : nm ? nm->as_str() : "Outfit " + std::to_string(cos);
+                o.name = l != label_of.end() && !l->second.empty() ? l->second : nm ? nm->as_str() : words::game_arg(G::OutfitN, std::to_string(cos));
                 for (int k = 0; k < 10; ++k) o.colors.push_back(k);   // costumes.cpp gives every slot colours 0-9
                 by[fid].outfits.push_back(o);
                 ++slots;
@@ -538,8 +534,9 @@ void build_catalog() {
     g_cat.clear();
     for (auto& [fid, f] : by) {
         f.fid = fid;
-        const char* n = fighter_name(fid);
-        f.name = n ? n : "Fighter " + std::to_string(fid);
+        f.name = words::fighter_name(fid);
+        f.caption = words::fighter_caption(fid);
+        if (f.name.empty()) f.name = trf(W::ReplayFighterN, { std::to_string(fid) });
         sort_outfits(f.outfits);
         if (!f.outfits.empty()) g_cat.push_back(f);
     }
@@ -719,25 +716,13 @@ StageLook stage_look(int cell) {
     }
     return l;
 }
-// The game's message of a stage's name as text (via.gui.message.get), "" when not found
-std::string message_text(const uint8_t guid[16]) {
-    static Method* m = nullptr;
-    static bool looked = false;
-    if (!looked) {
-        looked = true;
-        TD* t = api().tdb()->find_type("via.gui.message");
-        m = t ? method_of(t, "get(System.Guid)", 1) : nullptr;
-        logf("replay tab: stage names %s", m ? "as text from via.gui.message.get" : "from the stage slots (via.gui.message.get not found)");
-    }
-    return m ? str(call_obj(m, nullptr, { const_cast<uint8_t*>(guid) })) : std::string();
-}
 // The Replay Music row's words, as text (copies show one text then another: never by a message id, see put_line_text): its name
-// and Custom ours, by language (replay_words.hpp); the game's values its own, English when a message is not found
-std::string bgm_title() { return word(Word::ReplayMusic, g_lang); }
+// and Custom ours, by language (words.hpp); the game's values its own, English when a message is not found
+std::string bgm_title() { return tr(W::ReplayRowMusic); }
 std::string bgm_value() {
-    if (g_bgm.mode == BgmMode::Custom) return word(Word::Custom, g_lang);
+    if (g_bgm.mode == BgmMode::Custom) return tr(W::ReplayCustom);
     uint8_t g[16];
-    std::string m = parse_guid(bgm_value_guid(g_bgm.mode), g) ? message_text(g) : std::string();
+    std::string m = parse_guid(bgm_value_guid(g_bgm.mode), g) ? game_message(g) : std::string();
     return m.empty() ? bgm_value_english(g_bgm.mode) : m;
 }
 // The summary's line: the value, with Custom's number of tracks
@@ -747,14 +732,14 @@ std::string bgm_summary_line() {
 // A cell's name, always as text: the banner's name has one writer mode (a message id there left its id behind under a
 // written text, and the core's compare then skipped the next stage's id: Wael 05/11, "moving keeps the old name")
 std::string cell_name(int cell) {
-    if (cell <= 0 || cell > static_cast<int>(g_stages.size())) return "Default";
+    if (cell <= 0 || cell > static_cast<int>(g_stages.size())) return game(G::Default);
     const StageEntry& s = g_stages[static_cast<size_t>(cell - 1)];
     std::string name = s.name;
     if (s.key.empty() && s.named && (name.empty() || name.rfind("ess", 0) == 0)) {
-        const std::string m = message_text(s.guid);
+        const std::string m = game_message(s.guid);
         if (!m.empty()) name = m;
     }
-    if (name.empty()) name = "Stage " + std::to_string(s.id);
+    if (name.empty()) name = trf(W::ReplayStageN, { std::to_string(s.id) });
     const StageLook l = stage_look(cell);
     return l.var ? stagelogic::variation_label(name, l.var->name, l.var->bundle) : name;
 }
@@ -1279,8 +1264,8 @@ void input() {
                 logf("replay tab: music -> %s", bgm_value_english(g_bgm.mode));
             }
             const bool custom = g_bgm.mode == BgmMode::Custom;
-            stages::replay_music_hint(custom ? word(Word::CustomMusicList, g_lang) : g_music_hint.c_str());
-            if (music_press && (custom ? replaymusic::open_custom_list(g_bgm.list, word(Word::CustomMusicList, g_lang))
+            stages::replay_music_hint(custom ? tr(W::ReplayCustomList) : g_music_hint.c_str());
+            if (music_press && (custom ? replaymusic::open_custom_list(g_bgm.list, tr(W::ReplayCustomList))
                                        : replaymusic::open_character_music())) { g_music_open.store(true); g_dirty = true; }
             return;
         }
@@ -1348,7 +1333,7 @@ void input() {
         // keyboard, the pad's X) opens the same menu as Edit Character's
         const bool var_press = k_var.press(k.var);
         if (const rto::Slot* slot = options_slot(*f, cur)) {
-            stages::replay_guide_hint(kOptionsHint);
+            stages::replay_guide_hint(tr(W::OptionsTitle));
             if (var_press && rto::menu::open_replay(slot, saved_options(slot), options_changed)) { g_options_open = true; return; }
         }
         const int rows = cur.forced ? kRows : 1;   // Off: the rows below are disabled, the focus stays on the first
@@ -1395,7 +1380,7 @@ void tab_bar(Obj* main) {
     void* item5 = find(main, "c_item_05");
     if (!item5) return;
     set_vis(item5, true);
-    if (void* t = A()->ui_find_child(item5, "e_text_menu", 1)) A()->ui_set_text(C(), t, kTabLabel);
+    if (void* t = A()->ui_find_child(item5, "e_text_menu", 1)) A()->ui_set_text(C(), t, tr(W::ReplayTab));
     set_vis(A()->ui_find_child(item5, "e_hit_mouse", 1), false);
     set_vis(A()->ui_find_child(item5, "c_batch", 1), false);
     set_state(item5, g_ours.load() ? "SELECT" : "DEFAULT");
@@ -1582,6 +1567,7 @@ void style_row_text(void* e, int64_t point, float w, float font) {
     set_enum(e, "set_PageAlignment(via.gui.PageAlignment)", point);
     A()->ui_set_region_size(C(), e, w, kRowH);
     A()->ui_set_font_size(C(), e, font, font);
+    set_enum(e, "set_AutoRegionFit(System.Boolean)", 0);   // never squeezed: every text of a row fits by itself (plugin/locale: max)
 }
 // A row (a copy of the game's row), once: the size of the game's rows (w x 58, its material w x 280, its shadow
 // w + 20 x 77 at -8, -6), the template's own extras hidden (colour block, frame, mouse area, its tinted title: the label
@@ -1614,7 +1600,7 @@ void row_darken(void* row, bool sel, bool disabled) {
     set_vis(d, !sel);
 }
 // A label copy (over its row): its left middle at (23, 29) of the row
-void put_label(void* title, const std::string& name, const char* text, float x, float y, uint32_t col, bool on) {
+void put_label(void* title, const std::string& name, const std::string& text, float x, float y, uint32_t col, bool on) {
     void* l = copy_of(title, name);
     if (!l) return;
     if (on) {
@@ -1623,14 +1609,14 @@ void put_label(void* title, const std::string& name, const char* text, float x, 
             set_priority(l, kPrioText);
         }
         place(l, x + kLabelX, y + kMidY);
-        A()->ui_set_text(C(), l, text);
+        A()->ui_set_text(C(), l, text.c_str());
         A()->ui_set_color(C(), l, col);
     }
     show(l, on);
 }
 // The character's page's row r: SELECT on the focused row, DEFAULT; texts and arrows coloured as the game's (the value
 // under the row's darken, the label and arrows over it); a disabled row darker, without arrows
-void put_row(void* title, int r, const char* label, const std::string& value, bool on, bool sel, bool disabled) {
+void put_row(void* title, int r, const std::string& label, const std::string& value, bool on, bool sel, bool disabled) {
     void* row = copy_of(title, cname("row", r));
     if (!row) return;
     const float y = kRowY + r * kRowStep;
@@ -1694,7 +1680,7 @@ void render_list(void* title, bool on, int focus, bool entered, bool side) {
             show(row, on);
         }
         const uint32_t label_col = ent ? kColListTextDecided : sel ? kColRowTextSel : kColRowTextDim;
-        put_label(title, cname("llbl", r), r == kBgmRow ? bgm_title().c_str() : kListLabels[r], kListX, y, label_col, on);
+        put_label(title, cname("llbl", r), list_label(r), kListX, y, label_col, on);
         if (r == kBgmRow)
             for (int s = 0; s < 2; ++s) {
                 void* a = copy_of(title, s ? "e_ro_larr" : "e_ro_larl");
@@ -1801,7 +1787,7 @@ void render_stage(void* title, bool on, bool grid) {
     // the Default cell's label, over its picture while it is in view
     const int def_vis = 0 - g_stage_top * kSCols;
     const bool def_on = on && def_vis >= 0 && def_vis < kSCells;
-    put_center_text(title, "e_ro_sdeflbl", "DEFAULT", nullptr, kSGridX + kSCellW / 2, kSGridY + kSCellH / 2, kSCellW, kFontStageCell,
+    put_center_text(title, "e_ro_sdeflbl", tr(W::ReplayStageDefault), nullptr, kSGridX + kSCellW / 2, kSGridY + kSCellH / 2, kSCellW, kFontStageCell,
                     grid && g_stage_cursor == 0 ? kColText : kColTextDim, def_on);
     // the focus frame (behind the focused cell), the chosen cell's corner mark
     const int fv = g_stage_cursor - g_stage_top * kSCols;
@@ -2006,7 +1992,7 @@ void put_sum_text(void* title, const std::string& name, bool head, const std::st
 // The summary: the title pill and its heading, then the items (names, lines, a picture: text = its path) where
 // summary_layout puts them
 struct SumItem { SumKind kind; std::string text; };
-void render_summary(void* title, bool on, const char* heading, const std::vector<SumItem>& items) {
+void render_summary(void* title, bool on, const std::string& heading, const std::vector<SumItem>& items) {
     put_pill(title, on);
     if (on) log_pill(title);
     put_sum_text(title, "e_ro_sumtitle", true, heading, sum_x(kSumTitleX), sum_y(kSumTitleY), kColSumTitle, on);
@@ -2033,12 +2019,12 @@ void render_summary(void* title, bool on, const char* heading, const std::vector
 // stage no longer listed), the Default cell's picture and "Default"
 void stage_summary(std::string& pic, std::string& name) {
     const int cell = stage_cell_of_choice();
-    if (cell <= 0 || cell > static_cast<int>(g_stages.size())) { pic = kStageDefaultImage; name = "Default"; return; }
+    if (cell <= 0 || cell > static_cast<int>(g_stages.size())) { pic = kStageDefaultImage; name = game(G::Default); return; }
     const StageEntry& e = g_stages[static_cast<size_t>(cell - 1)];
     std::string stage = e.name;
     if (e.key.empty() && e.named && (stage.empty() || stage.rfind("ess", 0) == 0))
-        if (std::string m = message_text(e.guid); !m.empty()) stage = m;
-    if (stage.empty()) stage = "Stage " + std::to_string(e.id);
+        if (std::string m = game_message(e.guid); !m.empty()) stage = m;
+    if (stage.empty()) stage = trf(W::ReplayStageN, { std::to_string(e.id) });
     pic = e.banner;
     name = stage;
     if (!e.key.empty()) return;
@@ -2052,15 +2038,15 @@ void stage_summary(std::string& pic, std::string& name) {
 // Settings (the stage's picture and name), Replay Music (its value)
 std::vector<SumItem> grid_summary() {
     std::vector<SumItem> v;
-    v.push_back({ SumKind::Name, kListLabels[0] });
-    for (const std::string& l : summary_lines(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, cut_utf8(l, kSumLineMax) });
-    v.push_back({ SumKind::Name, kListLabels[1] });
+    v.push_back({ SumKind::Name, list_label(0) });
+    for (const std::string& l : summary_lines(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, words::cut_units(l, kSumLineMax) });
+    v.push_back({ SumKind::Name, list_label(1) });
     std::string pic, name;
     stage_summary(pic, name);
     v.push_back({ SumKind::Picture, pic });
-    v.push_back({ SumKind::Line, cut_utf8(name, kSumLineMax) });
+    v.push_back({ SumKind::Line, words::cut_units(name, kSumLineMax) });
     v.push_back({ SumKind::Name, bgm_title() });
-    v.push_back({ SumKind::Line, cut_utf8(bgm_summary_line(), kSumLineMax) });
+    v.push_back({ SumKind::Line, words::cut_units(bgm_summary_line(), kSumLineMax) });
     return v;
 }
 
@@ -2084,9 +2070,9 @@ void render_grid(void* title, bool on, bool grid) {
         const Fighter& f = g_cat[static_cast<size_t>(idx)];
         const bool forced = choice_of(f).forced;
         put_image(title, cname("cimg", i), f.fid, x + kCellW - 96, y, 96, kCellH, true, grid ? kColText : kColTextDim);
-        put_text(title, cname("cname", i), grid_caption(f.name), x + 10, y + 40, kFontCell,
+        put_text(title, cname("cname", i), f.caption.empty() ? grid_caption(f.name) : f.caption, x + 10, y + 40, kFontCell,
                  foc ? kColDark : grid ? kColText : kColTextDim);
-        put_text(title, cname("con", i), "On", x + 10, y + 6, kFontCell, grid ? kColOn : kColOnDim, forced);
+        put_text(title, cname("con", i), game(G::On), x + 10, y + 6, kFontCell, grid ? kColOn : kColOnDim, forced);
     }
 }
 
@@ -2097,34 +2083,28 @@ void render_page(void* title, const Fighter* f) {
     // Off: the disabled rows show what On would bring back (the game keeps a disabled row's value)
     const Choice shown = on && !c.forced ? row_step(*f, c, 0, 1) : c;
     const int oi = on ? outfit_index(*f, shown) : -1;
-    put_text(title, "e_ro_name", on ? grid_caption(f->name) : "", kNameX, kNameY, kFontName, kColName, on);
-    auto fit = [](std::string v) {
-        if (v.size() <= kValueMax) return v;
-        size_t cut = kValueMax - 1;
-        while (cut > 0 && (static_cast<unsigned char>(v[cut]) & 0xC0) == 0x80) --cut;   // not inside a UTF-8 sequence
-        return v.substr(0, cut) + "...";
-    };
-    const char* labels[kRows] = { "Outfit Settings", "Costume", "Color" };
-    const std::string values[kRows] = { c.forced ? "On" : "Off", oi >= 0 ? fit(f->outfits[static_cast<size_t>(oi)].name) : "-",
+    put_text(title, "e_ro_name", on ? (f->caption.empty() ? grid_caption(f->name) : f->caption) : "", kNameX, kNameY, kFontName, kColName, on);
+    const std::string labels[kRows] = { game(G::OutfitSettings), game(G::Costume), game(G::Color) };
+    const std::string values[kRows] = { game(c.forced ? G::On : G::Off), oi >= 0 ? words::cut_units(f->outfits[static_cast<size_t>(oi)].name, kValueMax) : "-",
                                         shown.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], shown) : "-" };
     const rto::Slot* slot = on ? options_slot(*f, c) : nullptr;
     const std::vector<std::string>* saved = saved_options(slot);
     for (int r = 0; r < kRows; ++r) put_row(title, r, labels[r], values[r], on, r == g_row, r > 0 && !c.forced);
     // the summary: "Outfit Settings (Replay)", the three settings (Off: the outfit and colour are the replay's own)
     if (on) {
-        const std::string costume = c.forced && oi >= 0 ? cut_utf8(f->outfits[static_cast<size_t>(oi)].name, kSumLineMax) : "Default";
-        const std::string color = c.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], c) : "Default";
+        const std::string costume = c.forced && oi >= 0 ? words::cut_units(f->outfits[static_cast<size_t>(oi)].name, kSumLineMax) : game(G::Default);
+        const std::string color = c.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], c) : game(G::Default);
         std::vector<SumItem> items = { { SumKind::Name, labels[0] }, { SumKind::Line, values[0] },
                                        { SumKind::Name, labels[1] }, { SumKind::Line, costume },
                                        { SumKind::Name, labels[2] }, { SumKind::Line, color } };
         // one line per option not at its default (nothing when all are)
         if (slot) {
             const std::vector<std::string> lines = rto::option_lines(rto::manifest(), *slot, rto::forced_options(rto::manifest(), *slot, saved));
-            if (!lines.empty()) items.push_back({ SumKind::Name, kOptionsName });
+            if (!lines.empty()) items.push_back({ SumKind::Name, tr(W::OptionsTitle) });
             for (size_t i = 0; i < lines.size() && static_cast<int>(items.size()) < kSumTexts; ++i)
-                items.push_back({ SumKind::Line, cut_utf8(lines[i], kSumLineMax) });
+                items.push_back({ SumKind::Line, words::cut_units(lines[i], kSumLineMax) });
         }
-        render_summary(title, true, kSumTitlePage, items);
+        render_summary(title, true, tr(W::ReplaySumPage), items);
     }
     // the preview wears this choice live, not the player's own (rto.hpp); the page left, or Off: back to what it was
     if (on && c.forced) rto::replay_preview(slot, saved);
@@ -2157,12 +2137,12 @@ void render(Obj* main) {
     const bool bgm = level == kLevelList && g_list_row == kBgmRow;   // nothing on the right, as the game's value rows
     const int row = level == kLevelStage ? 1 : level == kLevelGrid ? 0 : g_list_row;
     header(main, f != nullptr);
-    set_desc(f ? kDescPage : stage ? kDescStage : bgm ? kDescBgm : kDescGrid);
+    set_desc(tr(f ? W::ReplayDescPage : stage ? W::ReplayDescStage : bgm ? W::ReplayDescMusic : W::ReplayDescGrid));
     render_list(title, f == nullptr, row, level == kLevelGrid || level == kLevelStage, !bgm);
     render_grid(title, f == nullptr && !stage && !bgm, level == kLevelGrid);
     render_stage(title, f == nullptr && stage, level == kLevelStage);
     render_page(title, f);
-    if (!f) render_summary(title, true, kSumTitleGrid, grid_summary());   // the page draws its own
+    if (!f) render_summary(title, true, tr(W::ReplaySumGrid), grid_summary());   // the page draws its own
     g_copies_shown = true;
     if (!g_place_logged && g_frame - g_enter_frame >= 3) {
         g_place_logged = true;
@@ -2187,9 +2167,8 @@ void enter(Obj* main) {
     build_catalog();                              // each time: the NSFW setting may have changed
     load_faces();
     load_choices();
-    g_lang = game_language();                     // each time: the game's Options may have changed it
     g_music_hint = replaymusic::guide_text(stagelogic::kCharaMusicKeyId);
-    if (g_music_hint.empty()) g_music_hint = kMusicHintEnglish;
+    if (g_music_hint.empty()) g_music_hint = game(G::CharaMusic);
     g_bgm.list = bgm_keep_owned(g_bgm.list, replaymusic::owned_tracks());   // kept in the file until a change is saved
     g_stages = stage_list();                      // each time: the stage list may grow (stage_list())
     load_stage_pictures();

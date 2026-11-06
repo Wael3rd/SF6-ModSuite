@@ -58,6 +58,7 @@
 #include "perf.hpp"
 #include "rto.hpp"
 #include "slots_ui.hpp"
+#include "words.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -87,7 +88,6 @@ constexpr Kind kSelectKind{ kPanelRows, kRowNames, "Spins", "Group", false };
 constexpr Kind kPopupKind{ kMaxRows, kPopupRows, "mArrSpin", "mGroup", true };
 const char* tag(int s) { return s == 1 ? "P1" : s == 2 ? "P2" : "popup"; }
 constexpr const char* kSettings = "reframework/data/SF6_CostumeSlots_data/settings.json";
-constexpr const char* kEntryLabel = "Costume options";   // English only: the plugin has no locale system
 // app.InputDigitalFlag (Down 1, Trigger 2, Release 4, Repeat 8): a press is one Trigger, a held key a Repeat (the DI
 // mode's rule: only those act)
 constexpr uint32_t kActFlags = 2 | 8;
@@ -728,8 +728,9 @@ Pub g_pub[3];
 void publish(int side, bool show) {
     std::lock_guard<std::mutex> lk(g_pub_mx);
     Pub& p = g_pub[side];
-    p.pad = show && !g_keys.pad_icon.empty() && g_keys.pad_bit ? g_keys.pad_icon + " " + kEntryLabel : std::string();
-    p.key = show && g_keys.vk ? g_keys.key_icon + " " + kEntryLabel : std::string();
+    const char* label = words::tr(words::W::OptionsTitle);
+    p.pad = show && !g_keys.pad_icon.empty() && g_keys.pad_bit ? g_keys.pad_icon + " " + label : std::string();
+    p.key = show && g_keys.vk ? g_keys.key_icon + " " + label : std::string();
     p.ms = GetTickCount64();
 }
 

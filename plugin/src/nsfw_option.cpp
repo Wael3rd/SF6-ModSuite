@@ -10,21 +10,19 @@
 #include "slots.hpp"
 #include "rto.hpp"
 #include "slots_ui.hpp"
+#include "words.hpp"
 
 namespace slots::nsfwopt {
 namespace {
 
 constexpr int32_t kTabInterface = 1;       // app.Option.TabType
 constexpr int32_t kSectionOthers = 290;    // app.Option.GroupType OthersSettings_Interface ("Other Settings")
-const char* kDesc = "Shows the outfits from costume_mods_nsfw and the options marked NSFW (see through, pubic, ...). "
-                    "Off hides them everywhere; a fighter wearing one goes back to Outfit 1.";
-const char* kDescOutfit = "When you wear a modded outfit chosen in Battle Settings, other players see you in this outfit "
-                          "(you see your mod). DriveTech: characters without it use Outfit 1. Applies from the next battle.";
 
 bool g_done = false;          // setup() ran (row placed or given up)
 int64_t g_group = -1, g_entry = -1, g_entry_outfit = -1;
 bool g_shown = false;         // the value the row holds (what the core was given / told)
 bool g_shown_dt = false;      // the value the "Outfit Others See" row holds
+uint32_t g_words = 0;         // the language the rows were written in (words::version)
 
 const SF6CoreAPI* A() { return ui::core(); }
 SF6CoreClient* C() { return ui::client(); }
@@ -38,19 +36,23 @@ bool make_row(const char** why) {
     g_group = g_entry = g_entry_outfit = -1;
     g_shown = costumes::display_nsfw();
     g_shown_dt = costumes::online_drivetech();
+    g_words = words::version();
+    using words::G; using words::W; using words::game; using words::tr; using words::trf;
     g_group = a->opt_group(C(), "slots.interface", "Slots Loader", "");
     if (g_group < 0) { *why = "opt_group refused"; return false; }
-    const char* labels[] = { "Off", "On" };
+    const std::string off = game(G::Off), on = game(G::On), outfit1 = game(G::Outfit1), dt = game(G::OutfitDrivetech);
+    const std::string desc = trf(W::NsfwDisplayDesc, { off, outfit1 }), desc_outfit = trf(W::NsfwOnlineOutfitDesc, { game(G::BattleSettings), dt, outfit1 });
+    const char* labels[] = { off.c_str(), on.c_str() };
     SF6CoreOptEntryDesc d{};
     d.struct_size = sizeof d;
-    d.kind = SF6CORE_OPT_CHOICE; d.key = "display_nsfw"; d.title = "Display NSFW Outfits"; d.desc = kDesc;
+    d.kind = SF6CORE_OPT_CHOICE; d.key = "display_nsfw"; d.title = tr(W::NsfwDisplay); d.desc = desc.c_str();
     d.options = labels; d.n_options = 2; d.value = g_shown ? 2 : 1;
     g_entry = a->opt_entry(C(), g_group, &d);
     if (g_entry < 0) { *why = "opt_entry refused"; return false; }
-    const char* outfits[] = { "Outfit 1", "DriveTech" };
+    const char* outfits[] = { outfit1.c_str(), dt.c_str() };
     SF6CoreOptEntryDesc o{};
     o.struct_size = sizeof o;
-    o.kind = SF6CORE_OPT_CHOICE; o.key = "online_outfit"; o.title = "Outfit Others See"; o.desc = kDescOutfit;
+    o.kind = SF6CORE_OPT_CHOICE; o.key = "online_outfit"; o.title = tr(W::NsfwOnlineOutfit); o.desc = desc_outfit.c_str();
     o.options = outfits; o.n_options = 2; o.value = g_shown_dt ? 2 : 1;
     g_entry_outfit = a->opt_entry(C(), g_group, &o);
     if (g_entry_outfit < 0) { *why = "opt_entry refused (Outfit Others See)"; return false; }
@@ -104,10 +106,13 @@ void setup() {
     g_group = g_entry = g_entry_outfit = -1;
 }
 
-// The setting changed elsewhere (settings.json edited): the row is made again with the new value. Not while an
-// option window is open (a rebuild would pull the rows from under the player).
+// The rows were written in another language than the game's: tick() has to write them again
+bool retext_pending() { return g_entry >= 0 && g_words != words::version(); }
+
+// The setting changed elsewhere (settings.json edited), or the game's language did: the row is made again with the new value
+// and words. Not while an option window is open (a rebuild would pull the rows from under the player).
 void tick() {
-    if (g_entry < 0 || (costumes::display_nsfw() == g_shown && costumes::online_drivetech() == g_shown_dt)) return;
+    if (g_entry < 0 || (costumes::display_nsfw() == g_shown && costumes::online_drivetech() == g_shown_dt && !retext_pending())) return;
     const SF6CoreAPI* a = A();
     if (!a || !C() || a->opt_window_open()) return;
     const char* why = nullptr;

@@ -25,6 +25,7 @@
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "rto.hpp"
+#include "words.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -251,7 +252,7 @@ std::string read_name(Obj* agent) {
     if (sel.fid <= 0) std::snprintf(src, sizeof src, "fighter not found (no settings part, no preview model yet): %s", what);
     else std::snprintf(src, sizeof src, "F%d outfit %d from %s: %s", sel.fid, sel.cos, sel.how, what);
     if (g_src_log != src) { g_src_log = src; logf("fs name: %s", src); }
-    return rto::clip_name(label.empty() ? row : label, kNameChars);
+    return rto::clip_name(label.empty() ? row : words::outfit_label(label), kNameChars);
 }
 
 // ---- placement (1080p GUI units; the bar's own space, every scale applied) ----

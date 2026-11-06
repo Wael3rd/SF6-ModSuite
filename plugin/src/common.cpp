@@ -1,6 +1,8 @@
 // SF6 Slots — native plugin: game access helpers, files, JSON, context.
 #include "slots.hpp"
 #include "perf.hpp"
+#include "replay_bgm.hpp"
+#include "words.hpp"
 
 #include <cstdarg>
 #include <cstdio>
@@ -161,6 +163,41 @@ std::string game_language() {
     }
     const char* c = got ? lang_code(val) : nullptr;
     return c ? c : "en";
+}
+
+// The game's own message (via.gui.message.get: the game's language), "" when not found
+std::string game_message(const uint8_t guid[16]) {
+    static Method* m = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        TD* t = api().tdb()->find_type("via.gui.message");
+        m = t ? method_of(t, "get(System.Guid)", 1) : nullptr;
+        if (!m) logf("words: via.gui.message.get not found: the game's words stay in English");
+    }
+    return m ? str(call_obj(m, nullptr, { const_cast<uint8_t*>(guid) })) : std::string();
+}
+
+// The language of words.hpp follows the game's Options, read as the Color Mod's and the Recording Manager's do (every 60 frames);
+// the game's words are asked once per language (what a message file not loaded yet did not give: asked again next time).
+void language_tick() {
+    static uint32_t next = 0;
+    static std::string last;
+    if (g_frame < next) return;
+    next = g_frame + 60;
+    try {
+        const std::string code = game_language();
+        if (code != last) {
+            last = code;
+            words::set_lang(code);
+            logf("words: the game's text language is %s", code.c_str());
+        }
+        words::resolve_game_words([](const char* guid) -> std::string {
+            uint8_t g[16];
+            return replay::parse_guid(guid, g) ? game_message(g) : std::string();
+        });
+    } catch (...) {
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

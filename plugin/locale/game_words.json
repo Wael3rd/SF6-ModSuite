@@ -1,0 +1,424 @@
+{
+ "_readme": "The words the game already has: the plugin shows the game's own message, by GUID (via.gui.message.get), so they are exact in every language. english: the game's English, shown only when a message is not found. msg: the entry's name in the game's message file, for reference. Generated tables: tools/localisation/gen_plugin_words.py.",
+ "words": [
+  {
+   "key": "on",
+   "guid": "dd2765b4-281f-4b6b-8893-9b5f9de8bf45",
+   "english": "On",
+   "msg": "CommonMessage16",
+   "where": "Replays > Settings: On over a portrait, the Outfit Settings row; Options rows; on / off rows of the Costume options menu"
+  },
+  {
+   "key": "off",
+   "guid": "d1efee5e-0df3-4f28-a713-61f9277e9908",
+   "english": "Off",
+   "msg": "CommonMessage17",
+   "where": "The same rows"
+  },
+  {
+   "key": "default",
+   "guid": "79f7a092-eaed-4b5d-8538-b6edd398d232",
+   "english": "Default",
+   "msg": "NewChallengerSoundTypeMessage0",
+   "where": "Replays > Settings: summary lines (an outfit, a colour or a stage left as the replay holds it)"
+  },
+  {
+   "key": "none",
+   "guid": "23d6aa00-c79f-4a98-9985-0b6530ca254b",
+   "english": "None",
+   "msg": "UIModeMenuMessage2683",
+   "where": "Costume options menu: first value of a row of choices"
+  },
+  {
+   "key": "outfit.settings",
+   "guid": "9b057c02-a86b-4c20-83e7-cead60c1cb63",
+   "english": "Outfit Settings",
+   "msg": "UIModeMenuMessage2766",
+   "where": "Replays > Settings, a character's page: first row, and in its summary"
+  },
+  {
+   "key": "costume",
+   "guid": "7b3521b1-2b63-4ee9-9130-7ffcf3200f37",
+   "english": "Costume",
+   "msg": "CommonMessage246",
+   "where": "Replays > Settings, a character's page: second row, and in its summary"
+  },
+  {
+   "key": "color",
+   "guid": "71a6b529-c203-47e5-987b-6b4970b43c16",
+   "english": "Color",
+   "msg": "CommonMessage220",
+   "where": "Replays > Settings, a character's page: third row, and in its summary"
+  },
+  {
+   "key": "outfit.1",
+   "guid": "4165bf8c-0aa8-4d26-85e4-4104a851affe",
+   "english": "Outfit 1",
+   "msg": "FighterCostumeMessage1",
+   "where": "Names of the game's outfits (Replays > Settings, Options, Costume options menu's title)"
+  },
+  {
+   "key": "outfit.2",
+   "guid": "b13681c2-b4d5-4d4d-8535-7988e72f18fd",
+   "english": "Outfit 2",
+   "msg": "FighterCostumeMessage2",
+   "where": "The same"
+  },
+  {
+   "key": "outfit.3",
+   "guid": "9bea2ce5-84f9-49f0-9688-db1726062510",
+   "english": "Outfit 3",
+   "msg": "FighterCostumeMessage3",
+   "where": "The same"
+  },
+  {
+   "key": "outfit.4",
+   "guid": "a9877add-a9b3-46fe-a9d2-32d83e3db6b5",
+   "english": "Outfit 4",
+   "msg": "FighterCostumeMessage4",
+   "where": "The same"
+  },
+  {
+   "key": "outfit.drivetech",
+   "guid": "2f508cfb-97d0-4235-9c27-9798b7863c75",
+   "english": "DriveTech Wear",
+   "msg": "FighterCostumeMessage5",
+   "where": "The same"
+  },
+  {
+   "key": "outfit.n",
+   "guid": "487c6fda-6b17-4e4d-a280-44917a258f44",
+   "english": "Outfit {0}",
+   "msg": "CommonMessage1013",
+   "where": "The same, for numbers above 4. {0}: the number"
+  },
+  {
+   "key": "color.ex",
+   "guid": "62b99d66-437a-4377-a2aa-e146730dfb13",
+   "english": "EX {0}",
+   "msg": "CommonMessage1386",
+   "where": "Replays > Settings: a colour's name. {0}: the number"
+  },
+  {
+   "key": "color.dx",
+   "guid": "06febf81-0dbd-4ba1-8765-898d8f2ea00c",
+   "english": "DX {0}",
+   "msg": "CommonMessage1408",
+   "where": "Replays > Settings: a colour's name. {0}: the number"
+  },
+  {
+   "key": "stage.settings",
+   "guid": "b21b1ead-0a0c-442e-864d-0efa84944da5",
+   "english": "Stage Settings",
+   "msg": "UIModeMenuMessage933",
+   "where": "Replays > Settings: second option row, and a heading of the summary"
+  },
+  {
+   "key": "restore.defaults",
+   "guid": "32ff3f34-e541-414a-8660-b58c6a11abf5",
+   "english": "Restore Default Settings",
+   "msg": "CommonMessage399",
+   "where": "Costume options menu: the row that restores the defaults"
+  },
+  {
+   "key": "player.1",
+   "guid": "ebffd0e7-a6bd-40d7-a54b-55f5fd4622ba",
+   "english": "P1",
+   "msg": "CommonMessage8",
+   "where": "Costume options menu: the side in its title and its side row; in its descriptions"
+  },
+  {
+   "key": "player.2",
+   "guid": "71abe1f1-f0a0-4e84-9f75-2c464e7269d5",
+   "english": "P2",
+   "msg": "CommonMessage9",
+   "where": "The same"
+  },
+  {
+   "key": "battle.settings",
+   "guid": "458797c8-0bf5-49df-9e98-97bdbe449481",
+   "english": "Battle Settings",
+   "msg": "InputGuideMessage126",
+   "where": "Options: inside the description of Outfit Others See"
+  },
+  {
+   "key": "hint.move",
+   "guid": "65c0a876-7468-4032-85de-61a5d1f0c597",
+   "english": "Move",
+   "msg": "InputGuideMessage38",
+   "where": "Costume options menu: the camera hint (Move)"
+  },
+  {
+   "key": "hint.zoom",
+   "guid": "d2c5e768-752e-4c05-8355-ad02a8e944ab",
+   "english": "Zoom",
+   "msg": "CommonMessage1123",
+   "where": "Costume options menu: the camera hint (Zoom)"
+  },
+  {
+   "key": "chara.music",
+   "guid": "865e0ad2-92b5-4ce8-ae68-6eca239e46da",
+   "english": "Character BGM",
+   "msg": "UIOptionMenuMessage2810",
+   "where": "Replays > Settings: guide bar entry when the game's own key text is not found"
+  }
+ ],
+ "fighters": [
+  {
+   "fid": 1,
+   "english": "Ryu",
+   "name_guid": "77fabaf4-c5e5-4a9c-80f4-a0fae1a1c5e7",
+   "name_msg": "FighterNameMessage1",
+   "caption_guid": "8e96ede3-6844-4acb-bdc6-459b5ec2b423",
+   "caption_msg": "FighterUINameMessage1"
+  },
+  {
+   "fid": 2,
+   "english": "Luke",
+   "name_guid": "d2412040-a955-44fc-9f31-4932588de487",
+   "name_msg": "FighterNameMessage2",
+   "caption_guid": "e36d9835-ad51-42b2-9b06-cc0da1ac067e",
+   "caption_msg": "FighterUINameMessage2"
+  },
+  {
+   "fid": 3,
+   "english": "Kimberly",
+   "name_guid": "54f5d04e-24cf-460d-9e9a-fc8e1783df33",
+   "name_msg": "FighterNameMessage3",
+   "caption_guid": "3fff6507-6555-4ca5-82b7-1ed9a373508a",
+   "caption_msg": "FighterUINameMessage3"
+  },
+  {
+   "fid": 4,
+   "english": "Chun-Li",
+   "name_guid": "4b363cba-a31f-416c-9255-98f0a5635ad1",
+   "name_msg": "FighterNameMessage4",
+   "caption_guid": "b1528659-10b5-41a0-909a-e58a0202dd54",
+   "caption_msg": "FighterUINameMessage4"
+  },
+  {
+   "fid": 5,
+   "english": "Manon",
+   "name_guid": "091c989e-6bdd-4425-85fc-d5a384eb8073",
+   "name_msg": "FighterNameMessage5",
+   "caption_guid": "4387a5d4-8456-4e42-87f9-f2e17c40ea53",
+   "caption_msg": "FighterUINameMessage5"
+  },
+  {
+   "fid": 6,
+   "english": "Zangief",
+   "name_guid": "a58dafde-7819-401c-a379-97eaf3fbb949",
+   "name_msg": "FighterNameMessage6",
+   "caption_guid": "82a697df-14c7-4d5f-950f-80964b9b1824",
+   "caption_msg": "FighterUINameMessage6"
+  },
+  {
+   "fid": 7,
+   "english": "JP",
+   "name_guid": "c96d8453-f882-4ded-872f-c164615e78ac",
+   "name_msg": "FighterNameMessage7",
+   "caption_guid": "a14cec4d-c79e-48ae-8dac-8d3cdd1029dd",
+   "caption_msg": "FighterUINameMessage7"
+  },
+  {
+   "fid": 8,
+   "english": "Dhalsim",
+   "name_guid": "637b1651-f144-4c7a-8acf-141dc92d2b32",
+   "name_msg": "FighterNameMessage8",
+   "caption_guid": "a78003d8-b0c6-4766-a648-3509dc3e7a7c",
+   "caption_msg": "FighterUINameMessage8"
+  },
+  {
+   "fid": 9,
+   "english": "Cammy",
+   "name_guid": "a04a14da-746e-4cd5-92c7-3a9694a39899",
+   "name_msg": "FighterNameMessage9",
+   "caption_guid": "5a1dd5c0-1540-4d2c-a9e9-c4a8b96b814b",
+   "caption_msg": "FighterUINameMessage9"
+  },
+  {
+   "fid": 10,
+   "english": "Ken",
+   "name_guid": "58e54230-4d11-4d35-8316-c5616c69259c",
+   "name_msg": "FighterNameMessage10",
+   "caption_guid": "d4e87011-c499-4be5-b493-f4f49590abf9",
+   "caption_msg": "FighterUINameMessage10"
+  },
+  {
+   "fid": 11,
+   "english": "Dee Jay",
+   "name_guid": "bf5cb4e3-1f4e-474b-a294-1c805c4f98f4",
+   "name_msg": "FighterNameMessage11",
+   "caption_guid": "1704f15f-a4c1-4c6c-acf4-f4bf99f86712",
+   "caption_msg": "FighterUINameMessage11"
+  },
+  {
+   "fid": 12,
+   "english": "Lily",
+   "name_guid": "47563675-c161-42f9-8ce1-9292f1b3e006",
+   "name_msg": "FighterNameMessage12",
+   "caption_guid": "d759f3d8-d19f-484a-880f-078276c2a9ec",
+   "caption_msg": "FighterUINameMessage12"
+  },
+  {
+   "fid": 13,
+   "english": "A.K.I.",
+   "name_guid": "19465ea1-ca0d-479d-a864-2987f6633a6f",
+   "name_msg": "FighterNameMessage13",
+   "caption_guid": "ba202e01-53ac-4893-a9db-a0d6a1613b43",
+   "caption_msg": "FighterUINameMessage13"
+  },
+  {
+   "fid": 14,
+   "english": "Rashid",
+   "name_guid": "f405051d-439f-4837-9b8b-11d9ea7d1598",
+   "name_msg": "FighterNameMessage14",
+   "caption_guid": "fceb1efb-0dd0-40e3-8966-756476b3add5",
+   "caption_msg": "FighterUINameMessage14"
+  },
+  {
+   "fid": 15,
+   "english": "Blanka",
+   "name_guid": "e941ef88-b4fd-4d38-b605-e3c2213a586d",
+   "name_msg": "FighterNameMessage15",
+   "caption_guid": "3a54f5cd-ad97-44c1-bd99-9beb7335b1c4",
+   "caption_msg": "FighterUINameMessage15"
+  },
+  {
+   "fid": 16,
+   "english": "Juri",
+   "name_guid": "5c9aa1a4-5bb4-422e-8a16-a53475cafd1a",
+   "name_msg": "FighterNameMessage16",
+   "caption_guid": "42726110-450b-46b9-8c90-262d848cdbc1",
+   "caption_msg": "FighterUINameMessage16"
+  },
+  {
+   "fid": 17,
+   "english": "Marisa",
+   "name_guid": "a2779bcb-5595-4b30-a405-36363519bd9e",
+   "name_msg": "FighterNameMessage17",
+   "caption_guid": "ab182560-3169-4e26-89ac-a90481a3889d",
+   "caption_msg": "FighterUINameMessage17"
+  },
+  {
+   "fid": 18,
+   "english": "Guile",
+   "name_guid": "1af3fec5-bda0-47db-91d1-205aaa868008",
+   "name_msg": "FighterNameMessage18",
+   "caption_guid": "5789867f-1e21-420e-ae7b-ddb99fedc7a3",
+   "caption_msg": "FighterUINameMessage18"
+  },
+  {
+   "fid": 19,
+   "english": "Ed",
+   "name_guid": "d1c17e91-bbea-4e44-b500-7bb81e1a8c1c",
+   "name_msg": "FighterNameMessage19",
+   "caption_guid": "483c7730-945f-468f-8acd-86f7f910502b",
+   "caption_msg": "FighterUINameMessage19"
+  },
+  {
+   "fid": 20,
+   "english": "E. Honda",
+   "name_guid": "d740bddb-95c5-41a4-9150-e6d9e960f3b0",
+   "name_msg": "StampNameMsg48",
+   "caption_guid": "bcbfc13c-d0a2-46e6-89cb-034ae3cfd9b7",
+   "caption_msg": "FighterUINameMessage20"
+  },
+  {
+   "fid": 21,
+   "english": "Jamie",
+   "name_guid": "0e9ef4cf-a5a4-475f-a626-00a11542ceac",
+   "name_msg": "FighterNameMessage21",
+   "caption_guid": "81841d41-5659-4919-8c81-fb107e835b41",
+   "caption_msg": "FighterUINameMessage21"
+  },
+  {
+   "fid": 22,
+   "english": "Akuma",
+   "name_guid": "e800a0ef-0356-4a3e-bac3-380bc5e6d194",
+   "name_msg": "FighterNameMessage22",
+   "caption_guid": "a455b01a-5729-47d2-aa98-128c1e8905fd",
+   "caption_msg": "FighterUINameMessage22"
+  },
+  {
+   "fid": 25,
+   "english": "Sagat",
+   "name_guid": "017f8453-6db6-4919-8963-d973ccee62ff",
+   "name_msg": "FighterNameMessage25",
+   "caption_guid": "c8c3e532-ff56-4fde-ab97-28149f8a5d61",
+   "caption_msg": "FighterUINameMessage25"
+  },
+  {
+   "fid": 26,
+   "english": "M. Bison",
+   "name_guid": "3e7ace34-c298-4d7d-82c4-81e1a69fcb77",
+   "name_msg": "FighterNameMessage26",
+   "caption_guid": "ffeb655d-536a-4bf4-b78a-b80e3b6acff7",
+   "caption_msg": "FighterUINameMessage26"
+  },
+  {
+   "fid": 27,
+   "english": "Terry",
+   "name_guid": "b0ea63c5-431a-4d45-a1c3-8100a9f2f0b4",
+   "name_msg": "FighterNameMessage27",
+   "caption_guid": "45f78c6a-e522-4f1e-8257-ab1c18f1960f",
+   "caption_msg": "FighterUINameMessage27"
+  },
+  {
+   "fid": 28,
+   "english": "Mai",
+   "name_guid": "fc54da02-f5fc-46ce-b7d3-11e55be7b7f3",
+   "name_msg": "FighterNameMessage28",
+   "caption_guid": "9851a14d-0874-4d2b-bda8-482c23e739e7",
+   "caption_msg": "FighterUINameMessage28"
+  },
+  {
+   "fid": 29,
+   "english": "Elena",
+   "name_guid": "260cbbff-b08f-48bd-ad9e-163cbf58a4ad",
+   "name_msg": "FighterNameMessage29",
+   "caption_guid": "b75714ea-a965-47a6-aa7b-b00e730d6924",
+   "caption_msg": "FighterUINameMessage29"
+  },
+  {
+   "fid": 30,
+   "english": "C. Viper",
+   "name_guid": "7fb8b5f0-cb8d-4184-9b0b-77a975d1ec28",
+   "name_msg": "FighterNameMessage30",
+   "caption_guid": "a7cefebf-1ba5-45f1-9447-c5f55ecdaa42",
+   "caption_msg": "FighterUINameMessage30"
+  },
+  {
+   "fid": 31,
+   "english": "Alex",
+   "name_guid": "646a3ef8-5d7a-4b75-9ed9-d7814f252115",
+   "name_msg": "FighterNameMessage31",
+   "caption_guid": "fc513429-4f14-46d1-9c4e-4a1eea8beac5",
+   "caption_msg": "FighterUINameMessage31"
+  },
+  {
+   "fid": 32,
+   "english": "Ingrid",
+   "name_guid": "d4e5a681-a046-4b01-b7d8-9b398449c52d",
+   "name_msg": "FighterNameMessage32",
+   "caption_guid": "2ef6cd5e-d553-4098-9171-f5a25654056f",
+   "caption_msg": "FighterUINameMessage32"
+  },
+  {
+   "fid": 33,
+   "english": "Yasmine",
+   "name_guid": "b479688d-fcdb-4914-ad61-8595e7fac77a",
+   "name_msg": "FighterNameMessage33",
+   "caption_guid": "ab0ab409-defd-4aef-87e4-1f8d6aa72597",
+   "caption_msg": "FighterUINameMessage33"
+  },
+  {
+   "fid": 34,
+   "english": "Arjun",
+   "name_guid": "fffd6f7b-4e49-4816-bfba-2809efa49413",
+   "name_msg": "FighterNameMessage34",
+   "caption_guid": "0f080787-a256-4637-a1ff-ffc65dc973aa",
+   "caption_msg": "FighterUINameMessage34"
+  }
+ ]
+}

@@ -1621,7 +1621,7 @@ struct Hint {
     bool lost_logged = false;
 } g_hint;
 uint32_t g_hint_replay_at = 0;                          // the frame the replay picker last asked for it (0 never)
-std::string g_hint_replay_label = "Stage Variation";    // ...and its label
+std::string g_hint_replay_label;                        // ...and its label
 int g_hint_replay_key = sl::kVariationKeyId;            // ...and its key
 
 // c_guideBtn's item template and its entries (texts e_text_0_g_* / e_text_0_d_*)
@@ -2166,7 +2166,7 @@ void replay_guide_hint(const char* label) { replay_hint(label, sl::kVariationKey
 bool replay_music_key_down() { return game_key_now(g_mk); }
 void replay_music_hint(const char* label) { replay_hint(label, sl::kCharaMusicKeyId); }
 void replay_variation_hint() {
-    if (g_variant_count) replay_guide_hint("Stage Variation");
+    if (g_variant_count) replay_guide_hint(words::tr(words::W::StageVariation));
 }
 
 // ---------------------------------------------------------------------------------------------

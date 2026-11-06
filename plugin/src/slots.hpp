@@ -127,6 +127,8 @@ Elem list_elem(Obj* list, int i);
 // ---- strings ----
 std::string str(Obj* s);                          // System.String -> UTF-8
 std::string game_language();                      // the game's text language: "en", "fr", ... ("en" when not read). Game thread.
+std::string game_message(const uint8_t guid[16]); // the game's own message, in the game's language ("" not found). Game thread.
+void language_tick();                             // each frame: the language of words.hpp, read at most every 60 frames. Game thread.
 Obj* new_string(const std::string& utf8);         // UTF-8 -> System.String
 std::string type_name(Obj* o);
 
@@ -183,7 +185,8 @@ namespace replay {
 // (core option service)
 namespace nsfwopt {
     void setup();                     // first frame, after rto::install_hooks (needs the core; once)
-    void tick();                      // the row follows settings.json
+    void tick();                      // the row follows settings.json and the game's language
+    bool retext_pending();            // the rows are written in another language than the game's (tick has work)
     bool on_value(int64_t entry, int64_t value);   // the core's on_value: true when the entry is the row's
 }
 // fs_name.cpp: the outfit's name on Fighter Settings, at the right end of the bottom input guide bar

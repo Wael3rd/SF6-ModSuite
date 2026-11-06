@@ -1,5 +1,6 @@
 // SF6 Slots — runtime costume options: the data side (rto_data.hpp). No game access.
 #include "rto_data.hpp"
+#include "words.hpp"
 
 #include <algorithm>
 #include <set>
@@ -607,7 +608,7 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
             if (chunks > 1) r.title += " (" + std::to_string(c + 1) + "/" + std::to_string(chunks) + ")";
             r.none = none;
             if (none) {
-                r.labels.push_back(req ? "(other row)" : "None");
+                r.labels.push_back(req ? words::tr(words::W::OptionsOtherRow) : words::game(words::G::None));
                 r.label_option.push_back(-1);
             }
             for (size_t k = c * per; k < picks.size() && k < (c + 1) * per; ++k) {
@@ -629,7 +630,7 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
             r.option = oi;
             offered(s, o.id, &r.partial);
             r.title = display_name(o.name) + (r.partial ? " *" : "");
-            r.labels = { "Off", "On" };
+            r.labels = { words::game(words::G::Off), words::game(words::G::On) };
             r.label_option = { -1, oi };
             r.value = has(chosen, o.id) ? 2 : 1;
             out.push_back(std::move(r));
@@ -676,7 +677,7 @@ std::vector<std::string> option_lines(const Manifest& m, const Slot& s, const st
             if (elsewhere) continue;
         }
         const std::string title = r.kind == Row::Pick ? display_name(mod->groups[static_cast<size_t>(r.group)].name) : plain(r.title);
-        out.push_back(title + ": " + plain(r.labels[static_cast<size_t>(r.value - 1)]));
+        out.push_back(words::trf(words::W::FmtNameValue, { title, plain(r.labels[static_cast<size_t>(r.value - 1)]) }));
     }
     return out;
 }

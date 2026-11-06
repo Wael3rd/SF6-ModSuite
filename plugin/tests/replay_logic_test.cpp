@@ -2,7 +2,7 @@
 // Build and run: build_replay_logic_test.bat (prints "all ok" and exits 0 when every check passes).
 #define _CRT_SECURE_NO_WARNINGS
 #include "../src/replay_logic.hpp"
-#include "../src/replay_words.hpp"
+#include "../src/words.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -202,8 +202,8 @@ int main() {
     check(grid_move(1, 0, -1, 30, 4) == 29 && grid_move(29, 0, 1, 30, 4) == 1 && grid_move(3, 0, -1, 30, 4) == 27 &&
           grid_move(27, 0, 1, 30, 4) == 3 && grid_move(28, 1, 0, 30, 4) == 29 &&
           grid_move(29, 1, 0, 30, 4) == 28, "a short last row: wraps to the cells that exist");
-    check(std::string(fighter_name(30)) == "C. Viper" && fighter_name(23) == nullptr, "fighter names");
-    check(game_outfit_name(0) == "Outfit 1" && game_outfit_name(3) == "Outfit 4" && game_outfit_name(4) == "DriveTech",
+    check(slots::words::fighter_name(30) == "C. Viper" && slots::words::fighter_name(23).empty() && slots::words::fighter_caption(30) == "C. VIPER", "fighter names");
+    check(game_outfit_name(0) == "Outfit 1" && game_outfit_name(3) == "Outfit 4" && game_outfit_name(4) == "DriveTech Wear",
           "game outfit names");
 
     // the summary on the right: one line per character set to On, the panel's layout
@@ -357,12 +357,6 @@ int main() {
             check(bgm_swap_allowed(&lists[0], nullptr), "bgm: a fighter with nothing in the save: its copy");
         }
         check(bgm_custom_line("Custom", 3) == "Custom (3)" && bgm_custom_line("Custom", 0) == "Custom (0)", "bgm: the summary's line");
-        // the words by language
-        check(std::string(word(Word::ReplayMusic, "en")) == "Replay Music" && std::string(word(Word::Custom, "en")) == "Custom" &&
-              std::string(word(Word::CustomMusicList, "en")) == "Custom Music List", "words: English");
-        check(std::string(word(Word::ReplayMusic, "fr")) == "Musique des replays" && std::string(word(Word::Custom, "fr")) == "Personnalis\xC3\xA9" "e" &&
-              std::string(word(Word::CustomMusicList, "fr")) == "Liste personnalis\xC3\xA9" "e", "words: French");
-        check(std::string(word(Word::ReplayMusic, "ja")) == "Replay Music" && std::string(word(Word::Custom, "")) == "Custom", "words: another language: English");
 
         const Choices no_c;
         check(to_json(no_c).find("bgm") == std::string::npos && to_json(no_c) == to_json(no_c, StageChoice{}, OptionStore{}, BgmChoice{}),

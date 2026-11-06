@@ -13,6 +13,7 @@
 // (No preset row: the mod's former variants only serve the migration of a Battle Settings choice, rto.cpp.)
 #include "rto.hpp"
 #include "slots_ui.hpp"
+#include "words.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -255,36 +256,34 @@ void build() {
     S.rows = rows(manifest(), *S.slot, S.chosen);
     S.pages = split_pages(static_cast<int>(S.rows.size()), kRowsPerPage, head_rows());
     const int n = static_cast<int>(S.pages.size());
-    const std::string who = S.side == 1 ? "P2" : "P1";
+    using words::G; using words::W; using words::game; using words::tr; using words::trf;
+    const std::string who = game(S.side == 1 ? G::Player2 : G::Player1);
     // a long outfit name is cut ("..."): the side and the page stay readable
-    const std::string name = upper(clip_name(S.slot->label.empty() ? S.slot->name : S.slot->label, n > 1 ? kPagedNameChars : kTitleNameChars));
+    const std::string name = upper(clip_name(words::outfit_label(S.slot->label.empty() ? S.slot->name : S.slot->label), n > 1 ? kPagedNameChars : kTitleNameChars));
     const std::string title = S.replay ? name : name + "  -  " + who;
-    const std::string live = S.replay ? "The preview shows it at once; saved for replays only."
-                                      : "The preview shows it at once; saved for " + who + ".";
+    const std::string live = S.replay ? std::string(tr(W::OptionsLiveReplay)) : trf(W::OptionsLivePlayer, { who });
     for (int p = 0; p < n; ++p) {
-        const int64_t g = A()->opt_group(C(), page_key(p).c_str(), page_title(title, p + 1, n).c_str(), "Costume options");
+        const int64_t g = A()->opt_group(C(), page_key(p).c_str(), page_title(title, p + 1, n).c_str(), tr(W::OptionsTitle));
         S.groups.push_back(g);
         if (g < 0) continue;
         int pos = 0;
         auto put = [&](int64_t e, Act a) { a.page = p; a.pos = pos++; if (e >= 0) S.acts[e] = a; };
         if (p == 0 && !S.replay) {
-            put(add_entry(g, SF6CORE_OPT_CHOICE, "side", "Player side",
-                          "Whose options this menu shows and changes: the fighter on that side in Training and Versus. "
-                          "Online, your own fighter wears P1's options.", { "P1", "P2" }, S.side + 1), { Act::Side });
+            put(add_entry(g, SF6CORE_OPT_CHOICE, "side", tr(W::OptionsPlayerSide), trf(W::OptionsPlayerSideDesc, { game(G::Player1) }),
+                          { game(G::Player1), game(G::Player2) }, S.side + 1), { Act::Side });
         }
         for (int ri : S.pages[static_cast<size_t>(p)]) {
             const Row& r = S.rows[static_cast<size_t>(ri)];
-            std::string desc = r.kind != Row::Pick ? "On or off. " + live
-                             : r.none ? "One option of this group at a time (None: the outfit without it). " + live
-                                      : "One option of this group at a time (this outfit always wears one). " + live;
-            if (r.partial) desc += " * Some files of this option (colours, cloth, physics) only change at the next launch, or not at all.";
+            std::string desc = words::sentences(r.kind != Row::Pick ? std::string(tr(W::OptionsDescToggle))
+                                                : r.none ? trf(W::OptionsDescPickNone, { game(G::None) })
+                                                         : std::string(tr(W::OptionsDescPickRequired)), live);
+            if (r.partial) desc = words::sentences(desc, tr(W::OptionsPartial));
             Act a; a.kind = Act::Option; a.row = ri;
             put(add_entry(g, SF6CORE_OPT_CHOICE, "row" + std::to_string(ri), r.title, desc, r.labels, r.value), a);
         }
         if (p == 0)
-            put(add_entry(g, SF6CORE_OPT_BUTTON, "restore", "Restore defaults",
-                          "Back to the options the outfit was installed with (Fluffy's choice or the loader's), " +
-                              (S.replay ? std::string("in replays.") : "for " + who + "."), {}, 0),
+            put(add_entry(g, SF6CORE_OPT_BUTTON, "restore", game(G::RestoreDefaults),
+                          S.replay ? std::string(tr(W::OptionsRestoreDescReplay)) : trf(W::OptionsRestoreDescPlayer, { who }), {}, 0),
                 { Act::Restore });
     }
 }
@@ -497,12 +496,11 @@ bool mouse_over_costume_row() {
 //  - No Color Mod loaded: we write the bar ourselves (the game is the only other writer; a Guard stops a fight).
 //  - A Color Mod loaded that does not call it (older): never the bar. The key icon at the end of the costume row's
 //    value instead (the kit B behaviour, 100 Costume / Color round trips without a crash).
-const char* kEntryLabel = "Costume options";        // English only: the plugin has no locale system
 const char* kSep = "      ";                        // the Color Mod's separator between entries (six spaces)
 const char* kKeyHint = "  <ICON KeyF><ICON MouseL>";             // the costume row's icon (older Color Mod only)
 const char* kPadHint = "  <ICON BtnD>";
-std::string entry_text(bool pad) { return std::string(pad ? "<ICON BtnD> " : "<ICON KeyF><ICON MouseL> ") + kEntryLabel; }
-const std::string kOldEntryKey = std::string("<ICON KeyF> ") + kEntryLabel;   // the entry before the mouse icon: still taken out
+std::string entry_text(bool pad) { return std::string(pad ? "<ICON BtnD> " : "<ICON KeyF><ICON MouseL> ") + words::tr(words::W::OptionsTitle); }
+std::string old_entry_key() { return std::string("<ICON KeyF> ") + words::tr(words::W::OptionsTitle); }   // the entry before the mouse icon: still taken out
 void erase_all(std::string& s, const std::string& what) {
     for (size_t at; (at = s.find(what)) != std::string::npos;) s.erase(at, what.size());
 }
@@ -586,7 +584,7 @@ void own_bar(bool show, bool leaving = false) {
     std::string want = cur;
     erase_all(want, kSep + entry_text(false));
     erase_all(want, kSep + entry_text(true));
-    erase_all(want, kSep + kOldEntryKey);
+    erase_all(want, kSep + old_entry_key());
     if (show) want += kSep + entry_text(H.pad);
     if (want == cur) return;                        // never an identical write
     if (!leaving && !H.bar_guard.take("the guide bar text")) return;

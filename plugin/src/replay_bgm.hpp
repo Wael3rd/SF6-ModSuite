@@ -30,7 +30,7 @@ struct BgmChoice {
     bool operator==(const BgmChoice& o) const { return mode == o.mode && list == o.list; }
 };
 
-// The game's values: its own messages (the player's language), English when one is not found. Custom's word: replay_words.hpp
+// The game's values: its own messages (the player's language), English when one is not found. Custom's word: ours (words.hpp)
 inline const char* bgm_value_guid(BgmMode m) {
     switch (m) {
     case BgmMode::Character: return "b7753bc3-dc3c-41d0-942d-413078de7f87";
