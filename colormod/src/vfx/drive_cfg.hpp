@@ -25,7 +25,7 @@ using json = nlohmann::json;
 enum class Mech { Impact = 0, Reversal, Parry, Rush, Special };
 constexpr int kMechs = 5;
 enum class Kind { Di, Hue };                       // Impact / Reversal: two colours; Parry / Rush / Special: a hue
-struct MechDesc { Mech mech; const char* name; Kind kind; const char* tkey; };
+struct MechDesc { Mech mech; const char* name; Kind kind; const char* tkey; const char* row_key; };
 const MechDesc& desc(Mech m);                      // "impact" / Kind::Di / "vfx.impact", ...
 
 // root = the REFramework data folder; L = the locale (key -> text); squares = the two chip colours a side wears
@@ -66,8 +66,8 @@ void apply_value(json& cfg, const std::vector<Item>& items, int v);
 int stepped(const json* cfg, const std::vector<Item>& items, int dir);   // (value_of + dir) % (2 + #items), Lua's %
 
 // ---- texts ---------------------------------------------------------------------------------------------------------
-std::string camel(const std::string& s);           // "DRIVE IMPACT" -> "Drive Impact" (ASCII letters, as Lua's %a)
-std::string title(Mech m);                         // camel(L(tkey))
+std::string title(Mech m);                         // the row's name, the game's own word (L(row_key))
+std::string text(const char* key);                 // L(key), for the module's other screens
 std::string rgb_hex(int64_t col);                  // ABGR int -> "RRGGBB"
 std::string swatch(const json& col);               // <color RRGGBB>■</color> (nil = black)
 // DIPanelMode label_of: Off / Follow / "name  ■■" (nullopt where the Lua raised an error: a name that is not text)

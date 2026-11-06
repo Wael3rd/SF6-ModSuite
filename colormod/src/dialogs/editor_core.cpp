@@ -16,6 +16,7 @@
 #include "nlohmann/json.hpp"
 
 #include "../fighters.hpp"
+#include "../vfx/preset_names.hpp"
 #include "../engine/catalog.hpp"
 #include "../engine/color_mods.hpp"
 #include "../engine/chips.hpp"
@@ -70,7 +71,31 @@ double lua_mod(double a, double b) {                            // Lua's float a
 double lfloor(double x) { return std::floor(x); }
 std::string L(const std::string& key) { return be.L ? be.L(key, {}) : key; }
 std::string L(const std::string& key, const std::vector<std::string>& args) { return be.L ? be.L(key, args) : key; }
-std::string upper(std::string s) { for (auto& c : s) if (c >= 'a' && c <= 'z') c = (char)(c - 32); return s; }
+// In capitals: ASCII, Latin-1, Latin Extended-A and Cyrillic (the titles of the languages that have capitals); the rest as it is
+std::string upper(const std::string& s) {
+    std::string r;
+    r.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        const unsigned char c = (unsigned char)s[i];
+        if (c >= 'a' && c <= 'z') { r += (char)(c - 32); continue; }
+        if (c >= 0xC3 && c <= 0xD1 && i + 1 < s.size()) {           // two bytes: U+00C0 - U+047F
+            unsigned cp = ((c & 0x1Fu) << 6) | ((unsigned char)s[i + 1] & 0x3Fu);
+            if ((cp >= 0xE0 && cp <= 0xFE && cp != 0xF7)) cp -= 0x20;
+            else if (cp >= 0x100 && cp <= 0x137 && (cp & 1)) cp -= 1;
+            else if (cp >= 0x139 && cp <= 0x148 && !(cp & 1)) cp -= 1;
+            else if (cp >= 0x14A && cp <= 0x177 && (cp & 1)) cp -= 1;
+            else if (cp >= 0x179 && cp <= 0x17E && !(cp & 1)) cp -= 1;
+            else if (cp >= 0x430 && cp <= 0x44F) cp -= 0x20;
+            else if (cp >= 0x450 && cp <= 0x45F) cp -= 0x50;
+            r += (char)(0xC0 | (cp >> 6));
+            r += (char)(0x80 | (cp & 0x3F));
+            ++i;
+            continue;
+        }
+        r += (char)c;
+    }
+    return r;
+}
 std::string lower(std::string s) { for (auto& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c + 32); return s; }
 bool starts(const std::string& s, const std::string& p) { return s.size() >= p.size() && s.compare(0, p.size(), p) == 0; }
 bool ends(const std::string& s, const std::string& p) { return s.size() >= p.size() && s.compare(s.size() - p.size(), p.size(), p) == 0; }
@@ -622,7 +647,7 @@ std::string human(std::string n) {                              // "esf_ClothA_J
     if ((starts(n, "Costume") || starts(n, "costume")) && n.size() > 7) {   // ^[Cc]ostume(%d+)$
         bool digits = true;
         for (size_t i = 7; i < n.size(); ++i) if (!is_digit(n[i])) digits = false;
-        if (digits) return "OUTFIT " + std::to_string(std::stol(n.substr(7)) + 1);
+        if (digits) return L("quick.outfit_n", { std::to_string(std::stol(n.substr(7)) + 1) });
     }
     std::string s;                                              // gsub("(%l)(%u)", "%1 %2")
     for (size_t i = 0; i < n.size(); ++i) {
@@ -778,7 +803,7 @@ void material_rows(const GroupRef& g, int k, const NodeRef& cc, const NodeRef& /
         NodeRef node = opt_node(cc, m.name);
         if (!node) continue;
         const char* name = m.name;
-        EntryRef e = g->slider(fmt("m%d_%s", k, name), fmt("Color %d  %s", k, L(m.loc).c_str()), "", 0, 1000, (int)lfloor(node_value(node) * 1000 + 0.5));
+        EntryRef e = g->slider(fmt("m%d_%s", k, name), L("slider.material_row", { std::to_string(k), L(m.loc) }), "", 0, 1000, (int)lfloor(node_value(node) * 1000 + 0.5));
         std::weak_ptr<Entry> we = e;
         e->cb_value = [we, node, cc](int v) {
             if (auto self = we.lock()) set_selected(self);
@@ -1090,7 +1115,9 @@ int sel_index(const DiCfg& cfg, size_t npresets) {              // :72
 }
 struct DiItem { int index = 0; std::string name; std::optional<uint32_t> c1, c2; };   // the spin's items: presets only
 std::string item_key(const DiItem& it) { return "p:" + std::to_string(it.index); }
-std::string item_label(const DiItem& it) { return fmt("%s  %s%s", it.name.c_str(), swatch1(it.c1).c_str(), swatch1(it.c2).c_str()); }
+// A preset's name as the player reads it: the default presets' are words of ours (the file keeps them in English)
+std::string preset_shown(const std::string& name) { const char* key = vfx::preset_key(name); return key ? L(key) : name; }
+std::string item_label(const DiItem& it) { return fmt("%s  %s%s", preset_shown(it.name).c_str(), swatch1(it.c1).c_str(), swatch1(it.c2).c_str()); }
 
 void di_set(int mech, const char* field, Tri v) { if (be.di_cfg_set) be.di_cfg_set(mech, field, v == kNil ? 0 : 1, v == kTrue, 0, {}); }
 void di_set_num(int mech, const char* field, const std::optional<double>& v) { if (be.di_cfg_set) be.di_cfg_set(mech, field, v ? 2 : 0, false, v ? *v : 0, {}); }
@@ -1218,7 +1245,7 @@ void di_build_page(int mi, int fighter, int side, const std::string& who, const 
     if (has_cur) { ref->c1 = items[(size_t)spin_sel - 1].c1; ref->c2 = items[(size_t)spin_sel - 1].c2; }
     const bool on_preset = has_cur;
     const int sel = on_preset ? items[(size_t)spin_sel - 1].index : sel_index(*cfg, plist->size());
-    const std::string sel_name = ((size_t)sel >= 1 && (size_t)sel <= plist->size() && (*plist)[(size_t)sel - 1].name) ? *(*plist)[(size_t)sel - 1].name
+    const std::string sel_name = ((size_t)sel >= 1 && (size_t)sel <= plist->size() && (*plist)[(size_t)sel - 1].name) ? preset_shown(*(*plist)[(size_t)sel - 1].name)
                                  : (((size_t)sel >= 1 && (size_t)sel <= plist->size()) ? std::string("nil") : std::string("-"));
     const std::string pfx = "__dicolor_" + mech;
     const std::string save_target = on_preset ? sel_name : next_di_name(*plist, prefix);
@@ -1386,7 +1413,11 @@ void di_build_pages() {                                         // M.build_pages
     edit.marks_on = true;                                       // edit.marks_fn: nothing marked by colour here
     std::string name = be.di_char_name ? be.di_char_name(fighter) : std::string();
     if (name.empty()) name = std::to_string(fighter);
-    const std::string who = upper(name) + " - P" + std::to_string(side);
+    // the game's own words: the fighter as its grids write it, its P1 / P2
+    const std::string fighter_key = "fighter." + std::to_string(fighter);
+    std::string shown_name = L(fighter_key);
+    if (shown_name == fighter_key) shown_name = upper(name);
+    const std::string who = shown_name + " - " + L(side == 2 ? "side.p2" : "side.p1");
     // M.open builds the pages BEFORE setting edit.page: without this fallback the first page would not get its row references
     const std::string cur_page = edit.has_page ? edit.page : std::string(DI_ROOT);
     for (int i = 0; i < 5; ++i) {

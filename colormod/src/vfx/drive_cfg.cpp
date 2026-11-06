@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <map>
 
+#include "preset_names.hpp"
 #include "settings.hpp"
 
 namespace vfx::drive_cfg {
@@ -19,11 +20,11 @@ json g_presets;                                    // null = not loaded
 json g_empty_presets = json::object();
 
 const MechDesc kDesc[kMechs] = {
-    { Mech::Impact, "impact", Kind::Di, "vfx.impact" },
-    { Mech::Reversal, "reversal", Kind::Di, "vfx.reversal" },
-    { Mech::Parry, "parry", Kind::Hue, "vfx.parry" },
-    { Mech::Rush, "rush", Kind::Hue, "vfx.rush" },
-    { Mech::Special, "special", Kind::Hue, "vfx.special" },
+    { Mech::Impact, "impact", Kind::Di, "vfx.impact", "vfx.row_impact" },
+    { Mech::Reversal, "reversal", Kind::Di, "vfx.reversal", "vfx.row_reversal" },
+    { Mech::Parry, "parry", Kind::Hue, "vfx.parry", "vfx.row_parry" },
+    { Mech::Rush, "rush", Kind::Hue, "vfx.rush", "vfx.row_rush" },
+    { Mech::Special, "special", Kind::Hue, "vfx.special", "vfx.row_special" },
 };
 
 bool truthy(const json& v) { return !(v.is_null() || (v.is_boolean() && !v.get<bool>())); }
@@ -38,6 +39,8 @@ void set(json& t, const char* k, json v) {
     else t[k] = std::move(v);
 }
 std::string L(const char* key) { return g_env.L ? g_env.L(key) : std::string(key); }
+// A preset's name as the player reads it: the default presets' are words of ours (the file keeps them in English)
+std::string shown_name(const std::string& name) { const char* key = vfx::preset_key(name); return key ? L(key) : name; }
 
 json* file_of(std::map<int, json>& cache, const char* kind, int fighter) {
     auto it = cache.find(fighter);
@@ -235,25 +238,8 @@ int stepped(const json* cfg, const std::vector<Item>& items, int dir) {
 
 // ---- texts ---------------------------------------------------------------------------------------------------------
 
-std::string camel(const std::string& s) {
-    std::string r = s;
-    for (char& c : r) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-    auto alpha = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
-    auto word = [&](char c) { return alpha(c) || (c >= '0' && c <= '9') || c == '\''; };
-    size_t i = 0;
-    while (i < r.size()) {
-        if (alpha(r[i])) {
-            if (r[i] >= 'a' && r[i] <= 'z') r[i] = (char)(r[i] - 'a' + 'A');
-            ++i;
-            while (i < r.size() && word(r[i])) ++i;
-        } else {
-            ++i;
-        }
-    }
-    return r;
-}
-
-std::string title(Mech m) { return camel(L(desc(m).tkey)); }
+std::string title(Mech m) { return L(desc(m).row_key); }
+std::string text(const char* key) { return L(key); }
 
 std::string rgb_hex(int64_t col) {
     char b[16];
@@ -281,6 +267,7 @@ std::optional<std::string> label(const json* cfg, const std::vector<Item>& items
     if ((size_t)(v - 2) >= items.size()) return L("toggle.off");
     const Item& it = items[(size_t)(v - 2)];
     auto name = concat_text(it.name);
+    if (name) *name = shown_name(*name);
     if (no_squares) return name ? *name : std::string();
     if (!name) return std::nullopt;
     auto s1 = swatch_of(it.c1);
@@ -305,7 +292,7 @@ std::optional<RowShow> row_show(Mech m, const json* cfg, const std::vector<Item>
     } else {
         const Item* it = ((size_t)(v - 2) < items.size()) ? &items[(size_t)(v - 2)] : nullptr;
         // label = it and it.name or L("toggle.off"); a name that is not a string reaches the bridge as no text
-        if (it && truthy(it->name)) r.label = it->name.is_string() ? it->name.get<std::string>() : std::string();
+        if (it && truthy(it->name)) r.label = it->name.is_string() ? shown_name(it->name.get<std::string>()) : std::string();
         else r.label = L("toggle.off");
         if (it) { c1 = it->c1; c2 = truthy(it->c2) ? it->c2 : it->c1; }
     }

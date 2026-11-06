@@ -40,18 +40,18 @@ using API = reframework::API;
 using MO  = API::ManagedObject;
 
 // ---- row definitions (same as SF6_MenuRowsNative.cpp kRows / kTargets) ------------------------------------------
-struct RowDef { const char* ctrl; const char* title; bool hidden; };
+struct RowDef { const char* ctrl; const char* title_key; bool hidden; };   // title_key: locale.json
 struct Target { const char* agents[2]; const char* source; const RowDef* rows; size_t n; bool hidden; };
 
 constexpr std::array<RowDef, 5> kRowsFS = { {
-    { "p_Spin_drvimpact",   "Drive Impact",    false },
-    { "p_Spin_drvreversal", "Drive Reversal",  false },
-    { "p_Spin_drvparry",    "Drive Parry",     false },
-    { "p_Spin_drvrush",     "Drive Rush",      false },
-    { "p_Spin_drvspecial",  "Special Attacks",  true },
+    { "p_Spin_drvimpact",   "vfx.row_impact",   false },
+    { "p_Spin_drvreversal", "vfx.row_reversal", false },
+    { "p_Spin_drvparry",    "vfx.row_parry",    false },
+    { "p_Spin_drvrush",     "vfx.row_rush",     false },
+    { "p_Spin_drvspecial",  "vfx.row_special",   true },
 } };
 constexpr std::array<RowDef, 1> kRowsCS = { {
-    { "p_Spin_drvspecial", "Special Attacks", true },
+    { "p_Spin_drvspecial", "vfx.row_special", true },
 } };
 constexpr std::array<Target, 2> kTargets = { {
     { { "MatchingFighterSetting", nullptr }, "p_Spin_color", kRowsFS.data(), kRowsFS.size(), false },
@@ -224,7 +224,8 @@ void create_rows_core(const Target& t, MO* agent, MO* source) {
         desc.pos_x = x_last; desc.pos_y = y; desc.pos_z = z_last;
         desc.visible = hid ? 0 : 1;
         desc.disabled = hid ? 1 : 0;
-        desc.title_text = def.title;
+        const std::string title_text = vfx::drive_cfg::text(def.title_key);
+        desc.title_text = title_text.c_str();
         void* out_ctrl = nullptr;
         SF6CoreStatus st = api()->ui_clone_row(cl(), &desc, &out_ctrl);
         if (st != SF6CORE_OK) {
