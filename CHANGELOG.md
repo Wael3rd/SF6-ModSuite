@@ -17,6 +17,64 @@
   folder, gives one outfit per add-on and one with all of them. Installed any other way, nothing changes.
 - `SlotsloaderContract=2` in `modinfo.ini` and `variants.json`.
 
+## 1.22.0 (2026-11-06) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.19.0 | Replay Music row in Replays > Settings; every text in the game's language |
+| SF6 Color Mod | 0.24.1 | every text in the game's language |
+| SF6 Native Core | 0.9.6 | unchanged |
+| SF6 Recording Manager | 2.2.7 | every text in the game's language |
+| SF6 Profile Mod | 1.0.0 | new: the full Fighter Profile, and the Steam name on a key |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.18.0, SF6 Color Mod 0.24.0 and SF6 Recording Manager
+2.2.6, then install Slots Loader 1.19.0, Color Mod 0.24.1 and Recording Manager 2.2.7. Native Core 0.9.6 is the same file
+as in 1.21.0: keep it. SF6 Profile Mod 1.0.0 is a new, optional package (it needs the Native Core): install it if you want it.
+With the all-in-one package, replace 1.21.0 with 1.22.0 (it now holds the Profile Mod too). The costume pak is not
+rebuilt at the first launch ("Up to date").
+
+### SF6 Slots Loader 1.19.0
+- New: Replays > Settings has a **Replay Music** row: Character, Opponent, Stage, Random, as the game's Battle BGM, in the
+  game's own words. T (pad Y) opens the game's Character Music screens; those playlists are the game's, so editing one
+  also changes online music. A replay normally picks at random among the stage's and both fighters' playlists; this row
+  forces it, for replays only. Your online setting is never changed. Default is Random, what replays do today.
+- New: a **Custom** value: T (pad Y) goes straight to the playlist screen for a list of your own, kept in
+  `replay_outfits.json`. Replays pick at random from it; empty means Random. The fighters' real playlists are never
+  changed.
+- New: every text follows the game's language.
+
+### SF6 Color Mod 0.24.1 and SF6 Recording Manager 2.2.7
+- Every text follows the game's language. The words the game already has now match it (for example "Coups spéciaux" in
+  French).
+
+### SF6 Profile Mod 1.0.0 (new package)
+- Opens the full Fighter Profile where the game opens the limited one. It only reuses what the server sent: sections it
+  does not send stay empty. This is not a bypass of anyone's privacy settings.
+- R (pad X) on a profile that shows a Steam ID switches the line between the ID and the player's Steam name. Nothing
+  changes at opening. It only acts when the game itself already shows the Steam ID: a hidden line stays hidden, with no
+  key shown. On a press, and only then, that ID is sent to steamcommunity.com to read the public name (a second request
+  for an account with no community profile); names are kept in memory for the session, never written to disk or to the
+  log. T stays the game's like. On tabs where the game already uses that key, the mod does nothing.
+- Off switches in `reframework\data\profile_mod.ini` (create the file; it is not shipped): `full_profile=0`,
+  `steam_name=0`.
+- Needs the Native Core 0.8.2 or newer.
+
+### Known issues
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet.
+- Manager mode has not been checked in an online match. Its owned-outfit opt-out was checked by automated tests only.
+- A very long first rebuild can leave the game with no window. In one test a 26-minute rebuild, on a PC busy with other
+  work, left the game stuck at start-up; closing it and launching again worked, and the pak was complete. The cause is not
+  known. Rebuilds of a few minutes were fine.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+- All languages except French are machine translations, not yet reviewed by native speakers.
+- Outfit names made by the loader ("Outfit I") stay in English in every language.
+- With the full profile, the limited one shows briefly first.
+- Profile Mod has not been checked in an online match.
+
 ## 1.21.0 (2026-11-06) — SF6 Mod Suite
 
 | Package | Version | |

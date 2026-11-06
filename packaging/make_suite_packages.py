@@ -30,6 +30,7 @@ sys.path.insert(0, HERE)
 from make_fluffy_package import CHARACTERS      # the 32 character folders of costume_mods, reused for color_mods
 CRSM = os.path.join(REPO, "crsm")
 CRSM_MIN_CORE = "0.9.5"       # 0.9.5: on_confirm (Confirm on spin rows, the drill details dialog); 0.8.0: the Native Core's training pause-menu service (pm_*), needed by the Recording Manager
+PROFILE_MIN_CORE = "0.8.2"   # ui_clone_control / ui_agents / ui_find_cached, as the Slots Loader's Replays tab
 CRSM_OWNERS = ("community", "files", "replay", "reversal", "record", "ui")
 CRSM_CONFIG_REL = "crsm/package/config.json"
 G_CRSM_CONFIG = "reframework/data/SF6_Community_data/config.json"
@@ -76,6 +77,31 @@ COLORMOD_README = CRLF.join([
     "",
     "REQUIRES the SF6 Native Core package (%s or newer) from the same release.",
     "Without it the mod stays inert; REFramework's log says: [ColorModNative] sf6core_native.dll not loaded: inert",
+    "",
+    "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
+    "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
+    "",
+])
+
+PROFILE_README = CRLF.join([
+    "SF6 Profile Mod v%s",
+    "===================",
+    "",
+    "Opens the full Fighter Profile where the game opens the limited one, using only what the server already sent: the",
+    "sections it does not send stay empty. This does not bypass anyone's privacy settings.",
+    "",
+    "Steam name: R / pad X on a profile whose platform line already shows a Steam ID switches that line between the ID and",
+    "the player's Steam name. Nothing changes when the profile opens. A line the game hides stays hidden. Only on a press,",
+    "that ID is sent to steamcommunity.com to read the public name (a second request for an account with no community",
+    "profile). Names are kept in memory for the session, never written to disk or to the log. On tabs where the game uses",
+    "that key itself, the mod does nothing.",
+    "",
+    "Switches (reframework/data/profile_mod.ini, read at start; the file is not shipped, create it to use them):",
+    "  full_profile=0   keeps the game's limited profile",
+    "  steam_name=0     no Steam name key, no request",
+    "",
+    "REQUIRES the SF6 Native Core package (%s or newer) from the same release. Without it the mod does nothing",
+    "(REFramework's log says: profile_mod: off).",
     "",
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
     "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
@@ -211,6 +237,7 @@ def main():
 
     core_v = version_in(os.path.join(REPO, "core", "src", "sf6core.cpp"), r'CORE_VERSION\s*=\s*"([^"]+)"')
     cm_v = version_in(os.path.join(REPO, "colormod", "src", "common.cpp"), r'kVersion\s*=\s*"([^"]+)"')
+    pm_v = version_in(os.path.join(REPO, "profile_mod", "profile_mod.cpp"), r'kVersion\s*=\s*"([^"]+)"')
 
     print("== SF6 Native Core %s" % core_v)
     core_zip = os.path.join(a.out, "SF6_NativeCore_%s.zip" % core_v)
@@ -230,13 +257,20 @@ def main():
               dirs=["reframework/color_mods/%s" % n for n in CHARACTERS] + ["reframework/color_mods/all_chars"],
               texts=[("reframework/color_mods/README.txt", open(os.path.join(REPO, "colormod", "data", "color_mods_README.txt"), encoding="utf-8").read().replace("\r\n", "\n").replace("\n", CRLF))])
 
+    print("== SF6 Profile Mod %s" % pm_v)
+    pm_zip = os.path.join(a.out, "SF6_ProfileMod_%s.zip" % pm_v)
+    write_zip(pm_zip,
+              "name=SF6 Profile Mod\nversion=%s\ndescription=Opens the full Fighter Profile where the game opens the limited one (only what the server sent), and swaps a shown Steam ID for the player's Steam name on a key press. Requires SF6 Native Core %s or newer.\nauthor=Wael\nNameAsBundle=SF6 Profile Mod\n" % (pm_v, PROFILE_MIN_CORE),
+              PROFILE_README % (pm_v, PROFILE_MIN_CORE),
+              [(os.path.join(REPO, "build", "profile_mod", "profile_mod.dll"), "reframework/plugins/profile_mod.dll")])
+
     print("== SF6 Slots Loader %s" % a.version)
     sl_zip = os.path.join(a.out, "SF6_SlotsLoader_v%s.zip" % a.version)
     cmd = [sys.executable, os.path.join(HERE, "make_fluffy_package.py"), "--version", a.version, "--out", sl_zip]
     if a.game: cmd += ["--game", a.game]
     if subprocess.call(cmd) != 0: sys.exit("make_fluffy_package.py failed")
 
-    zips = {"core": core_zip, "colormod": cm_zip, "slots": sl_zip}
+    zips = {"core": core_zip, "colormod": cm_zip, "profile": pm_zip, "slots": sl_zip}
     if not a.without_crsm:
         zips["crsm"] = crsm_package(a.out)
     paths = {k: game_paths(v) for k, v in zips.items()}

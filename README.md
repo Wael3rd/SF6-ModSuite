@@ -1,6 +1,6 @@
 # SF6 Mod Suite
 
-Street Fighter 6 mods by Wael, built and released together. Each release carries four Fluffy Mod Manager
+Street Fighter 6 mods by Wael, built and released together. Each release carries Fluffy Mod Manager
 packages:
 
 | Package | What it does | Needs |
@@ -9,13 +9,22 @@ packages:
 | **SF6 Color Mod** | extra costume colours, a colour editor, Drive colours per character and per player, all from the game's own menus: [colormod/README.md](colormod/README.md) | REFramework, SF6 Native Core |
 | **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
 | **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, drills, a reversal picker and online sharing of recordings, all in the game's training pause menu: [crsm/README.md](crsm/README.md) | REFramework, SF6 Native Core |
+| **SF6 Profile Mod** | opens the full Fighter Profile where the game opens the limited one, and shows a player's Steam name on a key press: see below | REFramework, SF6 Native Core |
 
-Install what you want: the Slots Loader works on its own (only its Replays Settings tab and the Stage Variation hint in the guide bar need the Native Core); the Color Mod and the Recording Manager need the Native Core of the same
-release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, the four packages in one: install either it or
+Install what you want: the Slots Loader works on its own (only its Replays Settings tab and the Stage Variation hint in the guide bar need the Native Core); the Color Mod, the Recording Manager and the Profile Mod need the Native Core of the same
+release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, every package in one: install either it or
 the separate packages, never both (two packages shipping the same files conflict in Fluffy Mod Manager).
 
 This repository was named SF6-SlotsLoader until 07/10/2026 and SF6-CostumeSlotsLoader until 30/09/2026; the old
 links lead here.
+
+## Profile Mod
+
+`SF6_ProfileMod_<version>.zip` (since 1.22.0, optional, needs the Native Core 0.8.2 or newer) is one plugin, `reframework/plugins/profile_mod.dll`.
+
+- It opens the full Fighter Profile where the game opens the limited one. It only reuses what the server already sent: the sections the server does not send stay empty. It does not bypass anyone's privacy settings. The limited profile shows briefly first.
+- On a profile whose platform line already shows a Steam ID, R / pad X switches that line between the ID and the player's Steam name. A line the game hides stays hidden. **Network:** only on a press of that key, the shown ID is sent to steamcommunity.com (HTTPS) to read the public name, and to steamcommunity.com again if the account has no community profile. Nothing is sent at any other time. Names are kept in memory for the session, never written to disk or to the log.
+- Off switches, in `reframework\data\profile_mod.ini` (create it; it is not shipped): `full_profile=0`, `steam_name=0`.
 
 ## Recording Manager
 
@@ -62,7 +71,7 @@ Grab `SF6_SlotsLoader_v<version>.zip` from [Releases](https://github.com/Wael3rd
 Fluffy Mod Manager or copy it over your Street Fighter 6 folder, then install costume mods as usual. You need
 REFramework in `dinput8.dll`, official build 1.5.8 or newer. For the Color Mod or the Recording Manager, install
 `SF6_NativeCore_<version>.zip` and `SF6_ColorMod_<version>.zip` / `SF6_CRSM_<version>.zip` from the same release. Or
-take `SF6_ModSuite_AllInOne_v<version>.zip` alone: it holds the four packages.
+take `SF6_ModSuite_AllInOne_v<version>.zip` alone: it holds every package.
 
 Costume mods can also go straight into `reframework\costume_mods\<Character>\`, **as downloaded**: the
 `.zip`, `.7z` or `.rar` file itself, or an unpacked folder with a `natives` tree or a `.pak`. Nothing to
@@ -91,6 +100,8 @@ behaves as Random). All of it applies on your PC only: the replay file is never 
 and costume options, your online music setting, or the game's playlists when on Custom. The choices are in
 `reframework\data\SF6_CostumeSlots_data\replay_outfits.json`. The Settings tab needs the SF6 Native Core 0.8.2 or newer
 (without it the tab is not added; the log says so).
+
+The Settings tab also has a **Replay Music** row (Character, Opponent, Stage, Random, or Custom: a list of your own), which forces the music of replays only; Random, the default, is what replays do. T / pad Y opens the game's Character Music screens (those playlists are the game's, so editing one changes online music too) or, on Custom, the playlist screen for your own list. Your online music setting is never changed.
 
 Updating in Fluffy Mod Manager: disable or remove the previous version first. Since 1.9.0 the mod is named
 SF6 Slots Loader.
@@ -294,7 +305,7 @@ plugin/              native REFramework plugin: menus, ownership, colours, onlin
 core/                SF6 Native Core: sf6core_native.dll, its C API (core/include) and docs
 colormod/            SF6 Color Mod: SF6_ColorModNative.dll and its locale table
 crsm/                SF6 Recording Manager: SF6_CRSMNative.dll, its locale table, package texts and offline tests
-packaging/           builds the distributable zips (make_suite_packages.py: the four of a release; make_bundle.py: the all-in-one)
+packaging/           builds the distributable zips (make_suite_packages.py: those of a release; make_bundle.py: the all-in-one)
 ```
 
 The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash

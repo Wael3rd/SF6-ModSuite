@@ -13,7 +13,7 @@ rem   costume_loader.exe paktool.exe loadtest.exe    costume tools
 rem   SF6_SlotsClean.exe              removes the loader's runtime paks and state (shipped next to amd_ags_x64.dll)
 rem   stagepak.exe stagetest.exe textest.exe         stage tools
 rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first; "build.bat archive_deps" builds only them, when missing (the Color Mod needs them).
-rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm.
+rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm, profile.
 rem Every compile runs on all cores (/MP). Build only what changed; the full build is for releases.
 
 rem Visual Studio or Build Tools with the C++ workload, wherever it is installed
@@ -36,6 +36,7 @@ if not exist %B%\costumes_only mkdir %B%\costumes_only
 if /i "%1"=="core" goto :only_core
 if /i "%1"=="colormod" goto :only_colormod
 if /i "%1"=="crsm" goto :only_crsm
+if /i "%1"=="profile" goto :only_profile
 if /i "%1"=="plugin" goto :plugin
 
 rem ---------------------------------------------------------------------------------------------
@@ -124,6 +125,9 @@ if errorlevel 1 goto :failed
 echo === Recording Manager (SF6_CRSMNative.dll) ===
 call crsm\build.bat
 if errorlevel 1 goto :failed
+echo === Profile Mod (profile_mod.dll) ===
+call profile_mod\build.bat
+if errorlevel 1 goto :failed
 
 echo.
 echo All OK: build\amd_ags_x64.dll, build\costumes_only\amd_ags_x64.dll, build\SF6_CostumeSlotsNative.dll,
@@ -139,6 +143,9 @@ call colormod\build.bat
 exit /b %errorlevel%
 :only_crsm
 call crsm\build.bat
+exit /b %errorlevel%
+:only_profile
+call profile_mod\build.bat
 exit /b %errorlevel%
 :done_one
 echo OK: %1 only
