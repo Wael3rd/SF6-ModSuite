@@ -714,7 +714,8 @@ options in the set (see `slots[].required`).
   of that name), each side's model on the VS screen (below) and each fighter (`PlayerBehavior`, `_PlayerID` 0 / 1, once `IsAppliedResource`). Its components are walked once (transform tree, 400 nodes at most):
   `via.render.Mesh`, `via.motion.Chain`, `app.PlayerColorController`. Its **slot is found from the paths its
   meshes load** (`product/model/esf/<fighter>/<folder>/`), so the online alias (a slot over its carrier) needs
-  nothing more. Game objects are never `add_ref`'d (R21): checked alive (`is_managed_object` + type) before use.
+  nothing more. An outfit of ours without options (the loader's `registry.json` knows its folder) has no slot, even when it
+  keeps parts of a game outfit that has options (M. Bison's Wesker: its body in `esf026/006`, its `esf026/001/02` the game's). Game objects are never `add_ref`'d (R21): checked alive (`is_managed_object` + type) before use.
 - **Pass** (per model, what differs from the manifest's desired state): verify the parts swapped on the frame
   before; meshes and materials (a pair in the same frame when both change); `SetColor(ColorNum)` on the model's
   colour controllers after a material change; textures on parts whose material is settled (the bindings of a

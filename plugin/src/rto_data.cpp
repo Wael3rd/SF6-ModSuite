@@ -154,14 +154,35 @@ const Slot* Manifest::slot_of_paths(const std::vector<std::string>& paths) const
         return !model_files;
     };
     const Slot* game = nullptr;
+    bool plain = false;
     for (auto& p : paths) {
         for (auto& s : slots) {
             if (s.prefix.empty() || p.compare(0, s.prefix.size(), s.prefix) != 0) continue;
             if (!s.game) return &s;
             if (!game && worn(s)) game = &s;
         }
+        for (auto& f : plain_outfits) if (!plain && p.compare(0, f.size(), f) == 0) plain = true;
     }
-    return game;
+    // A mod replacing only part of an outfit keeps the rest in that game outfit's folder (M. Bison's Wesker: its body in
+    // esf026/006, its esf026/001/02 the game's): files of a game outfit with options, but not that outfit, and no options
+    return plain ? nullptr : game;
+}
+
+size_t note_outfit_folders(Manifest& m, const std::string& registry) {
+    Json j;
+    if (!json_parse(registry, j) || j.kind != Json::Object) return 0;
+    const Json* ss = j.get("slots");
+    if (!ss || ss->kind != Json::Array) return 0;
+    m.plain_outfits.clear();
+    for (auto& e : ss->arr) {
+        const std::string dir = str_of(e.get("fighter_dir")), folder = str_of(e.get("new_folder"));
+        if (dir.empty() || folder.empty()) continue;
+        const std::string prefix = norm_path("product/model/esf/" + dir + "/" + folder + "/");
+        bool listed = false;
+        for (auto& s : m.slots) if (s.prefix == prefix) listed = true;
+        if (!listed && std::find(m.plain_outfits.begin(), m.plain_outfits.end(), prefix) == m.plain_outfits.end()) m.plain_outfits.push_back(prefix);
+    }
+    return m.plain_outfits.size();
 }
 
 const Slot* Manifest::slot_of(int fighter, int costume_no) const {

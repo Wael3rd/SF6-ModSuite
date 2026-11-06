@@ -62,6 +62,9 @@ struct Manifest {
     std::vector<Mod> mods;
     std::vector<Slot> slots;
     bool has_nsfw = false;                                   // an option is marked "nsfw"
+    // The folders of our outfits that have no options ("product/model/esf/esf026/006/"; note_outfit_folders): the manifest
+    // does not list them, and a model wearing one is not the game outfit it keeps other parts of
+    std::vector<std::string> plain_outfits;
     // "Display NSFW Outfits" (settings.json display_nsfw, set by the plugin): while false, NSFW options are not offered
     // nor worn; a saved choice of one is kept (keep_hidden), only not applied
     bool show_nsfw = false;
@@ -70,11 +73,15 @@ struct Manifest {
     // The slot whose folder holds this resource ("product/model/esf/esf028/006/..."), lowercase path
     const Slot* slot_of_path(const std::string& path) const;
     // The slot a model wears, from the resources it loads: one of our slots before a game outfit (a slot of ours
-    // may keep a part in the game's folder of the outfit it is made from)
+    // may keep a part in the game's folder of the outfit it is made from). nullptr for one of our outfits without options,
+    // even when it keeps parts of a game outfit that has some (plain_outfits).
     const Slot* slot_of_paths(const std::vector<std::string>& paths) const;
     const Slot* slot_of(int fighter, int costume_no) const;
 };
 bool parse_manifest(const std::string& text, Manifest& out, std::string& err);
+// From the loader's registry.json ("slots": fighter_dir, new_folder): every outfit of ours the manifest has no slot for goes
+// to plain_outfits. How many; an unreadable text changes nothing.
+size_t note_outfit_folders(Manifest& m, const std::string& registry);
 
 // A resource path as the manifest names it: lowercase, '/' separators, without "natives/stm/"
 std::string norm_path(const std::string& path);
