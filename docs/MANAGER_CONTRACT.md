@@ -58,8 +58,9 @@ Everything of contract 1, and:
    that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk. Installed any
    other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the plugin is not listed at its size and
    nothing of this applies. In Manager mode:
-   - outfits come from `reframework/costume_mods` only: no Fluffy Mod Manager discovery, no loose `natives` files and
-     no other patch paks as outfits (they are still read as the game's files);
+   - outfits come from `reframework/costume_mods` (and `reframework/costume_mods_nsfw`, unlike the fork: empty, it
+     changes nothing; its outfits stay hidden unless "Display NSFW Outfits" is on): no Fluffy Mod Manager discovery, no
+     loose `natives` files and no other patch paks as outfits (they are still read as the game's files);
    - one outfit per variant of a modular mod (`variants.json`'s `"runtime_options"` is `"off"`), each switched by
      `variant_choices.json`; no in-game costume options (a `costume_options.json` a build in normal mode left is removed:
      it names the same pak, so the plugin would use it);
