@@ -11090,6 +11090,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         g_rto_layout = g_manager_mode ? RtoLayout::Off : RtoLayout::One;
         logf(g_manager_mode ? "  runtime options: off (Manager mode: one outfit per variant)\n"
                             : "  runtime options: on (one outfit per modular mod)\n");
+        // Manager mode writes no options manifest. One a build in normal mode left names the same pak, so the plugin would
+        // take it as this pak's and offer its options on outfits that are numbered otherwise now.
+        if (g_manager_mode && DeleteFileA((registry_dir + "\\" + RTO_FILE).c_str()))
+            logf("  %s of the normal mode removed\n", RTO_FILE);
     }
     // NSFW keywords (docs/RUNTIME_OPTIONS.md, NSFW outfits): ZZtaii's list, or NsfwKeywords= (a comma list replacing it;
     // given empty: detection off). Manager mode: off (the Manager's Slotsloader hid nothing)

@@ -60,8 +60,11 @@ Case 24 (after 23) checks fork 1.10.5 in Manager mode (`docs/MANAGER_CONTRACT.md
 `manager_installs.json` lists a stand-in plugin at its size, as when the Manager installed the loader). Two archives
 (stored zips the test writes): a main and five add-ons naming it in `AddonFor`, each a copy of the main's body mesh: the
 main and five "main + add-on" outfits, each its own row in `variants.json`; a main with four add-ons, two of its body and
-two of another part: "too many to combine", the main alone. Then the list is removed: runtime options again, rebuilt.
+two of another part: "too many to combine", the main alone. `costume_options.json` of the normal mode is gone in Manager
+mode (it names the same pak, the plugin would use it). Then the list is removed: runtime options again, rebuilt, the
+manifest back.
 
-`slots_clean_test.exe --row-manager <build dir> <scratch folder> <game folder> <costume mod archive>` runs cases 7-22 and
+`slots_clean_test.exe --row-manager <build dir> <scratch folder> <game folder> <costume mod archive>` runs cases 7-22, 25 and
 24 with Manager mode on from the start (the first run must say so): the fork's fixes of cases 16-21 must hold there too.
-Case 22 then gives the five combined outfits only (one sub-folder of separate mods: the main alone is not made).
+Case 22 then gives the five combined outfits only (one sub-folder of separate mods: the main alone is not made). Case 25 is
+short there: two mods in one sub-folder are not handled together (that rule belongs to the runtime options).

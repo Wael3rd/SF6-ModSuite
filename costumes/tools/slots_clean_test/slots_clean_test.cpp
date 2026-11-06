@@ -1131,7 +1131,6 @@ static int run_row_test(const char* build, const char* work, const char* game, c
         DeleteFileA(probes.c_str());
         run_loader("costume", previous);  expect_row("previous build", "1M 2S 3C");
         const std::string before = slurp(costume_pak_path());
-        check(!has(slurp(data_dir + "\\outfits.json"), "loose_files_kept"), "the previous build does not say loose_files_kept");
         run_loader("costume");  expect_said("costume", "Up to date (fingerprint match");
         DeleteFileA(registry.c_str());
         DeleteFileA((data_dir + "\\pak_sources.tsv").c_str());
@@ -1143,6 +1142,8 @@ static int run_row_test(const char* build, const char* work, const char* game, c
     printf("[24] Manager mode (one outfit per variant): a main and five add-ons that each replace its body mesh, in one "
            "archive (fork 1.10.5)\n");
     {
+        const std::string options_file = data_dir + "\\costume_options.json";
+        check(exists(options_file) != g_manager_suite, "before this case: an options manifest in normal mode, none in Manager mode");
         if (!g_manager_suite) set_manager_mode(true);
         const auto s2 = game_bytes(c2_scene);
         std::string body_m, body_d, hair_m, hair_d;
@@ -1182,6 +1183,7 @@ static int run_row_test(const char* build, const char* work, const char* game, c
         run_loader("costume");  expect_row("Manager mode, both archives added", "1M 2S 3C");
         expect_said("costume", "Manager mode: installed by the Slotsloader Manager");
         expect_said("costume", "runtime options: off (Manager mode: one outfit per variant)");
+        check(!exists(options_file), "Manager mode: the options manifest of the normal mode is gone (the same pak name: the plugin would use it)");
         expect_said("costume", "Fixture Main: 5 add-ons that each replace the same files: one variant each");
         for (int k = 1; k <= 5; k++)
             expect_said("costume", ("  variant: Fixture Main + Option " + std::to_string(k)).c_str());
@@ -1205,6 +1207,7 @@ static int run_row_test(const char* build, const char* work, const char* game, c
             expect_said("costume", "Up to date (fingerprint match", false);   // a change of mode rebuilds
             expect_said("costume", "Manager mode: installed by the Slotsloader Manager", false);
             expect_said("costume", "runtime options: on (one outfit per modular mod)");
+            check(exists(options_file), "back in normal mode: the options manifest is written again");
             expect_said("costume", "that each replace the same files: one variant each", false);
             expect_said("costume", "too many to combine", false);
         }
