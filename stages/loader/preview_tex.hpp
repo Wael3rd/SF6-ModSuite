@@ -22,3 +22,11 @@ bool make_stage_preview_tex(const std::wstring& image_path, std::vector<uint8_t>
 // Stage-strip cell thumbnail (128x256 BC1, same header layout): the horizontal centre of the preview band
 // (1:2 aspect, width = band height / 2) of the same screenshot.
 bool make_stage_thumb_tex(const std::wstring& image_path, std::vector<uint8_t>& out_tex, std::string& err);
+
+// A stage mod's own menu picture (its tex_StageImage / tex_StageThumb, any of BC1/BC2/BC3/BC7/RGBA8/BGRA8, largest mip) made
+// into our preview (thumb false: 2048x512) or cell thumbnail (128x256): the whole picture when its aspect is the target's,
+// else cut like a screenshot. False (err set) when mip 0 is not in the file (a streaming texture's base file) or the format
+// is not one of those.
+bool make_stage_tex_from_game_tex(const std::vector<uint8_t>& tex, bool thumb, std::vector<uint8_t>& out_tex, std::string& err);
+// The decoding step alone (tests): RGBA8, w x h.
+bool decode_game_tex_rgba(const std::vector<uint8_t>& tex, std::vector<uint8_t>& rgba, int& w, int& h, std::string& err);

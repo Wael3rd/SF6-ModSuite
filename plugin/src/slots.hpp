@@ -75,6 +75,8 @@ enum Event : uint32_t {
     EV_POPUP         = 1u << 12,  // the Training pause menu's character popup built or updated (rto_select.cpp)
     EV_FIGHTER_LOAD  = 1u << 13,  // the game asked for fighters' files or builds fighters from a description (costumes.cpp)
     EV_OPP_SUMMARY   = 1u << 14,  // Opponent Outfit Settings' summary drawn with a shorter outfit list (opp_summary.cpp)
+    EV_RTO_REPLAY    = 1u << 16,  // Replays > Settings: a replay's forced options set, or its preview on (rto.cpp)
+    EV_STAGE_GRID    = 1u << 15,  // a stage grid built, refreshed, focused, decided or a cycle key pressed (stages.cpp)
     EV_DIAG          = 1u << 31,  // a method watched for the log was called
 };
 // Methods watched for the log only: which of them the game calls, and when
@@ -168,6 +170,13 @@ namespace costumes {
     void set_display_nsfw(bool on);   // the row changed: settings.json written, applied on the next tick
     bool online_drivetech();          // settings.json "online_outfit": "DriveTech" (else Outfit 1) is the carrier
     void set_online_drivetech(bool on);   // the row changed: settings.json written, applied on the next tick
+    // The slot the online alias dressed the player's fighter in: that FighterDesc's, else the last one dressed for `fid` still
+    // alive (any thread); false: none
+    bool dressed_slot(Obj* fd, int fid, int& slot, int& color);
+}
+// replay_outfits.cpp: Replay Outfits, what each fighter wears in a replay (rules: replay_outfits.hpp)
+namespace replay {
+    void install_hooks();             // first frame
 }
 // nsfw_option.cpp: the rows "Display NSFW Outfits" and "Outfit Others See" in Options > Interface > Other Settings
 // (core option service)

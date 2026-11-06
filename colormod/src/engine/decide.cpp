@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -22,6 +23,8 @@
 #include "color_mods.hpp"
 #include "live.hpp"
 #include "live_internal.hpp"
+#include "requests.hpp"
+#include "../../include/sf6colormod_entries.h"
 
 namespace engine::decide {
 namespace {
@@ -485,11 +488,67 @@ Resolved resolve_bs(MO* ctrl, int fighter, uint32_t id) {
     return out;
 }
 
-// what a controller should wear: an entry of the side's list on BASE_COLOR, else a game-colour override
+// ---- other mods' requests (include/sf6colormod_entries.h): what a fighter / costume wears, over the player's own
+// choices (state.json and the remembered selections are never changed). The exports may come from any thread: the
+// table has its own lock, always taken after live::mx() (the hooks), never before it.
+std::mutex g_req_mx;
+requests::Table g_req;
+bool in_battle_flow();
+uintptr_t running_flow_map() {                        // bFlowManager.m_flow_work._FlowMap (compared only)
+    MO* bfm = API::get()->get_managed_singleton("app.bFlowManager");
+    MO* work = bfm ? ll::read_field_object(bfm, "m_flow_work") : nullptr;
+    return (uintptr_t)(work ? ll::read_field_object(work, "_FlowMap") : nullptr);
+}
+// a preview request (scope 1) for this controller's fighter / costume, outside any battle: the requester's preview
+// (Battle Settings' capture-room fighter, borrowed), dressed as asked whatever side it would otherwise be
+bool preview_requested(MO* ctrl) {
+    {
+        std::lock_guard lk(g_req_mx);
+        if (!g_req.any(requests::kPreview)) return false;
+    }
+    if (in_battle_flow()) return false;
+    const auto [f, c] = path_identity(ctrl);
+    std::lock_guard lk(g_req_mx);
+    return g_req.find(requests::kPreview, f, c, 0) != nullptr;
+}
+// the request that applies to this controller: scope 1 for the preview side (3), scope 2 for a battle side (1, 2) of
+// the replay it was made for; nullopt = none (the usual decisions)
+std::optional<std::string> requested(MO* ctrl, int side) {
+    const int scope = side == 3 ? requests::kPreview : (side == 1 || side == 2) ? requests::kReplay : 0;
+    if (!scope) return std::nullopt;
+    {
+        std::lock_guard lk(g_req_mx);
+        if (!g_req.any(scope)) return std::nullopt;
+    }
+    if (scope == requests::kPreview && in_battle_flow()) return std::nullopt;
+    const uintptr_t running = scope == requests::kReplay ? running_flow_map() : 0;
+    const auto [f, c] = path_identity(ctrl);
+    std::lock_guard lk(g_req_mx);
+    const requests::Request* r = g_req.find(scope, f, c, running);
+    return r ? std::optional<std::string>(r->id) : std::nullopt;
+}
+
+// what a controller should wear: another mod's request first; an entry of the side's list on BASE_COLOR, else a
+// game-colour override
 Resolved resolve_tree(MO* ctrl, int side) {
     Resolved out;
     const auto id = color_num(ctrl);
     if (!id) return out;
+    // requested: exactly that entry on colour 02, else the game's own colours (no entry, no edited game colour)
+    if (const auto rq = requested(ctrl, side)) {
+        if (!rq->empty() && *id == kBaseColor) {
+            const auto [rf, rc] = path_identity(ctrl);
+            const int k = g_cat.find_ident(rf, rc, *rq);
+            const auto* entries = k > 0 ? g_cat.entries(rf, rc) : nullptr;
+            if (entries && (size_t)k <= entries->size()) {
+                const Entry& e = (*entries)[(size_t)k - 1];
+                out.tree = entry_tree(e);
+                out.entry = e;
+                out.k = k;
+            } else cmn::journal("request: entry %s of %d / %d not in the catalogue: the game's own colours", rq->c_str(), rf, rc);
+        }
+        return out;
+    }
     if (side == 1 || side == 2) {
         const int fc = path_identity(ctrl).first;
         if (bs_applies(ctrl, side, fc)) return resolve_bs(ctrl, fc, *id);
@@ -553,7 +612,7 @@ int ctrl_side(MO* ctrl) {
 }
 
 int should_inject(MO* ctrl, Resolved& r) {           // side to dress, 0 = none (r = what it wears)
-    int side = ctrl_side(ctrl);
+    int side = preview_requested(ctrl) ? 3 : ctrl_side(ctrl);
     if (!side) {                                     // no hint (script loaded mid-flow): fighter/costume name, P1 only
         const auto [f, c] = battle_identity(live::go_name(ctrl));
         if (f >= 0 && f == g_sel[0].fighter && c == g_sel[0].costume) side = 1;
@@ -1113,6 +1172,15 @@ void on_frame() {
     try {
         ++g_tick;
         if (g_tick % 30 == 0) bs_state();             // journals the Battle Settings colours' state when it changes
+        if (g_tick % 20 == 0) {                       // other mods' replay requests: over once their replay is
+            const uintptr_t running = running_flow_map();
+            std::lock_guard lk(g_req_mx);
+            const size_t before = g_req.size(requests::kReplay);
+            if (before) {
+                g_req.tick(running, cmn::frame(), 600);
+                if (g_req.size(requests::kReplay) != before) cmn::journal("requests: the replay's requests are over (%zu left)", g_req.size(requests::kReplay));
+            }
+        }
         color_mods_tick();
         if (g_tick % kTickEvery == 0) p2_poll();
         if (cmn::frame() % kBattlePassEvery == 0) battle_pass();
@@ -1281,6 +1349,43 @@ bool install() {
     cmn::log_info("[ColorModNative] decisions: hooks on GetColorList, SetColor, setTempCosColData, setTempColor; %zu colour lists, state p1=%d p2=%d fs=%d",
                   g_cat.all().size(), g_sel[0].rw, g_sel[1].rw, g_sel[2].rw);
     return true;
+}
+
+// ---- other mods (include/sf6colormod_entries.h) ----------------------------------------------------------------------
+int entries_version() { return active() ? SF6CM_ENTRIES_VERSION : 0; }   // requests act only while the decisions are ours
+
+int entries_export(int fighter, int costume, SF6CMEntry* out, int cap) {
+    std::lock_guard lk(live::mx());
+    const auto* l = g_cat.entries(fighter, costume);
+    if (!l) return 0;
+    for (int i = 0; out && i < cap && i < (int)l->size(); ++i) {
+        const Entry& e = (*l)[(size_t)i];
+        std::snprintf(out[i].label, sizeof(out[i].label), "%s", e.label.c_str());
+        std::snprintf(out[i].id, sizeof(out[i].id), "%s", e.ident.c_str());
+    }
+    return (int)l->size();
+}
+
+int request(int scope, int fighter, int costume, const char* id, void* battle) {
+    const std::string sid = id ? id : "";
+    bool ok = false;
+    {
+        std::lock_guard lk(g_req_mx);
+        ok = g_req.set(scope, fighter, costume, sid, (uintptr_t)battle, cmn::frame());
+    }
+    cmn::journal("request %s: scope %d, fighter %d costume %d -> %s", ok ? "taken" : "refused", scope, fighter, costume,
+                 sid.empty() ? "the game's own colours" : sid.c_str());
+    return ok ? 1 : 0;
+}
+
+void clear_requests(int scope) {
+    size_t n = 0;
+    {
+        std::lock_guard lk(g_req_mx);
+        n = g_req.size(scope);
+        g_req.clear(scope);
+    }
+    if (n) cmn::journal("requests of scope %d cleared (%zu)", scope, n);
 }
 
 }  // namespace engine::decide

@@ -50,6 +50,10 @@
 #define STB_DXT_IMPLEMENTATION
 #include "third_party/stb_dxt.h"
 
+#define BCDEC_STATIC
+#define BCDEC_IMPLEMENTATION
+#include "third_party/bcdec.h"   // common/third_party: decodes a stage mod's own menu pictures (BC1/2/3/7)
+
 #define NOMINMAX
 #include <windows.h>
 #include <cstdio>
@@ -279,7 +283,49 @@ void write_tex_header(std::vector<uint8_t>& out, int w, int h, uint32_t pitch, u
     put<int32_t>(out, 52, (int32_t)data_size);
 }
 
-// Shared path: decode -> the 4:1 band (compute_crop) -> optional centre cut (thumb) -> resize -> BC1 -> .tex.
+// RGBA (w x h, tightly packed) -> the .tex. thumb: 128x256 cell thumbnail, else the 2048x512 preview. fit: the whole image
+// is resized when its aspect is already the target's (within 10 %): a stage mod's own menu picture; otherwise the 4:1 band
+// (compute_crop) and, for a thumbnail, its centre with a 1:2 aspect, as for a screenshot.
+bool build_from_rgba(const uint8_t* pixels, int img_w, int img_h, bool thumb, bool fit, std::vector<uint8_t>& out_tex,
+                     std::string& err) {
+    out_tex.clear();
+    if (!pixels || img_w <= 0 || img_h <= 0) { err = "image has no pixels"; return false; }
+    const int out_w = thumb ? THUMB_W : OUT_W;
+    const int out_h = thumb ? THUMB_H : OUT_H;
+    const double target = double(out_w) / double(out_h), aspect = double(img_w) / double(img_h);
+    const uint8_t* src = pixels;
+    int src_w = img_w, src_h = img_h;
+    std::vector<uint8_t> centre;   // thumb only: contiguous copy of the band's centre
+    if (!(fit && aspect > target * 0.9 && aspect < target * 1.1)) {
+        int crop_y = 0, crop_h = 0;
+        compute_crop(img_w, img_h, crop_y, crop_h);
+        if (crop_h <= 0 || crop_y < 0 || crop_y + crop_h > img_h) { err = "crop computation failed"; return false; }
+        src = pixels + (size_t)crop_y * img_w * 4;
+        src_h = crop_h;
+        if (thumb) {
+            // Centre of the band with a 1:2 aspect: width = band height / 2.
+            src_w = std::max(1, std::min(img_w, crop_h / 2));
+            const int x0 = (img_w - src_w) / 2;
+            centre.resize((size_t)src_w * crop_h * 4);
+            for (int y = 0; y < crop_h; y++)
+                memcpy(centre.data() + (size_t)y * src_w * 4, src + ((size_t)y * img_w + x0) * 4, (size_t)src_w * 4);
+            src = centre.data();
+        }
+    }
+    std::vector<uint8_t> resized((size_t)out_w * out_h * 4);
+    resize_rgba(src, src_w, src_h, resized.data(), out_w, out_h);
+
+    std::vector<uint8_t> bc1;
+    encode_bc1(resized.data(), out_w, out_h, bc1);
+    const uint32_t pitch = (uint32_t)(out_w / 4) * 8;
+    const uint32_t data_size = pitch * (uint32_t)(out_h / 4);
+    if (bc1.size() != data_size) { err = "internal size mismatch"; return false; }
+    write_tex_header(out_tex, out_w, out_h, pitch, data_size);
+    out_tex.insert(out_tex.end(), bc1.begin(), bc1.end());
+    return true;
+}
+
+// Shared path for a screenshot: decode -> build_from_rgba (band, no fit).
 bool build_tex(const std::wstring& image_path, bool thumb, std::vector<uint8_t>& out_tex, std::string& err) {
     out_tex.clear();
     try {
@@ -301,57 +347,21 @@ bool build_tex(const std::wstring& image_path, bool thumb, std::vector<uint8_t>&
             err = std::string("decode failed: ") + (reason ? reason : "unknown");
             return false;
         }
-        if (img_w <= 0 || img_h <= 0) {
-            stbi_image_free(pixels);
-            err = "decoded image has no pixels";
-            return false;
-        }
-
-        int crop_y = 0, crop_h = 0;
-        compute_crop(img_w, img_h, crop_y, crop_h);
-        if (crop_h <= 0 || crop_y < 0 || crop_y + crop_h > img_h) {
-            stbi_image_free(pixels);
-            err = "crop computation failed";
-            return false;
-        }
-
-        const int out_w = thumb ? THUMB_W : OUT_W;
-        const int out_h = thumb ? THUMB_H : OUT_H;
-        const uint8_t* crop_ptr = pixels + (size_t)crop_y * img_w * 4;
-        std::vector<uint8_t> centre;   // thumb only: contiguous copy of the band's centre
-        int src_w = img_w;
-        if (thumb) {
-            // Centre of the band with a 1:2 aspect: width = band height / 2.
-            src_w = std::max(1, std::min(img_w, crop_h / 2));
-            const int x0 = (img_w - src_w) / 2;
-            centre.resize((size_t)src_w * crop_h * 4);
-            for (int y = 0; y < crop_h; y++)
-                memcpy(centre.data() + (size_t)y * src_w * 4, crop_ptr + ((size_t)y * img_w + x0) * 4, (size_t)src_w * 4);
-            crop_ptr = centre.data();
-        }
-
-        std::vector<uint8_t> resized((size_t)out_w * out_h * 4);
-        resize_rgba(crop_ptr, src_w, crop_h, resized.data(), out_w, out_h);
+        const bool ok = build_from_rgba(pixels, img_w, img_h, thumb, false, out_tex, err);
         stbi_image_free(pixels);
-
-        std::vector<uint8_t> bc1;
-        encode_bc1(resized.data(), out_w, out_h, bc1);
-
-        const uint32_t pitch = (uint32_t)(out_w / 4) * 8;
-        const uint32_t data_size = pitch * (uint32_t)(out_h / 4);
-        if (bc1.size() != data_size) {
-            err = "internal size mismatch";
-            return false;
-        }
-
-        write_tex_header(out_tex, out_w, out_h, pitch, data_size);
-        out_tex.insert(out_tex.end(), bc1.begin(), bc1.end());
-        return true;
+        return ok;
     } catch (...) {
         err = "unexpected error building texture";
         out_tex.clear();
         return false;
     }
+}
+
+template <class T>
+T get_le(const std::vector<uint8_t>& b, size_t off) {
+    T v{};
+    memcpy(&v, b.data() + off, sizeof(T));
+    return v;
 }
 
 } // namespace
@@ -362,4 +372,80 @@ bool make_stage_preview_tex(const std::wstring& image_path, std::vector<uint8_t>
 
 bool make_stage_thumb_tex(const std::wstring& image_path, std::vector<uint8_t>& out_tex, std::string& err) {
     return build_tex(image_path, true, out_tex, err);
+}
+
+bool decode_game_tex_rgba(const std::vector<uint8_t>& tex, std::vector<uint8_t>& rgba, int& w, int& h, std::string& err) {
+    rgba.clear();
+    w = h = 0;
+    try {
+        if (tex.size() < 56 || memcmp(tex.data(), "TEX\0", 4) != 0) { err = "not a texture"; return false; }
+        const int tw = get_le<uint16_t>(tex, 8), th = get_le<uint16_t>(tex, 10);
+        const int images = tex[14], mip_bytes = tex[15];
+        const int32_t format = get_le<int32_t>(tex, 16);
+        if (tw <= 0 || th <= 0 || tw > 8192 || th > 8192) { err = "bad size"; return false; }
+        if (images < 1 || mip_bytes < 16 || 40 + (size_t)mip_bytes * images > tex.size()) { err = "bad mip table"; return false; }
+        const int64_t off = get_le<int64_t>(tex, 40);
+        const int32_t pitch = get_le<int32_t>(tex, 48), size = get_le<int32_t>(tex, 52);
+        int block = 0;                    // bytes per 4x4 block, 0: uncompressed 32-bit
+        switch (format) {
+        case 71: case 72: block = 8; break;                    // BC1
+        case 74: case 75: case 77: case 78: block = 16; break; // BC2, BC3
+        case 98: case 99: block = 16; break;                   // BC7
+        case 28: case 29: case 87: case 91: block = 0; break;  // R8G8B8A8, B8G8R8A8
+        default: { char b[64]; snprintf(b, sizeof b, "unsupported format %d", format); err = b; return false; }
+        }
+        const int bw = (tw + 3) / 4, bh = (th + 3) / 4;
+        const int64_t row = block ? (int64_t)bw * block : (int64_t)tw * 4;
+        const int64_t rows = block ? bh : th;
+        if (off < 56 || pitch < row || (int64_t)size < (int64_t)pitch * rows || off + (int64_t)pitch * rows > (int64_t)tex.size()) {
+            err = "mip 0 not in the file (a streaming texture's header?)";
+            return false;
+        }
+        const int pw = block ? bw * 4 : tw, ph = block ? bh * 4 : th;   // padded to whole blocks
+        std::vector<uint8_t> full((size_t)pw * ph * 4);
+        const uint8_t* base = tex.data() + off;
+        for (int64_t y = 0; y < rows; ++y) {
+            const uint8_t* line = base + y * pitch;
+            if (!block) {
+                uint8_t* dst = full.data() + (size_t)y * pw * 4;
+                memcpy(dst, line, (size_t)tw * 4);
+                if (format == 87 || format == 91)
+                    for (int x = 0; x < tw; ++x) std::swap(dst[x * 4], dst[x * 4 + 2]);
+                continue;
+            }
+            for (int bx = 0; bx < bw; ++bx) {
+                const uint8_t* blk = line + (size_t)bx * block;
+                uint8_t* dst = full.data() + ((size_t)(y * 4) * pw + (size_t)bx * 4) * 4;
+                switch (format) {
+                case 71: case 72: bcdec_bc1(blk, dst, pw * 4); break;
+                case 74: case 75: bcdec_bc2(blk, dst, pw * 4); break;
+                case 77: case 78: bcdec_bc3(blk, dst, pw * 4); break;
+                default: bcdec_bc7(blk, dst, pw * 4); break;
+                }
+            }
+        }
+        rgba.resize((size_t)tw * th * 4);
+        for (int y = 0; y < th; ++y) memcpy(rgba.data() + (size_t)y * tw * 4, full.data() + (size_t)y * pw * 4, (size_t)tw * 4);
+        w = tw;
+        h = th;
+        return true;
+    } catch (...) {
+        err = "unexpected error decoding texture";
+        rgba.clear();
+        return false;
+    }
+}
+
+bool make_stage_tex_from_game_tex(const std::vector<uint8_t>& tex, bool thumb, std::vector<uint8_t>& out_tex, std::string& err) {
+    out_tex.clear();
+    std::vector<uint8_t> rgba;
+    int w = 0, h = 0;
+    if (!decode_game_tex_rgba(tex, rgba, w, h, err)) return false;
+    try {
+        return build_from_rgba(rgba.data(), w, h, thumb, true, out_tex, err);
+    } catch (...) {
+        err = "unexpected error building texture";
+        out_tex.clear();
+        return false;
+    }
 }

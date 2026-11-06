@@ -34,6 +34,9 @@ struct Act { enum Kind { Side, Option, Restore } kind = Option; int page = 0, po
 
 struct State {
     bool active = false;
+    bool replay = false;                            // Replays > Settings (open_replay): no player side, on_change saves
+    ReplayChange on_change = nullptr;
+    std::vector<std::string> saved;                 // ...what is saved for this outfit (keep_hidden)
     uint32_t opened_at = 0, closed_at = 0;
     const Slot* slot = nullptr;
     int side = 0, page = 0;                         // page: the one on screen (pages are siblings, never stacked)
@@ -226,9 +229,10 @@ int mouse_on_title() {
 }
 
 // ---- pages ----
+int head_rows() { return S.replay ? kHeadRows - 1 : kHeadRows; }   // Replays > Settings: Restore defaults only
 int page_rows(int p) {                              // the entries of page p (its option rows, and the first page's own)
     if (p < 0 || p >= static_cast<int>(S.pages.size())) return 0;
-    return static_cast<int>(S.pages[static_cast<size_t>(p)].size()) + (p == 0 ? kHeadRows : 0);
+    return static_cast<int>(S.pages[static_cast<size_t>(p)].size()) + (p == 0 ? head_rows() : 0);
 }
 
 int64_t add_entry(int64_t g, int kind, const std::string& key, const std::string& title, const std::string& desc,
@@ -249,20 +253,21 @@ void build() {
     for (int64_t g : S.groups) A()->opt_remove_group(C(), g);
     S.groups.clear();
     S.rows = rows(manifest(), *S.slot, S.chosen);
-    S.pages = split_pages(static_cast<int>(S.rows.size()), kRowsPerPage, kHeadRows);
+    S.pages = split_pages(static_cast<int>(S.rows.size()), kRowsPerPage, head_rows());
     const int n = static_cast<int>(S.pages.size());
     const std::string who = S.side == 1 ? "P2" : "P1";
     // a long outfit name is cut ("..."): the side and the page stay readable
-    const std::string title = upper(clip_name(S.slot->label.empty() ? S.slot->name : S.slot->label,
-                                              n > 1 ? kPagedNameChars : kTitleNameChars)) + "  -  " + who;
-    const std::string live = "The preview shows it at once; saved for " + who + ".";
+    const std::string name = upper(clip_name(S.slot->label.empty() ? S.slot->name : S.slot->label, n > 1 ? kPagedNameChars : kTitleNameChars));
+    const std::string title = S.replay ? name : name + "  -  " + who;
+    const std::string live = S.replay ? "The preview shows it at once; saved for replays only."
+                                      : "The preview shows it at once; saved for " + who + ".";
     for (int p = 0; p < n; ++p) {
         const int64_t g = A()->opt_group(C(), page_key(p).c_str(), page_title(title, p + 1, n).c_str(), "Costume options");
         S.groups.push_back(g);
         if (g < 0) continue;
         int pos = 0;
         auto put = [&](int64_t e, Act a) { a.page = p; a.pos = pos++; if (e >= 0) S.acts[e] = a; };
-        if (p == 0) {
+        if (p == 0 && !S.replay) {
             put(add_entry(g, SF6CORE_OPT_CHOICE, "side", "Player side",
                           "Whose options this menu shows and changes: the fighter on that side in Training and Versus. "
                           "Online, your own fighter wears P1's options.", { "P1", "P2" }, S.side + 1), { Act::Side });
@@ -278,7 +283,8 @@ void build() {
         }
         if (p == 0)
             put(add_entry(g, SF6CORE_OPT_BUTTON, "restore", "Restore defaults",
-                          "Back to the options the outfit was installed with (Fluffy's choice or the loader's), for " + who + ".", {}, 0),
+                          "Back to the options the outfit was installed with (Fluffy's choice or the loader's), " +
+                              (S.replay ? std::string("in replays.") : "for " + who + "."), {}, 0),
                 { Act::Restore });
     }
 }
@@ -312,6 +318,13 @@ void turn(bool next) {
 }
 
 void commit(const char* why) {
+    if (S.replay) {                                 // saved by the page: the player's own choices are not touched
+        S.saved = keep_hidden(manifest(), *S.slot, S.saved, S.shown, S.chosen);
+        S.shown = S.chosen;
+        S.on_change(S.slot, &S.saved);
+        logf("rto: replay menu, %s: %s (%zu options)", S.slot->mod.c_str(), why, S.chosen.size());
+        return;
+    }
     auto& sd = choices().mods[S.slot->mod][static_cast<size_t>(S.side)];
     const std::vector<std::string> saved = sd.changed ? sd.ids : S.slot->defaults;
     sd.changed = true;
@@ -328,7 +341,7 @@ void teardown(const char* why) {
     for (int64_t g : S.groups) A()->opt_remove_group(C(), g);
     A()->opt_rebuild(C());
     A()->opt_ensure_built(C());
-    g_last_side = S.side;
+    if (!S.replay) g_last_side = S.side;
     S = State{};
     S.closed_at = g_frame;
     choices_changed();                              // the preview goes back to P1's options
@@ -351,6 +364,31 @@ void open() {
     S.opened_at = g_frame;
     logf("rto: menu opened on %s/%s (%s), %zu rows on %zu pages", slot->fighter_dir.c_str(), slot->folder.c_str(),
          slot->label.c_str(), S.rows.size(), S.pages.size());
+}
+
+// The tab's menu: the same pages, what they change goes to on_change (rto.hpp)
+bool do_open_replay(const Slot* slot, const std::vector<std::string>* saved, ReplayChange on_change) {
+    if (!slot || !on_change || !g_svc || S.active || A()->opt_window_open() || g_frame - S.closed_at <= 30) {
+        logf("rto: replay menu not opened (%s)", !slot ? "no outfit with options" : !g_svc ? "no option service" : "a window is open or just closed");
+        return false;
+    }
+    S = State{};
+    S.slot = slot;
+    S.replay = true;
+    S.on_change = on_change;
+    S.chosen = forced_options(manifest(), *slot, saved);
+    S.shown = S.chosen;
+    S.saved = saved ? *saved : slot->defaults;
+    if (const int gp = game_guide_pad(); gp >= 0) H.pad = gp == 1;   // the title's page keys (no Fighter Settings here)
+    build();
+    A()->opt_rebuild(C());
+    A()->opt_ensure_built(C());
+    A()->opt_open_menu(C(), page_key(0).c_str(), -1);
+    S.active = true;
+    S.opened_at = g_frame;
+    logf("rto: replay menu opened on %s/%s (%s), %zu rows on %zu pages", slot->fighter_dir.c_str(), slot->folder.c_str(), slot->label.c_str(),
+         S.rows.size(), S.pages.size());
+    return true;
 }
 
 // ---- the core's callbacks (game thread, guarded by the core) ----
@@ -394,7 +432,14 @@ void SF6CORE_CALL cb_button(void*, int64_t entry, SF6CoreOptButtonResult* out) {
     if (it == S.acts.end()) return;
     const Act a = it->second;
     try {
-        if (a.kind == Act::Restore) {
+        if (a.kind == Act::Restore && S.replay) {
+            S.chosen = forced_options(manifest(), *S.slot, nullptr);
+            S.shown = S.chosen;
+            S.saved = S.slot->defaults;
+            S.on_change(S.slot, nullptr);
+            logf("rto: replay menu, %s: defaults restored", S.slot->mod.c_str());
+            rebuild_later(a.page, a.pos);
+        } else if (a.kind == Act::Restore) {
             choices().mods[S.slot->mod][static_cast<size_t>(S.side)] = Side{};
             S.chosen = chosen_of(manifest(), *S.slot, choices(), S.side);
             S.shown = S.chosen;
@@ -681,6 +726,15 @@ void install() {
 }
 
 bool service() { return g_svc; }
+bool open_replay(const Slot* slot, const std::vector<std::string>* saved, ReplayChange on_change) {
+    try { return do_open_replay(slot, saved, on_change); }
+    catch (...) { logf("rto: EXCEPTION opening the replay menu"); return false; }
+}
+void replay_close(const char* why) {
+    if (!S.active || !S.replay) return;
+    A()->opt_close(C());
+    teardown(why);
+}
 int tab_key(bool next, std::string* sym) {
     const PageKeys& k = page_keys();
     if (sym) *sym = k.sym[next ? 1 : 0];
@@ -743,7 +797,7 @@ void tick(bool fs_visible) {
                 if (p == S.page) show(p, S.rebuild_pos);   // another page's (a late callback): built again when turned to
             }
         }
-        if (fs_visible || S.active) hint_tick();
+        if (fs_visible || (S.active && !S.replay)) hint_tick();
         else if (H.agent) hint_reset();
     } catch (...) {
         logf("rto: EXCEPTION in the menu (tick)");

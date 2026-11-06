@@ -44,6 +44,12 @@ a `dlc\test.pak` holding rows with zeros over the hash, as a mod manager's PAK m
   left out ("slot scene missing").
 - 21: a donor's colour list and colours (esf002 Outfit 1's) in Ryu's folder: the slot's copy names the slot's copies.
 - 22: a main and five add-ons that each replace its body mesh: one outfit with runtime options, not "too many to combine".
+- 25: several mods in one sub-folder of a character folder (docs/RUNTIME_OPTIONS.md, "Several mods in one sub-folder"). The
+  fixtures are retouches of M. Bison, meshes only, made of the game's own (archives by Windows' `tar.exe`). Handled together,
+  nothing on a game outfit: two archives, one with a body mesh; the same as folders; two with a body mesh (a "Version" choice);
+  a modular mod and an add-on; an outfit of two costumes and an add-on of neither of their folders; a sub-folder of
+  `costume_mods_nsfw`. As before: all pure add-ons; the same two loose in the character folder, as folders and as archives; one
+  alone in a sub-folder beside a loose hair; the options of one unpacked bundle; the same sub-folder name in both roots.
 
 `slots_clean_test.exe --row ... <previous build dir>` (a folder with the previous release's `costume_loader.exe` and
 `stagetest.exe`) adds case 23: an install built by the previous build is Up to date for this one, and this one built from

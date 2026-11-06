@@ -26,3 +26,10 @@
 // Starts the watcher thread. Returns at once; safe to call from DllMain. `variants` must stay
 // alive for the whole session.
 void stage_slots_start(const wchar_t* game_dir, const std::vector<StageVariant>* variants);
+
+// The selection applied now, from any thread: the plugin's per-menu choice at the moment a battle, a training stage or a
+// replay is set up, ahead of the stage's first file (the watcher would read state.json a few ms later; the plugin writes it
+// too, for the next start). state_json: the text of state.json ("selected" is read, the rest ignored). Returns 2 when a
+// variant is served, 1 when none, 0 when the stage slots are not running. Exported by amd_ags_x64.dll as
+// SF6StageSlots_Apply.
+int stage_slots_apply(const char* state_json);

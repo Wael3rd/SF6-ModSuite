@@ -10,6 +10,7 @@
 #include "json.hpp"
 
 #include <array>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -200,6 +201,53 @@ double panel_arrow_left(double title_left, double glyph_w, double offset, double
 int vs_model_side(const std::vector<std::string>& up, int* root);
 // A spin step on a row's value (1-based, `labels` values): wraps at both ends
 int step_value(int value, int labels, int dir);
+
+// ---- a replay's forced options (Replays > Settings: replay_options.hpp, docs/RUNTIME_OPTIONS.md) ----
+// What a forced fighter wears in a replay, over the player's own choices, which are only ever read: nothing here writes a
+// Choices. A forced fighter whose outfit has nothing saved wears that outfit's defaults, not the player's choices.
+struct ForcedFighter {
+    int costume = -1;                                        // the outfit forced (its files are asked for ahead)
+    std::map<std::string, std::vector<std::string>> by_mod;  // outfit (mod key) -> the set saved
+};
+// The set an outfit wears from what was saved for it (nullptr: its defaults); hidden options, gone options and required
+// groups as for the player's choices (chosen_of)
+std::vector<std::string> forced_options(const Manifest& m, const Slot& s, const std::vector<std::string>* saved);
+// What a model wears on `side`: the replay's set for a forced fighter (forced: its entry, nullptr: not forced), else the
+// player's own choices
+std::vector<std::string> worn_options(const Manifest& m, const Slot& s, const Choices& own, int side, const ForcedFighter* forced);
+// One line per option row not at its default ("Body: RER4R Wesker for Suit Bison", "Hide belt chain: On"), the menu's order
+std::vector<std::string> option_lines(const Manifest& m, const Slot& s, const std::vector<std::string>& chosen);
+// The forced fighters of the replay being played. It is that replay's only, named by its flow map (compared, never read),
+// as the Color Mod's requests: once that replay has been seen running, any other flow running ends it (no flow at all says
+// nothing: between two steps of the same replay); one never seen running ends after `timeout` frames.
+class ReplayWear {
+public:
+    void set(std::map<int, ForcedFighter> fighters, uintptr_t battle, uint64_t now) {
+        f_ = std::move(fighters);
+        battle_ = battle;
+        ran_ = false;
+        set_at_ = now;
+        if (!battle_) f_.clear();
+    }
+    void clear() { f_.clear(); battle_ = 0; ran_ = false; }
+    bool any() const { return !f_.empty(); }
+    bool ran() const { return ran_; }
+    // true when it has just ended
+    bool update(uintptr_t running, uint64_t now, uint64_t timeout) {
+        if (f_.empty()) return false;
+        if (running && running == battle_) ran_ = true;
+        const bool over = ran_ ? (running && running != battle_) : now - set_at_ > timeout;
+        if (over) clear();
+        return over;
+    }
+    const ForcedFighter* find(int fighter) const { auto it = f_.find(fighter); return it != f_.end() ? &it->second : nullptr; }
+    const std::map<int, ForcedFighter>& fighters() const { return f_; }
+private:
+    std::map<int, ForcedFighter> f_;
+    uintptr_t battle_ = 0;
+    bool ran_ = false;
+    uint64_t set_at_ = 0;
+};
 
 // ---- former variant slots (the launch that turned runtime options on (1.13)) ----
 // The kept slot of a fighter's former variant slot number, and that variant's options

@@ -9,6 +9,7 @@
 #include "rto.hpp"
 #include "perf.hpp"
 #include "wjournal.hpp"
+#include "replay_tab.hpp"
 
 namespace slots {
 
@@ -65,6 +66,8 @@ void on_late_update() {
         }
     }
 
+    replaytab::frame();                     // the Replays menu's "Replay Outfits" tab: its own gate (replay_tab.cpp)
+
     uint32_t ev = g_events.exchange(0, std::memory_order_acq_rel);
     if (!ev && !g_costumes_busy && !g_stages_busy && !g_rto_busy && !g_name_busy && !g_opp_busy) {
         perf::end(perf::OnLateUpdate, pt_outer);
@@ -78,6 +81,7 @@ void on_late_update() {
             stages::install_hooks();
             rto::install_hooks();
             fsname::install_hooks();
+            replay::install_hooks();
             nsfwopt::setup();
         }
         if (ev & EV_DIAG) diag_flush();

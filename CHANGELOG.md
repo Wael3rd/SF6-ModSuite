@@ -12,8 +12,73 @@
   complete outfits naming its main files in `AddonFor`, all replacing the same files (each its own body mesh: Ingrid C1
   Barefoot Stockings v2), gave the main files alone ("too many to combine"); each option is now an outfit ("main +
   option"), however many there are. Other add-on sets keep the limit of three. Installed any other way, these options
-  stay runtime options of one outfit, as in 1.16.4.
+  stay runtime options of one outfit, as in 1.17.0.
 - `SlotsloaderContract=2` in `modinfo.ini` and `variants.json`.
+
+## 1.20.0 (2026-11-05) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.17.0 | Replays > Settings tab (outfit and stage shown in replays), modded stages in the stage menus |
+| SF6 Color Mod | 0.24.0 | its RW / MC colours can be listed and requested by other mods |
+| SF6 Native Core | 0.9.6 | "OVERDRIVE EDITION" line on the title screen |
+| SF6 Recording Manager | 2.2.6 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.16.4, SF6 Color Mod 0.23.3 and SF6 Native Core
+0.9.5, then install Slots Loader 1.17.0, Color Mod 0.24.0 and Native Core 0.9.6. Recording Manager 2.2.6 is the same
+file as in 1.19.9: keep it. With the all-in-one package, replace 1.19.9 with 1.20.0. The costume pak is not rebuilt at the
+first launch ("Up to date"). The stage pak is rebuilt once at the first launch if you have stage mods (its table gained
+the tile / variation guess): a few seconds, up to a few minutes with large archives.
+
+### SF6 Slots Loader 1.17.0
+- New: Replays has a 6th tab, **Settings**.
+  - *Replay Outfit Settings*: a grid of the fighters. A fighter set to On is shown in replays in the costume and colour
+    you pick, with a live 3D preview. The colour row also lists the Color Mod's RW / MC colours. R (pad X) opens the same
+    Costume options menu as Edit Character, without its Player side row.
+  - Off (Default): a replay shows the outfit you really wore, taken from a local journal of your online matches,
+    written from now on. Older replays show what they recorded.
+  - *Stage Settings*: the stage shown during replays, modded stages included.
+  - A summary panel on the right, like Battle Settings'.
+  - Everything applies on your PC only. The replay file is never changed; your own outfit, colour and costume options
+    are never changed. The settings are in `reframework\data\SF6_CostumeSlots_data\replay_outfits.json`.
+  - The tab needs the Native Core 0.8.2 or newer; without it the tab is not added (the log says so).
+- New: modded stages in **Battle Settings > Other > Stage Settings** and **Training pause > Environment Settings >
+  Change Stage**. The classic Stage Select's UP / DOWN is unchanged.
+  - A mod that is really another stage (Suzaku Castle over the Training Room) gets its own cell, with its picture and name.
+  - A mod that changes a stage's look (lighting) is a variation of it: X (R on the keyboard) previews the next one (the
+    guide bar shows "Stage Variation" only when the stage has some; that hint needs the Native Core 0.8.2 or newer),
+    Confirm chooses it, leaving the cell without confirming puts the chosen one back.
+  - Random Stage Settings: each cell has its own tick. When the game's random lands on a stage that has ticked cells, one
+    of them is loaded.
+  - The VS screen shows what is really loaded.
+  - Online is safe: only the original stage ids travel, the mod is visible on your PC only.
+  - The automatic sorting into cells and variations can be overridden in `reframework\stage_mods\stage_slots.ini`
+    (`kind=tile` or `kind=variation`, `name=`); see `stages/README.md`.
+  - Each menu keeps its own choice: Battle Settings, Training and Replays.
+- Fix: mods put together in one sub-folder of a character folder, at least one of them with a body mesh, are now handled together, even when they ship only meshes and textures: one outfit of its own, the others its options. They were all becoming options of the game's outfit. A mod alone in its sub-folder always gets its own outfit, as before.
+- The costume pak is not rebuilt at the first launch (`LOADER_PAK_ID` is unchanged).
+
+### SF6 Color Mod 0.24.0
+- For other mods: the RW / MC colours of a fighter's outfit can be listed, and one can be requested for the preview or for
+  one replay (`colormod/include/sf6colormod_entries.h`, `docs/RUNTIME_OPTIONS.md`, "Color Mod entries for Replays >
+  Settings"). The player's saved colours are never written. The Slots Loader's Replay Outfit Settings uses it.
+- New: a folder `all_chars` in `reframework\color_mods`, there by default, for colour packs that cover several characters.
+  The fighter and the costume still come from the file names; the editor's MC colours stay in `<Character>/MANUALCOLORS_NN`.
+
+### SF6 Native Core 0.9.6
+- New: an "OVERDRIVE EDITION" line under the logo on the title screen, in the logo's white. An empty
+  `reframework\data\sf6core\title_off.txt` turns it off.
+
+### Known issues
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet. The sub-folder fix above was checked by automated tests and on real mods
+  offline, but not yet in the game.
+- An outfit made from a mod that replaces only part of a game outfit (a body mesh, say) can be taken for that game outfit by
+  Costume options: its menu then shows and changes the game outfit's options. Fix to come.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
 
 ## 1.19.9 (2026-11-05) — SF6 Mod Suite
 

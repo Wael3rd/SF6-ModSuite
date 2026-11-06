@@ -39,7 +39,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.5";
+static constexpr const char* CORE_VERSION = "0.9.6";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2166,6 +2166,7 @@ static void on_late_update() {
     // -- 3c. Training pause menu (increment 8): installed on demand, then its
     //        state (training, pause, menu close) and the install pass --
     pausemenu_frame();
+    title_frame();                                  // the title screen line (title.cpp)
 
     // -- 4. Frame callbacks --
     {

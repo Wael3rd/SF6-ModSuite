@@ -617,6 +617,49 @@ std::vector<Row> rows(const Manifest& m, const Slot& s, const std::vector<std::s
     return out;
 }
 
+std::vector<std::string> forced_options(const Manifest& m, const Slot& s, const std::vector<std::string>* saved) {
+    Choices c;
+    if (saved) {
+        Side& sd = c.mods[s.mod][0];
+        sd.changed = true;
+        sd.ids = *saved;
+    }
+    return chosen_of(m, s, c, 0);
+}
+
+std::vector<std::string> worn_options(const Manifest& m, const Slot& s, const Choices& own, int side, const ForcedFighter* forced) {
+    if (!forced) return chosen_of(m, s, own, side);
+    auto it = forced->by_mod.find(s.mod);
+    return forced_options(m, s, it != forced->by_mod.end() ? &it->second : nullptr);
+}
+
+std::vector<std::string> option_lines(const Manifest& m, const Slot& s, const std::vector<std::string>& chosen) {
+    std::vector<std::string> out;
+    const Mod* mod = m.mod_of(s);
+    if (!mod) return out;
+    const std::vector<Row> now = rows(m, s, chosen);
+    const std::vector<Row> def = rows(m, s, forced_options(m, s, nullptr));
+    auto plain = [](std::string t) {                         // the rows' "partial" mark is the menu's
+        if (t.size() > 2 && t.compare(t.size() - 2, 2, " *") == 0) t.resize(t.size() - 2);
+        return t;
+    };
+    for (size_t i = 0; i < now.size(); ++i) {
+        const Row& r = now[i];
+        if (i < def.size() && def[i].value == r.value) continue;
+        if (r.value < 1 || r.value > static_cast<int>(r.labels.size())) continue;
+        const bool off = r.label_option[static_cast<size_t>(r.value - 1)] < 0;
+        if (r.kind == Row::Pick && off) {                    // a group split in rows: "none here" when another row holds its pick
+            bool elsewhere = false;
+            for (const Row& o : now)
+                if (&o != &r && o.kind == Row::Pick && o.group == r.group && o.label_option[static_cast<size_t>(o.value - 1)] >= 0) elsewhere = true;
+            if (elsewhere) continue;
+        }
+        const std::string title = r.kind == Row::Pick ? display_name(mod->groups[static_cast<size_t>(r.group)].name) : plain(r.title);
+        out.push_back(title + ": " + plain(r.labels[static_cast<size_t>(r.value - 1)]));
+    }
+    return out;
+}
+
 void apply_row(const Manifest& m, const Slot& s, std::vector<std::string>& chosen, const Row& r, int value,
                std::vector<std::string>* notes) {
     const Mod* mod = m.mod_of(s);
