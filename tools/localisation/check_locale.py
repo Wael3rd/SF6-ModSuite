@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The localisation test: every key in every language, the same placeholders and tags in every language, no text over its stated max,
-a context note for every key, every key the code uses in the table, the plugin's generated table up to date. Exit 0: all ok."""
+a context note for every key, every key the code uses in the table, the plugin's generated table up to date. --game [folder]: also
+every character of ours appears in the game's own text in that language. Exit 0: all ok."""
 import glob
 import os
 import re
@@ -106,12 +107,31 @@ def plugin_checks():
                 check('"' + word + '"' not in code, "plugin: %s still writes %s" % (os.path.basename(p), word))
 
 
+def glyph_checks(game_dir):
+    """Every character of ours appears in the game's own text in that language: its fonts for that language draw it (--game)."""
+    import game_msgs
+    have = {lang: set() for lang in LANGS}
+    for m in game_msgs.load(game_dir).values():
+        for lang, text in m["text"].items():
+            if lang in have:
+                have[lang].update(text)
+    for module, path in MODULES:
+        table = read_table(path)
+        for lang in LANGS:
+            for k, text in table[lang].items():
+                missing = sorted(c for c in set(text) if c not in have[lang] and ord(c) > 32)
+                check(not missing, "%s: %s [%s]: no game text in this language uses %s" % (module, k, lang, missing))
+
+
 def main():
     for module, path in MODULES:
         table = read_table(path)
         table_checks(module, table)
     keys_used_checks()
     plugin_checks()
+    if "--game" in sys.argv:
+        at = sys.argv.index("--game") + 1
+        glyph_checks(sys.argv[at] if at < len(sys.argv) else __import__("game_msgs").DEFAULT_GAME)
     for f in FAIL:
         print("FAILED:", f)
     print("%d checks, %d failed" % (CHECKS, len(FAIL)))

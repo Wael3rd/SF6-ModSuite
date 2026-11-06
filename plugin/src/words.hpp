@@ -16,6 +16,7 @@
 #include <initializer_list>
 #include <mutex>
 #include <string>
+#include <utility>
 
 namespace slots::words {
 
@@ -89,13 +90,14 @@ inline GameCache& game_cache() { static GameCache c; return c; }
 using GameTextFn = std::string (*)(const char* guid);
 inline void resolve_game_words(GameTextFn get) {
     GameCache& c = game_cache();
-    std::lock_guard<std::mutex> lk(c.mx);
     if (c.complete) return;
     bool all = true;
     auto fill = [&](std::string& slot, const char* guid) {
-        if (!slot.empty()) return;
-        slot = guid ? get(guid) : std::string();
-        if (slot.empty()) all = false;
+        if (!slot.empty()) return;                // only the game thread writes: read without the lock, the game asked without it
+        std::string t = guid ? get(guid) : std::string();
+        if (t.empty()) { all = false; return; }
+        std::lock_guard<std::mutex> lk(c.mx);
+        slot = std::move(t);
     };
     for (int i = 0; i < kGameCount; ++i) fill(c.word[i], kGameWords[i].guid);
     for (int i = 0; i < kFighterCount; ++i) {

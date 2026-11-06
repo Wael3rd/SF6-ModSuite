@@ -538,7 +538,7 @@
     "options.title": "코스튬 옵션",
     "options.player_side": "플레이어 사이드",
     "options.player_side_desc": "이 메뉴에서 표시하고 변경하는 옵션의 대상입니다. 트레이닝과 버서스에서는 해당 사이드의 캐릭터입니다. 온라인에서는 자신의 캐릭터에 %s의 옵션이 적용됩니다.",
-    "options.desc_toggle": "켜거나 끕니다.",
+    "options.desc_toggle": "ON/OFF를 전환합니다.",
     "options.desc_pick_none": "이 그룹의 옵션은 한 번에 하나만 선택할 수 있습니다(%s: 옵션 없는 코스튬).",
     "options.desc_pick_required": "이 그룹의 옵션은 한 번에 하나만 선택할 수 있습니다(이 코스튬은 항상 하나를 착용합니다).",
     "options.live_replay": "미리보기에 바로 표시되며, 리플레이 전용으로 저장됩니다.",

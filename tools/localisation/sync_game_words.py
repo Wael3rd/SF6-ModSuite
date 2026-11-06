@@ -29,7 +29,7 @@ def main():
                 bad += 1
                 continue
             for lang in LANGS:
-                text = m["text"].get(lang) or m["text"]["en"]
+                text = (m["text"].get(lang) or m["text"]["en"]).replace("<PLUNUM>", "%d")   # the game's own number slot
                 if note.get("caps"):
                     text = text.upper()
                 if table[lang].get(key) != text:
