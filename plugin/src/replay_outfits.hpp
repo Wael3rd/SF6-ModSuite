@@ -13,6 +13,7 @@
 #pragma once
 
 #include "json.hpp"
+#include "replay_bgm.hpp"
 #include "replay_options.hpp"
 
 #include <cstdint>
@@ -110,12 +111,14 @@ struct Forced { int costume = -1, color = 0; std::string mod_id, colormod; Outfi
 
 // false: not a file of this format (the caller keeps what it had)
 // `stage` (when given): "stage":{"mode":"forced","id":N} -> N (StageDesc.StageId), -1 = the replay's own stage
-inline bool parse_outfits(const std::string& text, std::map<int, Forced>& out, int* stage = nullptr) {
+// `bgm` (when given): the Battle BGM row (replay_bgm.hpp), Random when absent
+inline bool parse_outfits(const std::string& text, std::map<int, Forced>& out, int* stage = nullptr, BgmChoice* bgm = nullptr) {
     Json j;
     std::string t = text;
     if (t.compare(0, 3, "\xEF\xBB\xBF") == 0) t.erase(0, 3);
     if (!json_parse(t, j) || j.kind != Json::Object) return false;
     out.clear();
+    if (bgm) *bgm = parse_bgm(j);
     if (stage) {
         *stage = -1;
         if (const Json* st = j.get("stage"); st && st->kind == Json::Object) {

@@ -301,6 +301,52 @@ int main() {
         check(from_json(to_json(fc, StageChoice{}, op), fd, nullptr, &od) && fd.empty() && od == op, "options: the fighter set to Off keeps them");
     }
 
+    // ---- the Battle BGM row (replay_bgm.hpp) ----
+    {
+        // the game's order: its spin's number + 1 is app.SelectBgm (Self, Opponent, Stage, Random)
+        check(static_cast<int>(BgmMode::Character) + 1 == 1 && static_cast<int>(BgmMode::Opponent) + 1 == 2 &&
+              static_cast<int>(BgmMode::Stage) + 1 == 3 && static_cast<int>(BgmMode::Random) + 1 == 4, "bgm: the values in the game's order");
+        check(BgmChoice{}.mode == BgmMode::Random, "bgm: Random by default");
+        check(bgm_cycle(BgmMode::Character, 1) == BgmMode::Opponent && bgm_cycle(BgmMode::Random, 1) == BgmMode::Character &&
+              bgm_cycle(BgmMode::Character, -1) == BgmMode::Random, "bgm: Left / Right wrap");
+        BgmChoice bb;
+        check(bgm_set(bb) == -1, "bgm: Random leaves the replay's description alone");
+        bb.mode = BgmMode::Character; check(bgm_set(bb) == 1, "bgm: Character is P1 (EBgmSet.Player1)");
+        bb.mode = BgmMode::Opponent;  check(bgm_set(bb) == 2, "bgm: Opponent is P2 (EBgmSet.Player2)");
+        bb.mode = BgmMode::Stage;     check(bgm_set(bb) == 0, "bgm: Stage (EBgmSet.Stage)");
+
+        const Choices no_c;
+        check(to_json(no_c).find("bgm") == std::string::npos && to_json(no_c) == to_json(no_c, StageChoice{}, OptionStore{}, BgmChoice{}),
+              "bgm: Random writes no key: a file never touched stays as it was");
+        for (const BgmMode bm : { BgmMode::Character, BgmMode::Opponent, BgmMode::Stage }) {
+            BgmChoice bw; bw.mode = bm;
+            const std::string bt = to_json(no_c, StageChoice{}, OptionStore{}, bw);
+            Choices brc; BgmChoice brb;
+            check(from_json(bt, brc, nullptr, nullptr, &brb) && brb == bw, "bgm: the value survives the file");
+        }
+        Choices brc; BgmChoice brb; brb.mode = BgmMode::Stage;
+        check(from_json("{\"version\":1,\"fighters\":{}}", brc, nullptr, nullptr, &brb) && brb.mode == BgmMode::Random, "bgm: an old file loads, Random");
+        brb.mode = BgmMode::Stage;
+        check(from_json("{\"version\":1,\"fighters\":{},\"bgm\":{\"mode\":\"future\"}}", brc, nullptr, nullptr, &brb) && brb.mode == BgmMode::Random,
+              "bgm: a value not known: Random");
+        brb.mode = BgmMode::Stage;
+        check(from_json("{\"version\":1,\"fighters\":{},\"bgm\":3}", brc, nullptr, nullptr, &brb) && brb.mode == BgmMode::Random, "bgm: not an object: Random");
+        BgmChoice bsb; bsb.mode = BgmMode::Opponent;
+        StageChoice bst; bst.forced = true; bst.id = 40000;
+        Choices bfc; StageChoice brs;
+        check(from_json(to_json(no_c, bst, OptionStore{}, bsb), bfc, &brs, nullptr, &brb) && brs == bst && brb == bsb, "bgm: with a stage in the file too");
+        check(from_json(to_json(no_c, bst, OptionStore{}, bsb), bfc) && bfc.empty(), "bgm: a caller not asking for it reads the same");
+
+        // a System.Guid's bytes in memory
+        uint8_t bg[16] = {};
+        const uint8_t want[16] = { 0x31, 0x7b, 0x1a, 0x27, 0xf2, 0xb6, 0x21, 0x43, 0xbd, 0x51, 0xc2, 0xe7, 0xb6, 0xc8, 0x62, 0xf6 };
+        check(parse_guid(kBgmTitleGuid, bg) && std::equal(bg, bg + 16, want), "bgm: a GUID's text to its bytes in memory");
+        check(!parse_guid("271a7b31-b6f2-4321-bd51", bg) && !parse_guid("271a7b31xb6f2-4321-bd51-c2e7b6c862f6", bg) && !parse_guid(nullptr, bg) &&
+              !parse_guid("271a7b31-b6f2-4321-bd51-c2e7b6c862f6a", bg), "bgm: not a GUID: refused");
+        for (const BgmMode bm : { BgmMode::Character, BgmMode::Opponent, BgmMode::Stage, BgmMode::Random })
+            check(parse_guid(bgm_value_guid(bm), bg) && bgm_value_english(bm)[0] != 0, "bgm: each value has its words");
+    }
+
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;
 }

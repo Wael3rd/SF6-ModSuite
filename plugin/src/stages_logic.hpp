@@ -248,6 +248,9 @@ inline int vs_stage(const Choice& served, const std::map<uint32_t, std::string>&
 // input id of that button in Battle Settings: app.InputAssign.Digital.Id UIOpponentCosSettingToggleEXDXColors (341,
 // Opponent Outfit Settings' "EX/DX Colors On/Off"): its symbol is the bar's icon, its keyboard binding the key read.
 constexpr int kVariationKeyId = 341;
+// Battle Settings' key of its "Character Music" entry: app.InputAssign.Digital.Id UIOpenCharaBgmSelectSetting (295, read 06/11:
+// T, the pad's Y), for the Battle BGM row of Replays > Settings
+constexpr int kCharaMusicKeyId = 295;
 // The guide bar's "<key> Stage Variation": only while the stage grid has the focus, on a stage's own entry (not a tile)
 // that has variations, and with a key symbol to show.
 inline bool variation_hint(bool grid_focused, bool focused_is_tile, int variations, bool have_symbol) {

@@ -6,12 +6,15 @@
 //   {"version":1,"fighters":{"<fighter id>":{"mode":"forced","costume":<FighterDesc.Costume>,
 //                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>,
 //                                            "colormod":"<a Color Mod entry's id: its file path; colour 1 then>"}},
-//    "stage":{"mode":"forced","id":<StageDesc.StageId: a vanilla stage>,"entry":"<a stage slot's key: tile / variation>"}}
+//    "stage":{"mode":"forced","id":<StageDesc.StageId: a vanilla stage>,"entry":"<a stage slot's key: tile / variation>"},
+//    "bgm":{"mode":"character"}}
 // No entry = Default (the replay's own outfit); no "stage" = the replay's own stage. A fighter's costume options:
-// replay_options.hpp ("options" under its entry; "mode":"off" keeps them while it is not forced).
+// replay_options.hpp ("options" under its entry; "mode":"off" keeps them while it is not forced). The music: replay_bgm.hpp
+// (no "bgm" = Random, what a replay does by itself).
 #pragma once
 
 #include "json.hpp"
+#include "replay_bgm.hpp"
 #include "replay_options.hpp"
 
 #include <algorithm>
@@ -239,7 +242,7 @@ inline std::vector<float> summary_layout(const std::vector<SumKind>& kinds) {
 }
 
 // ---- the file ------------------------------------------------------------------------------------------------------------
-inline std::string to_json(const Choices& cs, const StageChoice& stage = {}, const OptionStore& options = {}) {
+inline std::string to_json(const Choices& cs, const StageChoice& stage = {}, const OptionStore& options = {}, const BgmChoice& bgm = {}) {
     std::string o = "{\n    \"version\": 1,\n    \"fighters\": {";
     bool first = true;
     std::set<int> fids;
@@ -269,23 +272,26 @@ inline std::string to_json(const Choices& cs, const StageChoice& stage = {}, con
         if (!stage.entry.empty()) o += ", \"entry\": \"" + json_escape(stage.entry) + "\"";
         o += "}";
     }
+    if (const std::string b = bgm_json(bgm); !b.empty()) o += ",\n    " + b;
     o += "\n}\n";
     return o;
 }
 
 // false: not a file of this format (out left empty). Entries that are not "forced" or lack a costume are skipped.
 // `stage` (when given): the forced stage, Default when absent or not "forced". `options` (when given): every fighter's
-// costume options, whatever its mode.
-inline bool from_json(const std::string& text, Choices& out, StageChoice* stage = nullptr, OptionStore* options = nullptr) {
+// costume options, whatever its mode. `bgm` (when given): the Battle BGM row, Random when absent.
+inline bool from_json(const std::string& text, Choices& out, StageChoice* stage = nullptr, OptionStore* options = nullptr, BgmChoice* bgm = nullptr) {
     out.clear();
     if (stage) *stage = StageChoice{};
     if (options) options->clear();
+    if (bgm) *bgm = BgmChoice{};
     Json j;
     if (!json_parse(text, j) || j.kind != Json::Object) return false;
     const Json* v = j.get("version");
     if (!v || v->as_int(-1) != 1) return false;
     const Json* fs = j.get("fighters");
     if (!fs || fs->kind != Json::Object) return false;
+    if (bgm) *bgm = parse_bgm(j);
     if (const Json* st = j.get("stage"); stage && st && st->kind == Json::Object) {
         const Json* mode = st->get("mode");
         const Json* id = st->get("id");

@@ -10,8 +10,10 @@
 //     (replay_outfits.hpp plan()), so the game asks for that outfit's files and builds the fighter from it itself, the way
 //     it does for an outfit picked on a select screen. The replay's own data (ReplayInfo) is never written. Never in a
 //     live battle (IsNetwork, or no replay being played). A forced fighter's Color Mod entry (RW / MC, on colour 1) or
-//     its game colour is asked of the Color Mod for this replay (colormod_link.hpp); the forced stage is written too. Its
-//     costume options are told to the runtime options (rto.hpp, the player's own choices stay as they are).
+//     its game colour is asked of the Color Mod for this replay (colormod_link.hpp); the forced stage is written too, and
+//     the Battle BGM row's music (Rule.BgmType: this replay's description only, the player's online setting is the save's
+//     MatchingSelectBgm, never touched). Its costume options are told to the runtime options (rto.hpp, the player's own
+//     choices stay as they are).
 #include "slots.hpp"
 #include "replay_outfits.hpp"
 #include "colormod_link.hpp"
@@ -31,6 +33,7 @@ std::mutex g_mx;                                    // everything below: the hoo
 std::vector<RegSlot> g_reg;   uint64_t g_reg_stamp = 0;
 std::map<int, Forced> g_forced; uint64_t g_forced_stamp = 0;
 int g_stage = -1;                                   // the forced stage (StageDesc.StageId), -1: the replay's own
+BgmChoice g_bgm;                                    // the Battle BGM row
 std::map<std::string, Entry> g_journal; uint64_t g_journal_stamp = 0;
 std::string g_last_written;                         // the last journal key written (one line per match)
 std::mutex g_list_mx;                               // g_list_methods (read before g_mx is taken)
@@ -53,10 +56,12 @@ void refresh() {
     if (uint64_t s = stamp(kOutfits); s != g_forced_stamp) {
         std::map<int, Forced> f;
         int stage = -1;
-        if (!s) { g_forced.clear(); g_stage = -1; g_forced_stamp = 0; }
-        else if (parse_outfits(read_file(kOutfits), f, &stage)) {
+        BgmChoice bgm;
+        if (!s) { g_forced.clear(); g_stage = -1; g_bgm = {}; g_forced_stamp = 0; }
+        else if (parse_outfits(read_file(kOutfits), f, &stage, &bgm)) {
             g_forced = std::move(f);
             g_stage = stage;
+            g_bgm = bgm;
             g_forced_stamp = s;
             logf("replay outfits: replay_outfits.json read, %zu character%s forced, stage %s", g_forced.size(),
                  g_forced.size() == 1 ? "" : "s", stage >= 0 ? std::to_string(stage).c_str() : "the replay's own");
@@ -294,6 +299,16 @@ void dress_replay(Obj* map) {
             if (recorded_stage != g_stage) set_i32(sd, "StageId", g_stage);
             line += ", stage " + std::to_string(recorded_stage) + " -> " + std::to_string(g_stage);
         } else line += ", stage: no StageDesc (left alone)";
+    }
+    // The music: the game picks it from the description when it loads the battle (BattleFlowMap.loadBgmPrefab, one byte,
+    // app.EBgmSet). Random: left as the game set it.
+    if (const int set = bgm_set(g_bgm); set >= 0) {
+        Obj* rule = get_obj(desc, "Rule");
+        auto* p = rule ? static_cast<uint8_t*>(field_ptr(rule, "BgmType")) : nullptr;
+        if (p) {
+            line += ", music " + std::to_string(*p) + " -> " + std::to_string(set);
+            *p = static_cast<uint8_t>(set);
+        } else line += ", music: no BattleRule.BgmType (left alone)";
     }
     logf("replay outfits: replay %s%s: %s", key.c_str(), entry ? " (in the journal)" : "", line.c_str());
 }

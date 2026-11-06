@@ -149,6 +149,12 @@ slot, the opponent as recorded; a replay not found there shows what it recorded.
 outfit and colour on every side that plays that character, the player's own included. An extra outfit is named by its
 `mod_id` (registry.json): a mod that is gone leaves the character on Default.
 
+- Music: the Battle BGM row of the tab (`"bgm"` in the same file, `replay_bgm.hpp`), the game's values with Self as P1 and
+  Opponent as P2. A replay does not follow the online setting (the save's `MatchingSelectBgm`): its `BattleRule.BgmType` stays
+  3, Random, from `BattleRule.reset` (read 06/11 in a replay with the online setting on Character), so 1 chance in 3 each for
+  the stage's music, P1's and P2's, each fighter's being its playlist or else its default; the pick is seeded by the time, not
+  by the replay. The row writes `BgmType` in the same post-hook (Stage 0, Player1 1, Player2 2); Random writes nothing.
+  T / pad Y (input id 295) starts `app.UIFlowCharaBgmSetting` as Battle Settings does (`replay_music.cpp`).
 - The key: FNV-1a of the replay's `ReplayInfo` (match seed, stage, fighters, rounds' seeds without the trailing zero ones:
   the replay built at the end of a match has one round entry per round played, the server's and the local copies are padded
   to 5). Outfits and colours are not in the key. Seen equal, 05/11: the end of a match and its replay in My Replays.

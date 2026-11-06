@@ -1547,41 +1547,49 @@ std::string symbol_of(int id, int mode) {
     Method* m = method_of(gm->get_type_definition(), "GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)", 4);
     return g_key_symbols[k] = str(call_obj(m, gm, { arg_i32(id), arg_i32(mode), arg_i32(0), arg_i32(0) }));
 }
-struct VarKey {
+// A key of the game's menus: its id (the symbol's binding on a keyboard), its pad button
+struct GameKey {
+    int id = 0;
+    const char* what = "";
+    const char* pad_field = "";           // via.hid.GamePadButton's field
+    const char* pad_name = "";
+    uint32_t pad_bit = 0;
     bool init = false;
     Method* merged = nullptr;
     Method* button = nullptr;
-    uint32_t pad_bit = 64;                // via.hid.GamePadButton.RLeft
     unsigned sc = 0;                      // the keyboard key (scan code), 0 none
     uint32_t sc_at = 0;
     bool sc_known = false;
-} g_vk;
-bool variation_key_now() {
-    if (!g_vk.init) {
-        g_vk.init = true;
+};
+GameKey g_vk{ sl::kVariationKeyId, "variation key", "RLeft", "X", 64 };
+GameKey g_mk{ sl::kCharaMusicKeyId, "music key", "RUp", "Y", 16 };
+bool game_key_now(GameKey& k) {
+    if (!k.init) {
+        k.init = true;
         TD* pad = api().tdb()->find_type("via.hid.GamePad");
-        g_vk.merged = pad ? method_of(pad, "get_MergedDevice", 0) : nullptr;
+        k.merged = pad ? method_of(pad, "get_MergedDevice", 0) : nullptr;
         if (TD* btn = api().tdb()->find_type("via.hid.GamePadButton"))
-            if (auto* f = btn->find_field("RLeft")) g_vk.pad_bit = static_cast<uint32_t>(f->get_data<int32_t>(nullptr));
+            if (auto* f = btn->find_field(k.pad_field)) k.pad_bit = static_cast<uint32_t>(f->get_data<int32_t>(nullptr));
     }
     if (!window_in_front()) return false;
-    if (!g_vk.sc_known || g_frame - g_vk.sc_at >= 120) {          // the binding can change while the game runs
-        g_vk.sc_at = g_frame;
-        const std::string sym = symbol_of(sl::kVariationKeyId, kModeKeyboard);
+    if (!k.sc_known || g_frame - k.sc_at >= 120) {                // the binding can change while the game runs
+        k.sc_at = g_frame;
+        const std::string sym = symbol_of(k.id, kModeKeyboard);
         const unsigned sc = sl::qwerty_scan(sym);
-        if (!g_vk.sc_known || sc != g_vk.sc)
-            logf("stages: variation key: keyboard %s (scan code 0x%X), pad X (bit %u)", sym.empty() ? "-" : sym.c_str(), sc, g_vk.pad_bit);
-        g_vk.sc = sc;
-        g_vk.sc_known = true;
+        if (!k.sc_known || sc != k.sc)
+            logf("stages: %s: keyboard %s (scan code 0x%X), pad %s (bit %u)", k.what, sym.empty() ? "-" : sym.c_str(), sc, k.pad_name, k.pad_bit);
+        k.sc = sc;
+        k.sc_known = true;
     }
-    if (scan_down(g_vk.sc)) return true;
+    if (scan_down(k.sc)) return true;
     void* s = api().get_native_singleton("via.hid.GamePad");
-    Obj* dev = (s && g_vk.merged) ? call_obj(g_vk.merged, reinterpret_cast<Obj*>(s)) : nullptr;
+    Obj* dev = (s && k.merged) ? call_obj(k.merged, reinterpret_cast<Obj*>(s)) : nullptr;
     if (!dev) return false;
-    if (!g_vk.button) g_vk.button = method_of(dev->get_type_definition(), "get_Button", 0);
-    const Ret r = call(g_vk.button, dev);
-    return !r.exception_thrown && (r.dword & g_vk.pad_bit) != 0;
+    if (!k.button) k.button = method_of(dev->get_type_definition(), "get_Button", 0);
+    const Ret r = call(k.button, dev);
+    return !r.exception_thrown && (r.dword & k.pad_bit) != 0;
 }
+bool variation_key_now() { return game_key_now(g_vk); }
 
 // ---- the guide bar's hint "<key> Stage Variation" -------------------------------------------------------------------------
 // A copy of the bar's item template (e_text_0 of c_guideBtn: the element the game duplicates for each entry, so its font,
@@ -1614,6 +1622,7 @@ struct Hint {
 } g_hint;
 uint32_t g_hint_replay_at = 0;                          // the frame the replay picker last asked for it (0 never)
 std::string g_hint_replay_label = "Stage Variation";    // ...and its label
+int g_hint_replay_key = sl::kVariationKeyId;            // ...and its key
 
 // c_guideBtn's item template and its entries (texts e_text_0_g_* / e_text_0_d_*)
 Obj* bar_template(Obj* btn, std::vector<Obj*>* entries) {
@@ -1937,16 +1946,17 @@ void grid_frame() {
     g_key_was = down;
     // the hint: the grid's, else the replay picker's
     const bool replay_asks = g_hint_replay_at && g_frame - g_hint_replay_at <= 1;
-    const std::string sym = (g_grid.focused || replay_asks) ? symbol_of(sl::kVariationKeyId, guide_mode_now()) : std::string();
+    const std::string sym = g_grid.focused ? symbol_of(sl::kVariationKeyId, guide_mode_now()) : std::string();
+    const std::string replay_sym = replay_asks ? symbol_of(g_hint_replay_key, guide_mode_now()) : std::string();
     const bool grid_want = sl::variation_hint(g_grid.focused, tile, nvar, !sym.empty());
-    const bool replay_want = replay_asks && !sym.empty();
+    const bool replay_want = replay_asks && !replay_sym.empty();
     const char* why = !on ? "no stage grid on screen" : !g_grid.focused ? "the grid has not the focus" : tile ? "a tile" : "no variation";
-    hint_frame(grid_want || replay_want, grid_want ? sl::variation_hint_text(sym) : sl::guide_hint_text(sym, g_hint_replay_label), why);
+    hint_frame(grid_want || replay_want, grid_want ? sl::variation_hint_text(sym) : sl::guide_hint_text(replay_sym, g_hint_replay_label), why);
 }
 // No stage slots here: only the entry Replays > Settings asks for
 void replay_hint_frame() {
     const bool asks = g_hint_replay_at && g_frame - g_hint_replay_at <= 1;
-    const std::string sym = asks ? symbol_of(sl::kVariationKeyId, guide_mode_now()) : std::string();
+    const std::string sym = asks ? symbol_of(g_hint_replay_key, guide_mode_now()) : std::string();
     hint_frame(asks && !sym.empty(), sl::guide_hint_text(sym, g_hint_replay_label), "not asked");
 }
 
@@ -2145,12 +2155,16 @@ int32_t replay_stage() { return g_replay_stage.load(); }
 bool variation_key_down() { return g_variant_count && variation_key_now(); }
 
 bool replay_key_down() { return variation_key_now(); }
-void replay_guide_hint(const char* label) {
+static void replay_hint(const char* label, int key) {
     const bool asked = g_hint_replay_at && g_frame - g_hint_replay_at <= 2;
     g_hint_replay_at = g_frame;
     g_hint_replay_label = label;
+    g_hint_replay_key = key;
     if (!asked) post(EV_STAGE_GRID);                     // the stages' frame runs while it is asked (busy)
 }
+void replay_guide_hint(const char* label) { replay_hint(label, sl::kVariationKeyId); }
+bool replay_music_key_down() { return game_key_now(g_mk); }
+void replay_music_hint(const char* label) { replay_hint(label, sl::kCharaMusicKeyId); }
 void replay_variation_hint() {
     if (g_variant_count) replay_guide_hint("Stage Variation");
 }

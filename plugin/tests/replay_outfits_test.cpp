@@ -85,6 +85,12 @@ int main() {
     check(!parse_outfits("{\"version\":1,\"fighters\":{", kept) && kept.size() == 2, "a half-written file: refused, the last choices kept");
     std::map<int, Forced> none;
     check(parse_outfits("{\"version\":1}", none) && none.empty(), "no fighters: nothing forced");
+    {
+        BgmChoice bg; bg.mode = BgmMode::Stage;
+        check(parse_outfits("{\"version\":1}", none, nullptr, &bg) && bg.mode == BgmMode::Random, "music: no key, Random");
+        check(parse_outfits("{\"version\":1,\"bgm\":{\"mode\":\"opponent\"}}", none, nullptr, &bg) && bg.mode == BgmMode::Opponent && bgm_set(bg) == 2,
+              "music: read for the replay, with no fighters too");
+    }
     std::map<int, Forced> cmf;
     check(parse_outfits("{\"version\":1,\"fighters\":{\"1\":{\"mode\":\"forced\",\"costume\":8,\"mod_id\":\"8cd9\",\"color\":4,"
                         "\"colormod\":\"..\\\\color_mods\\\\Ryu\\\\MANUALCOLORS_01\\\\esf001_009_cmd_001.user.2\"}}}", cmf) &&
