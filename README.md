@@ -76,6 +76,8 @@ a cell of its own, with its picture and name, and a mod that only changes a stag
 that stage, cycled with X / R and confirmed. Random Stage Settings has a tick per cell. Only the game's own stage ids
 travel online. Without stage mods, no stage is changed and nothing is hooked. See [stages/README.md](stages/README.md).
 
+**Slotsloader Manager** (since 1.18.0): the Slots Loader follows ZZtaii's Slotsloader Manager contract 2 (`SlotsloaderContract=2` in its `modinfo.ini`, [docs/MANAGER_CONTRACT.md](docs/MANAGER_CONTRACT.md)). When that Manager installs the loader it behaves as ZZtaii's Slotsloader fork does (one outfit per variant, no in-game costume options); installed any other way, nothing changes.
+
 **Replays Settings** (since 1.20.0): Replays has a sixth tab, Settings, with two rows. *Replay Outfit Settings* is a grid of
 the fighters; a fighter set to On is shown in replays in the costume and colour you pick (the colour row also lists
 the Color Mod's RW / MC colours), with a live 3D preview; R / pad X opens the Costume options of that outfit, as in

@@ -17,6 +17,42 @@
   folder, gives one outfit per add-on and one with all of them. Installed any other way, nothing changes.
 - `SlotsloaderContract=2` in `modinfo.ini` and `variants.json`.
 
+## 1.21.0 (2026-11-06) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.18.0 | works with ZZtaii's Slotsloader Manager (contract 2); fix: Costume options of an outfit made from a partial mod |
+| SF6 Color Mod | 0.24.0 | unchanged |
+| SF6 Native Core | 0.9.6 | unchanged |
+| SF6 Recording Manager | 2.2.6 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.17.0, then install Slots Loader 1.18.0. Color Mod
+0.24.0, Native Core 0.9.6 and Recording Manager 2.2.6 are the same files as in 1.20.0: keep them. With the all-in-one
+package, replace 1.20.0 with 1.21.0. The costume pak is not rebuilt at the first launch ("Up to date").
+
+### SF6 Slots Loader 1.18.0
+- New: works with ZZtaii's Slotsloader Manager (`SlotsloaderContract=2`, `docs/MANAGER_CONTRACT.md`). Installed by the
+  Manager, the loader behaves as ZZtaii's Slotsloader fork does: one outfit per variant, switched on the Manager's page,
+  no in-game costume options. Installed any other way (Fluffy, by hand, the all-in-one), nothing changes: same pak, no
+  rebuild at the first launch, same menus. Tested in game with Manager 1.0.17; on the same mods it makes every outfit
+  of fork 1.10.9 with the same numbers. Thanks to ZZtaii: the swap repairs and the opt-out marker are his MIT code.
+- Fix: an outfit made from a mod that replaces only part of a game outfit (a body mesh, say) was taken for that game
+  outfit: its Costume options menu showed and changed the game outfit's choices, and it wore that outfit's chosen options
+  in fights and replays. It now has no options of its own, unless add-ons are put with it in its sub-folder.
+- Note: the sub-folder fix of 1.17.0 has now been seen in game.
+
+### Known issues
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet.
+- Manager mode has not been checked in an online match. Its owned-outfit opt-out was checked by automated tests only.
+- A very long first rebuild can leave the game with no window. In one test a 26-minute rebuild, on a PC busy with other
+  work, left the game stuck at start-up; closing it and launching again worked, and the pak was complete. The cause is not
+  known. Rebuilds of a few minutes were fine.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+
 ## 1.20.0 (2026-11-05) — SF6 Mod Suite
 
 | Package | Version | |
