@@ -1,6 +1,7 @@
 #include "ui/manager_logic.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 #include "model/labels.hpp"
 
@@ -21,18 +22,74 @@ RowText row_text(Row r, const Tr& T) {
         case kSaveAs: return { T("save_as", {}), T("save_as_desc", {}) };
         case kReset: return { T("reset", {}), T("reset_desc", {}) };
         case kErase: return { T("erase", {}), T("erase_desc", {}) };
-        case kShare: return { "Share drill", "Share the loaded drill with the community." };
-        case kDownload: return { "Download Drills", "Browse and download drills shared by others." };
+        case kShare: return { T("share", {}), T("share_desc", {}) };
+        case kDownload: return { T("download", {}), T("download_desc", {}) };
         default: return {};
     }
 }
 
 std::string page_title(const Tr& T) { return T("page", {}); }
+std::string page_guide(const Tr& T) { return T("page_desc", {}); }
+
+// ---- the model's texts at the screen's edge ---------------------------------------------------------------------------
+namespace {
+
+// the text after `prefix` when status starts with it
+bool after(const std::string& status, const char* prefix, std::string* rest) {
+    if (!starts_with(status, prefix)) return false;
+    *rest = status.substr(std::strlen(prefix));
+    return true;
+}
+
+bool all_digits(const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return c >= '0' && c <= '9'; });
+}
+
+}  // namespace
+
+std::string localise_status(const std::string& status, const Tr& T) {
+    static const struct { const char* en; const char* key; } kExact[] = {
+        { "No file selected", "st_no_file" }, { "No character", "st_no_char" }, { "No name", "st_no_name" },
+        { "No drill selected", "st_no_drill" }, { "No drill loaded", "st_no_loaded" },
+        { "Alloc Failed: memory still insufficient after retry", "st_alloc_failed" },
+        { "Unknown Character ID", "st_unknown_char" }, { "No TrainingManager", "st_no_tm" }, { "No RecFunc", "st_no_recfunc" },
+        { "No Fighter List", "st_no_fighters" }, { "empty or invalid slot data", "st_bad_data" },
+        { "invalid slot entry (bad id)", "st_bad_entry" },
+    };
+    for (const auto& e : kExact) if (status == e.en) return T(e.key, {});
+    std::string rest;
+    if (after(status, "Name already used: ", &rest)) return T("st_name_used", { rest });
+    if (after(status, "Load Failed: ", &rest)) return T("st_load_failed", { rest });
+    if (after(status, "Data not found for ID ", &rest) && all_digits(rest)) return T("st_no_data", { rest });
+    if (after(status, "Cannot rename ", &rest)) {                      // "<file>: <the system's message>" (a file name has no ':')
+        const size_t c = rest.find(": ");
+        if (c != std::string::npos) return T("st_cannot_rename", { rest.substr(0, c), rest.substr(c + 2) });
+    }
+    if (after(status, "Import rejected (", &rest)) {                   // "<source>): <why>"
+        const size_t c = rest.find("): ");
+        if (c != std::string::npos) return T("st_import_rejected", { rest.substr(0, c), localise_status(rest.substr(c + 3), T) });
+    }
+    if (after(status, "slot ", &rest)) {
+        const size_t sp = rest.find(' ');
+        if (sp != std::string::npos && all_digits(rest.substr(0, sp)) && rest.substr(sp) == " has no timeline/inputs")
+            return T("st_no_timeline", { rest.substr(0, sp) });
+    }
+    return status;
+}
+
+std::string localise_ticker(const std::string& ticker, const Tr& T) {
+    static const char kSaved[] = " File Saved", kLoaded[] = " File Loaded";
+    auto ends = [&](const char* w) { const size_t n = std::strlen(w); return ticker.size() > n && ticker.compare(ticker.size() - n, n, w) == 0; };
+    if (ends(kSaved)) return T("file_saved", { ticker.substr(0, ticker.size() - std::strlen(kSaved)) });
+    if (ends(kLoaded)) return T("file_loaded", { ticker.substr(0, ticker.size() - std::strlen(kLoaded)) });
+    return ticker;
+}
 
 // ---- the loadout spin --------------------------------------------------------------------------------------------------
-std::vector<std::string> spin_labels(const std::vector<std::string>& dropdown) {
+std::vector<std::string> spin_labels(const std::vector<std::string>& dropdown, const std::string& no_file) {
     std::vector<std::string> v = dropdown.empty() ? std::vector<std::string>{ kNoFile } : model::labels::short_list(dropdown);
     if (v.size() > kSpinCapacity) v.resize(kSpinCapacity);
+    if (!v.empty() && v[0] == kNoFile) v[0] = no_file;
     return v;
 }
 
@@ -187,7 +244,7 @@ void Runner::open() {
     screen_.rows_dirty();
     screen_.ticker(starts_with(r, "Loaded") ? T_("opened", { name })
                    : contains(r, "Allocating") ? T_("opened_alloc", { name })
-                   : T_("open_failed", { r }));
+                   : T_("open_failed", { localise_status(r, T_) }));
 }
 
 // RMT:111-118: the selected loadout, else the character's own file.
@@ -198,7 +255,7 @@ void Runner::save() {
         std::string tk;
         const std::string r = files_.export_selected(&tk);
         main_ticker(tk);
-        screen_.ticker(contains(r, "Saved") ? T_("saved", { name }) : T_("save_failed", { r }));
+        screen_.ticker(contains(r, "Saved") ? T_("saved", { name }) : T_("save_failed", { localise_status(r, T_) }));
     });
 }
 
@@ -214,7 +271,7 @@ void Runner::save_as() {
             const std::string r = files_.export_as(str, &tk);
             main_ticker(tk);
             screen_.list_changed();
-            screen_.ticker(contains(r, "Saved") ? T_("saved_as", { str }) : T_("save_failed", { r }));
+            screen_.ticker(contains(r, "Saved") ? T_("saved_as", { str }) : T_("save_failed", { localise_status(r, T_) }));
         });
     });
 }
@@ -230,7 +287,7 @@ void Runner::reset() {
         screen_.rows_dirty();
         screen_.ticker(starts_with(r, "Loaded") ? T_("reset_done", { name })
                        : contains(r, "Allocating") ? T_("reset_alloc", { name })
-                       : T_("reset_failed", { r }));
+                       : T_("reset_failed", { localise_status(r, T_) }));
     });
 }
 
@@ -244,7 +301,7 @@ void Runner::erase() {
         files_.ensure();
         screen_.list_changed();
         screen_.rows_dirty();
-        screen_.ticker(starts_with(r, "Erased") ? T_("erased", { name }) : T_("erase_failed", { r }));
+        screen_.ticker(starts_with(r, "Erased") ? T_("erased", { name }) : T_("erase_failed", { localise_status(r, T_) }));
     });
 }
 
@@ -254,12 +311,12 @@ void Runner::rename() {
     if (dialog_open()) return;
     const std::string sel = files_.selected_name();
     if (sel.empty()) return;
-    name_dialog("Rename drill", sel, [this](const std::string& str) {
+    name_dialog(T_("rename", {}), sel, [this](const std::string& str) {
         std::string r = "nil", tk;
         if (!str.empty()) r = files_.rename_selected(str, &tk);
         main_ticker(tk);
         screen_.list_changed();
-        screen_.ticker(starts_with(r, "Renamed") ? T_("renamed", { str }) : T_("rename_failed", { r }));
+        screen_.ticker(starts_with(r, "Renamed") ? T_("renamed", { str }) : T_("rename_failed", { localise_status(r, T_) }));
     });
 }
 

@@ -18,7 +18,31 @@ size_t u8_len(const std::string& s, size_t i) {  // the bytes of the character a
     return n;
 }
 
-void ascii_upper(std::string& s) { for (char& c : s) if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A'); }
+// The capital of a code point (itself when it has none here): ASCII, Latin-1, Latin Extended-A, Cyrillic.
+uint32_t upper_cp(uint32_t c) {
+    if (c < 0x80) return (c >= 'a' && c <= 'z') ? c - 32 : c;
+    if (c >= 0xE0 && c <= 0xFE) return c == 0xF7 ? c : c - 0x20;           // à-þ except ÷
+    if (c == 0xFF) return 0x178;                                           // ÿ -> Ÿ
+    if (c == 0x131) return 'I';                                            // dotless i
+    if (c >= 0x100 && c <= 0x137) return (c & 1) ? c - 1 : c;              // Ā ā ... (Ĳ ĳ, İ stays)
+    if (c >= 0x139 && c <= 0x148) return (c & 1) ? c : c - 1;              // Ĺ ĺ ... ň
+    if (c >= 0x14A && c <= 0x177) return (c & 1) ? c - 1 : c;              // Ŋ ŋ ... ŷ
+    if (c >= 0x179 && c <= 0x17E) return (c & 1) ? c : c - 1;              // Ź ź ... ž
+    if (c >= 0x430 && c <= 0x44F) return c - 0x20;                         // а-я
+    if (c >= 0x450 && c <= 0x45F) return c - 0x50;                         // ѐ-џ
+    if ((c >= 0x460 && c <= 0x481) || (c >= 0x48A && c <= 0x4BF) || (c >= 0x4D0 && c <= 0x52F)) return (c & 1) ? c - 1 : c;
+    if (c >= 0x4C1 && c <= 0x4CE) return (c & 1) ? c : c - 1;
+    if (c == 0x4CF) return 0x4C0;
+    return c;
+}
+
+void put_utf8(std::string& out, uint32_t c) {
+    if (c < 0x80) out += (char)c;
+    else if (c < 0x800) { out += (char)(0xC0 | (c >> 6)); out += (char)(0x80 | (c & 0x3F)); }
+    else { out += (char)(0xE0 | (c >> 12)); out += (char)(0x80 | ((c >> 6) & 0x3F)); out += (char)(0x80 | (c & 0x3F)); }
+}
+
+void ascii_upper(std::string& s) { s = upper_utf8(s); }
 
 std::string ascii_lower(std::string s) {
     for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
@@ -57,6 +81,22 @@ Range page_range(int saved, int page) {
 }
 
 // ---- texts -------------------------------------------------------------------------------------------------------------
+std::string upper_utf8(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        const size_t n = u8_len(s, i);
+        if (n == 1) { const unsigned char c = (unsigned char)s[i]; out += c < 0x80 ? (char)upper_cp(c) : s[i]; ++i; continue; }
+        if (n > 3) { out.append(s, i, n); i += n; continue; }                    // past U+FFFF: no case here
+        uint32_t cp = n == 2 ? ((unsigned char)s[i] & 0x1F) : ((unsigned char)s[i] & 0x0F);
+        for (size_t k = 1; k < n; ++k) cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
+        const uint32_t up = upper_cp(cp);
+        if (up == cp) out.append(s, i, n); else put_utf8(out, up);
+        i += n;
+    }
+    return out;
+}
+
 std::string header_text(const Tr& T, int page, int pages) {
     std::string s = T("details_page", { std::to_string(page + 1), std::to_string(std::max(1, pages)) });
     ascii_upper(s);

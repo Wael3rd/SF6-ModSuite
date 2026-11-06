@@ -24,6 +24,11 @@ uint64_t version();                           // +1 each time the language chang
 std::string lang();                           // "en", "fr", ...
 // RecordingManagerTab's T(key, ...): L("rsm." .. key, ...), the bare key when the text is missing everywhere.
 std::string T(const std::string& key, const std::vector<std::string>& args = {});
+// L(key, ...) of NativeLocale: the whole key ("fighter.1"), the bare key when the text is missing everywhere.
+std::string L(const std::string& key, const std::vector<std::string>& args = {});
+// A fighter's name for the screen: L("fighter.<id>") of the English name of model::chars (also the file name), that name
+// itself when the id or the text is missing. Display only: the file and request names stay English.
+std::string fighter(const std::string& english_name);
 std::string status();
 
 }  // namespace ui::lang

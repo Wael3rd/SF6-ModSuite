@@ -159,15 +159,34 @@ constexpr uint16_t kAsciiW[95] = {
 size_t u8_len(const std::string& s, size_t i) {  // the bytes of the character at i (a stray byte counts alone)
     const unsigned char c = (unsigned char)s[i];
     const size_t n = c < 0xC0 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-    return std::min(n, s.size() - i);
+    size_t k = 1;                                // the lead byte and the continuation bytes (10xxxxxx) that follow, up to n
+    while (k < n && i + k < s.size() && ((unsigned char)s[i + k] & 0xC0) == 0x80) ++k;
+    return k;
 }
 
-double char_em(const std::string& s, size_t i, size_t n) {
+// the code point of the character at i (n bytes, as u8_len gave them); 0xFFFD for a stray or truncated sequence
+uint32_t u8_cp(const std::string& s, size_t i, size_t n) {
     const unsigned char c = (unsigned char)s[i];
-    if (n == 1) return (c >= 32 && c < 127) ? kAsciiW[c - 32] / 1000.0 : 0.0;
-    if (s.compare(i, n, kEllipsis) == 0) return kEllipsisEm;
-    if (n == 3 && c >= 0xE3 && c <= 0xED) return 1.0;            // U+3000-U+DFFF: CJK, kana, Hangul
-    if (n == 3 && c == 0xEF && i + 1 < s.size() && ((unsigned char)s[i + 1] == 0xBC || (unsigned char)s[i + 1] == 0xBD)) return 1.0;   // full-width forms
+    if (n == 1) return c < 0x80 ? c : 0xFFFDu;
+    const size_t want = c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+    if (c < 0xC0 || n != want) return 0xFFFDu;
+    uint32_t cp = c & (0xFFu >> (want + 1));
+    for (size_t k = 1; k < n; ++k) cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
+    return cp;
+}
+
+// The width of one character in em: Latin and ASCII by the Arial table, 1 em for CJK / kana / Hangul / full-width forms /
+// the characters past U+FFFF (ideograph extensions, emoji), 0.6 em for any other letter (accented Latin ~0.56, Cyrillic
+// ~0.55-0.7, Arabic, Thai...). Always the whole UTF-8 sequence: its bytes are never counted one by one.
+double char_em(const std::string& s, size_t i, size_t n) {
+    const uint32_t cp = u8_cp(s, i, n);
+    if (cp < 0x80) return (cp >= 32 && cp < 127) ? kAsciiW[cp - 32] / 1000.0 : 0.0;
+    if (cp == 0x2026) return kEllipsisEm;
+    if ((cp >= 0x1100 && cp <= 0x11FF) ||                         // Hangul Jamo
+        (cp >= 0x2E80 && cp <= 0xD7FF) ||                         // CJK radicals, kana, ideographs, Hangul syllables
+        (cp >= 0xF900 && cp <= 0xFAFF) ||                         // CJK compatibility ideographs
+        (cp >= 0xFF01 && cp <= 0xFF60) || (cp >= 0xFFE0 && cp <= 0xFFE6) ||   // full-width forms
+        cp >= 0x10000) return 1.0;
     return 0.6;
 }
 
@@ -226,8 +245,8 @@ std::string cut_min(const std::string& s, double max_em, size_t min_chars) {
 }
 
 // community_label of `item` with the date taken out when it is kNoDate (and its two spaces)
-bool label_of(const nlohmann::json& item, const nlohmann::json& dv, std::string* out) {
-    if (!model::labels::community_label(item, dv, out)) return false;
+bool label_of(const nlohmann::json& item, const nlohmann::json& dv, std::string* out, const model::labels::ComWords& words) {
+    if (!model::labels::community_label(item, dv, out, words)) return false;
     const std::string gap = std::string("  ") + kNoDate;
     for (size_t p = out->find(gap); p != std::string::npos; p = out->find(gap)) out->erase(p, gap.size());
     return true;
@@ -254,13 +273,14 @@ std::string cut_em(const std::string& s, double max_em) {
     return h + kEllipsis;
 }
 
-std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, const std::string& full, double budget_em) {
+std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, const std::string& full, double budget_em,
+                        const model::labels::ComWords& words) {
     using nlohmann::json;
     if (text_em(full) <= budget_em || !shown.is_object()) return full;
     json it = shown;
     std::string label;
     it["updated_at"] = kNoDate;                                 // 1. the date
-    if (!label_of(it, dv, &label)) return full;
+    if (!label_of(it, dv, &label, words)) return full;
     if (text_em(label) <= budget_em) return label;
     const json dn = it.contains("display_name") ? it["display_name"] : json();
     if (dn.is_string()) {                                       // 2. the loadout name (its trailing " [TAG]" kept whole)
@@ -276,7 +296,7 @@ std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, c
         if (cut != name) {
             it["display_name"] = cut;
             std::string l;
-            if (label_of(it, dv, &l)) label = l;
+            if (label_of(it, dv, &l, words)) label = l;
         }
         if (text_em(label) <= budget_em) return label;
     }
@@ -291,7 +311,7 @@ std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, c
         if (cut != plain) {
             it["uploader_name"] = mark.empty() ? cut : cut + " " + mark;
             std::string l;
-            if (label_of(it, dv, &l)) label = l;
+            if (label_of(it, dv, &l, words)) label = l;
         }
     }
     return label;
@@ -424,8 +444,8 @@ bool learn_name_format(const std::string& msg, std::string* prefix, std::string*
     return true;
 }
 
-std::string slot_text(bool learnt, const std::string& prefix, const std::string& suffix, int n) {
-    if (!learnt) return "Slot " + std::to_string(n);
+std::string slot_text(bool learnt, const std::string& prefix, const std::string& suffix, int n, const std::string& fallback) {
+    if (!learnt) return fallback.empty() ? "Slot " + std::to_string(n) : fallback;
     return prefix + std::to_string(n) + suffix;
 }
 
@@ -469,7 +489,7 @@ void ComDialog::render() {
     for (int i = 1; i <= kRows; ++i) {
         // RMT:300-303: every row's title function tests the same condition, so all 7 rows read "Loading..." until the
         // first answer when no rows were built (all of them, not row 1 only)
-        if (loading_empty) labels_[i - 1] = "Loading...";
+        if (loading_empty) labels_[i - 1] = p_.loading_word();
         else labels_[i - 1] = i <= n ? p_.row_label(i) : "--";
         descs[i - 1] = i <= n ? p_.row_desc(i) : "";
     }

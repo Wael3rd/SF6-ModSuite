@@ -323,6 +323,134 @@ std::string com_full(const json& it, const json& dv = json()) { std::string l; m
 std::string com_fit(const json& it, const json& dv = json(), double em = lg::kComRowEm) { return lg::com_row_fit(it, dv, com_full(it, dv), em); }
 bool has(const std::string& s, const std::string& part) { return s.find(part) != std::string::npos; }
 
+bool valid_utf8(const std::string& s) {
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = (unsigned char)s[i];
+        const size_t n = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        if (n == 0 || i + n > s.size()) return false;
+        for (size_t k = 1; k < n; ++k) if (((unsigned char)s[i + k] & 0xC0) != 0x80) return false;
+        i += n;
+    }
+    return true;
+}
+
+// the Community words in another language, the width of non-Latin text, the capitals of the details' headers
+void test_localised_words() {
+    group("localised words");
+    namespace dt = ui::details;
+    // ---- the width of a text: a UTF-8 sequence is one character, never its bytes
+    const std::string cjk = "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E";               // ni-hon-go (3 characters, 9 bytes)
+    const std::string hangul = "\xED\x95\x9C\xEA\xB8\x80";                         // han-geul (2 characters)
+    const std::string cyr = "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82";     // Privet (6 letters, 12 bytes)
+    const std::string e_acute = "\xC3\xA9", emoji = "\xF0\x9F\x98\x80", fullwidth_a = "\xEF\xBC\xA1", rad = "\xE2\xBA\x80";
+    eq(lg::text_em(cjk), 3.0, "CJK: 1 em a character (3 characters, not 9 bytes)");
+    eq(lg::text_em(hangul), 2.0, "Hangul: 1 em a character");
+    eq(lg::text_em(fullwidth_a), 1.0, "a full-width letter: 1 em");
+    eq(lg::text_em(rad), 1.0, "a CJK radical (U+2E80): 1 em");
+    eq(lg::text_em(emoji), 1.0, "a character past U+FFFF: 1 em");
+    check(std::fabs(lg::text_em(cyr) - 6 * 0.6) < 1e-9 && lg::text_em(cyr) >= 6 * 0.55, "Cyrillic: 0.6 em a letter (>= 0.55), 6 letters not 12 bytes");
+    check(std::fabs(lg::text_em(cyr + cyr) - 2 * lg::text_em(cyr)) < 1e-9, "Cyrillic: the width adds up");
+    eq(lg::text_em(e_acute), 0.6, "an accented Latin letter: one character of 0.6 em");
+    eq(lg::text_em("\xE9"), 0.6, "a stray byte: one character of 0.6 em, never 0");
+    const std::string lead_only = "a\xE6";                                                  // a cut sequence at the end
+    check(std::fabs(lg::text_em(lead_only) - (lg::text_em("a") + 0.6)) < 1e-9, "a cut sequence: one character");
+    const std::string mixed = "A" + cjk + cyr + "z";
+    check(std::fabs(lg::text_em(mixed) - (lg::text_em("A") + 3.0 + lg::text_em(cyr) + lg::text_em("z"))) < 1e-9, "mixed text adds up");
+    // cut_em: on a character boundary, fits, ends with the ellipsis
+    for (double em : { 2.5, 3.5, 4.5, 6.0 }) {
+        const std::string cj = lg::cut_em(cjk + cjk + cjk, em);
+        check(valid_utf8(cj) && lg::text_em(cj) <= em + 1e-9 && cj.size() >= kEll.size() && cj.substr(cj.size() - kEll.size()) == kEll,
+              "cut_em of CJK to " + std::to_string(em) + " em: valid, fits, ellipsis");
+        const std::string cy = lg::cut_em(cyr + cyr + cyr, em);
+        check(valid_utf8(cy) && lg::text_em(cy) <= em + 1e-9 && cy.substr(cy.size() - kEll.size()) == kEll,
+              "cut_em of Cyrillic to " + std::to_string(em) + " em: valid, fits, ellipsis");
+    }
+    eq(lg::cut_em(cjk, 3.0), cjk, "CJK that fits is kept whole");
+
+    // ---- the Community row and title in another language (words given as templates)
+    model::labels::ComWords w;
+    w.by = "%s \xE3\x81\xAB\xE3\x82\x88\xE3\x82\x8B";               // "<author> ni-yoru"
+    w.slots = "%d \xE3\x82\xB9\xE3\x83\xAD\xE3\x83\x83\xE3\x83\x88";   // "<n> surotto"
+    w.downloads = "DL %d";
+    w.mark_upd = "NEW";
+    w.mark_dl = "OK";
+    w.window_title = "%s / %s";
+    w.page = "%d of %d";
+    const json it = com_item("Combo", "Ann", "2026-10-24", 4, 3, 7);
+    std::string lab;
+    check(model::labels::community_label(it, json(), &lab, w), "the label is built with the words");
+    eq(lab, std::string("Combo v1  Ann \xE3\x81\xAB\xE3\x82\x88\xE3\x82\x8B  2026-10-24  |  4 \xE3\x82\xB9\xE3\x83\xAD\xE3\x83\x83\xE3\x83\x88  +3  DL 7"), "the row in the words' order");
+    std::string en_lab;
+    model::labels::community_label(it, json(), &en_lab);
+    eq(en_lab, std::string("Combo v1  by Ann  2026-10-24  |  4 slots  +3  7DL"), "the default words are the English ones");
+    json dv = 1;
+    json up = it; up["version"] = 2;
+    model::labels::community_label(up, dv, &lab, w);
+    check(lab.rfind("<color FFAA00>NEW</color> ", 0) == 0, "the UPD mark's word: " + lab);
+    model::labels::community_label(it, dv, &lab, w);
+    check(lab.rfind("<color 00FF00>OK</color> ", 0) == 0, "the DL mark's word: " + lab);
+    model::labels::ComWords bad;
+    bad.by = "%d by";                                                                         // cannot be filled with a name
+    bad.slots = "%q";
+    bad.downloads = "%s %s";
+    model::labels::community_label(it, json(), &lab, bad);
+    eq(lab, en_lab, "a template that cannot be filled: the English one");
+    eq(model::labels::community_title("New", "Ryu", 2, 5, false, w), std::string("New / Ryu\n<ICON KeyA>   2 of 5   <ICON KeyE>"), "title with the words");
+    eq(model::labels::community_title("New", "Ryu", 2, 5, true, w), std::string("New / Ryu\n<ICON BtnL1>   2 of 5   <ICON BtnR1>"), "title with the words, pad glyphs");
+    eq(model::labels::community_title("New", "Ryu", 1, 1), std::string("New  Ryu Drills\n<ICON KeyA>   Page 1/1   <ICON KeyE>"), "title: the English default");
+    // the fit works on the words too: a label in the words of another language still fits its row
+    const json longit = com_item("Post-throw slop simulator (updated) [TEST]", "Chris_F (drillcodes)", "2026-10-24", 4, 0, 0);
+    std::string full;
+    model::labels::community_label(longit, json(), &full, w);
+    const std::string fitted = lg::com_row_fit(longit, json(), full, lg::kComRowEm, w);
+    check(lg::text_em(full) > lg::kComRowEm && lg::text_em(fitted) <= lg::kComRowEm && has(fitted, "DL 4") == false && has(fitted, "DL 0"), "the fit with the words: it fits, the words stay: " + fitted);
+    check(valid_utf8(fitted), "the fitted label is valid UTF-8");
+    // a long Japanese author: cut on a character, valid
+    const json jp = com_item("Combo", cjk + cjk + cjk + cjk + cjk + cjk + cjk + cjk + cjk + cjk, "2026-10-24", 4, 0, 0);
+    std::string jfull;
+    model::labels::community_label(jp, json(), &jfull, w);
+    const std::string jfit = lg::com_row_fit(jp, json(), jfull, 30.0, w);
+    check(valid_utf8(jfit) && lg::text_em(jfit) <= 30.0 + 1e-9 && lg::text_em(jfull) > 30.0, "a long CJK author: cut on a character, fits: " + jfit);
+
+    // ---- the slot wording when the game's is not learnt
+    eq(lg::slot_text(false, "", "", 14, "Emplacement 14"), std::string("Emplacement 14"), "not learnt: the locale's wording");
+    eq(lg::slot_text(true, "S ", "", 14, "Emplacement 14"), std::string("S 14"), "learnt: the game's wording first");
+    // the loading word of a port
+    struct P : lg::ComPort {
+        void page_open() override {} std::string title(bool) override { return ""; } bool loading() override { return true; }
+        int row_count() override { return 0; } std::string row_label(int) override { return ""; } std::string row_desc(int) override { return ""; }
+        bool data_changed() override { return false; } void mark_built() override {} int64_t version() override { return 0; }
+        bool prev_page() override { return false; } bool next_page() override { return false; } void cycle_sort() override {}
+        void vote(int) override {} bool download_prompt(int, std::string*) override { return false; } void download_confirmed() override {}
+        void show(const std::string&, const std::vector<std::string>& l, const std::vector<std::string>&) override { shown = l; }
+        void open_menu() override {} void navigate(int) override {} int focused_row() override { return 0; }
+        void confirm(const std::string&, std::function<void(bool)>) override {}
+        std::string loading_word() override { return "..."; }
+        std::vector<std::string> shown;
+    } port;
+    lg::ComDialog dlg(port);
+    dlg.open();
+    check(!port.shown.empty() && port.shown[0] == "...", "the dialog shows the port's loading word");
+
+    // ---- capitals of the details' headers (UTF-8)
+    eq(dt::upper_utf8("page 1/2"), std::string("PAGE 1/2"), "upper: ASCII");
+    eq(dt::upper_utf8("p\xC3\xA1gina \xC3\xA7 \xC3\xBC \xC3\xB1 \xC3\xA0 \xC3\xAA"), std::string("P\xC3\x81GINA \xC3\x87 \xC3\x9C \xC3\x91 \xC3\x80 \xC3\x8A"), "upper: Latin-1 letters");
+    eq(dt::upper_utf8("\xC3\xBF \xC3\xB7 \xC3\x9F"), std::string("\xC5\xB8 \xC3\xB7 \xC3\x9F"), "upper: y-diaeresis to Y-diaeresis, the division sign and sharp s unchanged");
+    eq(dt::upper_utf8("\xC5\x82\xC3\xB3""d\xC5\xBA \xC4\x85\xC4\x99 \xC5\x9B\xC4\x87 \xC5\xBC \xC5\x84"), std::string("\xC5\x81\xC3\x93""D\xC5\xB9 \xC4\x84\xC4\x98 \xC5\x9A\xC4\x86 \xC5\xBB \xC5\x83"), "upper: Polish letters (Latin Extended-A)");
+    eq(dt::upper_utf8("\xC5\x9F \xC4\x9F \xC4\xB1 \xC4\xB0 \xC5\xA1 \xC5\xBE \xC4\x8D \xC4\x9B"), std::string("\xC5\x9E \xC4\x9E I \xC4\xB0 \xC5\xA0 \xC5\xBD \xC4\x8C \xC4\x9A"), "upper: Turkish and Czech letters");
+    eq(dt::upper_utf8("\xD1\x81\xD1\x82\xD1\x80\xD0\xB0\xD0\xBD\xD0\xB8\xD1\x86\xD0\xB0 \xD1\x91 \xD1\x8F"), std::string("\xD0\xA1\xD0\xA2\xD0\xA0\xD0\x90\xD0\x9D\xD0\x98\xD0\xA6\xD0\x90 \xD0\x81 \xD0\xAF"), "upper: Cyrillic");
+    eq(dt::upper_utf8(cjk + hangul + "\xD8\xB5\xD9\x81\xD8\xAD\xD8\xA9"), cjk + hangul + "\xD8\xB5\xD9\x81\xD8\xAD\xD8\xA9", "upper: CJK, Hangul, Arabic unchanged");
+    eq(dt::upper_utf8(emoji + "a"), emoji + "A", "upper: a 4-byte character kept, the rest raised");
+    eq(dt::upper_utf8("\xE9"), std::string("\xE9"), "upper: a stray byte kept");
+    eq(dt::upper_utf8(""), std::string(""), "upper: empty");
+    const dt::Tr fr_t = [](const std::string& key, const std::vector<std::string>&) {
+        return key == "details_page" ? std::string("p\xC3\xA1gina 1/2") : key == "details_saved_one" ? std::string("1 espacio guardado \xC3\xA9") : std::string("\xD1\x81\xD0\xBB\xD0\xBE\xD1\x82\xD0\xBE\xD0\xB2 %d");
+    };
+    eq(dt::header_text(fr_t, 0, 2), std::string("P\xC3\x81GINA 1/2"), "header_text raises accented letters");
+    eq(dt::saved_text(fr_t, 1), std::string("1 ESPACIO GUARDADO \xC3\x89"), "saved_text raises accented letters");
+    check(dt::saved_text(fr_t, 5).rfind("\xD0\xA1\xD0\x9B\xD0\x9E\xD0\xA2\xD0\x9E\xD0\x92", 0) == 0, "saved_text raises Cyrillic");
+}
+
 void test_com_fit() {
     group("community row fit");
     check(lg::text_em("") == 0.0 && lg::text_em("<color 00FF00>DL</color> ") == lg::text_em("DL "), "markup tags draw nothing");
@@ -1525,6 +1653,7 @@ int main() {
     test_reversal_cursor();
     test_fit();
     test_com_fit();
+    test_localised_words();
     test_naming();
     test_community();
     test_tab_guard();

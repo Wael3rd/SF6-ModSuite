@@ -39,6 +39,7 @@ bool needs_pause();                            // under ui::lock: the menu seen 
 void tint(MO* t, bool focused);
 void style_text(MO* t, MO* ref);               // RecordingManagerTab.style_text: the 65 properties, tags off, priority + 2
 std::string slot_display_name(int n);          // RSM name of 1-8 / virtual name of 9-30
+std::string slot_label_text(int n);            // "Slot n" as the game words it (learnt on its rows), else the locale's
 std::optional<std::string> live_frames_text(int n);   // "59F" / the empty word of live slot n (nullopt = no slot data)
 std::string virtual_frames_text(int n);        // "78F" / the empty word of virtual slot n
 // Y = RUp (Triangle), X = RLeft (Square), south = RDown (A / Cross), east = RRight (B / Circle); up / down = the d-pad,

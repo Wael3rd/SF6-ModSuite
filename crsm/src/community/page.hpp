@@ -14,14 +14,16 @@
 
 #include "client.hpp"
 #include "identity.hpp"
+#include "model/labels.hpp"
 #include "model/store.hpp"
 
 namespace community {
 
 // What the user is told about an answer of the Worker. `key` = the locale key ("rsm.com_..." without the prefix, "" = no
-// translation: the text is the server's own); `arg` fills its %s; `en` = the full English text (also the fallback).
+// translation: the text is the server's own); `arg` fills its first %s / %d, `arg2` the second; `en` = the full English
+// text (also the fallback).
 struct Msg {
-    std::string key, arg, en;
+    std::string key, arg, en, arg2;
 };
 
 // The decisions on the Worker's answers, pure (tested without a server). `ok` = the request completed; the Worker's own
@@ -71,6 +73,7 @@ public:
         std::function<Identity()> identity;                 // CFN / player_id / anon_
         std::function<void(const std::string&)> log;        // rec_log
         std::function<std::string(const std::string& key, const std::vector<std::string>& args)> tr;   // locale "rsm.<key>"; returns the key when missing (unset = English)
+        std::function<std::string(const std::string& english_name)> display_char;   // a character's name for the title (unset = the name)
         // a row's label made to fit the screen (the display's measure): shown = the item the label was built from, dv =
         // its downloaded version, label = as built. Unset = the label as built.
         std::function<std::string(const json& shown, const json& dv, const std::string& label)> fit_label;
@@ -133,6 +136,9 @@ public:
     void rebuild();                                         // community_rebuild
     // Env::tr of "rsm.<key>" when the locale has it, else `en`
     std::string tr_or(const std::string& key, const std::string& en) const;
+    // The words of the rows and of the title (rsm.com_row_by, com_row_slots, com_row_dl, com_mark_upd, com_mark_dl,
+    // com_window_title, com_page), English where the locale has none.
+    model::labels::ComWords words() const;
     // After the author of a verified item (author_verified): the locale's rsm.com_verified_mark ("[V]") in green. A tag, not
     // a check mark: the glyph tables of the game's UI fonts (obfuscated .oft) could not be read, ASCII always draws.
     std::string verified_mark() const;
@@ -141,7 +147,8 @@ private:
     std::string community_char() const;
     std::string data_path(const std::string& rel) const { return env_.root + rel; }
     void say(const std::string& s) const { if (env_.ticker) env_.ticker(s); }
-    void say(const Msg& m) const;                           // translated through Env::tr when the key exists, else m.en
+    void say(const Msg& m) const { if (env_.ticker) env_.ticker(text(m)); }
+    std::string text(const Msg& m) const;                   // translated through Env::tr when the key exists, else m.en
     void note(const std::string& s) const { if (env_.log) env_.log(s); }
     Identity who() const { return env_.identity ? env_.identity() : Identity{"anon_000000", ""}; }
 

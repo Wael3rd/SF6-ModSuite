@@ -15,7 +15,9 @@
 #include "game/gm.hpp"
 #include "gx.hpp"
 #include "internal.hpp"
+#include "lang.hpp"
 #include "logic.hpp"
+#include "manager_logic.hpp"
 #include "mech/mech.hpp"
 #include "perf.hpp"
 
@@ -152,7 +154,7 @@ void frame() {
         g_pending.clear();
         return;
     }
-    while (mech::pop_ticker(&t)) push(t);       // the layers' asynchronous tickers (an import finished after an allocation)
+    while (mech::pop_ticker(&t)) push(ui::mgr::localise_ticker(t, [](const std::string& k, const std::vector<std::string>& a) { return ui::lang::T(k, a); }));   // the layers' asynchronous tickers (an import finished after an allocation)
     {
         std::lock_guard lk(g_mx);
         if (g_pending.empty()) return;           // nothing to show: no game read (the boot-flow check below is for a text only)

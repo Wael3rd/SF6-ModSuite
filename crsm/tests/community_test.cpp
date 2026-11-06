@@ -635,7 +635,7 @@ void test_fixes() {
         c.start();
         std::vector<std::string> tk;
         std::string cfn = "First";
-        bool translate = false;
+        bool translate = false, fighter_fr = false;
         Page::Env env;
         env.root = slash(root / "game") + "/";
         env.current_char = [] { return std::string("Ken"); };
@@ -645,6 +645,7 @@ void test_fixes() {
             if (!translate) return key;                                  // the locale has no such key: English fallback
             return "[fr] " + key + (args.empty() ? std::string() : " " + args[0]);
         };
+        env.display_char = [&](const std::string& n) { return fighter_fr ? n + "-fr" : n; };
         Page pg(c, env);
         pg.load_state();
         auto pump = [&] { for (int i = 0; i < 3000 && c.busy(); ++i) { c.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(1)); } };
@@ -671,8 +672,8 @@ void test_fixes() {
         check_eq(share_with(R"({"error":"cfn and value are bad"})"), std::vector<std::string>{ "Sharing drill...", "Share refused: cfn and value are bad" }, "share 400: Share refused: <reason>");
         check_eq(share_with(R"({})"), std::vector<std::string>{ "Sharing drill...", "Share failed: unexpected server answer" }, "share: empty answer");
         translate = true;
-        check_eq(share_with(R"({"error":"No changes: x"})"), std::vector<std::string>{ "Sharing drill...", "[fr] com_share_dup" }, "share 409 through the locale");
-        check_eq(share_with(R"({"error":"nope"})"), std::vector<std::string>{ "Sharing drill...", "[fr] com_share_refused nope" }, "share refused through the locale, %s = the reason");
+        check_eq(share_with(R"({"error":"No changes: x"})"), std::vector<std::string>{ "[fr] com_sharing", "[fr] com_share_dup" }, "share 409 through the locale");
+        check_eq(share_with(R"({"error":"nope"})"), std::vector<std::string>{ "[fr] com_sharing", "[fr] com_share_refused nope" }, "share refused through the locale, %s = the reason");
         translate = false;
 
         // 5: a download answer without error and without file; a list answer without items
@@ -690,8 +691,27 @@ void test_fixes() {
         tk.clear(); body = "{}";
         check(pg.download_prompt(2, &msg), "fixes: prompt again");
         pg.download_confirmed(); pump();
-        check_eq(tk, std::vector<std::string>{ "Downloading...", "[fr] com_dl_nofile" }, "download: message through the locale");
+        check_eq(tk, std::vector<std::string>{ "[fr] com_downloading", "[fr] com_dl_nofile" }, "download: message through the locale");
         translate = false;
+        // every ticker and box of the page has a key (the fake locale marks the key and its first argument)
+        translate = true;
+        tk.clear(); body = list_body; pg.fetch(1); pump();
+        check_eq(tk, std::vector<std::string>{ "[fr] com_list_many 2" }, "list count through the locale (many)");
+        check(pg.download_prompt(2, &msg) && msg == "[fr] com_download_ask Fresh", "download box through the locale: " + msg);
+        tk.clear(); pg.vote(2);
+        check_eq(tk, std::vector<std::string>{ "[fr] com_download_first F" }, "vote before download: the letter is a parameter");
+        tk.clear(); pg.share("Ken", "", "");
+        check_eq(tk, std::vector<std::string>{ "[fr] com_share_none" }, "share without a drill through the locale");
+        tk.clear(); body = R"({"error":"boom"})"; pg.fetch(1); pump();
+        check_eq(tk, std::vector<std::string>{ "[fr] com_list_failed boom" }, "list error: the server's text as the argument");
+        check(pg.title().find("[fr] com_window_title") == 0 && pg.title().find("[fr] com_page") != std::string::npos, "title words through the locale: " + pg.title());
+        translate = false;
+        tk.clear(); body = R"({"error":"boom"})"; pg.fetch(1); pump();
+        check_eq(tk, std::vector<std::string>{ "Community: boom" }, "list error in English");
+        fighter_fr = true;
+        check(pg.title().rfind("New  Ken-fr Drills\n", 0) == 0, "title: the character's display name, the request keeps the real one: " + pg.title());
+        fighter_fr = false;
+        check(pg.title().rfind("New  Ken Drills\n", 0) == 0, "title: English without the hook: " + pg.title());
 
         // 6: vote toggles follow the answer
         auto vote_with = [&](const std::string& answer) { tk.clear(); body = answer; pg.vote(1); pump(); return tk; };

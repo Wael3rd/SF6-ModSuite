@@ -168,7 +168,7 @@ bool shows_work_slot(const std::string& m) {
 // The cached widgets showing the game's slot-8 label get "Slot n". Returns the text written (or null).
 MO* relabel(int n) {
     if (!g_field) return nullptr;
-    const std::string want = "Slot " + std::to_string(n);       // the Lua's own wording here (RMT:592)
+    const std::string want = windows::slot_label_text(n);       // the game's wording of "Slot n" (the Lua's "Slot n", RMT:592, in English)
     MO* wrote = nullptr;
     for (int i = 0; i < g_wn; ++i) {
         MO* t = g_t[i];

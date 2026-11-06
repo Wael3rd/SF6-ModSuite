@@ -31,6 +31,7 @@
 #include "gx.hpp"
 #include "hookstack.hpp"
 #include "internal.hpp"
+#include "lang.hpp"
 #include "logic.hpp"
 #include "manager_page.hpp"
 #include "mech/bigc.hpp"
@@ -91,6 +92,8 @@ int g_fit_watch = 0;
 // the game's wording, learnt on its rows
 bool g_name_learnt = false;
 std::string g_name_pre, g_name_suf;
+// "Slot n" in the game's wording once learnt, else the locale's rsm.details_slot
+std::string slot_word(int n) { return lg::slot_text(g_name_learnt, g_name_pre, g_name_suf, n, ui::lang::T("details_slot", { std::to_string(n) })); }
 std::string g_empty_word = "Empty";
 std::optional<std::string> g_start_text;
 // Borrowed texts given the centre text's look, by address. The menu's GUI is built again at each opening (test B: 96
@@ -625,7 +628,7 @@ void slot_row_texts(MO* group, int n, bool focused) {
     if (!item) return;
     MO* name = kid(item, "e_txt_name");
     learn_name(name, g_win, n);
-    if (name && (g_name_learnt || n > 8)) put_text(name, lg::slot_text(g_name_learnt, g_name_pre, g_name_suf, n));   // always (back at 0 too)
+    if (name && (g_name_learnt || n > 8)) put_text(name, slot_word(n));   // always (back at 0 too)
     else if (name) g_text_changed = true;        // (the game's own name text: not followed, re-fit as before)
     MO* centre = kid(item, "e_txt_center");
     if (n > 8) put_text(centre, virtual_text(n));
@@ -721,7 +724,7 @@ void play_row_texts(MO* group, int n, bool focused) {
     if (g_big) pose_disabled(ctrl, item, row_disabled(n));
     MO* name = kid(item, "e_text_name");
     learn_name(name, g_rwin, n);
-    if (name && (g_name_learnt || n > 8)) put_text(name, lg::slot_text(g_name_learnt, g_name_pre, g_name_suf, n));
+    if (name && (g_name_learnt || n > 8)) put_text(name, slot_word(n));
     MO* centre = kid(item, "e_txt_center");
     if (n > 8) put_text(centre, virtual_text(n));        // the game's frames text comes from its 8-entry MenuSlotData
     else if (centre) { if (const auto want = live_frames(n)) put_text(centre, *want); }
@@ -1297,6 +1300,7 @@ void style_text(MO* t, MO* ref) {                // RMT:2193-2197
     gx::invoke(t, "set_Priority(System.Int32)", { gx::I(prio + 2) });
 }
 std::string slot_display_name(int n) { return display_name(n); }
+std::string slot_label_text(int n) { return slot_word(n); }
 std::optional<std::string> live_frames_text(int n) { return live_frames(n); }
 std::string virtual_frames_text(int n) { return virtual_text(n); }
 PadHeld pad_held(bool stick) {

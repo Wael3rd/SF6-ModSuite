@@ -10,6 +10,7 @@
 
 #include "common.hpp"
 #include "game/gm.hpp"
+#include "model/chars.hpp"
 #include "model/locale.hpp"
 #include "model/luajson.hpp"
 
@@ -126,6 +127,21 @@ std::string lang() {
 std::string T(const std::string& key, const std::vector<std::string>& args) {
     std::lock_guard lk(g_mx);
     return g_loc.T(key, args);
+}
+
+std::string L(const std::string& key, const std::vector<std::string>& args) {
+    std::lock_guard lk(g_mx);
+    return g_loc.L(key, args);
+}
+
+std::string fighter(const std::string& english_name) {
+    for (const auto& c : model::chars::all()) {
+        if (english_name != c.name) continue;
+        const std::string key = "fighter." + std::to_string(c.id);
+        const std::string t = L(key);
+        return t.empty() || t == key ? english_name : t;
+    }
+    return english_name;
 }
 
 std::string status() {

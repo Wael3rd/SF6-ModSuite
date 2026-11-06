@@ -243,7 +243,7 @@ void retext() {
     g_lang_seen = ui::lang::version();
     const int64_t page = g_page.load();
     if (page < 0) return;
-    perf::counted(g_api)->pm_set_texts(g_client, page, mgr::page_title(tr).c_str(), nullptr);
+    perf::counted(g_api)->pm_set_texts(g_client, page, mgr::page_title(tr).c_str(), mgr::page_guide(tr).c_str());
     for (int i = 0; i < mgr::kRowCount; ++i) {
         const mgr::RowText t = mgr::row_text((mgr::Row)i, tr);
         if (i != mgr::kLoadout) { perf::counted(g_api)->pm_set_texts(g_client, g_rows[i].load(), t.title.c_str(), t.guide.c_str()); continue; }
@@ -255,6 +255,7 @@ void retext() {
     g_hint_text = { tr("edit_name", {}), tr("delete_name", {}) };
     g_guide_key = "\x01";                     // the Loadout row has its own guide again: the description is put back
     g_spin_guide.clear();
+    g_list_dirty = true;                      // the spin's first entry (no file) in the new language
 }
 
 // info.description of the pack at `path` ("" when none), read once per change of the file
@@ -384,7 +385,7 @@ void sync() {
         dd = eng().dropdown();
         idx = eng().dropdown_index();
     }
-    const std::vector<std::string> labels = mgr::spin_labels(dd);
+    const std::vector<std::string> labels = mgr::spin_labels(dd, tr("select_file", {}));
     bool changed = false;
     size_t before = 0;
     int32_t sel = 0;
@@ -576,7 +577,7 @@ void details_open() {
         name = eng().selected_name();
         const std::string file = eng().selected_file();
         if (!ch.empty() && !file.empty()) path = eng().abs(model::store::pack_path(ch, file));
-        const std::vector<std::string> labels = mgr::spin_labels(eng().dropdown());
+        const std::vector<std::string> labels = mgr::spin_labels(eng().dropdown(), tr("select_file", {}));
         const int32_t i = mgr::spin_value(eng().dropdown_index(), labels.size());
         title = (size_t)i < labels.size() ? labels[(size_t)i] : name;
     }
@@ -584,7 +585,7 @@ void details_open() {
     const nlohmann::json data = model::luajson::load_file(path);
     ui::details::Drill d;
     d.title = title;
-    d.character = ch;
+    d.character = ui::lang::fighter(ch);                      // shown in the details frame: the player's language
     d.source = model::pack::source(data);
     d.author = model::pack::author(data);
     d.description = model::pack::description(data);
@@ -860,7 +861,8 @@ bool build_page() {
     pd.primary_func = mgr::kRecordFunc;
     pd.strip_index = mgr::kStripIndex;
     pd.title = title.c_str();
-    pd.guide = mgr::kPageGuide;
+    const std::string guide = mgr::page_guide(tr);
+    pd.guide = guide.c_str();
     const int64_t page = perf::counted(g_api)->pm_page(g_client, &pd);
     if (page < 0) { cmn::decline(F::Ui, "pm_page refused"); return false; }
     for (int i = 0; i < mgr::kRowCount; ++i) {
@@ -882,11 +884,12 @@ bool build_page() {
         g_rows[i].store(row);
         if (i == mgr::kLoadout) { std::lock_guard gl(g_guide_mx); g_guide_given = t.guide; }
     }
-    const char* first[] = { mgr::kNoFile };
+    const std::string no_file = tr("select_file", {});
+    const char* first[] = { no_file.c_str() };
     perf::counted(g_api)->pm_set_options(g_client, g_rows[mgr::kLoadout].load(), first, 1);
     {
         std::lock_guard lk(g_mx);
-        g_labels = { mgr::kNoFile };
+        g_labels = { no_file };
         g_hint_text = { tr("edit_name", {}), tr("delete_name", {}) };
     }
     g_lang_seen = ui::lang::version();

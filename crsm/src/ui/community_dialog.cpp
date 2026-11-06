@@ -57,7 +57,6 @@ namespace lg = ui::logic;
 using gx::MO;
 
 constexpr const char* kKey = "Community";       // _com.KEY (RMT:151)
-constexpr const char* kDesc = "Community drills.";   // the group's description (RMT:297)
 constexpr int kKeyA = 0x41, kKeyE = 0x45, kKeyT = 0x54, kKeyR = 0x52;   // RMT:329-332
 constexpr uint64_t kSetupWait = 60;              // frames a rebuilt dialog may take to show its page
 
@@ -118,8 +117,9 @@ community::Page& page() {
         env.identity = [] { return community::identity(banner_cfn()); };
         env.log = [](const std::string& s) { cmn::journal("ui: %s", s.c_str()); };
         env.tr = [](const std::string& key, const std::vector<std::string>& args) { return ui::lang::T(key, args); };   // locale.json rsm.com_*
+        env.display_char = [](const std::string& name) { return ui::lang::fighter(name); };   // the window title only
         env.fit_label = [](const nlohmann::json& shown, const nlohmann::json& dv, const std::string& label) {
-            return lg::com_row_fit(shown, dv, label, g_row_em.load());
+            return lg::com_row_fit(shown, dv, label, g_row_em.load(), page().words());
         };
         g_page = std::make_unique<community::Page>(community::client(), std::move(env));
         g_page->load_state();                    // com_state.json (the Lua read it at load, RMT:156)
@@ -151,6 +151,7 @@ public:
     void page_open() override { page().open(); }
     std::string title(bool pad) override { return page().title(pad); }
     bool loading() override { return page().loading(); }
+    std::string loading_word() override { return ui::lang::T("com_loading"); }
     int row_count() override { return (int)page().rows().size(); }
     std::string row_label(int row) override { return page().rows()[(size_t)row - 1].label; }
     std::string row_desc(int row) override {     // RMT:305-310 (created_at, the author: author_cfn since the Worker v4)
@@ -159,7 +160,7 @@ public:
         std::string uploader = community::item_author(item);
         if (community::item_verified(item)) uploader += "  " + page().verified_mark() + " " + page().tr_or("com_verified", "Steam-verified");
         const std::string created = cr.is_string() ? cr.get<std::string>().substr(0, 10) : std::string();
-        return "F: Download  |  " + uploader + "  " + created;
+        return ui::lang::T("com_row_download", { "F" }) + "  |  " + uploader + "  " + created;
     }
     // the lines of a row above "Like / Sort": its full name when the row cut it, then its description, wrapped at the
     // area's width (shown a page of g_desc_lines at a time: guide_text)
@@ -196,8 +197,9 @@ public:
         g_entries.clear();
         g_extras.assign(labels.size(), {});
         const int built = std::min((int)labels.size(), row_count());
-        for (int i = 1; i <= built; ++i) if (labels[(size_t)i - 1] != "Loading...") g_extras[(size_t)i - 1] = row_extra(i);
-        g_group = perf::counted(a)->opt_group(gx::cl(), kKey, title.c_str(), kDesc);
+        for (int i = 1; i <= built; ++i) g_extras[(size_t)i - 1] = row_extra(i);   // (built = 0 while the rows read "Loading...")
+        const std::string desc = ui::lang::T("com_group_desc");                    // the group's description (RMT:297)
+        g_group = perf::counted(a)->opt_group(gx::cl(), kKey, title.c_str(), desc.c_str());
         if (g_group < 0) { cmn::journal("ui: Community: opt_group failed"); return; }
         for (size_t i = 0; i < labels.size(); ++i) {
             const std::string key = "com_r" + std::to_string(i + 1);
@@ -246,7 +248,7 @@ public:
         return 0;
     }
     void confirm(const std::string& message, std::function<void(bool)> done) override {
-        ui::dialogs::confirm(message, "Community", std::move(done));   // the box title (RMT:256)
+        ui::dialogs::confirm(message, ui::lang::T("com_title"), std::move(done));   // the box title (RMT:256)
     }
 };
 

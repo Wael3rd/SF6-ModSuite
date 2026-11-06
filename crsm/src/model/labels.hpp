@@ -14,17 +14,31 @@ namespace model::labels {
 
 using json = nlohmann::json;
 
+// The words of the Community row and window title, as templates filled in order (%s, %d; model::locale::format): the
+// defaults are the English ones, the caller gives the player's language (locale.json rsm.com_*). A template that cannot be
+// filled with its arguments is replaced by the English one.
+struct ComWords {
+    std::string by = "by %s";                 // rsm.com_row_by: the author
+    std::string slots = "%d slots";           // rsm.com_row_slots
+    std::string downloads = "%dDL";           // rsm.com_row_dl
+    std::string mark_upd = "UPD";             // rsm.com_mark_upd: a newer version than the downloaded one
+    std::string mark_dl = "DL";               // rsm.com_mark_dl: downloaded
+    std::string window_title = "%s  %s Drills";   // rsm.com_window_title: sort, character
+    std::string page = "Page %d/%d";          // rsm.com_page
+};
+
 // community_rebuild: the label of one Community row from a Worker item (list answer). Mirrors the Lua format
 //   "%s%s%s  by %s  %s  |  %d slots  %s  %dDL"  = dl_mark, name, " v<version>", author, date, slot_count, score, downloads
 // with the dl_mark "<color FFAA00>UPD</color> " (server version above the downloaded one) or "<color 00FF00>DL</color> "
 // (downloaded), the score "%+d" ("<color 00CCFF>%+d</color>" when the player voted), the date = the first 10 characters of
 // updated_at (created_at when updated_at is empty or absent). `downloaded_version` = dl_version() of the item, null when
 // never downloaded. Returns false (label untouched) where the Lua raises: a field that is not a number where %d needs one.
-bool community_label(const json& item, const json& downloaded_version, std::string* label);
+bool community_label(const json& item, const json& downloaded_version, std::string* label, const ComWords& words = ComWords());
 
 // com_title: "<sort>  <char> Loadouts\n<ICON KeyA>   Page <p>/<n>   <ICON KeyE>"
 // `pad`: the pad's glyphs (<ICON BtnL1> / <ICON BtnR1>) instead of the keyboard's, since 2.2.2
-std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages, bool pad = false);
+std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages, bool pad = false,
+                            const ComWords& words = ComWords());
 // the dialog's guide line: "<ICON KeyT> Like   <ICON KeyR> Sort", or the pad's Y / X (<ICON BtnU> / <ICON BtnL>)
 std::string community_guide(bool pad);
 // math.max(1, math.ceil(total / rows))

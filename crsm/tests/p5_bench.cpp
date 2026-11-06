@@ -243,12 +243,14 @@ void test_texts() {
         eq(t.guide, std::string(guides[i]), "en guide of row " + std::to_string(i + 1));
     }
     eq(page_title(T), std::string("Manager"), "en page title");
-    eq(std::string(kPageGuide), std::string("Recording slot manager (SF6 Tools)."), "page guide (English, as v1.6)");
+    eq(page_guide(T), std::string("Recording slot manager (SF6 Tools)."), "en page guide (rsm.page_desc)");
     g_loc.set_lang("fr");
     eq(page_title(T), std::string("Gestion"), "fr page title");
     check(row_text(kOpen, T).title != "Open drill" && !row_text(kOpen, T).title.empty(), "fr Open row translated", row_text(kOpen, T).title);
-    eq(row_text(kShare, T).title, std::string("Share drill"), "fr Share row stays English (hard-coded in v1.6)");
-    eq(row_text(kDownload, T).guide, std::string("Browse and download drills shared by others."), "fr Download guide stays English");
+    eq(row_text(kShare, T).title, std::string("Partager le drill"), "fr Share row: rsm.share");
+    eq(row_text(kDownload, T).guide, std::string("Parcourir et t\xC3\xA9l\xC3\xA9" "charger les drills partag\xC3\xA9s par les autres."), "fr Download guide");
+    eq(page_guide(T), T("page_desc", {}), "fr page guide through rsm.page_desc");
+    check(page_guide(T) != "Recording slot manager (SF6 Tools).", "fr page guide translated", page_guide(T));
     g_loc.set_lang("es-419");                                       // the near language of es-419 is es
     check(!row_text(kSave, T).title.empty() && row_text(kSave, T).title != "save", "es-419 Save row resolved", row_text(kSave, T).title);
     g_loc.set_lang("nl");                                           // no block: English
@@ -261,6 +263,68 @@ void test_texts() {
     const Act acts[] = { Act::Open, Act::Save, Act::SaveAs, Act::Reset, Act::Erase, Act::Share, Act::Download };
     for (int i = 1; i < kRowCount; ++i) check(act_of_row(i) == acts[i - 1], "decide of row " + std::to_string(i + 1));
     check(!act_of_row(kRowCount).has_value() && !act_of_row(-1).has_value(), "no action outside the rows");
+}
+
+// localise_status / localise_ticker: the model's English strings to the rsm.st_* / rsm.file_* texts (only the en block has them
+// yet: another language gives the English text, so the checks run on a Tr that marks what it was asked)
+void test_localise() {
+    begin("P5 the model's texts at the screen's edge");
+    g_loc.set_lang("en");
+    const Tr T = translator();
+    eq(localise_status("No file selected", T), std::string("No file selected"), "en: No file selected");
+    eq(localise_status("No character", T), std::string("No character"), "en: No character");
+    eq(localise_status("No drill loaded", T), std::string("No drill loaded"), "en: No drill loaded");
+    eq(localise_status("Name already used: Combo A", T), std::string("Name already used: Combo A"), "en: Name already used keeps the name");
+    eq(localise_status("Load Failed: Ryu_Test.json", T), std::string("Load Failed: Ryu_Test.json"), "en: Load Failed keeps the file");
+    eq(localise_status("Data not found for ID 12", T), std::string("Data not found for ID 12"), "en: Data not found");
+    eq(localise_status("slot 7 has no timeline/inputs", T), std::string("slot 7 has no timeline/inputs"), "en: slot N has no timeline");
+    eq(localise_status("Cannot rename a.json: Access is denied.", T), std::string("Cannot rename a.json: Access is denied."), "en: Cannot rename");
+    eq(localise_status("Import rejected (x.json): invalid slot entry (bad id)", T), std::string("Import rejected (x.json): invalid slot entry (bad id)"),
+       "en: Import rejected with its reason");
+    // a Tr that marks every key and argument: which key, which arguments, in order
+    const Tr M = [](const std::string& key, const std::vector<std::string>& args) {
+        std::string s = "[" + key;
+        for (const std::string& a : args) s += "|" + a;
+        return s + "]";
+    };
+    const struct { const char* in; const char* want; } cases[] = {
+        { "No file selected", "[st_no_file]" }, { "No character", "[st_no_char]" }, { "No name", "[st_no_name]" },
+        { "No drill selected", "[st_no_drill]" }, { "No drill loaded", "[st_no_loaded]" },
+        { "Name already used: Combo A", "[st_name_used|Combo A]" },
+        { "Cannot rename F.json: The system cannot find the file", "[st_cannot_rename|F.json|The system cannot find the file]" },
+        { "Load Failed: Ryu_A.json", "[st_load_failed|Ryu_A.json]" },
+        { "Alloc Failed: memory still insufficient after retry", "[st_alloc_failed]" },
+        { "Import rejected (Ryu_A.json): empty or invalid slot data", "[st_import_rejected|Ryu_A.json|[st_bad_data]]" },
+        { "Import rejected (B (copy).json): slot 3 has no timeline/inputs", "[st_import_rejected|B (copy).json|[st_no_timeline|3]]" },
+        { "Import rejected (a.json): something unexpected", "[st_import_rejected|a.json|something unexpected]" },
+        { "Unknown Character ID", "[st_unknown_char]" }, { "No TrainingManager", "[st_no_tm]" }, { "No RecFunc", "[st_no_recfunc]" },
+        { "No Fighter List", "[st_no_fighters]" }, { "Data not found for ID 4", "[st_no_data|4]" },
+        { "empty or invalid slot data", "[st_bad_data]" }, { "invalid slot entry (bad id)", "[st_bad_entry]" },
+        { "slot 30 has no timeline/inputs", "[st_no_timeline|30]" },
+        // technical or unknown: unchanged
+        { "Crash: attempt to index a nil value", "Crash: attempt to index a nil value" },
+        { "Error: bad argument #1", "Error: bad argument #1" },
+        { "Data not found for ID x", "Data not found for ID x" },
+        { "slot x has no timeline/inputs", "slot x has no timeline/inputs" },
+        { "Cannot rename nocolon", "Cannot rename nocolon" },
+        { "nil", "nil" }, { "", "" },
+    };
+    for (const auto& c : cases) eq(localise_status(c.in, M), std::string(c.want), std::string("status: ") + c.in);
+    eq(localise_ticker("Ryu_A File Saved", M), std::string("[file_saved|Ryu_A]"), "ticker: File Saved");
+    eq(localise_ticker("My Drill File Loaded", M), std::string("[file_loaded|My Drill]"), "ticker: File Loaded");
+    eq(localise_ticker("Drill opened: x", M), std::string("Drill opened: x"), "ticker: another text unchanged");
+    eq(localise_ticker(" File Saved", M), std::string(" File Saved"), "ticker: no name, unchanged");
+    eq(localise_ticker("Ryu_A File Saved", T), std::string("Ryu_A File Saved"), "en ticker: the same text");
+    // the spin's first entry in the player's language, the comparison text kept
+    eq(join(spin_labels({}, "-- Choisir --")), std::string("-- Choisir --"), "empty list: the shown no-file entry");
+    eq(join(spin_labels({ kNoFile, "A" }, "-- Choisir --")), std::string("-- Choisir -- | A"), "first entry replaced, the others kept");
+    eq(join(spin_labels({ "A", kNoFile })), std::string("A | -- Select File --"), "only the first entry is the no-file one");
+    // every key the helpers ask for is in the en block
+    for (const char* k : { "st_no_file", "st_no_char", "st_no_name", "st_no_drill", "st_no_loaded", "st_name_used", "st_cannot_rename",
+                           "st_load_failed", "st_alloc_failed", "st_import_rejected", "st_unknown_char", "st_no_tm", "st_no_recfunc",
+                           "st_no_fighters", "st_no_data", "st_bad_data", "st_bad_entry", "st_no_timeline", "file_saved", "file_loaded",
+                           "select_file", "share", "share_desc", "download", "download_desc", "page_desc", "rename" })
+        check(T(k, { "a", "b" }) != k, std::string("key rsm.") + k + " in the en block");
 }
 
 void test_spin() {
@@ -787,6 +851,7 @@ int main(int argc, char** argv) {
     for (auto it = file.begin(); it != file.end(); ++it) if (it.key() != "_readme" && it->is_object()) g_langs.push_back(it.key());
     std::printf("[P5] Manager page\n");
     test_texts();
+    test_localise();
     test_spin();
     test_memory();
     test_memory_game_pages();

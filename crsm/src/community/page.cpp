@@ -18,7 +18,8 @@ namespace lj = model::luajson;
 namespace lu = model::lutil;
 namespace st = model::store;
 
-const char* const kSortNames[3] = { "New", "Popular", "Most Downloaded" };
+const char* const kSortNames[3] = { "New", "Popular", "Most Downloaded" };           // English; the keys below
+const char* const kSortWordKeys[3] = { "com_sort_new", "com_sort_popular", "com_sort_downloads" };
 const char* const kSortKeys[3] = { "recent", "popular", "downloads" };
 
 // "x or default" for a string member of a list item
@@ -91,7 +92,7 @@ bool item_verified(const json& item) {
 Msg share_verdict(bool ok, const json& resp, const std::string&) {
     const std::string err = error_text(resp);
     if (Msg a = auth_verdict(resp); !a.en.empty()) return a;
-    if (!ok) { const std::string e = err.empty() ? std::string("unknown") : err; return {"", "", "Share failed: " + e}; }
+    if (!ok) return err.empty() ? Msg{"com_share_failed_unknown", "", "Share failed: unknown"} : Msg{"com_share_failed", err, "Share failed: " + err};
     // ok = the request completed. Shared only when the Worker says so ({ ok = true }): its refusals are { error = ... }
     if (err.empty()) {
         const json okv = resp.is_object() ? lj::index(resp, "ok") : json();
@@ -110,8 +111,8 @@ Msg download_verdict(bool ok, const json& data) {
     const json file = (ok && data.is_object()) ? lj::index(data, "file") : json();
     if (lu::truthy(file)) return {"", "", ""};
     const std::string err = error_text(data);
-    if (!err.empty()) return {"", "", "Download failed: " + err};
-    if (!ok) return {"", "", "Download failed: unknown"};
+    if (!err.empty()) return {"com_dl_failed", err, "Download failed: " + err};
+    if (!ok) return {"com_dl_failed_unknown", "", "Download failed: unknown"};
     return {"com_dl_nofile", "", "Download failed: the server sent no file"};      // was "table: 0x..." in the Lua
 }
 
@@ -119,8 +120,8 @@ Msg list_verdict(bool ok, const json& data) {
     const json items = (ok && data.is_object()) ? lj::index(data, "items") : json();
     if (lu::truthy(items)) return {"", "", ""};
     const std::string err = error_text(data);
-    if (!err.empty()) return {"", "", "Community: " + err};
-    if (!ok) return {"", "", "Community: failed"};
+    if (!err.empty()) return {"com_list_failed", err, "Community: " + err};
+    if (!ok) return {"com_list_failed_unknown", "", "Community: failed"};
     return {"com_list_bad", "", "Community: the server sent no list"};
 }
 
@@ -145,8 +146,11 @@ VoteEffect vote_effect(bool ok, const json& data, int sent) {
     const std::string err = error_text(data);
     const Msg bad{"com_vote_bad", "", "Vote failed: unexpected server answer"};
     if (Msg a = auth_verdict(data); !a.en.empty()) { v.err = a; return v; }
-    if (!ok || !data.is_object()) { v.err = {"", "", "Vote failed: " + (err.empty() ? std::string("unknown") : err)}; return v; }
-    if (!lu::truthy(lj::index(data, "ok"))) { v.err = err.empty() ? bad : Msg{"", "", "Vote failed: " + err}; return v; }
+    if (!ok || !data.is_object()) {
+        v.err = err.empty() ? Msg{"com_vote_failed_unknown", "", "Vote failed: unknown"} : Msg{"com_vote_failed", err, "Vote failed: " + err};
+        return v;
+    }
+    if (!lu::truthy(lj::index(data, "ok"))) { v.err = err.empty() ? bad : Msg{"com_vote_failed", err, "Vote failed: " + err}; return v; }
     const json action = lj::index(data, "action");
     if (!action.is_string()) { v.err = bad; return v; }
     const std::string a = action.get<std::string>();
@@ -160,13 +164,15 @@ VoteEffect vote_effect(bool ok, const json& data, int sent) {
     return v;
 }
 
-void Page::say(const Msg& m) const {
-    if (!env_.ticker) return;
+std::string Page::text(const Msg& m) const {
     if (!m.key.empty() && env_.tr) {
-        const std::string t = env_.tr(m.key, m.arg.empty() ? std::vector<std::string>() : std::vector<std::string>{ m.arg });
-        if (!t.empty() && t != m.key && t != "rsm." + m.key) { env_.ticker(t); return; }
+        std::vector<std::string> args;
+        if (!m.arg.empty()) args.push_back(m.arg);
+        if (!m.arg2.empty()) args.push_back(m.arg2);
+        const std::string t = env_.tr(m.key, args);
+        if (!t.empty() && t != m.key && t != "rsm." + m.key) return t;
     }
-    env_.ticker(m.en);
+    return m.en;
 }
 
 Page::Page(Client& client, Env env) : client_(client), env_(std::move(env)) {
@@ -179,6 +185,18 @@ std::string Page::tr_or(const std::string& key, const std::string& en) const {
     if (!env_.tr) return en;
     const std::string t = env_.tr(key, {});
     return (t.empty() || t == key || t == "rsm." + key) ? en : t;
+}
+
+model::labels::ComWords Page::words() const {
+    model::labels::ComWords w;
+    w.by = tr_or("com_row_by", w.by);
+    w.slots = tr_or("com_row_slots", w.slots);
+    w.downloads = tr_or("com_row_dl", w.downloads);
+    w.mark_upd = tr_or("com_mark_upd", w.mark_upd);
+    w.mark_dl = tr_or("com_mark_dl", w.mark_dl);
+    w.window_title = tr_or("com_window_title", w.window_title);
+    w.page = tr_or("com_page", w.page);
+    return w;
 }
 
 std::string Page::verified_mark() const { return "<color 66DD66>" + tr_or("com_verified_mark", "[V]") + "</color>"; }
@@ -227,7 +245,7 @@ void Page::rebuild() {
         if (item.is_object() && (item.contains("author_cfn") || item_verified(item)))
             shown["uploader_name"] = item_author(item) + (item_verified(item) ? " " + verified_mark() : std::string());
         std::string label;
-        if (!model::labels::community_label(shown, dv, &label)) {
+        if (!model::labels::community_label(shown, dv, &label, words())) {
             // the Lua raises inside community_rebuild: the rows built so far stay (fetch() pcalls it and journals the error)
             note("com_rebuild ERROR: an item of the list does not have the expected fields");
             return;
@@ -244,8 +262,10 @@ void Page::rebuild() {
 }
 
 std::string Page::title(bool pad) const {
-    return model::labels::community_title(kSortNames[(sort_idx_ - 1) % 3], char_.empty() ? "?" : char_, page_,
-                                          model::labels::community_pages(total_, kRows), pad);
+    const int s = (sort_idx_ - 1) % 3;
+    const std::string shown_char = char_.empty() ? "?" : env_.display_char ? env_.display_char(char_) : char_;
+    return model::labels::community_title(tr_or(kSortWordKeys[s], kSortNames[s]), shown_char, page_,
+                                          model::labels::community_pages(total_, kRows), pad, words());
 }
 
 void Page::fetch(int page_after) {
@@ -268,7 +288,8 @@ void Page::fetch(int page_after) {
             total_ = (int64_t)lj::len(all_items_);
             page_ = page_after > 0 ? page_after : 1;
             rebuild();
-            say("Community: " + std::to_string(total_) + " drill" + (total_ != 1 ? "s" : ""));
+            const std::string n = std::to_string(total_);
+            say(Msg{total_ == 1 ? "com_list_one" : "com_list_many", n, "Community: " + n + " drill" + (total_ != 1 ? "s" : "")});
         } else {
             say(bad);
         }
@@ -315,11 +336,17 @@ bool Page::download_prompt(int row, std::string* message) {
     const auto local_ver = st::dl_version(state_, display);
     const json sv = lj::index(r.item, "version");
     const json server_ver = lu::truthy(sv) ? sv : json(1);
-    if (local_ver && num_le(server_ver, *local_ver)) { say("Already downloaded (v" + lua_tostring(*local_ver) + ")"); return false; }
+    if (local_ver && num_le(server_ver, *local_ver)) {
+        const std::string v = lua_tostring(*local_ver);
+        say(Msg{"com_already", v, "Already downloaded (v" + v + ")"});
+        return false;
+    }
     if (local_ver) {
-        *message = "Update v" + lua_tostring(server_ver) + " available (you have v" + lua_tostring(*local_ver) + "). Download?";
+        const std::string sv_text = lua_tostring(server_ver), lv_text = lua_tostring(*local_ver);
+        *message = text(Msg{"com_update_ask", sv_text, "Update v" + sv_text + " available (you have v" + lv_text + "). Download?", lv_text});
     } else {
-        *message = "Download \"" + str_member(r.item, "display_name", "?") + "\" by " + item_author(r.item) + "?";
+        const std::string nm = str_member(r.item, "display_name", "?"), au = item_author(r.item);
+        *message = text(Msg{"com_download_ask", nm, "Download \"" + nm + "\" by " + au + "?", au});
     }
     dl_row_ = r;
     return true;
@@ -358,20 +385,20 @@ void Page::download_confirmed() {
                 }
             }
             if (env_.packs_changed) env_.packs_changed();
-            say("Downloaded: " + name);
+            say(Msg{"com_downloaded", name, "Downloaded: " + name});
             fetch(page_);
         } else {
             say(bad);
         }
     });
-    say("Downloading...");
+    say(Msg{"com_downloading", "", "Downloading..."});
 }
 
 void Page::vote(int row) {
-    if (row < 1 || row > (int)rows_.size() || rows_[(size_t)row - 1].id.empty()) { say("No item"); return; }
+    if (row < 1 || row > (int)rows_.size() || rows_[(size_t)row - 1].id.empty()) { say(Msg{"com_no_item", "", "No item"}); return; }
     const Row r = rows_[(size_t)row - 1];
     const std::string display = lu::truthy(lj::index(r.item, "display_name")) ? lua_tostring(lj::index(r.item, "display_name")) : std::string();
-    if (!st::dl_version(state_, display)) { say("Download it first (F)"); return; }
+    if (!st::dl_version(state_, display)) { say(Msg{"com_download_first", "F", "Download it first (F)"}); return; }
     if (client_.busy()) { say(busy_verdict(client_.verifying())); return; }
     const Identity info = who();
     json cmd = json::object();
@@ -397,7 +424,7 @@ void Page::vote(int row) {
             }
             rebuild();
             built_ver_ = data_ver_;
-            say(ve.my_vote > 0 ? "Liked" : "Unliked");
+            say(ve.my_vote > 0 ? Msg{"com_liked", "", "Liked"} : Msg{"com_unliked", "", "Unliked"});
         } else {
             say(ve.err);
         }
@@ -405,11 +432,11 @@ void Page::vote(int row) {
 }
 
 void Page::share(const std::string& char_name, const std::string& pack_file, const std::string& display_in) {
-    if (pack_file.empty()) { say("No drill selected to share"); return; }
+    if (pack_file.empty()) { say(Msg{"com_share_none", "", "No drill selected to share"}); return; }
     const std::string display = lu::strip_json_ext(display_in.empty() ? pack_file : display_in);
     const Identity info = who();
     const json data = lj::load_file(data_path(st::pack_path(char_name, pack_file)));
-    if (!lu::truthy(data)) { say("Cannot read the drill file"); return; }
+    if (!lu::truthy(data)) { say(Msg{"com_share_nofile", "", "Cannot read the drill file"}); return; }
     if (client_.busy()) { say(busy_verdict(client_.verifying())); return; }
     json cmd = json::object();
     cmd["cmd"] = "share";
@@ -421,10 +448,10 @@ void Page::share(const std::string& char_name, const std::string& pack_file, con
     cmd["file"] = lj::encode(data);
     client_.send(std::move(cmd), [this, display](bool ok, const json& resp) {
         const Msg m = share_verdict(ok, resp, display);
-        if (m.en.empty()) say("Drill shared: " + display);
+        if (m.en.empty()) say(Msg{"com_shared", display, "Drill shared: " + display});
         else say(m);       // a refusal of the Worker (409 / 400 / 413 / 429...) is not "shared"; nothing is marked
     });
-    say("Sharing drill...");
+    say(Msg{"com_sharing", "", "Sharing drill..."});
 }
 
 }  // namespace community

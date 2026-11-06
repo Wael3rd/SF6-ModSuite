@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "model/labels.hpp"
 #include "nlohmann/json.hpp"
 
 namespace ui::logic {
@@ -98,7 +99,9 @@ constexpr size_t kComAuthorMinChars = 8;
 // least; a trailing tag of the name such as " [TEST]" is never cut: the name is cut before it), then the author's name
 // (its mark kept, kComAuthorMinChars at least). The marks, the version, the slots, the score and the downloads always
 // stay. Still wider: the shortest label made.
-std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, const std::string& full, double budget_em);
+// `words` = the row's words in the player's language (the label is built again from them as the cut goes on).
+std::string com_row_fit(const nlohmann::json& shown, const nlohmann::json& dv, const std::string& full, double budget_em,
+                        const model::labels::ComWords& words = model::labels::ComWords());
 // A free text (a loadout's description) made safe for a game text, in at most max_lines lines of max_em: \r and other
 // control characters dropped, tabs as spaces, '<' / '>' and '[' / ']' as '(' / ')' (a '<' starts the game's markup; its
 // texts draw no square bracket: "[x]" showed "x", 04/11), each paragraph (\n) wrapped at
@@ -147,7 +150,8 @@ std::string com_guide_text(const std::vector<std::string>& extra, const std::str
 // ---- the game's own wording, learnt on its rows ------------------------------------------------------------------------
 // name_fmt (RMT:880-883): the game's "Slot 1" with its first run of digits replaced by the number
 bool learn_name_format(const std::string& msg, std::string* prefix, std::string* suffix);
-std::string slot_text(bool learnt, const std::string& prefix, const std::string& suffix, int n);   // "Slot %d" when not learnt
+// not learnt: `fallback` (the locale's rsm.details_slot already filled), "Slot <n>" when empty
+std::string slot_text(bool learnt, const std::string& prefix, const std::string& suffix, int n, const std::string& fallback = std::string());
 bool is_frames_text(const std::string& msg);   // msg:match("^%d+%s*F$")
 // empty_word (RMT:888): a centre text the game wrote that is neither "" nor a frames text nor nil ("nil" = a null text)
 bool learnable_empty_word(const std::string& msg);
@@ -247,6 +251,7 @@ public:
     virtual void page_open() = 0;                             // Page::open (char, disk sync, sort New, page 1, fetch)
     virtual std::string title(bool pad) = 0;                  // pad: the pad's glyphs (the game's guide mode)
     virtual bool loading() = 0;
+    virtual std::string loading_word() { return "Loading..."; }   // the rows' text before the first answer (rsm.com_loading)
     virtual int row_count() = 0;                              // rows built, from row 1
     virtual std::string row_label(int row) = 0;               // 1-based
     virtual std::string row_desc(int row) = 0;                // "F: Download  |  <uploader>  <created>" (+ its description)

@@ -40,8 +40,11 @@ struct Range { int first = 0, last = 0; };     // the saved slots [first, last) 
 Range page_range(int saved, int page);
 
 // ---- texts -------------------------------------------------------------------------------------------------------------
-// The list's header: rsm.details_page "PAGE %d/%d", page counted from 0 here and from 1 on screen, in capitals (ASCII
-// letters; the locale's own texts are already written so).
+// s in capitals, on UTF-8: ASCII, Latin-1 (a-ÿ; ß stays), Latin Extended-A and Cyrillic letters; any other character
+// (CJK, Hangul, Arabic, Greek...) and any stray byte unchanged.
+std::string upper_utf8(const std::string& s);
+// The list's header: rsm.details_page "PAGE %d/%d", page counted from 0 here and from 1 on screen, in capitals (upper_utf8:
+// accented and Cyrillic letters too).
 std::string header_text(const Tr& T, int page, int pages);
 // The top-left box's second line: rsm.details_saved "%d SLOTS SAVED" (rsm.details_saved_one "1 SLOT SAVED" for a single
 // slot), in capitals as header_text.

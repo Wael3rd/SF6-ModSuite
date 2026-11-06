@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "locale.hpp"
 #include "luajson.hpp"
 #include "lutil.hpp"
 
@@ -28,9 +29,17 @@ bool str_or(const json& v, const char* dflt, std::string* out) {
     return true;
 }
 
+// tmpl filled with args; the English template when it cannot be filled
+std::string fill(const std::string& tmpl, const std::string& english, const std::vector<std::string>& args) {
+    std::string out;
+    if (model::locale::format(tmpl, args, &out)) return out;
+    model::locale::format(english, args, &out);
+    return out;
+}
+
 }  // namespace
 
-bool community_label(const json& item, const json& downloaded_version, std::string* label) {
+bool community_label(const json& item, const json& downloaded_version, std::string* label, const ComWords& words) {
     if (!item.is_object()) return false;
     std::string name, author, date;
     if (!str_or(lj::index(item, "display_name"), "?", &name)) return false;
@@ -63,7 +72,7 @@ bool community_label(const json& item, const json& downloaded_version, std::stri
         json svj = lutil::truthy(version) ? version : json(1);
         const auto sv = lutil::to_number(svj.is_string() ? json() : svj);       // comparing a string with a number raises
         if (!lv || !sv) return false;
-        dl_mark = sv->get<double>() > lv->get<double>() ? "<color FFAA00>UPD</color> " : "<color 00FF00>DL</color> ";
+        dl_mark = sv->get<double>() > lv->get<double>() ? "<color FFAA00>" + words.mark_upd + "</color> " : "<color 00FF00>" + words.mark_dl + "</color> ";
     }
 
     const json score_j = lutil::truthy(lj::index(item, "score")) ? lj::index(item, "score") : json(0);
@@ -75,13 +84,17 @@ bool community_label(const json& item, const json& downloaded_version, std::stri
     if (!fmt_int(lutil::truthy(sc) ? sc : json(0), false, &slots)) return false;
     if (!fmt_int(lutil::truthy(dl) ? dl : json(0), false, &downloads)) return false;
 
-    *label = dl_mark + name + ver + "  by " + author + "  " + date + "  |  " + slots + " slots  " + score_str + "  " + downloads + "DL";
+    const ComWords en;
+    *label = dl_mark + name + ver + "  " + fill(words.by, en.by, { author }) + "  " + date + "  |  " + fill(words.slots, en.slots, { slots }) + "  " +
+             score_str + "  " + fill(words.downloads, en.downloads, { downloads });
     return true;
 }
 
-std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages, bool pad) {
-    return sort_label + "  " + char_name + " Drills\n" + (pad ? "<ICON BtnL1>" : "<ICON KeyA>") + "   Page " + std::to_string(page) + "/" +
-           std::to_string(total_pages) + "   " + (pad ? "<ICON BtnR1>" : "<ICON KeyE>");
+std::string community_title(const std::string& sort_label, const std::string& char_name, int64_t page, int64_t total_pages, bool pad,
+                            const ComWords& words) {
+    const ComWords en;
+    return fill(words.window_title, en.window_title, { sort_label, char_name }) + "\n" + (pad ? "<ICON BtnL1>" : "<ICON KeyA>") + "   " +
+           fill(words.page, en.page, { std::to_string(page), std::to_string(total_pages) }) + "   " + (pad ? "<ICON BtnR1>" : "<ICON KeyE>");
 }
 
 std::string community_guide(bool pad) {

@@ -30,9 +30,9 @@ constexpr int64_t kFtRecordSlot = 118;        // TrainingFuncType RECORD_SLOT: t
 constexpr int32_t kButtonX = 92;              // app.InputAssign.Digital.ConfigId UI_X (core/docs/PAUSE_MENU.md, Hints)
 constexpr int32_t kButtonY = 93;              // UI_Y
 constexpr uint64_t kNativeActionHold = 240;   // MAIN's own tickers kept quiet 240 frames after the menu closes (RMT:1157)
+// The files layer's first dropdown entry (no file); spin_labels shows it in the player's language (rsm.select_file), the
+// comparisons stay on this one.
 constexpr const char* kNoFile = "-- Select File --";
-// The page guide stays English, as in v1.6 (RMT:1831: the tab's guide is hard-coded, rsm.page_desc is not used there).
-constexpr const char* kPageGuide = "Recording slot manager (SF6 Tools).";
 
 // ---- rows ---------------------------------------------------------------------------------------------------------------
 enum Row : int { kLoadout = 0, kOpen, kSave, kSaveAs, kReset, kErase, kShare, kDownload, kRowCount };
@@ -40,13 +40,26 @@ enum Row : int { kLoadout = 0, kOpen, kSave, kSaveAs, kReset, kErase, kShare, kD
 using Tr = std::function<std::string(const std::string& key, const std::vector<std::string>& args)>;   // RMT's T(key, ...)
 
 struct RowText { std::string title, guide; };
-RowText row_text(Row r, const Tr& T);         // rows 1-6 localized (rsm.*), Share / Download English (RMT:397, 418)
+RowText row_text(Row r, const Tr& T);         // the rows' titles and help lines (rsm.*)
 std::string page_title(const Tr& T);          // rsm.page "Manager"
+std::string page_guide(const Tr& T);          // rsm.page_desc "Recording slot manager (SF6 Tools)."
+
+// ---- the model's texts at the screen's edge ---------------------------------------------------------------------------
+// The files layer's status strings (model::files::Engine::status, "No file selected", "Load Failed: X"...) are the English
+// ones the tests and the prefix checks use; where one becomes the %s of a message shown (Open failed: %s...) it goes
+// through here. The known exact strings and prefix-with-argument forms (see the cpp) give their rsm.st_* text; the file
+// names and the system's own messages inside them stay as they are; anything else ("Crash: ...", the Lua-like technical
+// errors) is returned unchanged.
+std::string localise_status(const std::string& status, const Tr& T);
+// The game's tickers the model builds, "<x> File Saved" / "<x> File Loaded": rsm.file_saved / rsm.file_loaded with <x>;
+// anything else unchanged.
+std::string localise_ticker(const std::string& ticker, const Tr& T);
 
 // ---- the loadout spin --------------------------------------------------------------------------------------------------
 // The option labels: the files layer's dropdown ("-- Select File --", display names...) cut by short_list (64 bytes, "…"),
-// at most kSpinCapacity (the loadouts past it are not reachable, as in v1.6).
-std::vector<std::string> spin_labels(const std::vector<std::string>& dropdown);
+// at most kSpinCapacity (the loadouts past it are not reachable, as in v1.6). `no_file` = the text shown for the first
+// entry (kNoFile) when it is the files layer's.
+std::vector<std::string> spin_labels(const std::vector<std::string>& dropdown, const std::string& no_file = kNoFile);
 // The spin's value: the 1-based dropdown index as a 0-based option, clamped to the options shown.
 int32_t spin_value(int dropdown_index, size_t n_labels);
 // on_spin(index): the dropdown index (1-based) to select. The core already wrapped the index (Q / D loop).
@@ -168,7 +181,7 @@ private:
     // RMT confirm(message, title, fn): ignored while one of ours is up
     void ask(const std::string& text, const std::string& title, std::function<void()> yes);
     void name_dialog(const std::string& title, const std::string& initial, std::function<void(const std::string&)> apply);
-    void main_ticker(const std::string& t) { if (!t.empty()) screen_.ticker(t); }
+    void main_ticker(const std::string& t) { if (!t.empty()) screen_.ticker(localise_ticker(t, T_)); }
     Loadouts& files_;
     Screen& screen_;
     Tr T_;
