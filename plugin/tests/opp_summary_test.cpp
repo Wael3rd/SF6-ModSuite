@@ -13,7 +13,45 @@ static void check(bool ok, const char* what) {
     if (!ok) ++fails;
 }
 
+static void test_lines() {
+    using namespace slots::oppsum;
+    auto f = line_format("Type 1: 0", "Type 1", 0);
+    check(f.before.empty() && f.sep == ": ", "a line's format: the name and its count");
+    f = line_format("Type 1 : 12", "Type 1", 12);
+    check(f.sep == " : ", "a line's format: French spacing");
+    f = line_format("\xE3\x82\xBF\xEF\xBC\x9A" "3", "\xE3\x82\xBF", 3);
+    check(f.sep == "\xEF\xBC\x9A", "a line's format: a full-width colon");
+    f = line_format("[Type 1]: 0", "Type 1", 0);
+    check(f.before == "[" && f.sep == "]: ", "a line's format: something before the name");
+    f = line_format("other: 0", "Type 1", 0);
+    check(f.before.empty() && f.sep == ": ", "a line's format: its name not found");
+    f = line_format("Type 1: x", "Type 1", 0);
+    check(f.sep == ": ", "a line's format: its count not found");
+    auto w = line_window(2, 19, -1);
+    check(w.first == 0 && w.count == 2 && !w.more_above && !w.more_below, "two extras: both, no more");
+    w = line_window(19, 19, 18);
+    check(w.first == 0 && w.count == 19 && !w.more_below, "as many as the rows: all of them");
+    w = line_window(30, 19, -1);
+    check(w.first == 0 && w.count == 18 && w.more_above == 0 && w.more_below == 12, "the outfit is a game's: the first ones, and how many are left");
+    w = line_window(30, 19, 15);
+    check(w.first == 7 && w.count == 17 && w.more_above == 7 && w.more_below == 6, "in the middle: both ends say how many");
+    w = line_window(30, 19, 29);
+    check(w.first == 12 && w.count == 18 && w.more_above == 12 && w.more_below == 0, "the last one: shown, nothing below");
+    bool shown = true, sums = true;
+    for (int total = 20; total < 60; ++total)
+        for (int c = 0; c < total; ++c) {
+            const auto x = line_window(total, 19, c);
+            if (c < x.first || c >= x.first + x.count) shown = false;
+            if (x.more_above + x.count + x.more_below != total) sums = false;
+            if (x.count + (x.more_above ? 1 : 0) + (x.more_below ? 1 : 0) != 19) sums = false;
+        }
+    check(shown, "the outfit shown is always among the lines");
+    check(sums, "every line is shown or counted, in exactly the rows there are");
+    check(line_window(0, 19, -1).count == 0 && line_window(5, 0, 1).count == 0, "nothing to show, or no room");
+}
+
 int main() {
+    test_lines();
     // draw_length: the summary's widgets are 6
     check(draw_length(20, 6) == 6, "Cammy, 5 outfits + 15 slots: the first 6 while it draws");
     check(draw_length(7, 6) == 6, "one outfit too many: 6");

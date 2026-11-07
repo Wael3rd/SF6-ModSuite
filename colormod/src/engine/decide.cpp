@@ -500,13 +500,14 @@ uintptr_t running_flow_map() {                        // bFlowManager.m_flow_wor
     return (uintptr_t)(work ? ll::read_field_object(work, "_FlowMap") : nullptr);
 }
 // a preview request (scope 1) for this controller's fighter / costume, outside any battle: the requester's preview
-// (Battle Settings' capture-room fighter, borrowed), dressed as asked whatever side it would otherwise be
+// (Battle Settings' capture-room fighter, borrowed), dressed as asked whatever side it would otherwise be. In a battle
+// flow (Battle Settings is open from the Battle Hub too) only that capture-room fighter, never the fighters of the battle.
 bool preview_requested(MO* ctrl) {
     {
         std::lock_guard lk(g_req_mx);
         if (!g_req.any(requests::kPreview)) return false;
     }
-    if (in_battle_flow()) return false;
+    if (in_battle_flow() && live::side_from_parents(ctrl) != 3) return false;
     const auto [f, c] = path_identity(ctrl);
     std::lock_guard lk(g_req_mx);
     return g_req.find(requests::kPreview, f, c, 0) != nullptr;
@@ -520,7 +521,7 @@ std::optional<std::string> requested(MO* ctrl, int side) {
         std::lock_guard lk(g_req_mx);
         if (!g_req.any(scope)) return std::nullopt;
     }
-    if (scope == requests::kPreview && in_battle_flow()) return std::nullopt;
+    if (scope == requests::kPreview && in_battle_flow() && live::side_from_parents(ctrl) != 3) return std::nullopt;
     const uintptr_t running = scope == requests::kReplay ? running_flow_map() : 0;
     const auto [f, c] = path_identity(ctrl);
     std::lock_guard lk(g_req_mx);

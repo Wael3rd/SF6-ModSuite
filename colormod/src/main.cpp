@@ -83,9 +83,15 @@ bool decide_squares(int fighter, int only_side, uint32_t& c0, uint32_t& c1) {
 }
 }  // namespace
 
+static void post_late_update() {
+    if (cmn::closing()) return;
+    try { screens::colour::track::opponent_post(); } catch (...) {}
+}
+
 extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param) {
     if (!param || !param->functions) return false;
     try { reframework::API::initialize(param); } catch (...) { return false; }
+    if (param->functions->on_post_application_entry) param->functions->on_post_application_entry("LateUpdateBehavior", post_late_update);
     try {
         // (the fighter names are read on a thread cmn::init starts after the first frames, not during REFramework's startup)
         cmn::g_bridge_editor.status = engine::live::status;

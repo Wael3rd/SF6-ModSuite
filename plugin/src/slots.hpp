@@ -191,6 +191,7 @@ namespace nsfwopt {
 }
 // fs_name.cpp: the outfit's name on Fighter Settings, at the right end of the bottom input guide bar
 namespace fsname {
+    void run_in_guide_update(void (*job)());   // once, inside the next guide list's update (R19: where a copy can be made). The hook is there once Battle Settings opened.
     void install_hooks();             // first frame (needs the core's ui_clone_control)
     bool busy();
     void tick(uint32_t events);
@@ -199,6 +200,7 @@ namespace fsname {
 namespace oppsum {
     void install_hooks();             // from costumes::install_hooks (with slots only); starts the hook's code check (R18)
     bool busy();                      // the code check's verdict not acted on yet, or a list length to put back
+    void frame();                     // each frame: the summary's lines past the game's own, on that page only (a look every 15 frames otherwise)
     void tick(uint32_t events);       // installs the hook after the check; puts back a length a draw that threw left
 }
 namespace stages {

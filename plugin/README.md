@@ -126,9 +126,14 @@ of the page's outfit list, into the summary's widgets: 6 of them, as many as a f
 fighter with more outfits (our slots: Cammy with 15 slots has 20) made it write the 6 widgets, then throw: the page never
 showed, the screen stayed empty and Esc did nothing. While the summary is drawn, and only for such a fighter, the list's
 length is the number of widgets; the full length is put back as soon as the method returns (the method only reads the
-list). The summary shows the fighter's first 6 outfits (the game's own first); every outfit stays in the list for the rest
-of the page (outfit, colours, save). Idea from ZZtaii's Slotsloader fork (MIT, `SlotsloaderOpponentOutfitSummary.lua`),
-done here without Lua.
+list). Every outfit stays in the list for the rest of the page (outfit, colours, save). Idea from ZZtaii's Slotsloader fork
+(MIT, `SlotsloaderOpponentOutfitSummary.lua`), done here without Lua.
+
+The game's list shows 5 lines (the sixth widget is written and stays hidden). The lines past the fifth outfit are ours: copies of
+its text under the list's parent, in its style and step, made in the guide list's update (R19), found by name each frame (R35), only
+on this page. Each shows the outfit's name (`CostumeInventory.GetName`) and its count (`ValidColorIdList`), with what goes round them
+taken from a line the game wrote. A name too long for the place slides while the count stays. Up to 19 rows, so 24 lines; with more,
+the rows follow the outfit shown on the Costume row, and a row at an end says how many are past it.
 
 - One hook (pre and post), installed once a check over every method of the game found no other method entering its code
   (R18): on a thread of its own at the first start of a game version, then read from
@@ -136,7 +141,8 @@ done here without Lua.
 - The two writes (the length, the length back) go through the core's guarded field write; a draw that threw before its end
   is put back by the next draw or two frames later.
 - Log: `[F9] Opponent Outfit Settings: 20 outfits, 6 summary labels: the summary shows the first 6 ...` (when the fighter
-  or its counts change), and the hook's line (`installed`, or `REFUSED (R18)`).
+  or its counts change), `[F9] Opponent Outfit Settings: 20 outfits, 5 shown by the game, 15 lines of ours`, and the hook's line
+  (`installed`, or `REFUSED (R18)`).
 
 ## Replay Outfits (`replay_outfits.cpp`, rules in `replay_outfits.hpp`)
 
