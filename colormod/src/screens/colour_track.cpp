@@ -12,6 +12,7 @@
 #include <thread>
 #include <cstdio>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <filesystem>
 #include <map>
@@ -771,6 +772,7 @@ struct OppPage {
     bool up = false, asked = false;
     Opt f, c;
     std::string id;                                                // what was asked for the preview ("" = the game's own colours)
+    bool clear_cells = false;                                      // the game drew ticks its list no longer holds: every colour of the game's off, once
     bool watched = false;                                          // `list` is the game's list of (wf, wc)
     int64_t wf = -1, wc = -1;
     std::vector<int> list;
@@ -872,9 +874,10 @@ void opp_watch(MO* param, const Opt& f, const Opt& c, MO* selected) {
         engine::decide::opp_toggle(fi, ci, e->ident);
         return;
     case engine::opponent::Change::kAllOn:
-        if (engine::decide::opp_count(fi, ci) > 0) {               // entries were ticked, the game saw nothing ticked: for the player, that key turns them off
+        if (g_opp.list.empty() && engine::decide::opp_count(fi, ci) > 0) {   // only entries ticked, the game saw nothing ticked: for the player, that key turns them off
             opp_restore(list, g_opp.list);
             engine::decide::opp_set_entries(fi, ci, false);
+            g_opp.clear_cells = true;                              // what the game drew for "all on" goes (never its UpdateColorGrid from here: it crashed the game, 07/11)
             return;
         }
         engine::decide::opp_set_entries(fi, ci, true);
@@ -895,27 +898,33 @@ void opp_show_ticks(MO* cm, MO* param, const Opt& f, const Opt& c) {
         const auto v = call_bool(item, "get_ActualVisible");
         if (!(v && *v)) continue;
         const Entry* e = opp_entry(item, f, c);
-        if (!e) continue;
+        if (!e && !g_opp.clear_cells) continue;
+        if (!opp_find(item, "e_text")) continue;                   // the scroll bar
         MO* check = opp_find(item, "c_check");
         const auto st = check ? call_str(check, "get_PlayState") : std::nullopt;
-        const bool on = engine::decide::opp_ticked((int)*f, (int)*c, e->ident);
+        const bool on = e && engine::decide::opp_ticked((int)*f, (int)*c, e->ident);
         if (st && *st == (on ? "ON" : "OFF")) continue;
         call(param, "UpdateColorGridItemCheck(via.gui.SelectItem,System.Boolean)", { item, ll::arg_i32(on ? 1 : 0) });
     }
+    g_opp.clear_cells = false;
 }
 // The summary's lines the game writes count the game's list: ours are added. Its text ends with that count, whatever the language.
-void opp_fix_counts(MO* param) {
-    MO* parts = field_obj(param, "mCosColorTextList");
-    MO* lc = parts ? field_obj(parts, "<Control>k__BackingField") : nullptr;
+void opp_fix_counts(MO* cm, MO* param) {
+    MO* lc = opp_find(cm, "p_ScrollList_texts_v");
     MO* dup = field_obj(param, "<SettingDataDuplicated>k__BackingField");
     MO* all = dup ? field_obj(dup, "CostumeSettings") : nullptr;
     int32_t fid = -1;
     if (!lc || !all || !ll::read_field_i32(param, "SettingFighterId", fid)) return;
     const int n = call_i32(all, "get_Count").value_or(0);
-    int i = 0;
-    for (MO* item = call_obj(lc, "get_Child"); item && i < n && i < kOppCellsMax; item = call_obj(item, "get_Next"), ++i) {
+    int guard = 0;
+    for (MO* item = call_obj(lc, "get_Child"); item && guard < kOppCellsMax; item = call_obj(item, "get_Next"), ++guard) {
         const auto v = call_bool(item, "get_ActualVisible");
         if (!(v && *v)) continue;
+        // the list's items come last first: c_item is the first line, itemN the line N (read 07/11)
+        const auto nm = call_str(item, "get_Name");
+        if (!nm) continue;
+        const int i = *nm == "c_item" ? 0 : nm->rfind("item", 0) == 0 ? std::atoi(nm->c_str() + 4) : -1;
+        if (i < 0 || i >= n) continue;
         MO* pc = list_item(all, i);
         int32_t cos = -1;
         if (!pc || !ll::read_field_i32(pc, "CostumeId", cos)) continue;
@@ -925,12 +934,11 @@ void opp_fix_counts(MO* param) {
         if (!msg) continue;
         MO* ids = field_obj(pc, "ValidColorIdList");
         const int base = ids ? call_i32(ids, "get_Count").value_or(0) : 0;
-        const std::string want_tail = std::to_string(base + extra), game_tail = std::to_string(base);
-        const auto ends = [&](const std::string& s) { return msg->size() >= s.size() && msg->compare(msg->size() - s.size(), s.size(), s) == 0; };
-        if (extra == 0 ? ends(game_tail) : (ends(want_tail) && msg->size() >= want_tail.size() + 1 && !std::isdigit((unsigned char)(*msg)[msg->size() - want_tail.size() - 1]))) continue;
-        if (!ends(game_tail)) continue;                            // not the game's text as we know it: left alone
-        const std::string line = msg->substr(0, msg->size() - game_tail.size()) + want_tail;
-        api()->ui_set_text(cmn::client(), text, line.c_str());
+        size_t digits = msg->size();
+        while (digits > 0 && std::isdigit((unsigned char)(*msg)[digits - 1])) --digits;
+        if (digits == msg->size()) continue;                       // not the game's text as we know it: left alone
+        const std::string line = msg->substr(0, digits) + std::to_string(base + extra);
+        if (line != *msg) api()->ui_set_text(cmn::client(), text, line.c_str());
     }
 }
 void tick_opponent() {
@@ -948,7 +956,7 @@ void tick_opponent() {
     MO* sel = grid ? call_obj(grid, "get_SelectedItem") : nullptr;
     opp_watch(param, f, c, sel);
     opp_show_ticks(cm, param, f, c);
-    opp_fix_counts(param);
+    opp_fix_counts(cm, param);
     if (!sel) return;
     const Entry* e = opp_entry(sel, f, c);
     const std::string id = e ? e->ident : std::string();
@@ -1708,7 +1716,7 @@ void opponent_post() {
     MO* grid = opp_find(cm, "p_ScrollGrid_0");
     opp_watch(param, g_opp.f, g_opp.c, grid ? call_obj(grid, "get_SelectedItem") : nullptr);
     opp_show_ticks(cm, param, g_opp.f, g_opp.c);
-    opp_fix_counts(param);
+    opp_fix_counts(cm, param);
 }
 
 void frame(uint64_t lua_frame) {

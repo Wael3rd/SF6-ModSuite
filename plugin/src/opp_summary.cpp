@@ -287,7 +287,7 @@ void read_lines(Obj* page, Obj* list) {
         rows.push_back(row);
     }
     LineFormat fmt;
-    Obj* item = call_obj(list, "get_Child");
+    void* item = A()->ui_find_child(list, "c_item", 0);    // the first line: the list's items come last first (read 07/11)
     void* first = item ? A()->ui_find_child(item, kLineName, 3) : nullptr;
     if (first && !rows.empty())
         fmt = line_format(str(call_obj(static_cast<Obj*>(first), "get_Message")), outfit_name(fid, rows[0].costume), rows[0].count);
