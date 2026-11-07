@@ -63,7 +63,7 @@ CORE_README = CRLF.join([
     "again when needed. An empty reframework/data/sf6core/timer_off.txt turns this off.",
     "",
     "It also adds the OVERDRIVE EDITION line under the logo of the title screen. Its position and size are in",
-    "reframework/data/sf6core/title.ini, made at the first launch and read when the game starts (pos_x, pos_y, font_size).",
+    "reframework/data/sf6core/title.ini, made at the first launch and read when the game starts (pos_x and pos_y from 0 to 1, font_size).",
     "",
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
     "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",

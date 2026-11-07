@@ -16,6 +16,7 @@
 // Everything is drawn through the core's own guarded display calls (client "sf6core.title").
 #include <windows.h>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -32,7 +33,7 @@ constexpr int32_t     kFontSlot      = 6;                  // the bold display f
 constexpr float       kPosX = 960.0f, kPosY = 812.0f, kPosZ = 0.0f;
 constexpr float       kFontW = 76.0f, kFontH = 76.0f;
 constexpr int         kFontMin = 8, kFontMax = 150;        // at 150 the line still fits kRegionW: nothing is squeezed
-constexpr int         kPosXMax = 1920, kPosYMax = 1080;    // the UI's own 1920 x 1080 space
+constexpr float       kSpaceW = 1920.0f, kSpaceH = 1080.0f; // the UI's own space: title.ini's positions are shares of it
 constexpr float       kRegionW = 1600.0f, kRegionH = 130.0f;
 constexpr float       kRasterW = 152.0f, kRasterH = 152.0f; // glyph raster size: the template's is its own 24 px, so a
                                                          // 76 px line drawn from it was blurry; 2x the font size
@@ -296,20 +297,21 @@ bool off_file_present() {
     return data_path("title_off.txt", path) && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 }
 
-// One whole number of title.ini within [lo, hi]; anything else keeps the default and says so. GetPrivateProfileInt is not
-// used: it reads "abc" as 0, a valid position.
-float ini_value(const char* path, const char* key, int lo, int hi, float def) {
+// One number of title.ini within [lo, hi]; anything else keeps the default and says so. A decimal comma is accepted (players
+// type 0,5). GetPrivateProfileInt is not used: it reads "abc" as 0, a valid position, and takes no decimals.
+float ini_value(const char* path, const char* key, float lo, float hi, float def) {
     char text[32] = {};
     GetPrivateProfileStringA("title", key, "", text, sizeof(text), path);
     if (!text[0]) return def;
+    if (char* comma = strchr(text, ',')) *comma = '.';
     char* end = nullptr;
-    const long v = strtol(text, &end, 10);
+    const float v = strtof(text, &end);
     while (end && *end == ' ') ++end;
-    if (end == text || (end && *end) || v < lo || v > hi) {
-        core_log(SF6CORE_LOG_WARN, nullptr, "[title] title.ini: %s is not a whole number from %d to %d: default kept", key, lo, hi);
+    if (end == text || (end && *end) || !(v >= lo && v <= hi)) {
+        core_log(SF6CORE_LOG_WARN, nullptr, "[title] title.ini: %s is not a number from %g to %g: default kept", key, lo, hi);
         return def;
     }
-    return (float)v;
+    return v;
 }
 
 void load_ini() {
@@ -320,10 +322,10 @@ void load_ini() {
         char text[512];
         const int len = snprintf(text, sizeof(text),
             "; The OVERDRIVE EDITION line under the logo of the title screen. Read when the game starts.\r\n"
-            "; On the game's 1920 x 1080 screen space, at any resolution. pos_x is the centre of the line.\r\n"
-            "; Whole numbers: pos_x 0 to %d, pos_y 0 to %d, font_size %d to %d. Delete this file to get the defaults back.\r\n"
-            "[title]\r\npos_x=%d\r\npos_y=%d\r\nfont_size=%d\r\n",
-            kPosXMax, kPosYMax, kFontMin, kFontMax, (int)kPosX, (int)kPosY, (int)kFontW);
+            "; pos_x and pos_y: a share of the screen, from 0 to 1 (0.5 is the middle). pos_x is the centre of the line.\r\n"
+            "; font_size: %d to %d, at the game's 1920 x 1080 reference. Delete this file to get the defaults back.\r\n"
+            "[title]\r\npos_x=%.4f\r\npos_y=%.4f\r\nfont_size=%d\r\n",
+            kFontMin, kFontMax, kPosX / kSpaceW, kPosY / kSpaceH, (int)kFontW);
         HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (f != INVALID_HANDLE_VALUE) {
             DWORD written = 0;
@@ -332,9 +334,9 @@ void load_ini() {
         }
         return;
     }
-    g_cfg.x = ini_value(path, "pos_x", 0, kPosXMax, kPosX);
-    g_cfg.y = ini_value(path, "pos_y", 0, kPosYMax, kPosY);
-    g_cfg.font = ini_value(path, "font_size", kFontMin, kFontMax, kFontW);
+    g_cfg.x = roundf(ini_value(path, "pos_x", 0.0f, 1.0f, kPosX / kSpaceW) * kSpaceW);
+    g_cfg.y = roundf(ini_value(path, "pos_y", 0.0f, 1.0f, kPosY / kSpaceH) * kSpaceH);
+    g_cfg.font = ini_value(path, "font_size", (float)kFontMin, (float)kFontMax, kFontW);
     core_log(SF6CORE_LOG_INFO, nullptr, "[title] title.ini: at %.0f,%.0f, size %.0f", g_cfg.x, g_cfg.y, g_cfg.font);
 }
 

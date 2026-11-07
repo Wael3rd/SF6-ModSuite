@@ -16,7 +16,7 @@ game's UI directly.
   engine for every client, with key-guide hints, see `docs/PAUSE_MENU.md`.
 - **Title screen line**: a "OVERDRIVE EDITION" line, in the white of the logo, under the STREET FIGHTER logo of the title screen (`title.cpp`): a copy of the title's (c) CAPCOM text, shown from the Select state with a short scale-down entrance; every value is a constant at the top of `title.cpp`. An empty `reframework/data/sf6core/title_off.txt` turns it off.
   Its position and size can be changed in `reframework/data/sf6core/title.ini`, made at the first launch and read when
-  the game starts (`pos_x`, `pos_y`, `font_size`); delete the file to get the defaults back.
+  the game starts (`pos_x` and `pos_y`, a share of the screen from 0 to 1, and `font_size`); delete the file to get the defaults back.
 - **Fault isolation**: a client that faults is skipped after five consecutive faults (circuit breaker), the others keep running.
 - A small **Lua bridge** (`SF6Core` in REFramework's Lua state) for scripts and diagnostics.
 - A log: `reframework/data/sf6core/sf6core.log` (one previous log kept as `sf6core.old.log` past 8 MB).
