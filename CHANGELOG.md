@@ -8,6 +8,7 @@
   logs (cleaned of your Windows user name, user folder paths and platform IDs, capped), and your Steam ID, which the server takes from your Steam
   verification. No report leaves until you choose Send; Back sends nothing and keeps nothing. One report per account per costume, kept 90 days.
   The menu's STATUS row follows the report: OK, BUG, WAITING FOR FIX, TO TEST (asked of the server when the menu opens, the costume's key alone).
+- **Record and Replay pages**: Up from the second row under the slots (Countdown, Repeat) goes to the first one, as Down came, instead of jumping back to the slots.
   [crsm/README.md](crsm/README.md#report-a-bug) lists it all. Needs the Community server's update.
 
 ## 1.23.0 (2026-11-07) — SF6 Mod Suite
