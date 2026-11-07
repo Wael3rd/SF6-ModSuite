@@ -55,7 +55,7 @@ files as in 1.24.0: keep them. With the all-in-one package, replace 1.24.0 with 
 - Two outfits of one fighter with the same mod name look the same on the Costume row. Their numbers differ, so choices
   do not mix.
 - Opponent Outfit Settings: with 02 as the only one of colours 01-10 ticked and the cursor on an RW / MC cell, T toggles that cell
-  instead of turning all off. RW 1's squares do not match its preview.
+  instead of turning all off.
 - An outfit named after its archive keeps the file's extension in its name (".rar").
 - Report a bug is on Battle Settings > Character only.
 - Slotsloader Manager: report_mod.dll has not been checked in a package installed by ZZtaii's Manager.
