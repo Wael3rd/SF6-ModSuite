@@ -188,6 +188,12 @@ double drawn_px(const std::string& s, const EmOf& em_of);
 std::vector<std::string> wrap_px(const std::string& text, double max_px, int max_lines, const EmOf& em_of);
 // What Ctrl+V puts in the text field (UTF-16): line breaks as /n (edit_result turns them back), control characters out, < and > dropped as the game does, max_units at most.
 std::wstring paste_text(const std::wstring& clipboard, size_t max_units);
+// Whether typing it may go on: key events go to whichever window has the focus, so never unless the game's is in front, with no modifier down and our dialog still up.
+enum class PasteStop { None, NotInFront, Modifier, DialogGone };
+inline PasteStop paste_stop(bool game_in_front, bool modifier_down, bool dialog_up) {
+    return !dialog_up ? PasteStop::DialogGone : !game_in_front ? PasteStop::NotInFront : modifier_down ? PasteStop::Modifier : PasteStop::None;
+}
+inline const char* paste_stop_name(PasteStop s) { return s == PasteStop::NotInFront ? "the game is not in front" : s == PasteStop::Modifier ? "a modifier is down" : s == PasteStop::DialogGone ? "the dialog is gone" : "nothing"; }
 // The message on the guide's line: "" = none. focus: the row with the cursor. One message at a time, the most urgent.
 std::string message_text(const Session& s, Row focus, const Tr& tr);
 // A text of a player's or a mod's for a game text: < > [ ] made ( ), one line (an unknown message tag crashes the game's render thread)

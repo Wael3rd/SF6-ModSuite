@@ -1106,9 +1106,20 @@ uint32_t g_v_seen = 0;
 uint64_t g_paste_check_at = 0;
 std::string g_paste_before;
 constexpr uint64_t kPasteCheckFrames = 10;
+bool game_in_front() {                           // key events go to whichever window has the focus, and Ctrl's state is global
+    const HWND front = GetForegroundWindow();
+    DWORD pid = 0;
+    return front && GetWindowThreadProcessId(front, &pid) && pid == GetCurrentProcessId();
+}
+bool modifier_down() {
+    for (const int vk : { VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN }) if (GetAsyncKeyState(vk) & 0x8000) return true;
+    return false;
+}
+rp::PasteStop paste_stop_now() { return rp::paste_stop(game_in_front(), modifier_down(), g_paste_on.load() && !cmn::closing()); }
 void paste_body() {
-    for (int i = 0; i < 300 && (GetAsyncKeyState(VK_CONTROL) & 0x8000 || GetAsyncKeyState('V') & 0x8000); ++i) Sleep(10);   // typed with Ctrl down they would be shortcuts
-    if (GetAsyncKeyState(VK_CONTROL) & 0x8000 || !g_paste_on.load()) return;
+    for (int i = 0; i < 300 && (GetAsyncKeyState(VK_CONTROL) & 0x8000 || GetAsyncKeyState('V') & 0x8000) && game_in_front(); ++i) Sleep(10);   // typed with Ctrl down they would be shortcuts
+    rp::PasteStop stop = paste_stop_now();
+    if (stop != rp::PasteStop::None) { cmn::journal("bug report: Ctrl+V stopped: %s", rp::paste_stop_name(stop)); return; }
     std::wstring raw;
     for (int i = 0; i < 5 && !OpenClipboard(nullptr); ++i) { Sleep(20); if (i == 4) return; }
     if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
@@ -1120,10 +1131,13 @@ void paste_body() {
     }
     CloseClipboard();
     const std::wstring text = rp::paste_text(raw, rp::kTextMaxUnits);
-    for (size_t i = 0; i < text.size() && g_paste_on.load() && !cmn::closing(); i += 32) {
-        INPUT in[64] = {};
+    constexpr size_t kBatch = 16;                // what a change of window between the check and the send could still reach, at most
+    for (size_t i = 0; i < text.size(); i += kBatch) {
+        stop = paste_stop_now();                 // before every batch
+        if (stop != rp::PasteStop::None) { cmn::journal("bug report: Ctrl+V stopped at %zu of %zu: %s", i, text.size(), rp::paste_stop_name(stop)); return; }
+        INPUT in[kBatch * 2] = {};
         UINT n = 0;
-        for (size_t k = i; k < text.size() && k < i + 32; ++k) {
+        for (size_t k = i; k < text.size() && k < i + kBatch; ++k) {
             for (const DWORD flags : { (DWORD)KEYEVENTF_UNICODE, (DWORD)(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP) }) {
                 in[n].type = INPUT_KEYBOARD;
                 in[n].ki.wScan = (WORD)text[k];
@@ -1139,13 +1153,14 @@ void paste_tick() {
     const uint32_t n = cmn::key_presses('V');
     if (n != g_v_seen) {
         g_v_seen = n;
-        if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) && !g_paste_check_at && !g_pasting.load()) {
+        if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) && game_in_front() && !g_paste_check_at && !g_pasting.load()) {
             g_paste_before = ui::dialogs::text_field_shown();
             g_paste_check_at = tick() + kPasteCheckFrames;
         }
     }
     if (!g_paste_check_at || tick() < g_paste_check_at) return;
     g_paste_check_at = 0;
+    if (!game_in_front()) { cmn::journal("bug report: Ctrl+V stopped: the game is not in front"); return; }
     const std::string now = ui::dialogs::text_field_shown();
     const bool own = g_paste_before.empty() || now == g_paste_before;
     cmn::journal("bug report: Ctrl+V in the text dialog: %s", own ? "ours" : "the game's own");

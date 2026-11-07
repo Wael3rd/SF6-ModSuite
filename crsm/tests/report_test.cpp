@@ -179,6 +179,13 @@ static void test_sources(const fs::path& crsm) {
     check(!has(report, "ithdraw") && !has(logic_src, "ithdraw") && !has(texts, "report_row_withdraw") && !has(texts, "report_sum_withdraw") && !has(readme, "ithdraw"), "no withdraw left");
     check(has(report, "ui_clone_control") && has(slurp(crsm / "src/ui/community_dialog.cpp"), "bug_report::dialog_update()"), "copies only inside the dialog's own update (R19)");
     check(has(report, "kMsgName") && has(report, "slots::scroll") && has(report, "set_ScissorRect(via.Rect)"), "the message slides as a long name does");
+    {
+        const size_t body = report.find("void paste_body() {"), send = report.find("SendInput(n, in", body), check_at = report.find("stop = paste_stop_now();                 // before every batch", body);
+        const size_t tick_at = report.find("void paste_tick() {");
+        check(body != std::string::npos && check_at != std::string::npos && check_at < send && report.find("for (size_t i = 0; i < text.size(); i += kBatch)", body) < check_at, "the window and the modifiers looked at before every batch");
+        check(has(report.substr(tick_at, report.find("g_paste_before = ", tick_at) - tick_at), "game_in_front()"), "and when the press is counted");
+        check(has(report, "GetWindowThreadProcessId(front, &pid) && pid == GetCurrentProcessId()"), "the window in front is this process's");
+    }
     check(has(report, "g_paste_on.store(true)") && has(report, "if (g_naming) { paste_tick();") && !has(report, "paste_tick();\n    dock_all"), "Ctrl+V only while our text dialog is up");
     check(has(report, "kDockX = -430.0f") && has(report, "kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 }"), "on the side, as the Color Mod's Edit Drive Colors");
 }
@@ -420,6 +427,11 @@ static void test_summary() {
     const std::vector<std::string> cut = rp::wrap_px(std::string(1000, 'A'), kPx, 1, em);
     check(cut.size() == 1 && cut[0].size() > 3 && cut[0].substr(cut[0].size() - 3) == "..." && rp::drawn_px(cut[0], em) <= kPx, "one line at most: cut with ...");
     check(rp::wrap_px("one two\nthree", 2000, 9, em) == std::vector<std::string>({ "one two", "three" }), "its own line breaks stay");
+    // Ctrl+V: never into another window, never with a modifier down
+    check(rp::paste_stop(true, false, true) == rp::PasteStop::None, "the game in front, no modifier, the dialog up: it may go");
+    check(rp::paste_stop(false, false, true) == rp::PasteStop::NotInFront, "another window in front: it stops");
+    check(rp::paste_stop(true, true, true) == rp::PasteStop::Modifier, "a modifier down: it stops");
+    check(rp::paste_stop(true, false, false) == rp::PasteStop::DialogGone && rp::paste_stop(false, true, false) == rp::PasteStop::DialogGone, "the dialog gone: it stops");
     // Ctrl+V: what goes in the field
     check(rp::paste_text(L"a\r\nb\nc\rd", 100) == L"a/nb/nc/nd", "line breaks as /n");
     check(rp::paste_text(L"a\tb\x01\x7f<c>", 100) == L"a bc", "tab a space, control characters out, < > dropped");
