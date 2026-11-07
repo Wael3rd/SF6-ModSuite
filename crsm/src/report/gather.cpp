@@ -212,14 +212,15 @@ Report gather(const Snapshot& snap, const fs::path& root, const Scrub& scrub) {
     if (!have_outfits) notes.push_back("outfits.json could not be read (no Slots Loader, or never run)");
     if (!have_registry) notes.push_back("registry.json could not be read");
 
-    const json* outfit = have_outfits ? find_outfit(outfits, snap.fighter, r.outfit_row) : nullptr;
-    int number = -1;
+    const json* outfit = have_outfits ? find_outfit_number(outfits, snap.fighter, snap.costume_no) : nullptr;
+    if (!outfit && have_outfits) outfit = find_outfit(outfits, snap.fighter, r.outfit_row);
+    int number = snap.costume_no;
     if (outfit && outfit->contains("costume_no") && (*outfit)["costume_no"].is_number_integer()) number = (*outfit)["costume_no"].get<int>();
     const json* slot = have_registry && outfit ? find_slot(registry, snap.fighter, number) : nullptr;
     r.costume_no = number;
     r.outfit = outfit ? clean_paths(str_of(*outfit, "label"), scrub) : r.outfit_row;
     if (r.outfit.empty()) r.outfit = r.outfit_row;
-    r.costume_key = costume_key(snap.fighter, r.outfit_row, outfit, slot, have_outfits && snap.fighter > 0);
+    r.costume_key = costume_key(snap.fighter, r.outfit_row, outfit, slot, have_outfits && snap.fighter > 0, number);
 
     if (outfit || slot) {
         json rec = json::object();

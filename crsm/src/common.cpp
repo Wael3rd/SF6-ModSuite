@@ -502,8 +502,14 @@ constexpr uint64_t kWriterAfterFrames = 300;
 std::atomic<bool> g_writer_started{false};
 std::atomic<uint64_t> g_present_count{0};
 void start_writer() { if (!g_writer_started.exchange(true)) bgwriter::start(); }
-void on_present_cb() { if (g_present_count.fetch_add(1, std::memory_order_relaxed) + 1 == kWriterAfterFrames) start_writer(); }
+std::atomic<void (*)()> g_present_fn{nullptr};
+void on_present_cb() {
+    if (g_present_count.fetch_add(1, std::memory_order_relaxed) + 1 == kWriterAfterFrames) start_writer();
+    if (void (*fn)() = g_present_fn.load(std::memory_order_relaxed)) fn();
+}
 }  // namespace
+
+void set_present_fn(void (*fn)()) { g_present_fn.store(fn, std::memory_order_relaxed); }
 
 bool init() {
     g_started = now_text();

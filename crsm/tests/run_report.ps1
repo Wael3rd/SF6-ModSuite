@@ -14,7 +14,7 @@ if (-not $Work) { $Work = Join-Path $repo 'build\crsm_tests\work_report' }
 if ($LASTEXITCODE -ne 0) { throw "build_report_tests failed" }
 $bin = Join-Path $repo 'build\crsm_tests'
 New-Item -ItemType Directory -Force $Work | Out-Null
-& (Join-Path $bin 'report_test.exe') --work $Work
+& (Join-Path $bin 'report_test.exe') --work $Work --repo (Split-Path -Parent $PSScriptRoot)
 $a = $LASTEXITCODE
 & (Join-Path $bin 'report_capture_test.exe')
 $b = $LASTEXITCODE

@@ -34,11 +34,13 @@ COMMUNITY (2.1.0)
   the next share or like). If Steam cannot verify you, browsing and downloading keep working; sharing and likes say why.
 
 REPORT A BUG (2.2.8)
-  On Battle Settings > Character, Character tab, R (pad: X) takes a picture of the game and opens a menu listing what would be sent: the
-  picture, your text, the character, outfit and colour with the outfit's record, the versions and list of your mods, the Slots Loader's two logs
-  (your Windows user name, the paths of your user folder and anything that looks like a platform ID removed first), and your Steam ID, which the
-  server takes from your Steam verification. Nothing leaves until you choose Send. Back sends nothing and keeps nothing. The server keeps one
-  report per account per outfit for 90 days; only the mod's author reads them. Details: crsm/README.md in the source.
+  On Battle Settings > Character, Character tab, R (pad: X) takes a picture of the game and opens a menu. Its first row is STATUS: OK shows nothing
+  else. BUG shows Describe the problem, Send, and the real values of what would be sent: the picture, your text, the character, outfit and colour
+  with the outfit's record, the versions and list of your mods, the Slots Loader's two logs (your Windows user name, the paths of your user folder
+  and anything that looks like a platform ID removed first), and your Steam ID, which the server takes from your Steam verification. When the menu
+  opens it only asks the server the state of your report on this outfit (the outfit's key alone goes). No report leaves until you choose Send. Back
+  sends nothing and keeps nothing. A report waits as WAITING FOR FIX; once the author fixes it, it shows TO TEST: choose OK if it is fixed, BUG if
+  not. The server keeps one report per account per outfit for 90 days; only the mod's author reads them. Details: crsm/README.md in the source.
 
 YOUR DATA
   Slots, drills and names are in reframework/data/SF6_RecordingSlotManager_data/ and Community settings in

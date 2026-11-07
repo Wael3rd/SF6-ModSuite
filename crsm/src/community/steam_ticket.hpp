@@ -104,6 +104,9 @@ struct Api {
     std::string where;                              // for the log: the module and the exports found
     std::string dispatch;                           // dispatch_hint()
 };
+// The player's own SteamID64, from the steam_api64.dll the game loaded, for his own screen: never logged, never sent (the server takes the account from the token). 0 when
+// it cannot be read. Game thread (where the game's own Steam calls run); the read is under SEH.
+uint64_t local_steam_id();
 // From the steam_api64.dll the game loaded; false + why when it is not loaded or an export is missing.
 bool resolve(Api* out, std::string* why);
 // How the game pumps Steam callbacks, from its own import tables (plain and delay-load): "classic: ..." when it imports

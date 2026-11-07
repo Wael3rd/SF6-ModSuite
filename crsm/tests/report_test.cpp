@@ -1,15 +1,19 @@
 // report_test - the pure parts of "Report a bug": what the guards promise. No game, no network; its files only in --work.
 #include <windows.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
 #include "report/gather.hpp"
 #include "report/report_logic.hpp"
 #include "report/pixels.hpp"
+#include "ui/logic.hpp"
 
 namespace fs = std::filesystem;
 namespace rp = report;
@@ -111,6 +115,8 @@ static void test_key() {
     const json updated = json::parse(R"({"mod_id":"5555555555555555","fighter":30,"original_costume_no":0,"new_costume_no":5})");
     check(rp::costume_key(30, "Outfit I", a, &updated, true) != k1, "a mod's update: a new key");
     check(rp::costume_key(30, "Outfit I", a, nullptr, true) != k1 && rp::costume_key_ok(rp::costume_key(30, "Outfit I", a, nullptr, true)), "no registry: from its source");
+    check(rp::costume_key(30, "Outfit 2", nullptr, nullptr, true, 1) == "game:30:c1" && rp::costume_key(30, "Tenue 2", nullptr, nullptr, true, 1) == "game:30:c1", "a game outfit by its number: the same in every language");
+    check(rp::find_outfit_number(outfits, 30, 16) && (*rp::find_outfit_number(outfits, 30, 16))["name"] == "Outfit VI" && !rp::find_outfit_number(outfits, 30, 1) && !rp::find_outfit_number(outfits, 30, -1), "by its number");
     const std::string g = rp::costume_key(30, "Outfit 2", nullptr, nullptr, true);
     check(g.rfind("game:30:", 0) == 0 && rp::costume_key_ok(g), "a game outfit: " + g);
     check(g != rp::costume_key(31, "Outfit 2", nullptr, nullptr, true) && g != rp::costume_key(30, "Outfit 3", nullptr, nullptr, true), "character + outfit");
@@ -121,6 +127,58 @@ static void test_key() {
     check(!rp::costume_key_ok("mod:" + std::string(73, 'a')) && rp::costume_key_ok("mod:" + std::string(72, 'a')), "its length");
 
     check(rp::qwerty_scan("<ICON KeyR>") == 0x13 && rp::qwerty_scan("<ICON KeyQ> x") == 0x10 && rp::qwerty_scan("<ICON BtnL>") == 0 && rp::qwerty_scan("") == 0, "the key's place");
+}
+
+// Asleep means asleep: nothing here has a Training flag or a claim to look at; what the module may depend on, its sources are held to
+static void test_wake() {
+    rp::LeftWatch w;
+    check(!w.seen(), "a new waking");
+    check(!w.left(100, 1000) && w.seen(), "its first frame counts as a call");
+    check(!w.left(101, 1001), "the update runs: awake");
+    check(!w.left(101, 1001 + rp::kLeftFrames), "a long pause in its calls is not yet a leaving");
+    check(w.left(101, 1002 + rp::kLeftFrames), "no call for that long: the screen is left");
+    w.reset();
+    check(!w.seen() && !w.left(101, 5000), "the next opening starts again, whatever the count");
+    check(!w.left(UINT32_MAX, 5001) && !w.left(0, 5002), "the count may wrap");
+    w.reset();
+    w.beat(5, 10);
+    check(!w.left(5, 10 + rp::kLeftFrames), "a report under way counts as beats, then the same rule");
+}
+
+static std::string slurp(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+// "Report a bug" before any Training and from Training's Multi Menu: both were lost in game, 07/11, by gates of the UI's frame
+static void test_sources(const fs::path& crsm) {
+    const std::string report = slurp(crsm / "src/ui/bug_report.cpp"), ui = slurp(crsm / "src/ui/ui.cpp"), dialogs = slurp(crsm / "src/ui/dialogs.cpp"), windows = slurp(crsm / "src/ui/windows.cpp");
+    check(!report.empty() && !ui.empty() && !dialogs.empty() && !windows.empty(), "the sources are there");
+    check(!has(ui, "bug_report::frame"), "not in the UI's frame: it returns before the claim");
+    check(!has(report, "ui::active()") && !has(report, "ui::training()") && !has(report, "ui::paused()") && !has(report, "mech::state()"), "no gate on the claim, Training or the pause");
+    check(has(report, "set_frame_callback(g_opt_client, on_core_frame, nullptr)") && has(report, "set_frame_callback(g_opt_client, nullptr, nullptr)"), "its own frame callback, on and off");
+    check(has(report, "dlg::frame(false)") && has(report, "ui::lang::frame("), "the text dialog and the language run for it until the claim");
+    check(!has(report, "add_hook") && !has(report, "on_present("), "no hook of its own beside the screen's: nothing per frame anywhere asleep");
+    check(has(report, "app.UIFlowMatchingFighterSetting.Main\", \"OnUpdate"), "woken by the screen's own update, through the code check (mech::hooks)");
+    check(!has(report, "OnEnter") || !has(report, "\"OnEnter"), "no state OnEnter");
+    check(has(dialogs, "ui::dialogs_on()") && has(dialogs, "bool text_available()"), "the text dialog's hooks and requests follow dialogs_on");
+    check(has(windows, "com::open() || bug_report::awake()"), "under the screen in Training, the Record page's R and T act on nothing");
+    // The Steam ID: read once, for g_values, never journaled, never in a command or a snapshot
+    const std::string gather_src = slurp(crsm / "src/report/gather.cpp"), logic_src = slurp(crsm / "src/report/report_logic.cpp"), snap_src = slurp(crsm / "src/report/gather.hpp");
+    check(has(report, "g_values.steam_id = rp::steam_id_text(community::steam::local_steam_id())"), "the menu's Steam ID comes from the Steam client");
+    size_t uses = 0;
+    for (size_t p = report.find("steam_id"); p != std::string::npos; p = report.find("steam_id", p + 1)) ++uses;
+    check(uses == 3 && !has(report, "journal(\"bug report: steam"), "and goes nowhere else in the game side (that one line: " + std::to_string(uses) + ")");
+    check(!has(gather_src, "steam_id") && !has(snap_src, "steam_id") && !has(gather_src, "local_steam_id"), "not in what is gathered");
+    const size_t mk = logic_src.find("make_command");
+    const size_t mk_end = mk == std::string::npos ? mk : logic_src.find("\n}", mk);
+    check(mk != std::string::npos && !has(logic_src.substr(mk, mk_end - mk), "steam"), "not in what is sent");
+    // A status request carries the key alone
+    const size_t ask = report.find("void ask_status()"), ask_end = report.find("community::client().send", ask);
+    const std::string ask_src = report.substr(ask, ask_end - ask);
+    check(has(ask_src, "\"report_get\"") && has(ask_src, "\"costume_key\"") && !has(ask_src, "jpeg") && !has(ask_src, "logs") && !has(ask_src, "make_command"), "a status request is not a report");
+    check(has(report, "d.desc = \"\";") && has(report, "cur == g_summary") && has(report, "g_wrote == g_summary && cur == g_read_back"), "R7: the long text has one writer, the whole text compared first");
+    check(!has(report, "\"set_AutoRegionFit\"") && has(report, "set_AutoRegionFit(System.Boolean)"), "the fit is really turned off: the setter's full signature");
+    check(has(report, "kDockX = -430.0f") && has(report, "kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 }"), "on the side, as the Color Mod's Edit Drive Colors");
 }
 
 static void test_screen() {
@@ -140,61 +198,240 @@ static void test_screen() {
     no([](rp::ScreenRead& t) { t.can_report = false; }, "no Community client");
 }
 
+// Open with the server's answer given
+static rp::Session opened(rp::Server sv, const std::string& text = "") {
+    rp::Session s;
+    s.begin();
+    s.shot_settled();
+    if (sv == rp::Server::Unknown) s.server_unreachable();
+    else if (sv != rp::Server::Checking) s.server_answer(sv, text);
+    return s;
+}
+static bool rows_are(const rp::Session& s, std::vector<rp::Row> want) { want.insert(want.begin(), rp::Row::Status); return s.rows() == want; }
+static bool opts_are(const rp::Session& s, const std::vector<std::string>& want) { return s.options() == want; }
+
 static void test_session() {
     using S = rp::Stage;
+    using V = rp::Server;
+    using R = rp::Row;
     rp::Session s;
     check(s.stage() == S::Idle && !s.send(), "nothing up: nothing to send");
     check(s.begin() && s.stage() == S::Shooting && !s.begin(), "the key: one report at a time");
     check(!s.send(), "not before the menu is open");
     s.shot_settled();
     check(s.stage() == S::Open, "the menu");
+    // Checking: nothing else shows, nothing can be done
+    check(s.server() == V::Checking && opts_are(s, { "report_st_checking" }) && rows_are(s, {}), "checking: the one row");
+    check(!s.choose(1) && !s.confirm_due(), "checking: STATUS does nothing");
+    // No report: OK by default, nothing else; BUG the form
+    s.server_answer(V::None, "");
+    check(opts_are(s, { "report_st_ok", "report_st_bug" }) && s.option_index() == 0 && s.pick() == rp::Pick::Ok && rows_are(s, {}), "no report: OK, and nothing else");
+    check(s.choose(1) && s.pick() == rp::Pick::Bug && rows_are(s, { R::Text, R::Send }), "BUG: the two rows");
+    check(!s.choose(1), "the same choice again changes nothing");
+    check(!s.choose(7) && !s.choose(-1), "an option that does not exist");
     check(s.needs_text() && !s.send(), "no text while the field works: not sent");
     s.set_text_field_ok(false);
     check(!s.needs_text(), "a field that cannot open does not stop a report");
     s.set_text_field_ok(true);
+    check(s.choose(0) && rows_are(s, {}), "back to OK: nothing shows again");
+    s.choose(1);
     // Back sends nothing, keeps nothing
     s.set_text("secret");
     check(s.closed() && s.stage() == S::Idle && s.text().empty(), "Back: gone, text dropped, nothing on its way");
-    check(s.begin() && s.text().empty(), "the next report starts empty");
+    check(s.begin() && s.text().empty() && s.server() == V::Checking, "the next report starts empty, and asks again");
     s.shot_settled();
+    s.server_answer(V::None, "");
+    s.choose(1);
     s.set_text("hair clips");
-    check(s.send() && s.stage() == S::Sending, "Send");
-    check(!s.send(), "never twice");
+    check(s.send() && s.busy() == rp::Busy::Sending, "Send");
+    check(!s.send() && !s.start_status() && !s.choose(0), "never twice, nothing else meanwhile");
     s.answered(false, "curl exit 28");
-    check(s.stage() == S::Open && s.outcome() == rp::Session::Outcome::Failed && s.text() == "hair clips", "a failure: the text stays, the row can try again");
+    check(s.busy() == rp::Busy::None && s.outcome() == rp::Session::Outcome::Failed && s.text() == "hair clips" && s.server() == V::None, "a failure: the text stays, the row can try again");
     check(s.send(), "try again");
     s.answered(true, "");
-    check(s.outcome() == rp::Session::Outcome::Sent && s.text().empty() && !s.send(), "sent: the text gone, not sent twice");
-    check(s.closed() && s.stage() == S::Idle, "and the window closes");
+    check(s.outcome() == rp::Session::Outcome::Sent && s.server() == V::Waiting && s.pick() == rp::Pick::Held, "sent: WAITING FOR FIX");
+    check(opts_are(s, { "report_st_waiting", "report_st_ok" }) && s.option_index() == 0 && rows_are(s, { R::Text, R::Send }) && s.text() == "hair clips", "with the same two rows, its text kept");
+    check(s.has_report(), "and Send is now Update");
+    check(s.closed() && s.stage() == S::Idle && s.text().empty(), "the window closes: nothing kept");
     // closed while on its way
-    s.begin(); s.shot_settled(); s.set_text("x"); s.send();
-    check(!s.closed() && s.window_gone() && s.stage() == S::Sending, "closed while sending: its answer still comes");
+    s = opened(V::None);
+    s.choose(1); s.set_text("x"); s.send();
+    check(!s.closed() && s.window_gone() && s.busy() == rp::Busy::Sending, "closed while sending: its answer still comes");
     s.answered(true, "");
     check(s.stage() == S::Idle && s.text().empty(), "then nothing is left");
 
-    // the rows: the list of what goes out, Steam ID included
-    rp::Session m;
-    m.begin(); m.shot_settled();
-    rp::MenuInput in;
-    in.session = &m;
-    in.what = "Ryu, Outfit <VII>, Color [3]";
-    const rp::Tr tr = [](const std::string& k, const std::vector<std::string>& a) { return a.empty() ? k : k + "(" + a[0] + ")"; };
-    auto rows = rp::menu_rows(in, tr);
-    check(rows.size() == (size_t)rp::Row::Count, "one row for each thing");
-    bool steam = false, send = false;
-    for (const auto& r : rows) { steam = steam || r.row == rp::Row::Steam; send = send || r.row == rp::Row::Send; check(!r.desc.empty(), r.title + ": says what it means"); }
-    check(steam && send, "the Steam ID on the list, and Send");
-    check(rows[(size_t)rp::Row::Outfit].title.find('<') == std::string::npos && rows[(size_t)rp::Row::Outfit].title.find('[') == std::string::npos, "no markup from a mod's name in a game text");
-    check(has(rows[(size_t)rp::Row::Send].title, "report_need_text"), "Send says what is missing");
-    m.set_text("line one\nline two <x>");
-    rows = rp::menu_rows(in, tr);
-    check(has(rows[0].title, "line one line two (x)"), "the text on one line, no markup: " + rows[0].title);
-    check(has(rows[(size_t)rp::Row::Send].title, "report_row_send"), "Send, now");
-    in.shot_ok = false;
-    check(has(rp::menu_rows(in, tr)[1].title, "report_row_shot_none"), "the list says when there is no picture");
-    in.cut = [](const std::string& t, double) { return t.substr(0, 5) + "..."; };
-    check(rp::menu_rows(in, tr)[0].title == "repor...", "a long row is cut, never squeezed");
-    check(rp::error_key("banned") == "report_err_banned" && rp::error_key("verification_unavailable") == "report_err_steam" && rp::error_key("account_full") == "report_err_account" && rp::error_key("storage_full") == "report_err_full" && rp::error_key("curl exit 28") == "report_err_network" && rp::error_key("") == "report_err_network", "the errors' words");
+    // A report on the server: its text comes back, Update, and OK withdraws, only by its own row
+    s = opened(V::Waiting, "from the server");
+    check(s.text() == "from the server" && s.pick() == rp::Pick::Held && s.option_index() == 0 && rows_are(s, { R::Text, R::Send }), "waiting: the server's text, the form");
+    check(s.choose(1) && s.pick() == rp::Pick::Ok && rows_are(s, { R::Withdraw }) && !s.confirm_due(), "OK on a waiting report: only the row that withdraws: nothing left yet");
+    check(s.choose(0) && rows_are(s, { R::Text, R::Send }), "changed his mind");
+    s.choose(1);
+    check(s.start_status() && !s.start_status() && !s.send(), "withdraw: one request");
+    s.status_answered(false, rp::Server::Withdrawn, "network");
+    check(s.server() == V::Waiting && s.pick() == rp::Pick::Held && s.outcome() == rp::Session::Outcome::Failed, "a failure: the report still waits, the row says so");
+    s.choose(1);
+    s.start_status();
+    s.status_answered(true, V::Withdrawn, "");
+    check(s.server() == V::Withdrawn && s.pick() == rp::Pick::Ok && s.option_index() == 0 && opts_are(s, { "report_st_ok", "report_st_bug" }) && rows_are(s, {}), "withdrawn: OK");
+    check(s.choose(1) && rows_are(s, { R::Text, R::Send }) && s.has_report(), "BUG after that: Update, the server's row is replaced");
+    s.set_text("again");
+    check(s.send(), "and it goes");
+    s.answered(true, "");
+    check(s.server() == V::Waiting, "waiting again");
+
+    // TO TEST: nothing but STATUS; OK confirms at once, BUG is the form
+    s = opened(V::Fixed, "old text");
+    check(opts_are(s, { "report_st_to_test", "report_st_ok", "report_st_bug" }) && s.option_index() == 0 && rows_are(s, {}) && !s.confirm_due(), "to test: STATUS alone");
+    check(s.choose(2) && rows_are(s, { R::Text, R::Send }) && s.text() == "old text" && s.has_report(), "BUG: still broken: Change and Update");
+    s.send();
+    s.answered(true, "");
+    check(s.server() == V::Waiting && s.option_index() == 0, "WAITING FOR FIX once sent");
+    s = opened(V::Fixed);
+    check(s.choose(1) && s.confirm_due(), "OK: confirm is due");
+    check(s.start_status() && !s.confirm_due(), "once");
+    s.status_answered(true, V::Confirmed, "");
+    check(s.server() == V::Confirmed && !s.confirm_due() && s.pick() == rp::Pick::Ok && rows_are(s, {}) && opts_are(s, { "report_st_ok", "report_st_bug" }), "confirmed: OK again for the player");
+    s = opened(V::Fixed);
+    s.choose(1); s.start_status();
+    s.status_answered(false, V::Confirmed, "network");
+    check(s.server() == V::Fixed && s.pick() == rp::Pick::Held && !s.confirm_due() && s.outcome() == rp::Session::Outcome::Failed, "a confirm that failed: TO TEST again");
+    // Confirmed: as no report, but a new report replaces the row
+    s = opened(V::Confirmed, "t");
+    check(s.pick() == rp::Pick::Ok && rows_are(s, {}) && s.has_report(), "confirmed: OK");
+    // The server cannot be reached: OK and BUG still work, the send fails cleanly
+    s = opened(V::Unknown);
+    check(s.server() == V::Unknown && opts_are(s, { "report_st_ok", "report_st_bug" }) && !s.has_report(), "not reached: OK and BUG");
+    s.choose(1); s.set_text("t");
+    check(s.send(), "and Send may try");
+    s.answered(false, "");
+    check(s.outcome() == rp::Session::Outcome::Failed && s.text() == "t", "its failure keeps the text");
+    // What he typed while it was being asked stays
+    s = rp::Session{};
+    s.begin(); s.shot_settled();
+    s.set_text("mine");
+    s.server_answer(V::Waiting, "theirs");
+    check(s.text() == "mine", "the answer never overwrites what he typed");
+    s.server_answer(V::Fixed, "later");
+    check(s.server() == V::Waiting, "one answer only");
+    check(rp::server_from(false, "fixed") == V::None && rp::server_from(true, "waiting") == V::Waiting && rp::server_from(true, "fixed") == V::Fixed && rp::server_from(true, "confirmed") == V::Confirmed &&
+          rp::server_from(true, "withdrawn") == V::Withdrawn && rp::server_from(true, "?") == V::Waiting, "the server's words");
+
+    check(rp::error_key("banned") == "report_err_banned" && rp::error_key("verification_unavailable") == "report_err_steam" && rp::error_key("account_full") == "report_err_account" &&
+          rp::error_key("storage_full") == "report_err_full" && rp::error_key("bad_transition") == "report_err_status" && rp::error_key("") == "report_err_network", "the errors' own texts");
+    check(rp::steam_id_text(76561198000000001ULL) == "76561198000000001" && rp::steam_id_text(0).empty() && rp::steam_id_text(12345).empty(), "a SteamID shows, anything else does not");
+    const std::vector<uint8_t> j = { 0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC0, 0, 11, 8, 0x04, 0x38, 0x07, 0x80, 3, 0, 0, 0, 0, 0 };
+    int w = 0, h = 0;
+    check(rp::jpeg_size(j, &w, &h) && w == 1920 && h == 1080, "a JPEG's size from its header");
+    check(!rp::jpeg_size({ 1, 2, 3 }, &w, &h) && !rp::jpeg_size({}, &w, &h), "not a JPEG");
+}
+
+static std::string joined(const std::vector<rp::SummaryLine>& l) { std::string s; for (const auto& x : l) s += x.text + "\n"; return s; }
+// What the menu shows: real values, in form states only
+static void test_summary() {
+    using V = rp::Server;
+    const rp::Tr tr = [](const std::string& k, const std::vector<std::string>& a) { std::string s = k; for (const auto& x : a) s += "(" + x + ")"; return s; };
+    rp::MenuValues v;
+    v.steam_id = "76561198000000001";
+    v.character = "Ryu"; v.outfit = "Outfit <VII>"; v.colour = "Color [3]";
+    v.shot_w = 1920; v.shot_h = 1080; v.shot_bytes = 300 * 1024;
+    v.versions = { { "Recording Manager", "2.2.8" }, { "Core", "0.9.6" } };
+    v.log_loader_bytes = 4096; v.log_plugin_bytes = 2048; v.mods = 37; v.loaded = true;
+    rp::Session s = opened(V::None);
+    check(rp::summary_lines(s, v, tr).empty(), "OK: no text at all");
+    s.choose(1);
+    std::string t = joined(rp::summary_lines(s, v, tr));
+    check(has(t, "76561198000000001"), "the actual Steam ID");
+    check(has(t, "Ryu") && has(t, "Outfit (VII)") && has(t, "Color (3)") && !has(t, "<") && !has(t, "["), "the character, outfit and colour, with no markup");
+    check(has(t, "(1920)(1080)(300)"), "the picture's real size");
+    check(has(t, "Recording Manager 2.2.8") && has(t, "Core 0.9.6"), "the real versions");
+    check(has(t, "(37)") && has(t, "report_sum_logs(4)(2)") && has(t, "report_sum_keep"), "the logs' real sizes, the mods, what Back does");
+    check(!has(t, "report_sum_replace") && !has(t, "report_sum_text"), "no warning without a report, no text before one is written");
+    s.set_text("line one\nline two <x>");
+    t = joined(rp::summary_lines(s, v, tr));
+    check(has(t, "line one line two (x)"), "the text on one line, no markup");
+    check(rp::row_title(s, rp::Row::Text, tr) == "report_row_change" && rp::row_title(s, rp::Row::Send, tr) == "report_row_send", "Change, Send");
+    rp::Session none = opened(V::None);
+    none.choose(1);
+    check(rp::row_title(none, rp::Row::Text, tr) == "report_row_describe" && rp::row_title(none, rp::Row::Send, tr) == "report_row_need_text", "Describe, and Send says what is missing");
+    // no picture, no Steam ID, the files not read yet
+    rp::MenuValues b = v;
+    b.shot_bytes = 0; b.shot_failed = true; b.steam_id.clear();
+    t = joined(rp::summary_lines(none, b, tr));
+    check(has(t, "report_sum_shot_none") && has(t, "report_sum_steam_none") && !has(t, "1920"), "says when there is no picture, and still says the Steam ID goes");
+    b.loaded = false;
+    t = joined(rp::summary_lines(none, b, tr));
+    check(!has(t, "report_sum_logs") && !has(t, "report_sum_versions") && has(t, "report_sum_shot_none"), "a moment after the key: what is known");
+    // the overwrite warning, in the text and on the row
+    rp::Session w = opened(V::Waiting, "theirs");
+    t = joined(rp::summary_lines(w, v, tr));
+    check(has(t, "report_sum_replace") && has(t, "theirs") && rp::row_title(w, rp::Row::Send, tr) == "report_row_update" && rp::row_title(w, rp::Row::Text, tr) == "report_row_change", "a report exists: replaced, said twice");
+    w.send();
+    check(rp::row_title(w, rp::Row::Send, tr) == "report_sending", "sending");
+    w.answered(true, "");
+    t = joined(rp::summary_lines(w, v, tr));
+    check(has(t, "report_sum_sent") && !has(t, "report_sum_replace"), "sent");
+    w.set_text("new");
+    t = joined(rp::summary_lines(w, v, tr));
+    check(!has(t, "report_sum_sent") && has(t, "report_sum_replace"), "changed after sending: the warning is back");
+    w.send();
+    w.answered(false, "banned");
+    check(has(rp::row_title(w, rp::Row::Send, tr), "report_failed(report_err_banned)"), "a failure on the row");
+    // the states with no form
+    w = opened(V::Waiting, "theirs");
+    w.choose(1);
+    t = joined(rp::summary_lines(w, v, tr));
+    check(has(t, "report_sum_withdraw") && !has(t, "76561198000000001") && rp::row_title(w, rp::Row::Withdraw, tr) == "report_row_withdraw", "OK on a waiting report: the warning alone");
+    rp::Session f = opened(V::Fixed, "x");
+    t = joined(rp::summary_lines(f, v, tr));
+    check(has(t, "report_sum_to_test") && !has(t, "76561198000000001"), "to test: what to do, alone");
+    f.choose(1); f.start_status(); f.status_answered(false, V::Confirmed, "network");
+    t = joined(rp::summary_lines(f, v, tr));
+    check(has(t, "report_failed(report_err_network)") && has(t, "report_sum_to_test"), "its failure is said");
+    rp::Session u = opened(V::Unknown);
+    check(has(joined(rp::summary_lines(u, v, tr)), "report_sum_unreachable"), "the server not reached: said at once");
+    // the room: kSummaryLines at most, whatever the wrap gives
+    rp::Session big = opened(V::Waiting, "x");
+    const std::string all = rp::summary_text(big, v, tr, [](const std::string& line, int max_lines) { return std::vector<std::string>((size_t)max_lines, line.substr(0, 10)); });
+    check(std::count(all.begin(), all.end(), '\n') + 1 == rp::kSummaryLines, "never past the room");
+    // The command never holds the Steam ID the menu shows
+    rp::Report r;
+    r.costume_key = "game:1:c1";
+    r.text = "t";
+    const std::string cmd = rp::make_command(r).dump();
+    check(!has(cmd, "steam") && !has(cmd, "76561198"), "the command has no identity");
+}
+
+// Every language's real texts with the longest values, wrapped by the UI's own measure: the promises fit the window's room, nothing is lost by the cut
+static void test_summary_fits(const fs::path& crsm) {
+    const json all = json::parse(slurp(crsm / "data/SF6_CRSM_data/locale.json"), nullptr, false);
+    check(all.is_object(), "the texts");
+    if (!all.is_object()) return;
+    int langs = 0;
+    int worst = 0;
+    std::string worst_lang;
+    for (const auto& [lang, block] : all.items()) {
+        if (lang.empty() || lang[0] == '_' || !block.is_object()) continue;
+        ++langs;
+        const rp::Tr tr = [&block](const std::string& k, const std::vector<std::string>& a) {
+            std::string s = block.value("rsm." + k, std::string());
+            for (const std::string& x : a) { const size_t p = s.find("%s"); if (p == std::string::npos) break; s.replace(p, 2, x); }
+            return s;
+        };
+        rp::MenuValues v;
+        v.steam_id = "76561198000000001";
+        v.character = "Chun-Li"; v.outfit = "VEGETA MAJIN Black Hair Long Name Outfit"; v.colour = "Color 10";
+        v.shot_w = 1920; v.shot_h = 1080; v.shot_bytes = 449 * 1024;
+        v.versions = { { "Recording Manager", "2.2.8" }, { "Core", "0.9.6" }, { "Color Mod", "0.24.2" }, { "Loader", "1.20.0" } };
+        v.log_loader_bytes = 64 * 1024; v.log_plugin_bytes = 64 * 1024; v.mods = 137; v.loaded = true;
+        rp::Session s = opened(rp::Server::Waiting, std::string(900, 'x'));
+        int lines = 0;
+        for (const auto& l : rp::summary_lines(s, v, tr)) lines += (int)ui::logic::desc_lines(l.text, 45.0, l.max_lines).size();
+        if (lines > worst) { worst = lines; worst_lang = lang; }
+        check(lines <= rp::kSummaryLines, lang + ": fits the window, " + std::to_string(lines) + " lines");
+        for (const auto& l : rp::summary_lines(s, v, tr)) check(!l.text.empty() && !has(l.text, "%s"), lang + ": a line with its values");
+    }
+    check(langs == 14, "the 14 languages: " + std::to_string(langs));
+    printf("  the summary's longest: %d lines of %d (%s)\n", worst, rp::kSummaryLines, worst_lang.c_str());
 }
 
 static void test_pixels() {
@@ -303,6 +540,15 @@ static void test_gather(const fs::path& work) {
     v.outfit_row = "Main + Addon";
     check(rp::gather(v, root, scrub).costume_key == k2, "the same by its label");
 
+    // the outfit's number, when the screen's part gives it, beats the row's text; a game outfit gets its number
+    rp::Snapshot num = snap;
+    num.outfit_row = "Some text the row shows";
+    num.costume_no = 6;
+    check(rp::gather(num, root, scrub).costume_key == "mod:aaaa000000000002:f30:c0", "by the number, whatever the row says");
+    num.costume_no = 2;
+    const rp::Report gm_r = rp::gather(num, root, scrub);
+    check(gm_r.costume_key == "game:30:c2" && gm_r.costume_no == 2, "a game outfit by its number: " + gm_r.costume_key);
+
     // broken files do not stop a report
     put(root / "reframework/data/SF6_Costumes_Data/outfits.json", "{ not json");
     rp::Report broken = rp::gather(snap, root, scrub);
@@ -318,13 +564,20 @@ static void test_gather(const fs::path& work) {
 }
 
 int main(int argc, char** argv) {
-    fs::path work = fs::temp_directory_path() / "report_test";
-    for (int i = 1; i + 1 < argc; ++i) if (!strcmp(argv[i], "--work")) work = argv[i + 1];
+    fs::path work = fs::temp_directory_path() / "report_test", crsm;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (!strcmp(argv[i], "--work")) work = argv[i + 1];
+        else if (!strcmp(argv[i], "--repo")) crsm = argv[i + 1];
+    }
     test_clean();
     test_caps();
     test_key();
+    test_wake();
+    if (!crsm.empty()) test_sources(crsm);
     test_screen();
     test_session();
+    test_summary();
+    if (!crsm.empty()) test_summary_fits(crsm);
     test_pixels();
     test_gather(work);
     printf("report_test: %d checks, %d failed\n", g_checks, g_failed);

@@ -15,6 +15,7 @@ namespace report {
 // What the game thread read when the key was pressed, and what the player wrote
 struct Snapshot {
     int fighter = -1;                          // < 0: not found on the screen
+    int costume_no = -1;                       // < 0: not read: the outfit is found by the row's text
     std::string character;                     // the English name (model::chars)
     std::string outfit_row, colour_row;        // what the screen's rows show
     std::string text;

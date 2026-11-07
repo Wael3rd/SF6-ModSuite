@@ -34,7 +34,7 @@ std::string ticket_brief(const uint8_t* p, size_t n);
 bool public_cfn(const std::string& s);
 // 32 random bytes in base64url, as the Worker mints them (/^[A-Za-z0-9_-]{43}$/)
 bool token_ok(const std::string& t);
-// The commands that need the token: share, vote, delete, report
+// The commands that need the token: share, vote, delete, report, report_get, report_status
 bool needs_token(const std::string& cmd);
 
 struct Token {

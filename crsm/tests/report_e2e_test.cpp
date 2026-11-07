@@ -1,6 +1,7 @@
 // report_e2e_test - a whole report through the real client code, to a server given on the command line (a local stand-in, never a live one):
 //
-//   report_e2e_test --api-base http://127.0.0.1:<port> --api-key <the stand-in's key> --work <scratch folder>
+//   report_e2e_test --api-base http://127.0.0.1:<port> --api-key <the stand-in's key> --work <scratch folder> [--after-fixed]
+// --after-fixed: the second half, once the admin has marked the mod's report fixed: the menu's TO TEST, and confirming it.
 //
 // What the game's part would do after the key: a real JPEG (WIC), gather() on a fake game folder, make_command(), then community::Client over
 // WinHTTP with a fake Steam ticket. No game, no Steam. It refuses any api-base that is not on this machine.
@@ -55,6 +56,40 @@ static Answer post(community::Client& c, json cmd) {
     return a;
 }
 
+static json get_cmd(const std::string& key) { return json{ { "cmd", "report_get" }, { "costume_key", key } }; }
+static json status_cmd(const std::string& key, const std::string& action) { return json{ { "cmd", "report_status" }, { "costume_key", key }, { "action", action } }; }
+
+// The admin marked the mod's report fixed (verify_standin): TO TEST, then OK confirms it, the row is OK again and the admin still sees it
+static int second_half(const std::string& base, const std::string& key, const fs::path& work) {
+    const std::string costume = "mod:402b1ac9c4dd7fb1:f30:c0";
+    const fs::path cfg = work / "config.json";
+    put(cfg, json({ {"api_base", base}, {"api_key", key} }).dump());
+    FakeTickets tickets;
+    community::Client c;
+    community::set_client_version("e2e");
+    std::string cfg_path = cfg.string();
+    for (char& ch : cfg_path) if (ch == '\\') ch = '/';
+    c.configure(cfg_path);
+    c.worker().set_tickets(&tickets);
+    c.start();
+    Answer a = post(c, get_cmd(costume));
+    check(a.done && a.ok && a.data["exists"] == true && a.data["status"] == "fixed", "marked fixed: the player reads it: " + a.data.dump().substr(0, 120));
+    rp::Session m;
+    m.begin(); m.shot_settled();
+    m.server_answer(rp::server_from(true, a.data["status"].get<std::string>()), a.data["text"].get<std::string>());
+    check(m.server() == rp::Server::Fixed && m.option_index() == 0 && m.options()[0] == "report_st_to_test", "the menu: TO TEST");
+    check(m.choose(1) && m.confirm_due() && m.start_status(), "OK: confirm goes");
+    a = post(c, status_cmd(costume, rp::action_confirm()));
+    check(a.done && a.ok && a.data["ok"] == true, "confirmed: " + a.data.dump());
+    m.status_answered(true, rp::Server::Confirmed, "");
+    check(m.option_index() == 0 && m.options()[0] == "report_st_ok", "the row is OK again");
+    a = post(c, get_cmd(costume));
+    check(a.done && a.data["status"] == "confirmed", "and stays on the server, confirmed: " + a.data.dump().substr(0, 120));
+    c.stop();
+    printf("report_e2e_test --after-fixed: %d checks, %d failed\n", g_checks, g_failed);
+    return g_failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     std::string base, key;
     fs::path work = fs::temp_directory_path() / "report_e2e";
@@ -63,12 +98,15 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--api-key")) key = argv[i + 1];
         else if (!strcmp(argv[i], "--work")) work = argv[i + 1];
     }
+    bool after_fixed = false;
+    for (int i = 1; i < argc; ++i) if (!strcmp(argv[i], "--after-fixed")) after_fixed = true;
     if (base.rfind("http://127.0.0.1:", 0) != 0 && base.rfind("http://localhost:", 0) != 0) {
         printf("report_e2e_test: only a server on this machine; got '%s'\n", base.c_str());
         return 2;
     }
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     std::error_code ec;
+    if (after_fixed) return second_half(base, key, work);
     fs::remove_all(work, ec);
     const fs::path root = work / "game";
 
@@ -110,7 +148,14 @@ int main(int argc, char** argv) {
     c.configure(cfg_path);
     c.worker().set_tickets(&tickets);
     c.start();
-    Answer a = post(c, rp::make_command(r));
+    // The menu opens: its one request, the key alone, before anything was ever sent
+    Answer a = post(c, get_cmd(r.costume_key));
+    check(a.done && a.ok && a.data["ok"] == true && a.data["exists"] == false && !a.data.contains("text"), "no report on this costume yet: " + a.data.dump());
+    rp::Session menu;
+    menu.begin(); menu.shot_settled();
+    menu.server_answer(rp::server_from(a.data["exists"] == true, ""), "");
+    check(menu.server() == rp::Server::None && menu.pick() == rp::Pick::Ok, "the menu: OK");
+    a = post(c, rp::make_command(r));
     check(a.done && a.ok && a.data.contains("ok") && a.data["ok"] == true && a.data["replaced"] == false, "first report: accepted, new: " + a.data.dump());
     check(fs::exists(community::auth::token_path(cfg.string())), "the token came from the (fake) Steam ticket and was kept");
     rp::Report again = r;
@@ -128,6 +173,21 @@ int main(int argc, char** argv) {
     bad["image"] = "PGh0bWw+PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0PjwvaHRtbD4=";
     a = post(c, bad);
     check(a.done && community::auth::error_code(a.data) == "bad_image", "a picture that is no JPEG: refused: " + a.data.dump());
+    // The next opening: the text comes back, Update; withdrawing, and what the player may not do
+    a = post(c, get_cmd(r.costume_key));
+    check(a.done && a.ok && a.data["exists"] == true && a.data["status"] == "waiting" && a.data["text"].get<std::string>() == again.text, "the report comes back, its text whole: " + a.data.dump().substr(0, 120));
+    rp::Session back;
+    back.begin(); back.shot_settled();
+    back.server_answer(rp::server_from(true, a.data["status"].get<std::string>()), a.data["text"].get<std::string>());
+    check(back.server() == rp::Server::Waiting && back.has_report() && back.text() == again.text, "the menu: WAITING FOR FIX, Update");
+    a = post(c, status_cmd(nopic.costume_key, rp::action_withdraw()));
+    check(a.done && a.ok && a.data["ok"] == true, "withdraw: " + a.data.dump());
+    a = post(c, get_cmd(nopic.costume_key));
+    check(a.done && a.data["status"] == "withdrawn", "withdrawn, not deleted: " + a.data.dump().substr(0, 120));
+    a = post(c, status_cmd(nopic.costume_key, rp::action_confirm()));
+    check(a.done && community::auth::error_code(a.data) == "bad_transition", "confirm needs a fixed report: " + a.data.dump());
+    a = post(c, status_cmd(nopic.costume_key, "fixed"));
+    check(a.done && community::auth::error_code(a.data) == "bad_action", "the player can never set fixed: " + a.data.dump());
     c.stop();
     printf("report_e2e_test: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

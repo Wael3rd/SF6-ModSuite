@@ -19,7 +19,9 @@ set "OUT=..\build\crsm_tests"
 if not exist "%OUT%\rp" mkdir "%OUT%\rp"
 if not exist "%OUT%\rc" mkdir "%OUT%\rc"
 set "COMMON=/nologo /std:c++20 /EHa /utf-8 /W4 /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX /DWIN32_LEAN_AND_MEAN /external:I ..\colormod\third_party /external:W0 /I src"
-cl %COMMON% /Od tests\report_test.cpp src\report\report_logic.cpp src\report\gather.cpp /Fe:"%OUT%\report_test.exe" /Fo:"%OUT%\rp\\" /link /nologo
+set "MODEL="
+for %%f in (src\model\*.cpp) do set "MODEL=!MODEL! %%f"
+cl %COMMON% /Od tests\report_test.cpp src\report\report_logic.cpp src\report\gather.cpp src\ui\logic.cpp %MODEL% /Fe:"%OUT%\report_test.exe" /Fo:"%OUT%\rp\\" /link /nologo
 if errorlevel 1 exit /b 1
 cl %COMMON% /O2 tests\report_capture_test.cpp src\report\capture.cpp src\report\report_logic.cpp /Fe:"%OUT%\report_capture_test.exe" /Fo:"%OUT%\rc\\" /link /nologo windowscodecs.lib
 if errorlevel 1 exit /b 1

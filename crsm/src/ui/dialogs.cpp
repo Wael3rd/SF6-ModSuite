@@ -46,7 +46,7 @@ constexpr const char* kDialogSetupSig = "Init()";
 constexpr int kLineSearchFrames = 300;          // route 3A: the explanation line looked for ~5 s at most
 constexpr int kLineSettleFrames = 30;           // ... and the walk kept 30 frames after it was found (a later rebuild)
 
-struct TextReq { std::string title, initial; size_t max = 64; std::function<void(bool, const std::string&)> done; };
+struct TextReq { std::string title, initial; size_t max = 64; std::function<void(bool, const std::string&)> done; bool pause_menu = true; };
 struct BoxReq { std::string text, title; std::function<void(bool)> done; };
 
 // the text dialog in progress (`naming`, RMT:1399)
@@ -94,7 +94,6 @@ MO* tm() { return gx::singleton("app.training.TrainingManager"); }
 void menu_input_blocked(bool on) {              // RMT:1418-1424 (B3 would count these; the Lua's direct calls kept)
     if (g_input_off == on) return;
     g_input_off = on;
-    if (!ui::training()) return;                 // a text dialog outside Training (Report a bug): no pause menu to hold
     gx::set_block_input(gx::pause_agent(), on);
     gx::invoke(tm(), "SetAllMenuInput(System.Boolean)", { gx::B(!on) });
     cmn::journal("ui: menu input %s", on ? "blocked" : "released");
@@ -150,7 +149,7 @@ void open_text(TextReq r) {
     g_job_up.store(true);
     g_naming.store(true);
     ++g_dialogs;
-    menu_input_blocked(true);
+    if (r.pause_menu) menu_input_blocked(true);
     cmn::journal("ui: name dialog for %s", g_job->title.c_str());
 }
 
@@ -203,7 +202,7 @@ void box_tick() {                                // confirm_tick (RMT:88-98), un
 // ---- hooks ------------------------------------------------------------------------------------------------------------
 #define UI_PRE(name, body_fn)                                                                    \
     int name(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {          \
-        if (cmn::closing() || !ui::active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;             \
+        if (cmn::closing() || !ui::dialogs_on()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;         \
         int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;                                                \
         __try { rc = body_fn(argv); } __except (EXCEPTION_EXECUTE_HANDLER) { ui::fault(#name " (SEH)"); } \
         return rc;                                                                              \
@@ -212,7 +211,7 @@ void box_tick() {                                // confirm_tick (RMT:88-98), un
 #define UI_PRE_S(name, stack, body_fn)                                                           \
     int name(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {          \
         auto* s_ = stack.push();                                                                \
-        if (!s_ || cmn::closing() || !ui::active()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;      \
+        if (!s_ || cmn::closing() || !ui::dialogs_on()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;  \
         int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;                                                \
         __try { rc = body_fn(argv, s_); } __except (EXCEPTION_EXECUTE_HANDLER) { ui::fault(#name " (SEH)"); } \
         return rc;                                                                              \
@@ -364,7 +363,7 @@ thread_local HookStack<ShowCall> s_show;
 int show_pre_body(void** argv, ShowCall* s) { s->self = argv[1]; return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 void show_post_body(void**, const ShowCall* c) {
     void* self = c->self;
-    if (!self || !g_naming.load() || !ui::active()) return;
+    if (!self || !g_naming.load() || !ui::dialogs_on()) return;
     std::lock_guard lk(ui::lock());
     try { if (ours(self)) relabel_dialog(*g_job, "SetupText"); } catch (...) { ui::fault("text dialog relabel"); }
 }
@@ -374,7 +373,7 @@ UI_POST_S(show_post, s_show, show_post_body)
 // job holds (one text dialog at a time)
 int setup_pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 void setup_post_body() {
-    if (!g_naming.load() || !ui::active()) return;
+    if (!g_naming.load() || !ui::dialogs_on()) return;
     std::lock_guard lk(ui::lock());
     try { if (g_job && !g_job->finished) relabel_dialog(*g_job, "the dialog setup's post"); } catch (...) { ui::fault("dialog setup post"); }
 }
@@ -606,10 +605,10 @@ std::string status() {
 namespace ui::dialogs {
 
 void text_input(const std::string& title, const std::string& initial, size_t max_bytes,
-                std::function<void(bool ok, const std::string& text)> done) {
-    if (!ui::active()) { if (done) done(false, initial); return; }   // (called back at once: the UI is off)
+                std::function<void(bool ok, const std::string& text)> done, bool pause_menu) {
+    if (!ui::dialogs_on()) { if (done) done(false, initial); return; }   // (called back at once: the UI is off)
     std::lock_guard lk(dlg::g_q_mx);
-    dlg::g_text_q.push_back(dlg::TextReq{ title, initial, max_bytes ? max_bytes : 64, std::move(done) });
+    dlg::g_text_q.push_back(dlg::TextReq{ title, initial, max_bytes ? max_bytes : 64, std::move(done), pause_menu });
 }
 
 void confirm(const std::string& text, std::function<void(bool yes)> done) { confirm(text, std::string(), std::move(done)); }

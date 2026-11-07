@@ -45,6 +45,9 @@ int64_t wheel_total();
 // The mouse cursor in the game window's client area (GetCursorPos + ScreenToClient, pixels) and that area's size
 // (GetClientRect), the window being the one whose messages CRSM sees (on_message); false while unknown or empty
 bool cursor_client(int* x, int* y, int* w, int* h);
+// Called once at the next Present (the render thread), then it clears itself by set_present_fn(nullptr). One callback of REFramework's for the whole DLL:
+// there is no taking one back, and null here costs one atomic load per Present.
+void set_present_fn(void (*fn)());
 // Plain text file (append only, off the game thread), for example the probes log.
 void append_file(const char* path, std::string text);
 

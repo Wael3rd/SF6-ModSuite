@@ -28,7 +28,7 @@
 namespace ui::dialogs {
 // All run their work on the game thread (frame callback); 'done' is called there too.
 void text_input(const std::string& title, const std::string& initial, size_t max_bytes,
-                std::function<void(bool ok, const std::string& text)> done);
+                std::function<void(bool ok, const std::string& text)> done, bool pause_menu = true);   // pause_menu: it is over the training pause menu, whose input it holds
 void confirm(const std::string& text, std::function<void(bool yes)> done);
 void community_open();    // Manager "Download Loadouts"
 void community_share();   // Manager "Share loadout"

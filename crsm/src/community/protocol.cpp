@@ -84,6 +84,11 @@ bool build_request(const json& cmd, const Config& cfg, Request* out, std::string
         out->method = "POST"; out->url = base + "/api/report"; out->has_body = true; out->timeout_ms = kReportTimeoutMs;
         for (const char* k : { "costume_key", "text", "character", "fighter_id", "outfit", "outfit_row", "costume_no", "colour", "versions", "logs", "record", "mods", "notes", "image" })
             put(body, cmd, k);
+    } else if (name == "report_get") {
+        out->method = "GET"; out->url = base + "/api/report?costume_key=" + url_encode(field_text(cmd, "costume_key"));
+    } else if (name == "report_status") {
+        out->method = "POST"; out->url = base + "/api/report/status"; out->has_body = true;
+        put(body, cmd, "costume_key"); put(body, cmd, "action");
     } else if (name == "ticket") {
         const std::string t = field_text(cmd, "ticket");
         if (t.empty()) { *error = "no ticket"; return false; }

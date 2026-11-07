@@ -1,8 +1,7 @@
 // report::logic - the pure parts of "Report a bug" (no game, no core, no file): what the guards promise, so the bench can hold them to it.
 //   - the logs cleaned (clean_log) and capped (cap_log), every other cap;
 //   - which outfit a costume row means and the costume key (one report per account per costume, on the server);
-//   - what goes out (make_command), the menu's rows (menu_rows) and the rule of its life (Session): nothing leaves without Send, and
-//     Back leaves nothing behind.
+//   - what goes out (make_command), the menu's rules (Session, summary_lines): nothing leaves without Send, and Back leaves nothing behind.
 // The game side is ui/bug_report.cpp, the files report/gather.cpp, the picture report/capture.cpp.
 #pragma once
 
@@ -21,7 +20,7 @@ using json = nlohmann::json;
 
 // ---- the caps ----------------------------------------------------------------------------------------------------------------
 constexpr size_t kTextMaxUnits = 1000;          // the text field (UTF-16 units): the most the game's field was tried with (04/11)
-constexpr size_t kJpegMaxBytes = 700 * 1024;    // the picture; the Worker refuses over 800 KB
+constexpr size_t kJpegMaxBytes = 450 * 1000;    // the picture; the Worker refuses over 500 KB (the free plan's 10 ms of CPU a request)
 constexpr size_t kLogMaxBytes = 64 * 1024;      // each log: its start (where it says what was loaded) + its end (what just happened)
 constexpr size_t kLogHeadBytes = 8 * 1024;
 constexpr size_t kRecordMaxBytes = 16 * 1024;   // the outfit's record (the Worker refuses over 32 KB)
@@ -65,9 +64,12 @@ const json* find_outfit(const json& outfits, int fighter, const std::string& row
 const json* find_slot(const json& registry, int fighter, int costume_no);
 // The costume's identity on the server, /^(mod|game|unk):[a-z0-9:._-]{1,72}$/:
 //   mod:<mod id>:f<fighter>:c<outfit it is based on>   one of ours: its mod's id, so a mod's update allows a new report
-//   game:<fighter>:<row's hash>                        a game outfit (its text, as no number can be read on this screen)
-//   unk:<fighter>:<row's hash>                         the mods' data could not be read
-std::string costume_key(int fighter, const std::string& row, const json* outfit, const json* slot, bool data_read);
+//   game:<fighter>:c<number>                           a game outfit, its number (read on the screen's part)
+//   game:<fighter>:<row's hash>                        a game outfit whose number could not be read: its text
+//   unk:<fighter>:c<number> or <row's hash>            the mods' data could not be read
+std::string costume_key(int fighter, const std::string& row, const json* outfit, const json* slot, bool data_read, int costume_no = -1);
+// The row of outfits.json for that fighter and outfit number; nullptr = none (a game outfit)
+const json* find_outfit_number(const json& outfits, int fighter, int costume_no);
 bool costume_key_ok(const std::string& key);
 
 // ---- what goes out ---------------------------------------------------------------------------------------------------------------
@@ -81,54 +83,122 @@ struct Report {
 json make_command(const Report& r);
 
 // ---- the menu ---------------------------------------------------------------------------------------------------------------------
-enum class Stage { Idle, Shooting, Open, Sending };
-enum class Row { Text = 0, Shot, Outfit, Versions, Logs, Steam, Send, Count };
+// Wael, 07/11. Rows are real actions only; what cannot be pressed is the text under them. The first row is STATUS, a choice:
+//   no report on this costume             OK (default): nothing else shows.     BUG: Describe the problem / Change the description, Send, the summary.
+//   a report on the server, waiting       WAITING FOR FIX: its text is back, Change the description, Update, the summary, the overwrite warning.
+//                                         OK: withdraws it: its warning and one row that does it (nothing leaves before that row).
+//   the admin marked it fixed             TO TEST: nothing else but a line saying what to do. OK: it is confirmed at once, the row is OK again.
+//                                         BUG: still broken: as a report waiting, WAITING FOR FIX once sent.
+//   confirmed or withdrawn                OK, as with no report; BUG: the old text, Update, the warning (the row on the server is replaced).
+// The status comes from the server when the menu opens: STATUS says Checking... meanwhile, and if the server cannot be reached the menu says so; OK and BUG still work.
+// These rules live here only, to be easy to change.
+enum class Stage { Idle, Shooting, Open };
+enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed, Withdrawn };
+enum class Pick { Ok, Bug, Held };              // Held: the status the server has (WAITING FOR FIX, TO TEST, Checking...)
+enum class Busy { None, Sending, Status };
+enum class Row { Status, Text, Send, Withdraw };
 
-// The life of one report. Game thread only.
+// The server's answer to "my report on this costume": { exists, status, text }
+Server server_from(bool exists, const std::string& status);
+// The action the status request carries for a change the player made: "" = none
+inline const char* action_confirm() { return "confirm"; }
+inline const char* action_withdraw() { return "withdraw"; }
+
+// One report's life in the menu. Game thread only.
 class Session {
 public:
     Stage stage() const { return stage_; }
+    Server server() const { return server_; }
+    Pick pick() const { return pick_; }
+    Busy busy() const { return busy_; }
     // The key: a new report. false = one is already up.
     bool begin();
     // The picture is taken, or given up: the menu may open
     void shot_settled() { if (stage_ == Stage::Shooting) stage_ = Stage::Open; }
-    void set_text(const std::string& text) { text_ = text; }
+    // The server's answer when the menu opened. text: what it holds. Nothing the player has typed meanwhile is overwritten.
+    void server_answer(Server s, const std::string& text);
+    void server_unreachable() { if (server_ == Server::Checking) { server_ = Server::Unknown; pick_ = Pick::Ok; } }
+    bool has_report() const { return server_ == Server::Waiting || server_ == Server::Fixed || server_ == Server::Confirmed || server_ == Server::Withdrawn; }
+    // The STATUS row: its options, as locale keys, and which one is shown
+    std::vector<std::string> options() const;
+    int option_index() const;
+    // The player moved STATUS. true: something changed.
+    bool choose(int index);
+    // What to do now because of a choice: the player said OK on TO TEST: confirm it (once)
+    bool confirm_due() const { return server_ == Server::Fixed && pick_ == Pick::Ok && busy_ == Busy::None; }
+    // The action rows under STATUS
+    std::vector<Row> rows() const;
+    void set_text(const std::string& text) { text_ = text; text_typed_ = true; outcome_ = Outcome::None; error_.clear(); }
     const std::string& text() const { return text_; }
     void set_text_field_ok(bool ok) { field_ok_ = ok; }
-    // The Send row: true = goes out now. Never twice; never with nothing to say while the field works.
-    bool send();
     bool needs_text() const { return field_ok_ && text_.empty(); }
+    // The Send / Update row: true = it goes out now. Never twice at once; never with nothing to say while the field works.
+    bool send();
+    // Withdraw's row, or confirm_due: the status request goes out now
+    bool start_status();
     enum class Outcome { None, Sent, Failed };
-    // The server's answer, or a failure before it
-    void answered(bool sent, const std::string& error);
+    void answered(bool sent, const std::string& error);         // Send's answer: sent = WAITING FOR FIX
+    void status_answered(bool ok, Server now, const std::string& error);
     Outcome outcome() const { return outcome_; }
     const std::string& error() const { return error_; }
     // The window closed, for any reason. true = nothing is on its way: the caller drops the picture and all (this object already dropped
-    // the text). false = the report was sent before the close: its answer still comes, answered() ends it.
+    // the text). false = a request was sent before the close: its answer still comes, answered() ends it.
     bool closed();
     bool window_gone() const { return window_gone_; }
 private:
     void reset();
     Stage stage_ = Stage::Idle;
+    Server server_ = Server::Checking;
+    Pick pick_ = Pick::Held;
+    Busy busy_ = Busy::None;
     std::string text_, error_;
-    bool field_ok_ = true, window_gone_ = false;
+    bool field_ok_ = true, window_gone_ = false, text_typed_ = false;
     Outcome outcome_ = Outcome::None;
 };
 
 using Tr = std::function<std::string(const std::string& key, const std::vector<std::string>& args)>;
-struct RowText { Row row; std::string title, desc; };
-struct MenuInput {
-    const Session* session = nullptr;
-    std::string what;                           // "Ryu, Aloha Ryu, Color 3": what the screen shows
-    bool shot_ok = true;
-    double row_em = 0;                          // what a row holds, in em
-    std::function<std::string(const std::string&, double)> cut;   // a text cut to that many em (with its "...")
+// The real values the summary shows. steam_id: read from the Steam client for this screen only: never logged, never sent (the server takes it from the token).
+struct MenuValues {
+    std::string steam_id, character, outfit, colour;
+    int shot_w = 0, shot_h = 0;
+    size_t shot_bytes = 0;
+    bool shot_failed = false;
+    std::vector<std::pair<std::string, std::string>> versions;    // name, value
+    size_t log_loader_bytes = 0, log_plugin_bytes = 0, mods = 0;
+    bool loaded = false;                        // gathered off the game thread: false a moment after the key
 };
-std::vector<RowText> menu_rows(const MenuInput& in, const Tr& tr);
+// A row's title in the player's language
+std::string row_title(const Session& s, Row row, const Tr& tr);
+// The text under the rows, as paragraphs to wrap at the window's width, the ones to keep first. Empty: nothing shows.
+struct SummaryLine { std::string text; int max_lines = 3; };
+std::vector<SummaryLine> summary_lines(const Session& s, const MenuValues& v, const Tr& tr);
+// All of it wrapped, kSummaryLines at most: what the window has room for. wrap(paragraph, max lines) is the UI's measure (never squeezed: lines cut with "...").
+constexpr int kSummaryLines = 12;
+using Wrap = std::function<std::vector<std::string>(const std::string&, int)>;
+std::string summary_text(const Session& s, const MenuValues& v, const Tr& tr, const Wrap& wrap);
 // A text of a player's or a mod's for a game text: < > [ ] made ( ), one line (an unknown message tag crashes the game's render thread)
 std::string shown_safe(const std::string& s);
-// The error's text for the Send row: known server codes in the player's language, anything else the general one
+// The error's text: known server codes in the player's language, anything else the general one
 std::string error_key(const std::string& code);
+// A SteamID64 as shown, "" when it is none
+std::string steam_id_text(uint64_t id);
+// A JPEG's size from its frame header; false when it has none
+bool jpeg_size(const std::vector<uint8_t>& j, int* w, int* h);
+
+// ---- asleep / awake --------------------------------------------------------------------------------------------------------------------
+// While awake, on each frame: the calls of the screen's own update, counted by its hook. Nothing here knows of Training or of the UI's claim.
+constexpr uint64_t kLeftFrames = 20;            // frames with no call: the screen's flow has left its main state (a long frame is one frame)
+class LeftWatch {
+public:
+    bool seen() const { return have_; }         // false: the first frame of this waking
+    void beat(uint32_t beats, uint64_t frame) { if (!have_ || beats != beats_) { have_ = true; beats_ = beats; at_ = frame; } }
+    bool left(uint32_t beats, uint64_t frame) { beat(beats, frame); return frame - at_ > kLeftFrames; }
+    void reset() { have_ = false; }
+private:
+    bool have_ = false;
+    uint32_t beats_ = 0;
+    uint64_t at_ = 0;
+};
 
 // ---- the guide entry and the key ---------------------------------------------------------------------------------------------------
 // The scancode of a guide symbol's key ("<ICON KeyR>": the game names its keys at their QWERTY place), 0 when it names no letter or digit

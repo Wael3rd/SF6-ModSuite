@@ -77,13 +77,24 @@ name, with `[V]` for a verified share. The Community server itself is not part o
 ## Report a bug
 
 On Battle Settings > Character (Fighter Settings), Character tab, R on the keyboard or X on the pad (the entry "Report a bug" in the guide
-bar) takes a picture of the game and opens a menu. **Nothing leaves your PC until you choose Send on that menu.** Back sends nothing and
-keeps nothing: the picture is only ever in memory, no file is written.
+bar) takes a picture of the game and opens a menu on the side of the screen, the fighter still in sight. **No report leaves your PC until you
+choose Send on that menu.** Back sends nothing and keeps nothing: the picture is only ever in memory, no file is written.
+
+When the menu opens it asks the server one question, with your Steam-verified token: your report on this costume, if any. Only the costume's key
+goes with it, no picture, no log, no text. The answer is the report's status and your own text. If the server cannot be reached the menu says so, and
+OK and BUG still work.
+
+The first row is STATUS. On OK, the default, nothing else shows. On BUG: Describe the problem, Send, and under them the real values of what would be
+sent, your Steam ID included (the menu reads it from Steam for your screen; the plugin never logs it and never sends it). After Send, or when you
+already have a report on this costume, STATUS shows WAITING FOR FIX, your text comes back and Send becomes Update, which replaces what was sent; the
+menu says so first. When the author marks it fixed, STATUS shows TO TEST: choose OK if it is fixed (the author sees it confirmed), or BUG if it is
+still broken. Choosing OK on WAITING FOR FIX offers one more row that withdraws the report (the author sees it withdrawn). You can never mark a
+report fixed, nor see anyone else's.
 
 What Send sends, over HTTPS to the same Community server, with your Steam-verified token (see above):
 
 - **A picture of the game**, from the moment you pressed the key: the game's own image (its back buffer), never your desktop or another
-  window. A JPEG of 1080p at most, 700 KB at most. HDR is converted to SDR.
+  window. A JPEG of 1080p at most, 450 KB at most. HDR is converted to SDR.
 - **Your text**, as you wrote it (1000 characters at most).
 - **The character, outfit and colour** on the screen, and **the outfit's record** (its lines in `outfits.json` and `registry.json`).
 - **Versions**: the Recording Manager's, the Native Core's, the Color Mod's and the Slots Loader's; the size and the start of the SHA-256 of our
@@ -100,5 +111,7 @@ The server keeps **one report per Steam account per costume** (a new one on the 
 its mod's id, so a mod's update allows a new report), 100 MB per account at most, for **90 days** after its last update, and only the admin can read it. The plugin keeps no
 copy. If the picture, a log or the mods' data cannot be read, the report goes without it and says so.
 
-Cost: nothing but one atomic load per frame presented, and a look for the screen every 15 frames; a few reads a frame while the screen is up.
-The press costs one frame's copy of the image, about a millisecond; the encoding and the sending run off the game thread.
+Cost: asleep until this screen runs, in menus, Training and fights alike: no poll, nothing per frame. A hook on the screen's own update, which the game
+calls only while the screen is up, wakes it; a few reads a frame while the screen is up; when the screen is left, it goes back to sleep. One atomic load per
+frame presented remains (REFramework has no way to take a present callback back). The press costs one frame's copy of the image, about a millisecond;
+the encoding, the reading of the files and the requests run off the game thread.

@@ -21,6 +21,10 @@ using MO = reframework::API::ManagedObject;
 bool training();
 bool paused();
 uint64_t tick();                               // frames of the core's frame callback (the Lua's `tick`)
+// The text dialog's hooks and requests for "Report a bug", which owes nothing to the UI's claim: the owner "ui" and (the claim or a report under way).
+bool claimed();                                // the UI was handed over (ui::active() less the owner's own check)
+bool dialogs_on();
+void report_needs_dialogs(bool on);
 
 // One hook spec of the UI layer (never "required": a hook refused by the R18 check or missing degrades its own feature,
 // logged; `ok` tells the feature whether its hook is in place).
@@ -112,8 +116,9 @@ std::string status();
 
 // ---- "Report a bug" (bug_report.cpp) ----------------------------------------------------------------------------------------------------
 namespace bug_report {
-void start();                                  // the present callback (one atomic load per Present)
-void frame(bool training);                     // the screen, the guide entry, the key, the menu
+void specs(std::vector<mech::hooks::Spec>& out);   // the hook on the screen's own update: what wakes the module
+void start();                                  // its core client (no frame callback until the screen runs)
+bool awake();                                  // the screen's update ran just now (Fighter Settings up, or a report under way): any thread
 void hand_back();                              // the UI stopped: the window closed, nothing kept
 std::string status();
 }  // namespace bug_report

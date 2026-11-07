@@ -134,6 +134,21 @@ std::string module_of(const void* p) {
     return b;
 }
 
+uint64_t local_steam_id() {
+    HMODULE h = GetModuleHandleW(L"steam_api64.dll");
+    if (!h) return 0;
+    const auto get_user = reinterpret_cast<int32_t (*)()>(GetProcAddress(h, "SteamAPI_GetHSteamUser"));
+    const auto find = reinterpret_cast<void* (*)(int32_t, const char*)>(GetProcAddress(h, "SteamInternal_FindOrCreateUserInterface"));
+    const auto get_id = reinterpret_cast<uint64_t (*)(void*)>(GetProcAddress(h, "SteamAPI_ISteamUser_GetSteamID"));   // the flat export takes care of CSteamID's return
+    if (!get_user || !find || !get_id) return 0;
+    __try {
+        void* user = find(get_user(), "SteamUser021");     // the version this dll is built for: slot and layout are its own
+        return user ? get_id(user) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 bool resolve(Api* out, std::string* why) {
     Api a;
     HMODULE h = GetModuleHandleA("steam_api64.dll");                 // the game loaded it; never loaded by us
