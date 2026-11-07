@@ -97,7 +97,12 @@ void make_copy(uintptr_t part) {
     a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
     a->ui_set_visible(C(), c, 0);                 // placed and shown by the next frame
 }
+std::atomic<void (*)()> g_guide_job{ nullptr };   // another module's copies, made here for the same reason (R19)
 void post_guide_late(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (g_guide_job.load(std::memory_order_acquire) && !g_closing.load(std::memory_order_relaxed))
+        if (auto* job = g_guide_job.exchange(nullptr, std::memory_order_acq_rel)) {
+            try { job(); } catch (...) { logf("fs name: EXCEPTION in a job of the guide list's update"); }
+        }
     const uintptr_t p = tl_part;
     tl_part = 0;
     if (!p || !g_req_on.load(std::memory_order_acquire) || g_closing.load(std::memory_order_relaxed)) return;
@@ -491,6 +496,8 @@ void hook_now() {
     g_on = true;
     logf("fs name: on (the copy is made in app.UIPartsInputGuideList.OnLateUpdate)");
 }
+
+void run_in_guide_update(void (*job)()) { g_guide_job.store(job, std::memory_order_release); }
 
 void install_hooks() {
     const SF6CoreAPI* a = A();

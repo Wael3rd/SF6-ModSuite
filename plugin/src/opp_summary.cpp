@@ -15,6 +15,13 @@
 // rest of the page (the outfit spin, the colour grid, the save). Nothing else changes, and nothing changes for a fighter
 // whose outfits all have a widget.
 //
+// The summary's list shows 5 lines (its via.gui.ScrollList's ItemCount; the sixth widget is written and stays hidden), so nothing past the fifth outfit showed.
+// Those lines are ours (frame, read 07/11): copies of the game's text under the list's parent, in its style, at its step, made in the guide list's update (R19,
+// fsname::run_in_guide_update), found by name every frame (R35), only on this page. The name is the game's (CostumeInventory.GetName), the count the outfit's
+// ValidColorIdList, what goes round them comes from a line the game wrote. A name too long for its place slides in it and the count stays (name_scroll.cpp);
+// with more lines than rows they follow the outfit shown, and a row at an end says how many are past it (line_window). The list's ItemCount is not touched: a live
+// change to a native list that the fix below keeps short is not worth the risk for one line.
+//
 // - One hook, pre + post, on that method only. The game calls it when the page opens and when a setting of the page changes
 //   (no per-frame caller: the page has no update method). R18: hooked only once a check over every method of the game found
 //   no other method entering its code, on a thread of its own (as the core's and the Recording Manager's checks), its result
@@ -27,7 +34,13 @@
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "opp_summary.hpp"
+#include "name_scroll.hpp"
 #include "perf.hpp"
+#include "scroll_logic.hpp"
+#include "words.hpp"
+
+#include <map>
+#include <vector>
 
 #include <mutex>
 
@@ -133,8 +146,11 @@ void on_draw(Obj* page) {
     post(EV_OPP_SUMMARY);                                         // the frame puts it back if the draw throws
 }
 
+std::atomic<bool> g_lines_dirty{ true };         // the game wrote its lines again: ours are read again
+
 int pre_draw(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     const int64_t t0 = perf::begin();
+    g_lines_dirty.store(true, std::memory_order_relaxed);
     if (argc >= 2 && !g_closing.load(std::memory_order_relaxed)) {
         try { on_draw(reinterpret_cast<Obj*>(argv[1])); } catch (...) { logf("Opponent Outfit Settings: EXCEPTION in the summary hook"); }
     }
@@ -152,6 +168,178 @@ void post_draw(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
         logf("Opponent Outfit Settings: EXCEPTION in the summary hook (after)");
     }
     perf::end(perf::HkOppSummaryDraw, t0);
+}
+
+// ======================== the lines past the game's own ========================
+constexpr const char* kAgent = "OtherMatchingFighterSetting";
+constexpr const char* kListName = "p_ScrollList_texts_v";
+constexpr const char* kLineName = "e_text_costume";
+constexpr uint32_t kPollEvery = 15, kRefreshEvery = 30, kCopyAskEvery = 30;
+constexpr float kLineStep = 31, kPlaceW = 320, kOffScreen = -4000;   // the list's items are 31 apart, its text's region 320 wide (read 07/11)
+constexpr int kRefusedMax = 3;
+
+struct Line { std::string whole, moving, fixed; };
+std::vector<Line> g_lines;
+int g_shown = 0;                                 // rows given a line at the last frame
+bool g_up = false;
+uint32_t g_tick = 0, g_read_at = 0, g_asked_at = 0;
+float g_x = 0, g_y = 0;                          // the first line of the list, in its parent's units
+int g_first = 5;                                 // the list's ItemCount
+std::map<std::pair<int, int>, std::string> g_names;   // this page's visit
+std::atomic<int> g_need{ 0 };
+std::atomic<int> g_copy_refused{ 0 };
+int g_lines_logged = -1;
+
+const SF6CoreAPI* A() { return ui::core(); }
+SF6CoreClient* C() { return ui::client(); }
+std::string line_name(char kind, int row) {
+    char b[32];
+    snprintf(b, sizeof b, "e_ss_opp_%c%02d", kind, row);
+    return b;
+}
+// The page on screen: its main control, and its param (the page's type, checked)
+bool page_up(Obj*& cm, Obj*& page) {
+    void* buf[2] = {};
+    const uint32_t n = A()->ui_agents(kAgent, buf, 2);
+    for (uint32_t i = 0; i < n && i < 2; ++i) {
+        Obj* agent = static_cast<Obj*>(buf[i]);
+        Obj* c = call_obj(agent, "get_ControlMain");
+        Obj* go = call_obj(agent, "get_GameObject");
+        bool ok1 = false, ok2 = false;
+        const bool v = c && call_bool(c, "get_ActualVisible", {}, &ok1);
+        const bool d = go && call_bool(go, "get_DrawSelf", {}, &ok2);    // a hidden GUI keeps its controls' ActualVisible
+        if (!ok1 || !ok2 || !v || !d) continue;
+        Obj* deleg = get_obj(agent, "<InputDelegates>k__BackingField");
+        Obj* flow = deleg ? get_obj(deleg, "<Flow>k__BackingField") : nullptr;
+        Obj* p = flow ? get_obj(flow, "_Param") : nullptr;
+        if (!p || p->get_type_definition() != g_page) continue;
+        cm = c; page = p;
+        return true;
+    }
+    return false;
+}
+// Inside the guide list's update (R19): the copies this page lacks, hidden; the frame places and shows them
+void make_lines() {
+    const SF6CoreAPI* a = A();
+    if (!a || !C() || g_copy_refused.load() >= kRefusedMax) return;
+    Obj* cm = nullptr;
+    Obj* page = nullptr;
+    if (!page_up(cm, page)) return;
+    Obj* list = static_cast<Obj*>(a->ui_find_cached(cm, kListName));
+    Obj* parent = list ? call_obj(list, "get_Parent") : nullptr;
+    Obj* item = list ? call_obj(list, "get_Child") : nullptr;
+    void* tmpl = item ? a->ui_find_child(item, kLineName, 3) : nullptr;
+    if (!parent || !tmpl) return;
+    const int need = g_need.load();
+    for (int r = 0; r < need; ++r)
+        for (const char kind : { 'l', 'r' }) {
+            const std::string name = line_name(kind, r);
+            if (a->ui_find_child(parent, name.c_str(), 0)) continue;
+            void* c = nullptr;
+            const SF6CoreStatus st = a->ui_clone_control(C(), tmpl, parent, name.c_str(), &c);
+            if (st != SF6CORE_OK || !c) {
+                logf("Opponent Outfit Settings: a line's copy refused (core status %d)", static_cast<int>(st));
+                g_copy_refused.fetch_add(1);
+                return;
+            }
+            SF6CoreArg m{}; m.type = SF6CORE_ARG_I64; m.v.i = 1;   // via.gui.MaskType.NonTarget: no mask of the new parent clips it
+            a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
+            SF6CoreArg fit{}; fit.type = SF6CORE_ARG_I64; fit.v.i = 0;   // never squeezed: a long name slides
+            a->obj_invoke(C(), c, "set_AutoRegionFit(via.gui.RegionFitType)", &fit, 1, nullptr);
+            a->ui_set_visible(C(), c, 0);
+        }
+}
+std::string outfit_name(int fid, int costume) {
+    auto it = g_names.find({ fid, costume });
+    if (it != g_names.end()) return it->second;
+    static Method* m_inv = method_of(api().tdb()->find_type("app.InventoryManager"), "get_Costume", 0);
+    static Method* m_name = method_of(api().tdb()->find_type("app.InventoryManager.CostumeInventory"), "GetName", 2);
+    Obj* inv = m_inv ? call_obj(m_inv, nullptr) : nullptr;
+    std::string name = inv && m_name ? str(call_obj(m_name, inv, { arg_i32(fid), arg_i32(costume) })) : std::string();
+    if (name.empty()) name = "#" + std::to_string(costume + 1);
+    g_names[{ fid, costume }] = name;
+    return name;
+}
+// What the lines are now: read from the page's own data, after the game's draw
+void read_lines(Obj* page, Obj* list) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    if (g_swap.list) return;                     // the list's length isn't the full one until the draw is over
+    Obj* outfits = obj_at(obj_at(page, f_dup), f_cos);
+    int32_t fid = -1, shown_cos = -1;
+    if (!outfits || !i32_at(page, f_fid, fid)) return;
+    const Ret rc = call(page, "get_SettingOtherCostumeId");
+    if (!rc.exception_thrown) shown_cos = static_cast<int32_t>(rc.dword);
+    const Ret rn = call(list, "get_ItemCount");
+    if (!rn.exception_thrown && static_cast<int32_t>(rn.dword) > 0) g_first = static_cast<int32_t>(rn.dword);
+    float p[3] = {};
+    const Ret rp = call(list, "get_Position");
+    if (!rp.exception_thrown) { memcpy(p, rp.bytes.data(), sizeof p); g_x = p[0]; g_y = p[1]; }
+    const int n = list_count(outfits);
+    struct Row { int costume = 0, count = 0; };
+    std::vector<Row> rows;
+    int current = -1;
+    for (int i = 0; i < n; ++i) {
+        Obj* o = list_item(outfits, i);
+        Row row;
+        if (o) { get_i32(o, "CostumeId", row.costume); row.count = list_count(get_obj(o, "ValidColorIdList")); }
+        if (row.costume == shown_cos && i >= g_first) current = i - g_first;
+        rows.push_back(row);
+    }
+    LineFormat fmt;
+    Obj* item = call_obj(list, "get_Child");
+    void* first = item ? A()->ui_find_child(item, kLineName, 3) : nullptr;
+    if (first && !rows.empty())
+        fmt = line_format(str(call_obj(static_cast<Obj*>(first), "get_Message")), outfit_name(fid, rows[0].costume), rows[0].count);
+    const int extras = n - g_first;
+    const LineWindow w = line_window(extras, kOwnLinesMax, current);
+    std::vector<Line> lines;
+    const auto more = [&](int count) { lines.push_back({ words::trf(words::W::ReplayMore, { std::to_string(count) }), std::string(), std::string() }); };
+    if (w.more_above) more(w.more_above);
+    for (int i = 0; i < w.count; ++i) {
+        const Row& row = rows[static_cast<size_t>(g_first + w.first + i)];
+        Line l;
+        l.moving = fmt.before + outfit_name(fid, row.costume);
+        l.fixed = fmt.sep + std::to_string(row.count);
+        l.whole = l.moving + l.fixed;
+        lines.push_back(l);
+    }
+    if (w.more_below) more(w.more_below);
+    g_lines = std::move(lines);
+    g_need.store(static_cast<int>(g_lines.size()));
+    if (static_cast<int>(g_lines.size()) != g_lines_logged) {
+        g_lines_logged = static_cast<int>(g_lines.size());
+        logf("[F%d] Opponent Outfit Settings: %d outfits, %d shown by the game, %d lines of ours", fid, n, g_first, g_lines_logged);
+    }
+}
+// One row: one text while the line fits; too long, the name in that text, sliding in a window that leaves room for the count, in a second text. Arabic stays one
+// text: the order of a split line there can't be checked. (As Replays > Settings' lines, the other way round.)
+void put_line(void* t, void* v, const Line& l, float x, float y) {
+    const SF6CoreAPI* a = A();
+    const bool can_split = !l.fixed.empty() && words::lang() != std::string("ar");
+    const float whole = can_split ? namescroll::known_width(t, l.whole) : -1;
+    const bool wide = whole > 0 && scroll::overflows(whole, kPlaceW);
+    const float tail = wide ? namescroll::known_width(v, l.fixed) : -1;
+    const float window = tail > 0 ? kPlaceW - tail : 0;
+    const bool split = window >= scroll::kSplitMinWindow;
+    const std::string& in_t = split ? l.moving : l.whole;
+    namescroll::release_unless(t, in_t);
+    if (!namescroll::busy(t, x, y)) {
+        a->ui_set_text(C(), t, in_t.c_str());
+        a->ui_set_position(C(), t, x, y, 0);
+    }
+    a->ui_set_visible(C(), t, 1);
+    namescroll::drive(t, split ? window : kPlaceW);
+    const bool tail_up = wide && (tail < 0 || split);
+    if (tail_up) {
+        const float vx = split ? x + window : kOffScreen;
+        namescroll::release_unless(v, l.fixed);
+        if (!namescroll::busy(v, vx, y)) {
+            a->ui_set_text(C(), v, l.fixed.c_str());
+            a->ui_set_position(C(), v, vx, y, 0);
+        }
+    }
+    a->ui_set_visible(C(), v, tail_up ? 1 : 0);
+    namescroll::drive(v, kPlaceW);
 }
 
 // ======================== R18: the code check, as the core's (core/src/pausemenu/pausemenu.cpp) ========================
@@ -289,6 +477,53 @@ void install_hooks() {
 
 bool busy() {
     return (g_m && !g_hook_done) || g_pending.load(std::memory_order_acquire);
+}
+
+void frame() {
+    if (!g_m) return;
+    ++g_tick;
+    if (!g_up && g_tick % kPollEvery != 0) return;
+    const SF6CoreAPI* a = A();
+    if (!a || !C() || !SF6CORE_HAS(a, ui_agents) || !SF6CORE_HAS(a, ui_find_cached) || !SF6CORE_HAS(a, ui_clone_control)) return;
+    try {
+        Obj* cm = nullptr;
+        Obj* page = nullptr;
+        if (!page_up(cm, page)) {
+            if (g_up) { g_up = false; g_lines.clear(); g_names.clear(); g_shown = 0; g_lines_logged = -1; g_need.store(0); g_lines_dirty.store(true); }
+            return;
+        }
+        g_up = true;
+        Obj* list = static_cast<Obj*>(a->ui_find_cached(cm, kListName));
+        Obj* parent = list ? call_obj(list, "get_Parent") : nullptr;
+        if (!parent) return;
+        if (g_lines_dirty.exchange(false) || g_tick - g_read_at >= kRefreshEvery) {
+            g_read_at = g_tick;
+            read_lines(page, list);
+        }
+        const int count = static_cast<int>(g_lines.size());
+        bool missing = false;
+        for (int r = 0; r < count || r < g_shown; ++r) {
+            void* t = a->ui_find_cached(parent, line_name('l', r).c_str());
+            void* v = a->ui_find_cached(parent, line_name('r', r).c_str());
+            if (r >= count) {
+                if (t) a->ui_set_visible(C(), t, 0);
+                if (v) a->ui_set_visible(C(), v, 0);
+                if (t) namescroll::drive(t);
+                if (v) namescroll::drive(v);
+                continue;
+            }
+            if (!t || !v) { missing = true; continue; }
+            put_line(t, v, g_lines[static_cast<size_t>(r)], g_x, g_y + kLineStep * static_cast<float>(g_first + r));
+        }
+        g_shown = count;
+        if (missing && g_tick - g_asked_at >= kCopyAskEvery && g_copy_refused.load() < kRefusedMax) {
+            g_asked_at = g_tick;
+            fsname::run_in_guide_update(make_lines);
+        }
+    } catch (...) {
+        static bool once = false;
+        if (!once) { once = true; logf("Opponent Outfit Settings: EXCEPTION in the summary's lines"); }
+    }
 }
 
 void tick(uint32_t /*events*/) {
