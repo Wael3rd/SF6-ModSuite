@@ -25,10 +25,18 @@ static void make_dirs(const std::string& path) {   // every folder of a file pat
         if (path[i] == '\\' || path[i] == '/') CreateDirectoryA(path.substr(0, i).c_str(), nullptr);
 }
 
+// A fixture file that can't be written is the test's own failure, and says so: plain paths stop at 259 characters, so a deep scratch
+// folder would leave files out silently and the loaders would look wrong (README: keep the scratch folder short).
+static void cannot_write(const std::string& path) {
+    const std::string what = "cannot write a fixture file (" + std::to_string(path.size()) + " characters; keep the scratch folder short): " + path;
+    check(false, what.c_str());
+}
+
 static void put(const std::string& path, const std::string& data) {
     make_dirs(path);
     FILE* f = fopen(path.c_str(), "wb");
     if (f) { fwrite(data.data(), 1, data.size(), f); fclose(f); }
+    else cannot_write(path);
 }
 
 static std::string slurp(const std::string& path) {
@@ -325,6 +333,7 @@ static void put_bin(const std::string& path, const std::vector<uint8_t>& d) {
     make_dirs(path);
     FILE* f = fopen(path.c_str(), "wb");
     if (f) { if (!d.empty()) fwrite(d.data(), 1, d.size(), f); fclose(f); }
+    else cannot_write(path);
 }
 
 static std::vector<uint8_t> bytes_of(const std::string& s) { return std::vector<uint8_t>(s.begin(), s.end()); }

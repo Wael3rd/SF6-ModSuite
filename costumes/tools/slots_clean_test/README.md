@@ -19,7 +19,9 @@ folder are byte for byte unchanged, and that the note about Fluffy's `ArchiveLis
 `slots_clean_test.exe --row <build dir> <scratch folder> <game folder> <costume mod archive>` runs the real
 `costume_loader.exe` and `stagetest.exe` (both from `build\`) on a fake game folder in the scratch folder. The game folder
 is only read: its `re_chunk_000.pak` (passed as `--base-pak`), the shipped loader data and the stage path index are used,
-nothing is written there. Any small costume mod archive (.zip, .7z, .rar) will do. Mod paks (synthetic) appear and
+nothing is written there. Any small costume mod archive (.zip, .7z, .rar) will do. Keep the scratch folder short, about 60
+characters at most: the test writes its fixture files with plain paths, which stop at 259 characters, and a file it can't write
+is a FAIL that says so. A deep folder fails cases 17 on for that reason alone. Mod paks (synthetic) appear and
 disappear above the loaders' paks, and after every run the patch paks must form an unbroken row from 001. A loader pak
 that has to stay below a mod pak becomes a marker-only placeholder (shown `c` / `s` in the output, `C` / `S` are the real
 paks) and is deleted once no mod pak is above it. A full run takes a few minutes.
