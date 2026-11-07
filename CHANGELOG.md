@@ -6,13 +6,13 @@
 |---|---|---|
 | SF6 Slots Loader | 1.21.0 | now holds Report a bug (`report_mod.dll`) |
 | SF6 Recording Manager | 2.2.9 | Report a bug moved out |
-| SF6 Color Mod | 0.24.3 | unchanged |
+| SF6 Color Mod | 0.24.4 | Opponent Outfit Settings: a ticked RW / MC colour is really the one shown |
 | SF6 Native Core | 0.9.7 | unchanged |
 | SF6 Profile Mod | 1.0.0 | unchanged |
 
-Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.20.1 and SF6 Recording Manager 2.2.8, then install Slots Loader
-1.21.0 and Recording Manager 2.2.9 together. Color Mod 0.24.3, Native Core 0.9.7 and Profile Mod 1.0.0 are the same files as in
-1.24.0: keep them. With the all-in-one package, replace 1.24.0 with 1.25.0. The costume pak is not rebuilt at the first launch
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.20.1, SF6 Recording Manager 2.2.8 and SF6 Color Mod 0.24.3, then
+install Slots Loader 1.21.0, Recording Manager 2.2.9 and Color Mod 0.24.4 together. Native Core 0.9.7 and Profile Mod 1.0.0 are the same
+files as in 1.24.0: keep them. With the all-in-one package, replace 1.24.0 with 1.25.0. The costume pak is not rebuilt at the first launch
 ("Up to date").
 
 ### SF6 Slots Loader 1.21.0
@@ -24,6 +24,14 @@ Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.20.1 and SF
 - It sleeps more: until you press R (pad X) on that screen, it holds one hook on that screen and one variable read per displayed
   frame. The first press of a session opens the menu about half a second later; the next ones open at once. It sends no API key.
 - Beside a Recording Manager 2.2.8 it stays off, and that version's own report keeps working: REFramework's log says so.
+
+### SF6 Color Mod 0.24.4
+- Opponent Outfit Settings: each RW and MC cell now ticks alone, without colour 02 or the other cells, and an online opponent gets the
+  colour you ticked, by the game's own rule among all you ticked. This is your own display. Your ticks stay in
+  `reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt`, never in the game's save.
+- The game draws among every outfit ticked for that fighter, and extra outfits start with their colour 01 ticked. To see only your RW,
+  untick the others.
+- If a ticked colour's mod is gone, that opponent wears plain colour 02, and the log says so.
 
 ### SF6 Recording Manager 2.2.9
 - Report a bug moved to the Slots Loader's package: this version has none of its own. With a Slots Loader older than 1.21.0 there is no
@@ -46,8 +54,8 @@ Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.20.1 and SF
 - An outfit whose mod gives no usable name still shows the loader's "Outfit I", in English in every language.
 - Two outfits of one fighter with the same mod name look the same on the Costume row. Their numbers differ, so choices
   do not mix.
-- Opponent Outfit Settings: ticking an RW or MC colour also ticks colour 02 and the other RW / MC cells of that outfit, and an
-  opponent then wears colour 02, not the one ticked. The colours shown are right; the real choice comes in a later release.
+- Opponent Outfit Settings: with 02 as the only one of colours 01-10 ticked and the cursor on an RW / MC cell, T toggles that cell
+  instead of turning all off. RW 1's squares do not match its preview.
 - An outfit named after its archive keeps the file's extension in its name (".rar").
 - Report a bug is on Battle Settings > Character only.
 - Slotsloader Manager: report_mod.dll has not been checked in a package installed by ZZtaii's Manager.
