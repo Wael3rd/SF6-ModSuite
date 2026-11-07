@@ -97,7 +97,7 @@ What Send sends, over HTTPS to the same Community server, with your Steam-verifi
   can reach you. Other players never see a report.
 
 The server keeps **one report per Steam account per costume** (a new one on the same costume replaces the old one; a costume is identified by
-its mod's id, so a mod's update allows a new report) for **90 days** after its last update, and only the admin can read it. The plugin keeps no
+its mod's id, so a mod's update allows a new report), 100 MB per account at most, for **90 days** after its last update, and only the admin can read it. The plugin keeps no
 copy. If the picture, a log or the mods' data cannot be read, the report goes without it and says so.
 
 Cost: nothing but one atomic load per frame presented, and a look for the screen every 15 frames; a few reads a frame while the screen is up.

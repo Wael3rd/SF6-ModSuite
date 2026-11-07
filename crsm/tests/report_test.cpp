@@ -194,7 +194,7 @@ static void test_session() {
     check(has(rp::menu_rows(in, tr)[1].title, "report_row_shot_none"), "the list says when there is no picture");
     in.cut = [](const std::string& t, double) { return t.substr(0, 5) + "..."; };
     check(rp::menu_rows(in, tr)[0].title == "repor...", "a long row is cut, never squeezed");
-    check(rp::error_key("banned") == "report_err_banned" && rp::error_key("verification_unavailable") == "report_err_steam" && rp::error_key("curl exit 28") == "report_err_network" && rp::error_key("") == "report_err_network", "the errors' words");
+    check(rp::error_key("banned") == "report_err_banned" && rp::error_key("verification_unavailable") == "report_err_steam" && rp::error_key("account_full") == "report_err_account" && rp::error_key("storage_full") == "report_err_full" && rp::error_key("curl exit 28") == "report_err_network" && rp::error_key("") == "report_err_network", "the errors' words");
 }
 
 static void test_pixels() {

@@ -425,6 +425,7 @@ std::string error_key(const std::string& code) {
     if (code == "banned" || code == "steam_banned") return "report_err_banned";
     if (code == "verification_unavailable" || code == "invalid_token" || code == "update_required") return "report_err_steam";
     if (code == "storage_full") return "report_err_full";
+    if (code == "account_full") return "report_err_account";
     if (code == "too_large" || code == "bad_image" || code == "bad_key" || code == "bad_json") return "report_err_refused";
     return "report_err_network";
 }

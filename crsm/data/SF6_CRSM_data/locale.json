@@ -751,6 +751,10 @@
     "rsm.report_err_refused": {
       "where": "Fighter Settings > Report a bug: goes into 'Not sent: %s'.",
       "max": 60
+    },
+    "rsm.report_err_account": {
+      "where": "Fighter Settings > Report a bug: goes into 'Not sent: %s'. The account's own room on the server is full (100 MB).",
+      "max": 60
     }
   },
   "en": {
@@ -960,7 +964,8 @@
     "rsm.report_err_steam": "Steam could not verify you. Confirm to try again",
     "rsm.report_err_banned": "this account is banned",
     "rsm.report_err_full": "the server is full. Try again later",
-    "rsm.report_err_refused": "the server refused it"
+    "rsm.report_err_refused": "the server refused it",
+    "rsm.report_err_account": "your reports already fill your 100 MB on the server"
   },
   "fr": {
     "rsm.page": "Gestion",
@@ -1169,7 +1174,8 @@
     "rsm.report_err_steam": "Steam n'a pas pu vous vérifier. Confirmer pour réessayer",
     "rsm.report_err_banned": "ce compte est banni",
     "rsm.report_err_full": "le serveur est plein. Réessayez plus tard",
-    "rsm.report_err_refused": "le serveur l'a refusé"
+    "rsm.report_err_refused": "le serveur l'a refusé",
+    "rsm.report_err_account": "vos rapports occupent déjà vos 100 Mo sur le serveur"
   },
   "ja": {
     "rsm.page": "マネージャー",
@@ -1378,7 +1384,8 @@
     "rsm.report_err_steam": "Steam認証に失敗。決定で再試行",
     "rsm.report_err_banned": "このアカウントはBANされています",
     "rsm.report_err_full": "サーバーが満杯です。後でお試しください",
-    "rsm.report_err_refused": "サーバーに拒否されました"
+    "rsm.report_err_refused": "サーバーに拒否されました",
+    "rsm.report_err_account": "報告がサーバーの上限100 MBに達しています"
   },
   "zh-Hans": {
     "rsm.page": "管理",
@@ -1587,7 +1594,8 @@
     "rsm.report_err_steam": "Steam 无法验证你。确认以重试",
     "rsm.report_err_banned": "此账号已被封禁",
     "rsm.report_err_full": "服务器已满。请稍后再试",
-    "rsm.report_err_refused": "服务器已拒绝"
+    "rsm.report_err_refused": "服务器已拒绝",
+    "rsm.report_err_account": "你的报告已占满服务器上的 100 MB"
   },
   "it": {
     "rsm.page": "Gestione",
@@ -1796,7 +1804,8 @@
     "rsm.report_err_steam": "Steam non ti ha verificato. Conferma per riprovare",
     "rsm.report_err_banned": "questo account è bandito",
     "rsm.report_err_full": "il server è pieno. Riprova più tardi",
-    "rsm.report_err_refused": "il server l'ha rifiutata"
+    "rsm.report_err_refused": "il server l'ha rifiutata",
+    "rsm.report_err_account": "le tue segnalazioni occupano già i tuoi 100 MB sul server"
   },
   "de": {
     "rsm.page": "Verwaltung",
@@ -2005,7 +2014,8 @@
     "rsm.report_err_steam": "Steam konnte dich nicht prüfen. Bestätigen zum Wiederholen",
     "rsm.report_err_banned": "dieses Konto ist gesperrt",
     "rsm.report_err_full": "der Server ist voll. Später erneut versuchen",
-    "rsm.report_err_refused": "der Server hat sie abgelehnt"
+    "rsm.report_err_refused": "der Server hat sie abgelehnt",
+    "rsm.report_err_account": "deine Meldungen belegen schon deine 100 MB auf dem Server"
   },
   "es": {
     "rsm.page": "Gestión",
@@ -2214,7 +2224,8 @@
     "rsm.report_err_steam": "Steam no pudo verificarte. Confirma para reintentar",
     "rsm.report_err_banned": "esta cuenta está vetada",
     "rsm.report_err_full": "el servidor está lleno. Inténtalo más tarde",
-    "rsm.report_err_refused": "el servidor lo ha rechazado"
+    "rsm.report_err_refused": "el servidor lo ha rechazado",
+    "rsm.report_err_account": "tus informes ya ocupan tus 100 MB en el servidor"
   },
   "es-419": {
     "rsm.page": "Gestión",
@@ -2423,7 +2434,8 @@
     "rsm.report_err_steam": "Steam no pudo verificarte. Confirma para reintentar",
     "rsm.report_err_banned": "esta cuenta está vetada",
     "rsm.report_err_full": "el servidor está lleno. Inténtalo más tarde",
-    "rsm.report_err_refused": "el servidor lo rechazó"
+    "rsm.report_err_refused": "el servidor lo rechazó",
+    "rsm.report_err_account": "tus reportes ya ocupan tus 100 MB en el servidor"
   },
   "ru": {
     "rsm.page": "Менеджер",
@@ -2632,7 +2644,8 @@
     "rsm.report_err_steam": "Steam не подтвердил вас. Подтвердите, чтобы повторить",
     "rsm.report_err_banned": "этот аккаунт заблокирован",
     "rsm.report_err_full": "сервер заполнен. Попробуйте позже",
-    "rsm.report_err_refused": "сервер отклонил отчёт"
+    "rsm.report_err_refused": "сервер отклонил отчёт",
+    "rsm.report_err_account": "ваши отчёты уже заняли ваши 100 МБ на сервере"
   },
   "pl": {
     "rsm.page": "Menedżer",
@@ -2841,7 +2854,8 @@
     "rsm.report_err_steam": "Steam cię nie zweryfikował. Potwierdź, aby ponowić",
     "rsm.report_err_banned": "to konto jest zablokowane",
     "rsm.report_err_full": "serwer jest pełny. Spróbuj później",
-    "rsm.report_err_refused": "serwer je odrzucił"
+    "rsm.report_err_refused": "serwer je odrzucił",
+    "rsm.report_err_account": "twoje zgłoszenia zajmują już twoje 100 MB na serwerze"
   },
   "pt": {
     "rsm.page": "Gerenciador",
@@ -3050,7 +3064,8 @@
     "rsm.report_err_steam": "A Steam não verificou você. Confirme para tentar de novo",
     "rsm.report_err_banned": "esta conta está banida",
     "rsm.report_err_full": "o servidor está cheio. Tente mais tarde",
-    "rsm.report_err_refused": "o servidor o recusou"
+    "rsm.report_err_refused": "o servidor o recusou",
+    "rsm.report_err_account": "seus relatórios já ocupam seus 100 MB no servidor"
   },
   "ko": {
     "rsm.page": "매니저",
@@ -3259,7 +3274,8 @@
     "rsm.report_err_steam": "Steam 인증 실패. 확인을 눌러 재시도",
     "rsm.report_err_banned": "이 계정은 차단되었습니다",
     "rsm.report_err_full": "서버가 가득 찼습니다. 나중에 다시 시도하세요",
-    "rsm.report_err_refused": "서버가 거부했습니다"
+    "rsm.report_err_refused": "서버가 거부했습니다",
+    "rsm.report_err_account": "신고가 이미 서버의 100 MB 한도에 도달했습니다"
   },
   "zh-Hant": {
     "rsm.page": "管理",
@@ -3468,7 +3484,8 @@
     "rsm.report_err_steam": "Steam 無法驗證你。確認以重試",
     "rsm.report_err_banned": "此帳號已被封鎖",
     "rsm.report_err_full": "伺服器已滿。請稍後再試",
-    "rsm.report_err_refused": "伺服器已拒絕"
+    "rsm.report_err_refused": "伺服器已拒絕",
+    "rsm.report_err_account": "你的回報已占滿伺服器上的 100 MB"
   },
   "ar": {
     "rsm.page": "المدير",
@@ -3677,6 +3694,7 @@
     "rsm.report_err_steam": "تعذر تحقق Steam منك. أكد للمحاولة مجددًا",
     "rsm.report_err_banned": "هذا الحساب محظور",
     "rsm.report_err_full": "الخادم ممتلئ. حاول لاحقًا",
-    "rsm.report_err_refused": "رفضه الخادم"
+    "rsm.report_err_refused": "رفضه الخادم",
+    "rsm.report_err_account": "بلاغاتك تشغل بالفعل 100 ميغابايت على الخادم"
   }
 }
