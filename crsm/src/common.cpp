@@ -28,7 +28,7 @@
 namespace cmn {
 namespace {
 
-constexpr const char* kVersion = "2.2.7";              // 2.2.6: drill details dialog (F / pad A on the Drill row), Markdown descriptions, needs Native Core 0.9.5 (on_confirm); 2.2.5: "loadout" texts renamed "drill", downloaded Test drills recognised; 2.2.4: descriptions shown in full (Manager help line follows the spin, Community dialog area grown, Like / Sort on the guide row); 2.2.3: the first Community list of a session links the Steam account; 2.2.2: a pad's L1 / R1 / Y / X do what A / E / T / R do in the Community dialog, with the pad's glyphs when the game's guide shows a pad's, and the dialog built before its window opens (a slow list answer left nothing open); 2.2.1: lighter game-thread work (status, switch files, training entry); 2.2.0: Arjun, packs carry the training setup, pack descriptions; 2.1.3: the UI claimed at the first frame without a CRSM Lua; 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
+constexpr const char* kVersion = "2.2.8";              // 2.2.8: Report a bug on Fighter Settings (R / pad X); 2.2.6: drill details dialog (F / pad A on the Drill row), Markdown descriptions, needs Native Core 0.9.5 (on_confirm); 2.2.5: "loadout" texts renamed "drill", downloaded Test drills recognised; 2.2.4: descriptions shown in full (Manager help line follows the spin, Community dialog area grown, Like / Sort on the guide row); 2.2.3: the first Community list of a session links the Steam account; 2.2.2: a pad's L1 / R1 / Y / X do what A / E / T / R do in the Community dialog, with the pad's glyphs when the game's guide shows a pad's, and the dialog built before its window opens (a slow list answer left nothing open); 2.2.1: lighter game-thread work (status, switch files, training entry); 2.2.0: Arjun, packs carry the training setup, pack descriptions; 2.1.3: the UI claimed at the first frame without a CRSM Lua; 2.1.2: background threads start after the first frames; 2.1.1: a missing settings.json no longer leaves the mod inert, "Verifying with Steam..." and clear wait messages instead of "busy", source in SF6-ModSuite crsm/; 2.1.0: Community writes with a Steam-verified identity
 constexpr const char* kClientId = "SF6_CRSMNative";
 // The game's working directory is the game folder (convention of the other native mods).
 constexpr const char* kDataDir = "reframework/data/SF6_CRSMNative_data";
@@ -502,8 +502,14 @@ constexpr uint64_t kWriterAfterFrames = 300;
 std::atomic<bool> g_writer_started{false};
 std::atomic<uint64_t> g_present_count{0};
 void start_writer() { if (!g_writer_started.exchange(true)) bgwriter::start(); }
-void on_present_cb() { if (g_present_count.fetch_add(1, std::memory_order_relaxed) + 1 == kWriterAfterFrames) start_writer(); }
+std::atomic<void (*)()> g_present_fn{nullptr};
+void on_present_cb() {
+    if (g_present_count.fetch_add(1, std::memory_order_relaxed) + 1 == kWriterAfterFrames) start_writer();
+    if (void (*fn)() = g_present_fn.load(std::memory_order_relaxed)) fn();
+}
 }  // namespace
+
+void set_present_fn(void (*fn)()) { g_present_fn.store(fn, std::memory_order_relaxed); }
 
 bool init() {
     g_started = now_text();

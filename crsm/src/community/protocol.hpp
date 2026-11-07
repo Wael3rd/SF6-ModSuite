@@ -10,6 +10,11 @@
 //   delete    { cmd, id, cfn }                                    DELETE /api/delete/<id>    no body
 //   share     { cmd, char, name, cfn, player, description, file } POST   /api/share          { char, name, description, file, cfn? }
 //   ticket    { cmd, ticket, cfn }                                POST   /auth/steam/ticket  { ticket, cfn?, client_version }
+//   report    { cmd, costume_key, text, character, fighter_id, outfit, outfit_row, costume_no, colour, versions, logs, record, mods, notes,
+//               image }                                            POST   /api/report         the same members (report/report_logic.hpp); no identity:
+//                                                                  the Worker takes the account from the Bearer token, 60 s for its upload
+//   report_get    { cmd, costume_key }                            GET    /api/report?costume_key=   the caller's own report: status and text
+//   report_status { cmd, costume_key, action }                    POST   /api/report/status  { costume_key, action: confirm }
 // (page / per_page / value may be numbers or strings; the bridge read them as strings.) The headers (x-api-key,
 // x-client-version, Authorization) are auth::request_headers'.
 #pragma once
@@ -22,6 +27,8 @@
 namespace community {
 
 using json = nlohmann::json;
+
+constexpr int kReportTimeoutMs = 60000;   // a bug report's upload: up to a megabyte and more on a player's upstream
 
 struct Config {
     std::string api_base;   // "https://<api_base from config.json>" (no trailing slash is added or removed)
@@ -36,6 +43,7 @@ struct Request {
     std::string url;
     std::string body;       // empty for GET
     bool has_body = false;
+    int timeout_ms = 0;     // the whole request's limit; 0 = the usual 15 s (kMaxTimeMs). A bug report's picture may need more.
 };
 
 // The escape of the bridge: A-Z a-z 0-9 - _ . ~ stay, every other byte becomes %XX (upper case)

@@ -93,6 +93,7 @@ private:
     std::deque<Done> done_;
     std::thread th_;
     std::atomic<bool> stop_{false};
+    std::atomic<int> limit_ms_{kMaxTimeMs};   // the request in flight's limit (Request::timeout_ms)
     std::atomic<bool> started_{false};
     std::atomic<int64_t> running_since_ms_{0};
     std::atomic<uint64_t> jobs_done_{0};

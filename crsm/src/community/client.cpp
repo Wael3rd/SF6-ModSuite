@@ -35,7 +35,7 @@ bool Client::busy() const {
     return in_flight_;
 }
 
-bool Client::send(json cmd, Callback cb) {
+bool Client::send(json cmd, Callback cb, int timeout_ticks) {
     Worker::Job job;
     {
         std::lock_guard<std::mutex> lk(mx_);
@@ -44,6 +44,7 @@ bool Client::send(json cmd, Callback cb) {
             announced_ = false;
             pending_.id = next_id_++;
             pending_.cb = cb;
+            pending_.limit = timeout_ticks;
             in_flight_ = true;
             ++counters_.sent;
             job.id = pending_.id;
@@ -102,7 +103,7 @@ void Client::poll() {
             ++counters_.answered;
             if (!ok) ++counters_.failures;
             deliver = true;
-        } else if (pending_.ticks > kTimeoutTicks) {
+        } else if (pending_.ticks > pending_.limit) {
             cb = std::move(pending_.cb);
             ok = false;
             data = error_data("timeout");

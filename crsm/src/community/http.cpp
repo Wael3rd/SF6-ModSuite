@@ -129,7 +129,8 @@ HttpResult http_perform(const Request& rq, const std::string& api_key, CancelTok
     Handle session(WinHttpOpen(L"SF6_CRSMNative (WinHTTP)", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session) session.h = WinHttpOpen(L"SF6_CRSMNative (WinHTTP)", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) return failure(GetLastError(), "open");
-    WinHttpSetTimeouts(session.h, kMaxTimeMs, kMaxTimeMs, kMaxTimeMs, kMaxTimeMs);
+    const int limit = rq.timeout_ms > 0 ? rq.timeout_ms : kMaxTimeMs;
+    WinHttpSetTimeouts(session.h, limit, limit, limit, limit);
 
     Handle conn(WinHttpConnect(session.h, host.c_str(), uc.nPort, 0));
     if (!conn) return failure(GetLastError(), "connect");
@@ -207,7 +208,7 @@ bool Worker::take(Done* out) {
 
 void Worker::tick() {
     const int64_t since = running_since_ms_.load();
-    if (since == 0 || now_ms() - since <= kMaxTimeMs) return;
+    if (since == 0 || now_ms() - since <= limit_ms_.load()) return;
     std::lock_guard<std::mutex> lk(token_mx_);
     if (token_) token_->abort();
 }
@@ -341,6 +342,7 @@ Worker::Done Worker::run_job(const Job& j) {
 HttpResult Worker::perform(const Request& rq, const Config& cfg, const std::string& bearer) {
     CancelToken token;
     { std::lock_guard<std::mutex> lk(token_mx_); token_ = &token; }
+    limit_ms_.store(rq.timeout_ms > 0 ? rq.timeout_ms : kMaxTimeMs);
     running_since_ms_.store(now_ms());
     HttpResult hr = http_perform(rq, cfg.api_key, &token, bearer);
     running_since_ms_.store(0);

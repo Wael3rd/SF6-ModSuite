@@ -47,7 +47,7 @@ CursorAnswer record_cursor(int cur, int nxt, int dir, int win, bool outside) {
             a.replace = true; a.index = kFirstRow;
             return a;
         }
-        if (cur > kLastRow && dir < 0) {
+        if (cur > kLastRow && dir < 0 && nxt <= kLastRow) {     // (only the row just under the block: the second row under it goes to the first, as the game says)
             a.move = true; a.win = kMaxWin;                     // apply_shift(param, SLOT_TOTAL - WINDOW - win)
             a.replace = true; a.index = kLastRow;
         }
@@ -67,9 +67,11 @@ CursorAnswer replay_cursor(int cur, int nxt, int dir, int rwin, bool outside, co
     CursorAnswer a;
     if (nxt == cur) return a;
     if (outside) {                                              // from just outside the block: the first / last valid slot
-        const bool wrap_top = cur > kLastRow && dir > 0 && nxt >= kFirstRow && nxt <= kLastRow;   // Down from the last spin
+        const bool nxt_inside = nxt >= kFirstRow && nxt <= kLastRow;
+        const bool wrap_top = cur > kLastRow && dir > 0 && nxt_inside;   // Down from the last spin
         if (wrap_top) dir = 1;
-        else if (!((cur < kFirstRow && dir > 0) || (cur > kLastRow && dir < 0))) return a;
+        // (a second row under the block goes to the first, as the game says. From the first, the game may answer the header over the block, its 8 rows empty: still up into the 30 slots)
+        else if (!((cur < kFirstRow && dir > 0) || (cur > kLastRow && dir < 0 && nxt <= kLastRow))) return a;
         if (wrap_top) cur = kFirstRow - 1;                      // searched from the top of the whole list
     } else {
         if (nxt >= kFirstRow && nxt <= kLastRow) return a;      // staying inside the block

@@ -1,5 +1,71 @@
 # Changelog
 
+## 1.24.0 (2026-11-07) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.20.1 | Opponent Outfit Settings' summary lists every outfit |
+| SF6 Color Mod | 0.24.3 | Opponent Outfit Settings shows each RW / MC colour |
+| SF6 Native Core | 0.9.7 | the title line's position and size in a file |
+| SF6 Recording Manager | 2.2.8 | Report a bug; Record and Replay pages' cursor |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.20.0, SF6 Color Mod 0.24.2, SF6 Native Core 0.9.6 and SF6
+Recording Manager 2.2.7, then install the new ones. Profile Mod 1.0.0 is the same file as in 1.23.0: keep it. With the all-in-one
+package, replace 1.23.0 with 1.24.0. The costume pak is not rebuilt at the first launch ("Up to date").
+
+### SF6 Recording Manager 2.2.8
+- New: **Report a bug.** On Battle Settings > Character, on the Character tab, R (pad X) opens a menu to send the mod's author a
+  report on the outfit you are on. No report leaves until you choose Send; Back sends nothing and keeps nothing. Sent with it, and
+  said so in the menu when the cursor is on Send: a picture of the game taken at the press (only the game's picture, 1080p at most),
+  your text, the character, outfit and colour, the outfit's record, the mods' versions and list, the Slots Loader's and its plugin's
+  logs (cleaned of your Windows user name, user folder paths and platform IDs, capped), and your Steam ID, which the server takes
+  from your Steam verification. Opening the menu asks the server for this outfit's status, with its key and your token only.
+- One report per account per outfit: sending again replaces it, and the menu warns you. Reports are kept 90 days.
+- Its STATUS row follows the report: OK, BUG, WAITING FOR FIX, TO TEST. When the author marks it fixed you see TO TEST; choose OK,
+  then MARK AS FIXED, to confirm it, or BUG if it is still broken.
+- It sleeps until this screen opens: no check runs in menus, Training or fights, apart from one variable read per displayed frame
+  and at some updates of option windows. It works wherever the screen is opened from, with or without a visit to Training.
+- Fix: on the Record and Replay pages, Up from the second row under the slots (Countdown, Repeat) goes to the first one, instead of
+  jumping to the last slot.
+
+### SF6 Color Mod 0.24.3
+- Fix: Opponent Outfit Settings showed the same two squares on every RW and MC cell, and colour 02 on the preview. Each cell now shows
+  its own squares and the preview follows it. It never worked on this page.
+
+### SF6 Slots Loader 1.20.1
+- New: Opponent Outfit Settings' summary lists every outfit, extra outfits included, under their real names. A long name slides and
+  its count stays still; past the room there is, the list follows the Costume row and says how many are above and below.
+
+### SF6 Native Core 0.9.7
+- New: the OVERDRIVE EDITION line's position and size are in `reframework/data/sf6core/title.ini`, made at the first launch and read
+  when the game starts: `pos_x` and `pos_y`, a share of the screen from 0 to 1, and `font_size`. Delete the file to get the defaults back.
+
+### Known issues
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet.
+- Manager mode has not been checked in an online match. Its owned-outfit opt-out was checked by automated tests only.
+- A very long first rebuild can leave the game with no window. In one test a 26-minute rebuild, on a PC busy with other
+  work, left the game stuck at start-up; closing it and launching again worked, and the pak was complete. The cause is not
+  known. Rebuilds of a few minutes were fine.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+- All languages except French are machine translations, not yet reviewed by native speakers.
+- An outfit whose mod gives no usable name still shows the loader's "Outfit I", in English in every language.
+- Two outfits of one fighter with the same mod name look the same on the Costume row. Their numbers differ, so choices
+  do not mix.
+- Opponent Outfit Settings: ticking an RW or MC colour also ticks colour 02 and the other RW / MC cells of that outfit, and an
+  opponent then wears colour 02, not the one ticked. The colours shown are right; the real choice comes in a later release.
+- An outfit named after its archive keeps the file's extension in its name (".rar").
+- Report a bug is on Battle Settings > Character only, and needs the Recording Manager.
+- The Record and Replay pages' fix was checked in game with the keyboard, not with a pad.
+- Arabic: a long line of Replays > Settings' summary slides as a whole, and scrolling names have not been checked in game.
+- Real outfit names have not been checked in a real online match. They are local text: outfits still travel as numbers.
+- With the full profile, the limited one shows briefly first.
+- Profile Mod has not been checked in an online match.
+
 ## 1.23.0 (2026-11-07) — SF6 Mod Suite
 
 | Package | Version | |

@@ -120,6 +120,44 @@ void test_record_cursor() {
     check(a.move && a.win == 0 && a.replace && a.index == 2, "down from Countdown wraps to slot 1");
     a = lg::record_cursor(10, 11, 1, 4, true);
     check(!a.move && !a.replace, "Trigger -> Countdown: the game's answer");
+    // as the game numbers them, read in game 07/11: Trigger 11, Countdown 12, the row between them and the slots not focusable
+    a = lg::record_cursor(12, 11, -1, 22, true);
+    check(!a.move && !a.replace, "up from row 12: the game's answer, row 11");
+    a = lg::record_cursor(11, 9, -1, 0, true);
+    check(a.move && a.win == 22 && a.replace && a.index == 9, "up from row 11: slot 30");
+    a = lg::record_cursor(12, 2, 1, 22, true);
+    check(a.move && a.win == 0 && a.replace && a.index == 2, "down from row 12: slot 1");
+    // Wael, 07/11: up from Countdown jumped to slot 30 over Recording Trigger
+    for (const int win : { 0, 7, 22 }) {
+        a = lg::record_cursor(11, 10, -1, win, true);
+        check(!a.move && !a.replace, "up from Countdown: the game's answer, Recording Trigger, at any window");
+    }
+    {
+        RecSim r;
+        r.cur = 9; r.win = 22;
+        r.press(1);
+        check(r.cur == 10, "slot 30 down: Recording Trigger");
+        r.press(1);
+        check(r.cur == 11, "down: Countdown");
+        r.press(-1);
+        check(r.cur == 10 && r.win == 22, "up: Recording Trigger, not slot 30");
+        r.press(-1);
+        check(r.cur == 9 && r.win == 22 && r.slot() == 30, "up: slot 30");
+        r.cur = 11; r.win = 7;
+        r.press(-1);
+        check(r.cur == 10 && r.win == 7, "from a window in the middle too: Recording Trigger, the window kept");
+        r.press(-1);
+        check(r.cur == 9 && r.win == 22 && r.slot() == 30, "then slot 30, as before");
+        r.cur = 11; r.win = 7;
+        r.press(1);
+        check(r.cur == 2 && r.win == 0 && r.slot() == 1, "the wrap, down from the last row: slot 1");
+        r.press(-1);
+        check(r.cur == 0, "up from slot 1 at the top: the strip");
+        r.press(-1);
+        check(r.cur == 11, "up from the strip: the last row");
+        r.press(-1);
+        check(r.cur == 10, "and up again: Recording Trigger");
+    }
     // whole walks
     RecSim s;
     std::vector<int> slots;
@@ -154,6 +192,7 @@ void test_record_cursor() {
 
 // ---- the Replay cursor ---------------------------------------------------------------------------------------------------
 void test_replay_cursor() {
+    const auto all_empty_first = [](int) { return true; };
     group("replay cursor");
     const std::set<int> valid = { 1, 5, 12, 30 };
     auto disabled = [&](int n) { return !valid.count(n); };
@@ -184,6 +223,18 @@ void test_replay_cursor() {
     // outside, moving away from the block (Replay Info -> Repeat Replay): the game's answer
     a = lg::replay_cursor(10, 11, 1, 0, true, disabled);
     check(!a.move && !a.replace, "Replay Info Display down: the game's answer");
+    // read in game 07/11: the window's 8 rows empty, the game answers the header (row 1) from row 11: the valid slots further on still come first
+    a = lg::replay_cursor(11, 1, -1, 0, true, disabled);
+    check(a.move && a.replace && a.index >= lg::kFirstRow && a.index <= lg::kLastRow, "up from row 11 over an empty window: the last valid slot");
+    a = lg::replay_cursor(11, 1, -1, 0, true, all_empty_first);
+    check(!a.move && !a.replace, "nothing valid at all: the game's answer");
+    a = lg::replay_cursor(12, 11, -1, 22, true, disabled);
+    check(!a.move && !a.replace, "up from row 12: the game's answer, row 11");
+    // Wael, 07/11: up from the second row under the block jumped to the last slot
+    for (const int cur : { 11, 12 }) for (const int rwin : { 0, 7, 22 }) {
+        a = lg::replay_cursor(cur, cur - 1, -1, rwin, true, disabled);
+        check(!a.move && !a.replace, "up inside the rows under the block: the game's answer, at any window");
+    }
     // everything empty: no jump at all
     auto all_empty = [](int) { return true; };
     a = lg::replay_cursor(0, 10, 1, 0, true, all_empty);

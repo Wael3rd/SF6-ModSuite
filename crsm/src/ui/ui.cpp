@@ -204,6 +204,7 @@ std::string status() {
         s += "; dialogs: " + dlg::status();
         s += "; community: " + com::status();
         s += "; drill details: " + details::status();
+        s += "; bug report: " + bug_report::status();
         s += "; ticker: " + ticker::status();
         s += "; " + ui::lang::status();
     }
@@ -220,6 +221,10 @@ bool needs_pause() {
 }
 
 bool active() { return g_claimed.load(std::memory_order_relaxed) && cmn::owns(F::Ui); }
+bool claimed() { return g_claimed.load(std::memory_order_relaxed); }
+namespace { std::atomic<bool> g_report_dialogs{false}; }
+void report_needs_dialogs(bool on) { g_report_dialogs.store(on, std::memory_order_relaxed); }
+bool dialogs_on() { return (g_claimed.load(std::memory_order_relaxed) || g_report_dialogs.load(std::memory_order_relaxed)) && cmn::owns(F::Ui); }
 bool standalone() { return g_by_dll.load(std::memory_order_relaxed) && active(); }
 std::recursive_mutex& lock() { return g_lock; }
 bool training() { return g_training.load(); }
@@ -243,6 +248,7 @@ void fault(const char* where) {
 void init() {
     cmn::set_implemented(F::Ui);
     cmn::on_hand_back(F::Ui, hand_back);
+    cmn::on_hand_back(F::Ui, [] { bug_report::hand_back(); });
     cmn::add_status("ui", status);
     cmn::add_status("standalone", standalone_status);
     cmn::bridge_fn("ui_claim", lua_ui_claim);
@@ -252,6 +258,7 @@ void init() {
 void start() {
     if (!cmn::owns(F::Ui)) return;
     ui::lang::load();                            // locale.json, read once here (never from a hook)
+    try { bug_report::start(); } catch (...) {}
     try { dump::tab_methods(); } catch (...) {}  // the game's tab methods (off by default: tab_dump_on.txt)
     std::string note;
     g_sa_mode = standalone::parse_mode(cmn::setting_standalone(), &note);
@@ -274,6 +281,7 @@ void hook_specs(std::vector<mech::hooks::Spec>& out) {
     windows::specs(out);
     reversal_ui::specs(out);
     dlg::specs(out);
+    bug_report::specs(out);
     ticker::specs(out);
     com::specs(out);
     details::specs(out);
