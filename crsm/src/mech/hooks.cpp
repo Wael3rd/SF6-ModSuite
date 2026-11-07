@@ -98,7 +98,6 @@ bool fold_scan_seh(std::vector<Target>* ts) {
 
 // ---- the code scan's cache (codecheck_cache.hpp): the scan only changes when the game does ---------------------------------
 // REFramework logs an "Encoded offset is 0" error per method without a native function (~346k lines, 85 MB) at every scan.
-constexpr const wchar_t* kCacheFile = L"reframework/data/SF6_CRSMNative_data/codecheck.txt";
 
 long long rva_of(uintptr_t a) {
     static const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
@@ -151,14 +150,14 @@ std::vector<codecache::Entry> cache_entries(const std::vector<Target>& ts) {
 }
 
 bool cache_load(std::string& key, std::vector<codecache::Entry>& es) {   // false: no file, or not a complete file of this format
-    std::ifstream f(kCacheFile, std::ios::binary);
+    std::ifstream f(cmn::code_cache_file(), std::ios::binary);
     if (!f) return false;
     const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     return codecache::parse(text, key, es);
 }
 
 bool cache_store(const std::string& text) {                              // temp file + replace: never a half file
-    const std::wstring path = kCacheFile, tmp = path + L".tmp";
+    const std::wstring path = cmn::code_cache_file(), tmp = path + L".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) return false;

@@ -24,6 +24,9 @@ uint32_t frame_thread();         // id of the thread that ran the last frame cal
 const SF6CoreAPI* core();        // nullptr when the core is absent
 SF6CoreClient* client();
 const char* version();
+// This DLL's files, for the sources it shares with report_mod (ui/lang.cpp, mech/hooks.cpp)
+const char* locale_file();
+const wchar_t* code_cache_file();
 
 // Logging: REFramework log (and the journal). "[CRSMNative]" prefix: the Lua side keeps "[CRSM]".
 void log_info(const char* fmt, ...);
@@ -45,9 +48,6 @@ int64_t wheel_total();
 // The mouse cursor in the game window's client area (GetCursorPos + ScreenToClient, pixels) and that area's size
 // (GetClientRect), the window being the one whose messages CRSM sees (on_message); false while unknown or empty
 bool cursor_client(int* x, int* y, int* w, int* h);
-// Called once at the next Present (the render thread), then it clears itself by set_present_fn(nullptr). One callback of REFramework's for the whole DLL:
-// there is no taking one back, and null here costs one atomic load per Present.
-void set_present_fn(void (*fn)());
 // Plain text file (append only, off the game thread), for example the probes log.
 void append_file(const char* path, std::string text);
 

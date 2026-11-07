@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "report/gather.hpp"
+#include "report/image_scan.hpp"
 #include "report/report_logic.hpp"
 #include "report/pixels.hpp"
 #include "ui/logic.hpp"
@@ -149,21 +150,33 @@ static std::string slurp(const fs::path& p) {
     std::ifstream f(p, std::ios::binary);
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
-// "Report a bug" before any Training and from Training's Multi Menu: both were lost in game, 07/11, by gates of the UI's frame
-static void test_sources(const fs::path& crsm) {
-    const std::string report = slurp(crsm / "src/ui/bug_report.cpp"), ui = slurp(crsm / "src/ui/ui.cpp"), dialogs = slurp(crsm / "src/ui/dialogs.cpp"), windows = slurp(crsm / "src/ui/windows.cpp");
-    check(!report.empty() && !ui.empty() && !dialogs.empty() && !windows.empty(), "the sources are there");
-    check(!has(ui, "bug_report::frame"), "not in the UI's frame: it returns before the claim");
-    check(!has(report, "ui::active()") && !has(report, "ui::training()") && !has(report, "ui::paused()") && !has(report, "mech::state()"), "no gate on the claim, Training or the pause");
+// The rules that live in the sources: the DLL on its own, the Recording Manager without a report (repo = the repository's root)
+static void test_sources(const fs::path& repo) {
+    const fs::path crsm = repo / "crsm", mod = repo / "report_mod";
+    const std::string report = slurp(mod / "src/bug_report.cpp"), host = slurp(mod / "src/host.cpp"), dialogs = slurp(crsm / "src/ui/dialogs.cpp"), windows = slurp(crsm / "src/ui/windows.cpp");
+    check(!report.empty() && !host.empty() && !dialogs.empty() && !windows.empty(), "the sources are there");
+    // the Recording Manager has no report, and nothing it holds could be taken for one (host.cpp looks for this literal in a running one)
+    for (const auto& e : fs::recursive_directory_iterator(crsm / "src")) {
+        if (!e.is_regular_file()) continue;
+        const std::string t = slurp(e.path());
+        check(!has(t, "SF6_CRSMNative_BugReport") && !has(t, "bug_report::") && !has(t, "report_needs_dialogs"), "no report in " + e.path().filename().string());
+    }
+    check(!fs::exists(crsm / "src/report/report_logic.cpp") && !fs::exists(crsm / "src/report/gather.cpp") && !fs::exists(crsm / "src/ui/bug_report.cpp"), "the report's sources moved, not copied");
+    check(has(host, "SF6_CRSMNative_BugReport") && has(host, "crsm_has_its_own_report()") && has(host, "report_mod: off (the Recording Manager running beside it"), "a running 2.2.8 keeps the key, and the log says so");
+    check(has(windows, "com::open() || fighter_settings_up() || (core && SF6CORE_HAS(core, opt_window_open)"), "the Recording Manager's R and T: on Fighter Settings and under any option window, nothing");
+    check(has(windows, "\"app.UIFlowMatchingFighterSetting.Main\", \"OnUpdate\", fighter_pre, nullptr"), "it knows that screen by its own update");
+    // asleep until its screen runs, whoever is installed
+    check(!has(report, "ui::active()") && !has(report, "ui::training()") && !has(report, "ui::claimed()") && !has(report, "mech::state()"), "no gate on Training or the pause");
     check(has(report, "set_frame_callback(g_opt_client, on_core_frame, nullptr)") && has(report, "set_frame_callback(g_opt_client, nullptr, nullptr)"), "its own frame callback, on and off");
-    check(has(report, "dlg::frame(false)") && has(report, "ui::lang::frame("), "the text dialog and the language run for it until the claim");
-    check(!has(report, "add_hook") && !has(report, "on_present("), "no hook of its own beside the screen's: nothing per frame anywhere asleep");
+    check(!has(host, "set_frame_callback(") && !has(host, "on_pre_application_entry") && !has(report, "on_pre_application_entry"), "no frame or update callback at the start: nothing per frame while it sleeps");
+    check(!has(report, "add_hook") && !has(report, "on_present("), "no hook but through the code check");
     check(has(report, "app.UIFlowMatchingFighterSetting.Main\", \"OnUpdate"), "woken by the screen's own update, through the code check (mech::hooks)");
-    check(!has(report, "OnEnter") || !has(report, "\"OnEnter"), "no state OnEnter");
+    check(!has(report, "\"OnEnter") && !has(report, "\"OnExit") && !has(host, "\"OnEnter") && !has(host, "\"OnExit"), "no state OnEnter or OnExit");
+    check(has(report, "app.UIFlowOptionBGDialog.Main\", \"OnUpdate") && has(report, "make_copies_seh();"), "copies only in the option dialog's own update (R19)");
+    check(has(report, "ui_find_child(row, name, 0)"), "copies found again by name (R35)");
     check(has(dialogs, "ui::dialogs_on()") && has(dialogs, "bool text_available()"), "the text dialog's hooks and requests follow dialogs_on");
-    check(has(windows, "com::open() || bug_report::awake()"), "under the screen in Training, the Record page's R and T act on nothing");
     // No Steam ID on the game side: the server takes it from the token, the menu does not show it
-    const std::string logic_src = slurp(crsm / "src/report/report_logic.cpp"), gather_src = slurp(crsm / "src/report/gather.cpp"), snap_src = slurp(crsm / "src/report/gather.hpp");
+    const std::string logic_src = slurp(mod / "src/report/report_logic.cpp"), gather_src = slurp(mod / "src/report/gather.cpp"), snap_src = slurp(mod / "src/report/gather.hpp");
     check(!has(report, "steam_id") && !has(logic_src, "steam_id") && !has(gather_src, "steam_id") && !has(snap_src, "steam_id"), "no Steam ID read, kept or sent by the client");
     const size_t mk = logic_src.find("make_command");
     const size_t mk_end = mk == std::string::npos ? mk : logic_src.find("\n}", mk);
@@ -175,12 +188,10 @@ static void test_sources(const fs::path& crsm) {
     check(has(report, "d.desc = \"\";") && has(report, "cur == g_summary") && has(report, "g_wrote == g_summary && cur == g_read_back"), "R7: the long text has one writer, the whole text compared first");
     check(has(report, "set_by_name(gmt, \"set_AutoRegionFit\", gx::I(0))") && has(report, "set_by_name(gmt, \"set_PageAlignment\", gx::I(0))"), "under the rows: the fit off, aligned from the top");
     check(!has(report, "rows_behind"), "the screen's rows are left alone (Wael: only the text's place mattered)");
-    const std::string texts = slurp(crsm / "data/SF6_CRSM_data/locale.json"), readme = slurp(crsm / "README.md");
+    const std::string texts = slurp(mod / "data/SF6_ReportMod_data/locale.json"), readme = slurp(mod / "README.md"), crsm_texts = slurp(crsm / "data/SF6_CRSM_data/locale.json");
     check(!has(report, "ithdraw") && !has(logic_src, "ithdraw") && !has(texts, "report_row_withdraw") && !has(texts, "report_sum_withdraw") && !has(readme, "ithdraw"), "no withdraw left");
-    check(has(report, "ui_clone_control") && has(slurp(crsm / "src/ui/community_dialog.cpp"), "bug_report::dialog_update()"), "copies only inside the dialog's own update (R19)");
+    check(has(texts, "rsm.report_title") && has(texts, "rsm.press_enter") && has(texts, "fighter.1") && !has(crsm_texts, "rsm.report_"), "the report's texts in the DLL's own file, and only there");
     check(has(report, "kMsgName") && has(report, "slots::scroll") && has(report, "set_ScissorRect(via.Rect)"), "the message slides as a long name does");
-    check(has(report, "set_by_name(gmt, \"set_AutoWrap\", gx::B(false))") && has(report, "set_by_name(gmt, \"set_ForceAutoWrap\", gx::B(false))") && !has(report, "set_by_name(gmt, \"set_AutoWrap\", gx::B(true))"), "the game never wraps the text under the rows: it cannot grow past its place");
-    check(has(report, "get_DisplaySize") && has(report, "void measure_summary(MO* gmt)") && has(report, "kTextPx * g_wrap_scale"), "the game's own measure tightens the lines");
     {
         const size_t body = report.find("void paste_body() {"), send = report.find("SendInput(n, in", body), check_at = report.find("stop = paste_stop_now();                 // before every batch", body);
         const size_t tick_at = report.find("void paste_tick() {");
@@ -189,7 +200,36 @@ static void test_sources(const fs::path& crsm) {
         check(has(report, "GetWindowThreadProcessId(front, &pid) && pid == GetCurrentProcessId()"), "the window in front is this process's");
     }
     check(has(report, "g_paste_on.store(true)") && has(report, "if (g_naming) { paste_tick();") && !has(report, "paste_tick();\n    dock_all"), "Ctrl+V only while our text dialog is up");
+    check(has(report, "set_by_name(gmt, \"set_AutoWrap\", gx::B(false))") && has(report, "set_by_name(gmt, \"set_ForceAutoWrap\", gx::B(false))") && !has(report, "set_by_name(gmt, \"set_AutoWrap\", gx::B(true))"), "the game never wraps the text under the rows: it cannot grow past its place");
+    check(has(report, "get_DisplaySize") && has(report, "void measure_summary(MO* gmt)") && has(report, "kTextPx * g_wrap_scale"), "the game's own measure tightens the lines");
     check(has(report, "kDockX = -430.0f") && has(report, "kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 }"), "on the side, as the Color Mod's Edit Drive Colors");
+    // the DLL ships no key, its token is the Community's
+    check(has(host, "kTokenPath = \"reframework/data/SF6_Community_data/identity.json\"") && has(host, "g_com.configure(kConfigPath, \"\", kTokenPath)"), "one token file for the two DLLs");
+    check(!has(host, "api_key"), "no key in the DLL's own code");
+}
+
+// A Recording Manager with its own report, beside the DLL (host.cpp). With --old-crsm and --new-crsm: the real files, mapped as images.
+static void test_image_scan(const std::string& old_dll, const std::string& new_dll) {
+    const char* literal = "SF6_CRSMNative_BugReport";
+    const size_t n = strlen(literal);
+    void* self = GetModuleHandleW(nullptr);
+    check(rp::image_holds(self, literal, n), "a literal of the module is found");
+    std::string none = "SF6_NotInThis";          // (made at run time: not in any read-only data)
+    none += "Module_" + std::to_string((unsigned long long)GetCurrentProcessId() * 7919ULL + 13);
+    check(!rp::image_holds(self, none.c_str(), none.size()), "a text it does not hold is not");
+    check(rp::image_holds(nullptr, literal, n), "unreadable: yes, so no second entry");
+    auto mapped = [](const std::string& path) -> HMODULE { return LoadLibraryExA(path.c_str(), nullptr, LOAD_LIBRARY_AS_IMAGE_RESOURCE); };
+    auto base = [](HMODULE h) { return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(h) & ~(uintptr_t)3); };
+    if (!old_dll.empty()) {
+        HMODULE h = mapped(old_dll);
+        check(h != nullptr, "the published 2.2.8 maps");
+        if (h) { check(rp::image_holds(base(h), literal, n), "the published 2.2.8 is seen"); FreeLibrary(h); }
+    }
+    if (!new_dll.empty()) {
+        HMODULE h = mapped(new_dll);
+        check(h != nullptr, "this build's Recording Manager maps");
+        if (h) { check(!rp::image_holds(base(h), literal, n), "this build's Recording Manager is not"); FreeLibrary(h); }
+    }
 }
 
 static void test_screen() {
@@ -491,8 +531,8 @@ static void test_summary() {
 // Every language's real texts with the longest values, wrapped by the UI's own measure: the list leaves room for the description, no line past the width, the rows and STATUS's
 // labels fit their places, the messages against the real room on the guide's line. A wide character counted as it draws.
 static double drawn_em(const std::string& s) { return ui::logic::text_em(s) + (rp::kWideDrawn - 1.0) * (double)rp::wide_chars(s); }
-static void test_summary_fits(const fs::path& crsm) {
-    const json all = json::parse(slurp(crsm / "data/SF6_CRSM_data/locale.json"), nullptr, false);
+static void test_summary_fits(const fs::path& repo) {
+    const json all = json::parse(slurp(repo / "report_mod/data/SF6_ReportMod_data/locale.json"), nullptr, false);
     check(all.is_object(), "the texts");
     if (!all.is_object()) return;
     const rp::EmOf em = [](const std::string& ch) { return ui::logic::text_em(ch); };
@@ -595,7 +635,7 @@ static void test_gather(const fs::path& work) {
     scrub.game_root = "C:\\Steam\\Street Fighter 6";
     rp::Snapshot snap;
     snap.fighter = 30; snap.character = "C. Viper"; snap.outfit_row = "Outfit I  <ICON KeyF>"; snap.colour_row = "Color 3";
-    snap.text = "the hair"; snap.crsm_version = "2.2.8"; snap.core_version = "0.9.6";
+    snap.text = "the hair"; snap.reporter_version = "1.0.0"; snap.core_version = "0.9.6";
     snap.jpeg = { 0xFF, 0xD8, 0xFF, 0xD9 };
 
     // nothing of the Slots Loader at all: the report still goes, saying so
@@ -606,7 +646,7 @@ static void test_gather(const fs::path& work) {
     const std::string notes = bare.notes.dump();
     check(has(notes, "outfits.json") && has(notes, "registry.json") && has(notes, "loader log") && has(notes, "plugin log"), "notes say what could not be read: " + notes);
     check(bare.jpeg.size() == 4 && !has(notes, "no picture"), "the picture is in");
-    check(bare.versions["recording_manager"] == "2.2.8" && bare.versions["native_core"] == "0.9.6", "versions");
+    check(bare.versions["report_mod"] == "1.0.0" && !bare.versions.contains("recording_manager") && bare.versions["native_core"] == "0.9.6", "versions");
 
     // a whole install
     put(root / "reframework/data/SF6_Costumes_Data/outfits.json", R"({"loader":"2026-11-07-x","outfits":[
@@ -614,6 +654,7 @@ static void test_gather(const fs::path& work) {
        {"fighter":30,"costume_no":6,"name":"Outfit II","based_on":0,"label":"Swimsuit","source":"C. Viper/Swimsuit 1.0.zip"}]})");
     put(root / "reframework/data/SF6_Costumes_Data/registry.json", R"({"slots":[{"mod_id":"402b1ac9c4dd7fb1","fighter":30,"original_costume_no":0,"new_costume_no":5,"scene_name":"esf030v05"}],"possession":[{"swatches":[[1,2]]}]})");
     put(root / "reframework/data/SF6_Costumes_Data/variants.json", R"({"contract":2,"runtime_options":"off"})");
+    put(root / "reframework/data/SF6_CRSMNative_data/status.json", R"({"version":"2.2.9"})");
     put(root / "reframework/data/SF6_ColorModNative_data/status.json", R"({"version":"0.24.1"})");
     put(root / "SF6_CostumeLoader.log", "started by C:\\Users\\Wael\\x\nsteam 76561198012345678\n=== at C:\\Steam\\Street Fighter 6\\reframework\n");
     std::string longlog;
@@ -689,20 +730,24 @@ static void test_gather(const fs::path& work) {
 }
 
 int main(int argc, char** argv) {
-    fs::path work = fs::temp_directory_path() / "report_test", crsm;
+    fs::path work = fs::temp_directory_path() / "report_test", repo;
+    std::string old_crsm, new_crsm;
     for (int i = 1; i + 1 < argc; ++i) {
         if (!strcmp(argv[i], "--work")) work = argv[i + 1];
-        else if (!strcmp(argv[i], "--repo")) crsm = argv[i + 1];
+        else if (!strcmp(argv[i], "--repo")) repo = argv[i + 1];
+        else if (!strcmp(argv[i], "--old-crsm")) old_crsm = argv[i + 1];
+        else if (!strcmp(argv[i], "--new-crsm")) new_crsm = argv[i + 1];
     }
     test_clean();
     test_caps();
     test_key();
     test_wake();
-    if (!crsm.empty()) test_sources(crsm);
+    if (!repo.empty()) test_sources(repo);
+    test_image_scan(old_crsm, new_crsm);
     test_screen();
     test_session();
     test_summary();
-    if (!crsm.empty()) test_summary_fits(crsm);
+    if (!repo.empty()) test_summary_fits(repo);
     test_pixels();
     test_gather(work);
     printf("report_test: %d checks, %d failed\n", g_checks, g_failed);

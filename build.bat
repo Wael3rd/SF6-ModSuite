@@ -6,6 +6,7 @@ rem Builds everything into build\
 rem   core\sf6core_native.dll           the shared core (core\build.bat)
 rem   colormod\SF6_ColorModNative.dll   the Color Mod (colormod\build.bat)
 rem   crsm\SF6_CRSMNative.dll           the SF6 Recording Manager (crsm\build.bat)
+rem   report_mod\report_mod.dll          Report a bug (report_mod\build.bat), in the Slots Loader's package
 rem   amd_ags_x64.dll                  costume slots + stage slots: the DLL the game loads
 rem   costumes_only\amd_ags_x64.dll    the costume loader alone (what the releases ship so far)
 rem   SF6_CostumeSlotsNative.dll       REFramework plugin used during online matches
@@ -13,7 +14,7 @@ rem   costume_loader.exe paktool.exe loadtest.exe    costume tools
 rem   SF6_SlotsClean.exe              removes the loader's runtime paks and state (shipped next to amd_ags_x64.dll)
 rem   stagepak.exe stagetest.exe textest.exe         stage tools
 rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first; "build.bat archive_deps" builds only them, when missing (the Color Mod needs them).
-rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm, profile.
+rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm, profile, report.
 rem Every compile runs on all cores (/MP). Build only what changed; the full build is for releases.
 
 rem Visual Studio or Build Tools with the C++ workload, wherever it is installed
@@ -37,6 +38,7 @@ if /i "%1"=="core" goto :only_core
 if /i "%1"=="colormod" goto :only_colormod
 if /i "%1"=="crsm" goto :only_crsm
 if /i "%1"=="profile" goto :only_profile
+if /i "%1"=="report" goto :only_report
 if /i "%1"=="plugin" goto :plugin
 
 rem ---------------------------------------------------------------------------------------------
@@ -128,10 +130,13 @@ if errorlevel 1 goto :failed
 echo === Profile Mod (profile_mod.dll) ===
 call profile_mod\build.bat
 if errorlevel 1 goto :failed
+echo === Report a bug (report_mod.dll) ===
+call report_mod\build.bat
+if errorlevel 1 goto :failed
 
 echo.
 echo All OK: build\amd_ags_x64.dll, build\costumes_only\amd_ags_x64.dll, build\SF6_CostumeSlotsNative.dll,
-echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll, build\crsm\SF6_CRSMNative.dll and the tools
+echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll, build\crsm\SF6_CRSMNative.dll, build\report_mod\report_mod.dll and the tools
 echo Replace the DLLs in the game folder only while the game is closed.
 exit /b 0
 
@@ -146,6 +151,9 @@ call crsm\build.bat
 exit /b %errorlevel%
 :only_profile
 call profile_mod\build.bat
+exit /b %errorlevel%
+:only_report
+call report_mod\build.bat
 exit /b %errorlevel%
 :done_one
 echo OK: %1 only

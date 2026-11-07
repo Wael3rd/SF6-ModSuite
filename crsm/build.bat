@@ -22,7 +22,7 @@ cd /d "%~dp0"
 if not exist ..\build\crsm mkdir ..\build\crsm
 set "MODEL="
 for %%f in (src\model\*.cpp src\game\*.cpp src\mech\*.cpp src\ui\*.cpp) do set "MODEL=!MODEL! %%f"
-for %%f in (src\community\*.cpp src\report\*.cpp) do set "MODEL=!MODEL! %%f"
+for %%f in (src\community\*.cpp) do set "MODEL=!MODEL! %%f"
 rem /external:I: the third-party headers are compiled at /W0 so that the 0-warning goal measures our own code
 cl /nologo /MP /std:c++20 /EHa /O2 /LD /utf-8 /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
    /external:I ..\core\include\sf6core /external:I ..\core\third_party\reframework\include /external:I ..\colormod\third_party /external:W0 ^

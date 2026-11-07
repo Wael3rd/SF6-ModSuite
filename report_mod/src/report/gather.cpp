@@ -112,9 +112,12 @@ std::string modinfo_line(const fs::path& p) {
 
 json versions_of(const Snapshot& s, const fs::path& root, const json& outfits, const json& variants) {
     json v = json::object();
-    v["recording_manager"] = s.crsm_version;
+    v["report_mod"] = s.reporter_version;
     v["native_core"] = s.core_version;
     bool ok = false;
+    const json rm = read_json(root / "reframework/data/SF6_CRSMNative_data/status.json", &ok);
+    if (ok && !str_of(rm, "version").empty()) v["recording_manager"] = str_of(rm, "version");
+    ok = false;
     const json cm = read_json(root / "reframework/data/SF6_ColorModNative_data/status.json", &ok);
     if (ok && !str_of(cm, "version").empty()) v["color_mod"] = str_of(cm, "version");
     if (!str_of(outfits, "loader").empty()) v["slots_loader_pak"] = str_of(outfits, "loader");
@@ -125,7 +128,7 @@ json versions_of(const Snapshot& s, const fs::path& root, const json& outfits, c
     const std::string mi = modinfo_line(root / "modinfo.ini");
     if (!mi.empty()) v["modinfo"] = mi;
     json files = json::object();
-    for (const char* rel : { "reframework/plugins/SF6_CRSMNative.dll", "reframework/plugins/sf6core_native.dll", "reframework/plugins/SF6_ColorModNative.dll",
+    for (const char* rel : { "reframework/plugins/report_mod.dll", "reframework/plugins/SF6_CRSMNative.dll", "reframework/plugins/sf6core_native.dll", "reframework/plugins/SF6_ColorModNative.dll",
                              "reframework/plugins/SF6_CostumeSlotsNative.dll", "reframework/plugins/profile_mod.dll", "amd_ags_x64.dll", "dinput8.dll" })
         file_id(root, rel, &files);
     v["files"] = std::move(files);

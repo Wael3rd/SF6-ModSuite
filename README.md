@@ -10,6 +10,7 @@ packages:
 | **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
 | **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, drills, a reversal picker and online sharing of recordings, all in the game's training pause menu: [crsm/README.md](crsm/README.md) | REFramework, SF6 Native Core |
 | **SF6 Profile Mod** | opens the full Fighter Profile where the game opens the limited one, and shows a player's Steam name on a key press: see below | REFramework, SF6 Native Core |
+| **Report a bug** | `report_mod.dll`, in the Slots Loader's package: R / pad X on Fighter Settings sends the author a report, only once you confirm: see below | REFramework, SF6 Native Core |
 
 Install what you want: the Slots Loader works on its own (only its Replays Settings tab and the Stage Variation hint in the guide bar need the Native Core); the Color Mod, the Recording Manager and the Profile Mod need the Native Core of the same
 release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, every package in one: install either it or
@@ -25,6 +26,12 @@ links lead here.
 - It opens the full Fighter Profile where the game opens the limited one. It only reuses what the server already sent: the sections the server does not send stay empty. It does not bypass anyone's privacy settings. The limited profile shows briefly first.
 - On a profile whose platform line already shows a Steam ID, R / pad X switches that line between the ID and the player's Steam name. A line the game hides stays hidden. **Network:** only on a press of that key, the shown ID is sent to steamcommunity.com (HTTPS) to read the public name, and to steamcommunity.com again if the account has no community profile. Nothing is sent at any other time. Names are kept in memory for the session, never written to disk or to the log.
 - Off switches, in `reframework\data\profile_mod.ini` (create it; it is not shipped): `full_profile=0`, `steam_name=0`.
+
+## Report a bug
+
+`report_mod.dll` (in `SF6_SlotsLoader_<version>.zip` and the all-in-one, needs the Native Core, does nothing without it): on Battle Settings > Character, R / pad X sends the author a picture of
+the game, your text, the outfit, the mods' versions and two cleaned logs, only once you confirm on a menu that tells you so, your Steam ID included; the menu then follows your report: waiting
+for a fix, to test. Kept 90 days, one per account per costume. [report_mod/README.md](report_mod/README.md) has the full list.
 
 ## Recording Manager
 
@@ -42,9 +49,6 @@ with no Lua script.
 - **Community** (since 2.1.0): sharing and liking drills need an identity verified by Steam, obtained by the plugin
   in the background (nothing to click). The server keeps your Steam account id for moderation; lists only show your
   CFN name, with `[V]` for a verified share. Version 2.0.x can browse and download, not share or like.
-- **Report a bug** (since 2.2.8): on Battle Settings > Character, R / pad X sends the author a picture of the game, your text, the outfit, the mods'
-  versions and two cleaned logs, only once you confirm on a menu that tells you so, your Steam ID included; the menu then follows your report: waiting
-  for a fix, to test. Kept 90 days, one per account per costume. [crsm/README.md](crsm/README.md#report-a-bug) has the full list.
 - The zip's `README.txt` has the details (settings, logs, the emergency stop). The source is in `crsm/`;
   [crsm/README.md](crsm/README.md) also says what the plugin sends to the Community server.
 

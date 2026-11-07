@@ -5,7 +5,7 @@
 // through the Community client: the Steam-verified token identifies the player, the server attaches his Steam ID. Back sends nothing and keeps nothing: the picture lives in memory
 // only, and goes with the window.
 //
-// Rules (docs: crsm/README.md "Report a bug"):
+// Rules (docs: report_mod/README.md):
 //   - On this screen only: its agent drawn, its tab 0, its costume row shown: the agent and its main control stay drawn and ActualVisible
 //     on the Titles and Profile tabs, so they prove nothing alone. To add a screen later: another screen_read(), the rest does not change.
 //   - The entry is a copy of the guide bar's item template on the resident InputGuide's bar, which every screen shows: a copy left visible
@@ -17,10 +17,9 @@
 //     state (R18: hooked through mech::hooks' code check, so a game update that folds it refuses the hook: no entry, no cost). Its first call
 //     wakes the module: it gives our core client a frame callback; when the calls stop (kLeftFrames) and no report is under way, the frame callback
 //     hands itself back. No state OnEnter / OnExit hook.
-//   - It works wherever the screen is opened from (main menu, the Multi Menu in Training, the hub) and owes nothing to the UI's claim, which comes
-//     later or never on some paths: it runs on its own frame callback, runs lang::frame and dlg::frame itself until the claim, and only asks of the
-//     owner "ui" (faults, hand-back) and of closing. What is left asleep: REFramework has no way to take a present callback back, so CRSM's existing one
-//     reads one more atomic pointer per Present (null but for the Present of a picture).
+//   - It works wherever the screen is opened from (main menu, the Multi Menu in Training, the hub) and owes nothing to the Recording Manager: it runs on its own frame callback, and
+//     runs lang::frame and dlg::frame itself. What is left asleep, the DLL's whole cost (host.cpp): one atomic load per Present and per window message's key test (REFramework has no way
+//     to take those callbacks back), one load in the hook on the option dialog's update, and the text dialog's hooks, which fire only on their events and pass through at once.
 //   - Encoding and HTTP off the game thread. No real player's id or name in the journal: counts and codes only.
 //   - No squeezed text: the rows are cut with "...", the entry's region is the text's.
 #include <windows.h>
@@ -39,20 +38,20 @@
 #include "community/auth.hpp"
 #include "community/client.hpp"
 #include "community/community.hpp"
-#include "../../../plugin/src/scroll_logic.hpp"
-#include "details_logic.hpp"
-#include "dialogs.hpp"
+#include "../../plugin/src/scroll_logic.hpp"
 #include "game/gm.hpp"
-#include "gx.hpp"
-#include "internal.hpp"
-#include "lang.hpp"
-#include "logic.hpp"
-#include "mech/mech.hpp"
 #include "model/chars.hpp"
 #include "perf.hpp"
 #include "report/capture.hpp"
 #include "report/gather.hpp"
 #include "report/report_logic.hpp"
+#include "report_mod.hpp"
+#include "ui/details_logic.hpp"
+#include "ui/dialogs.hpp"
+#include "ui/gx.hpp"
+#include "ui/internal.hpp"
+#include "ui/lang.hpp"
+#include "ui/logic.hpp"
 
 namespace ui::bug_report {
 namespace {
@@ -68,7 +67,6 @@ static_assert(rp::kTextMaxUnits == ui::details::kDescMaxUnits, "edit_result cuts
 constexpr const char* kAgent = "MatchingFighterSetting";
 constexpr const char* kCopyName = "e_text_crsm_report";          // not "p_...": never taken for a UI part (R20)
 constexpr const char* kGroupKey = "CrsmBugReport";
-constexpr const char* kClientId = "SF6_CRSMNative_BugReport";    // the core's option callbacks are per client: the Community dialog keeps its own
 constexpr const char* kFlowParam = "app.UIFlowMatchingFighterSetting.Param";
 constexpr uint64_t kHintPass = 10;                               // the entry placed, the bar read
 constexpr uint64_t kShotWait = 20;                               // frames for the next Present to take the picture before the menu opens anyway
@@ -789,16 +787,8 @@ void SF6CORE_CALL cb_page(void*, void* param, uint32_t rows) { if (rows) try { p
 // Our own core client: registered at the start, nothing else until the screen runs. Its option callbacks when a report opens its window: they are what
 // installs the core's option engine, which nothing should pay for before.
 bool register_client() {
-    const SF6CoreAPI* a = api();
-    if (!a) return false;
-    if (g_opt_client) return true;
-    SF6CoreClientDesc d{};
-    d.struct_size = sizeof d;
-    d.client_id = kClientId;
-    d.client_version = cmn::version();
-    d.priority = 100;
-    if (perf::counted(a)->register_client(&d, &g_opt_client) != SF6CORE_OK) { g_opt_client = nullptr; cmn::journal("bug report: the core refused the client"); return false; }
-    return true;
+    g_opt_client = cmn::client();                // the DLL's one core client (host.cpp)
+    return g_opt_client != nullptr;
 }
 bool ensure_client() {
     const SF6CoreAPI* a = api();
@@ -1332,7 +1322,7 @@ void begin_report(MO* main) {
     g_snap.character = g_snap.fighter > 0 ? model::chars::get_char_name(g_snap.fighter) : std::string();
     g_snap.outfit_row = row_text(main, "p_Spin_costume");
     g_snap.colour_row = row_text(main, "p_Spin_color");
-    g_snap.crsm_version = cmn::version();
+    g_snap.reporter_version = cmn::version();
     g_snap.core_version = a && a->get_version ? a->get_version() : "";
     g_values.character = g_snap.fighter > 0 ? ui::lang::fighter(g_snap.character) : std::string();
     g_values.outfit = rp::row_name(g_snap.outfit_row);
@@ -1371,6 +1361,13 @@ void make_copies_seh() {
         cmn::journal("bug report: a copy faulted: no more");
     }
 }
+// The option dialog's own update (R19: copies are made only there): one load while the window wants none
+bool ok_copies = false;
+int dialog_pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) { return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+void dialog_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (!g_copies_due.load(std::memory_order_relaxed) || cmn::closing()) return;
+    make_copies_seh();
+}
 void wake_up() {
     const SF6CoreAPI* a = cmn::core();
     if (!a || !g_opt_client || cmn::closing() || !cmn::owns(F::Ui) || !community::on()) { g_awake.store(false); return; }
@@ -1398,6 +1395,8 @@ void go_to_sleep() {
     // what the screen's update really did in this waking: the proof, in game, that it fires once a frame on this screen and stops when it is left
     cmn::journal("bug report: asleep (waking %llu: %u calls of the screen's update in %llu frames)", (unsigned long long)g_wakes,
                  g_beats.load() - g_wake_beats, (unsigned long long)(cmn::frame() - g_wake_frame));
+    cmn::journal("bug report: %s", status().c_str());
+    report_host::flush_journal();
     g_awake.store(false);
 }
 
@@ -1410,9 +1409,11 @@ void frame_body() {
         cmn::journal("bug report: awake");
     }
     ui::report_needs_dialogs(g_session.stage() != rp::Stage::Idle);
-    if (!ui::claimed()) {                        // what the report uses of the UI's frame, which runs only once it is claimed
-        ui::lang::frame(t, true, mech::events());
-        dlg::frame(false);
+    ui::lang::frame(t, true, 0);
+    {                                            // over Training's pause menu (the Multi Menu) the text dialog holds the menu's tab too; asked only while a report is open
+        const bool paused = g_session.stage() != rp::Stage::Idle && gx::pause_agent() != nullptr;
+        report_host::note_paused(paused);
+        dlg::frame(paused);
     }
     if (g_session.stage() != rp::Stage::Idle) {
         if (g_hint.shown) hint_hide();
@@ -1420,7 +1421,7 @@ void frame_body() {
         session_tick();
         return;
     }
-    if (g_left.left(g_beats.load(std::memory_order_relaxed), t)) { go_to_sleep(); return; }
+    if (g_left.left(g_beats.load(std::memory_order_relaxed), t) && !community::client().busy()) { go_to_sleep(); return; }   // (an answer on its way is taken first: asleep nothing polls)
     MO* main = nullptr;
     MO* agent = drawn_agent(&main);
     if (!agent) {
@@ -1446,10 +1447,12 @@ void frame_body() {
     }
 }
 
-void SF6CORE_CALL on_core_frame(uint64_t, void*) {
-    if (cmn::closing() || !cmn::owns(F::Ui) || !api() || !community::on()) { go_to_sleep(); return; }
+void SF6CORE_CALL on_core_frame(uint64_t core_frame, void*) {
+    if (cmn::closing() || !api() || !community::on()) { go_to_sleep(); return; }
+    if (!cmn::owns(F::Ui)) { hand_back(); return; }
     std::lock_guard lk(ui::lock());
     try {
+        report_host::frame(core_frame);
         frame_body();
     } catch (...) {
         ui::fault("bug report frame");
@@ -1458,14 +1461,9 @@ void SF6CORE_CALL on_core_frame(uint64_t, void*) {
 
 }  // namespace
 
-void dialog_update() {
-    if (!g_copies_due.load(std::memory_order_relaxed) || cmn::closing()) return;
-    make_copies_seh();
-}
-bool awake() { return g_awake.load(std::memory_order_relaxed); }
-
 void specs(std::vector<mech::hooks::Spec>& out) {
     ui::spec(out, "app.UIFlowMatchingFighterSetting.Main", "OnUpdate", beat_pre, beat_post, "no Report a bug: nothing wakes it (a game update folded this screen's update?)", &ok_hook);
+    ui::spec(out, "app.UIFlowOptionBGDialog.Main", "OnUpdate", dialog_pre, dialog_post, "no message line and no bar in the menu", &ok_copies);
 }
 
 void start() {
@@ -1479,7 +1477,7 @@ void hand_back() {                               // the UI stopped: the next fra
         if (a && g_opt_client) perf::counted(a)->opt_close(g_opt_client);
         closed_now("the UI stopped");
     }
-    if (!ui::claimed()) { try { dlg::hand_back(); } catch (...) {} }
+    try { dlg::hand_back(); } catch (...) {}
     if (g_awake.load()) go_to_sleep();
 }
 
