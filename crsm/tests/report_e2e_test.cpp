@@ -77,8 +77,8 @@ static int second_half(const std::string& base, const std::string& key, const fs
     rp::Session m;
     m.begin(); m.shot_settled();
     m.server_answer(rp::server_from(true, a.data["status"].get<std::string>()), a.data["text"].get<std::string>());
-    check(m.server() == rp::Server::Fixed && m.option_index() == 0 && m.options()[0] == "report_st_to_test" && m.options()[1] == "report_st_mark_fixed", "the menu: TO TEST, MARK AS FIXED");
-    check(m.choose(1) && m.confirm_due() && m.start_status(), "MARK AS FIXED: confirm goes");
+    check(m.server() == rp::Server::Fixed && m.option_index() == 0 && m.options()[0] == "report_st_to_test" && m.options()[1] == "report_st_ok", "the menu: TO TEST");
+    check(m.choose(1) && m.rows().size() == 2 && m.rows()[1] == rp::Row::MarkFixed && m.start_status(), "OK, then its row MARK AS FIXED: confirm goes");
     a = post(c, status_cmd(costume, rp::action_confirm()));
     check(a.done && a.ok && a.data["ok"] == true, "confirmed: " + a.data.dump());
     m.status_answered(true, rp::Server::Confirmed, "");

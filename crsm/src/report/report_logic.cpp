@@ -397,7 +397,7 @@ std::vector<std::string> Session::options() const {
     switch (server_) {
         case Server::Checking: return { "report_st_checking" };
         case Server::Waiting: return { "report_st_waiting" };
-        case Server::Fixed: return { "report_st_to_test", "report_st_mark_fixed", "report_st_bug" };
+        case Server::Fixed: return { "report_st_to_test", "report_st_ok", "report_st_bug" };
         default: return { "report_st_ok", "report_st_bug" };
     }
 }
@@ -416,7 +416,7 @@ bool Session::choose(int index) {
     const std::vector<std::string> o = options();
     if (index < 0 || index >= (int)o.size()) return false;
     const std::string& k = o[(size_t)index];
-    pick_ = k == "report_st_ok" || k == "report_st_mark_fixed" ? Pick::Ok : k == "report_st_bug" ? Pick::Bug : Pick::Held;
+    pick_ = k == "report_st_ok" ? Pick::Ok : k == "report_st_bug" ? Pick::Bug : Pick::Held;
     outcome_ = Outcome::None;
     error_.clear();
     return true;
@@ -426,6 +426,7 @@ std::vector<Row> Session::rows() const {
     std::vector<Row> r{ Row::Status };
     if (stage_ != Stage::Open || server_ == Server::Checking) return r;
     if (pick_ == Pick::Bug || server_ == Server::Waiting) { r.push_back(Row::Text); r.push_back(Row::Send); }
+    else if (pick_ == Pick::Ok && server_ == Server::Fixed) r.push_back(Row::MarkFixed);
     return r;
 }
 
@@ -459,10 +460,8 @@ void Session::status_answered(bool ok, Server now, const std::string& error) {
     busy_ = Busy::None;
     if (window_gone_) { reset(); return; }
     if (ok) { server_ = now; pick_ = Pick::Ok; outcome_ = Outcome::None; error_.clear(); return; }
-    outcome_ = Outcome::Failed;
+    outcome_ = Outcome::Failed;                          // (the rows stay as they are: the row can try again)
     error_ = error;
-    // what the server still says: the row goes back to it
-    pick_ = server_ == Server::Waiting || server_ == Server::Fixed ? Pick::Held : Pick::Ok;
 }
 
 bool Session::closed() {
@@ -488,6 +487,7 @@ std::string row_title(const Session& s, Row row, const Tr& tr) {
     switch (row) {
         case Row::Status: return tr("report_status", {});
         case Row::Text: return tr(s.text().empty() ? "report_row_describe" : "report_row_change", {});
+        case Row::MarkFixed: return tr("report_row_mark_fixed", {});
         case Row::Send: break;
     }
     return tr(s.has_report() ? "report_row_update" : "report_row_send", {});
@@ -502,7 +502,8 @@ std::vector<SummaryLine> summary_lines(const Session& s, const MenuValues& v, co
     std::vector<SummaryLine> out;
     if (s.stage() != Stage::Open || !form_shown(s)) return out;
     out.push_back({ tr("report_sum_character", { shown_safe(v.character) }) });
-    out.push_back({ tr("report_sum_outfit", { shown_safe(v.outfit) }) });
+    const std::string colour = shown_safe(v.colour);
+    out.push_back({ tr("report_sum_outfit", { shown_safe(v.outfit) + (colour.empty() ? "" : ", " + colour) }), 2 });
     if (!s.text().empty()) out.push_back({ tr("report_sum_description", {}) });
     return out;
 }
@@ -568,14 +569,110 @@ size_t wide_chars(const std::string& s) {
     return n;
 }
 
-double wrap_em(const std::string& line, double em) {
-    const size_t wide = wide_chars(line);
-    size_t chars = 0;
-    for (size_t i = 0; i < line.size(); ++i) if (((unsigned char)line[i] & 0xC0) != 0x80) ++chars;
-    if (!wide || !chars) return em;
-    // a line's Latin takes about half an em a character: how much of it is wide, in text_em's terms
-    const double wide_em = (double)wide, other_em = (double)(chars - wide) * 0.5;
-    return em * (wide_em + other_em) / (wide_em * kWideDrawn + other_em);
+static size_t u8_len_at(const std::string& s, size_t i) {
+    const unsigned char c = (unsigned char)s[i];
+    size_t n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+    return i + n > s.size() ? s.size() - i : n;
+}
+// One character: px per em of the width table, read in game at this font. The classes the font is the widest on, each on its own measure.
+static double char_px(const std::string& ch, double em) {
+    if (ch.size() == 1) {
+        const char k = ch[0];
+        if (k >= '0' && k <= '9') return em * 21.0;
+        if (k >= 'A' && k <= 'Z') return em * 20.0;
+        return em * 18.2;
+    }
+    return wide_chars(ch) ? em * 18.2 * kWideDrawn : em * 21.0;
+}
+
+double drawn_px(const std::string& s, const EmOf& em_of) {
+    double px = 0;
+    for (size_t i = 0; i < s.size();) {
+        const size_t n = u8_len_at(s, i);
+        const std::string ch = s.substr(i, n);
+        px += char_px(ch, em_of(ch));
+        i += n;
+    }
+    return px;
+}
+
+std::vector<std::string> wrap_px(const std::string& text, double max_px, int max_lines, const EmOf& em_of) {
+    std::vector<std::string> lines;
+    bool more = false;
+    const auto push = [&](std::string l) {
+        while (!l.empty() && l.back() == ' ') l.pop_back();
+        size_t b = 0;
+        while (b < l.size() && l[b] == ' ') ++b;
+        l.erase(0, b);
+        if (l.empty()) return;
+        if ((int)lines.size() < max_lines) lines.push_back(std::move(l));
+        else more = true;
+    };
+    std::string cur;
+    double cur_px = 0;
+    size_t last_space = std::string::npos;
+    for (size_t i = 0; i < text.size();) {
+        const size_t n = u8_len_at(text, i);
+        const std::string ch = text.substr(i, n);
+        i += n;
+        if (ch == "\n") { push(cur); cur.clear(); cur_px = 0; last_space = std::string::npos; continue; }
+        const double w = char_px(ch, em_of(ch));
+        if (cur_px + w > max_px && !cur.empty()) {
+            if (last_space != std::string::npos && ch != " ") {
+                push(cur.substr(0, last_space));
+                cur.erase(0, last_space + 1);
+            } else {
+                push(cur);
+                cur.clear();
+            }
+            cur_px = drawn_px(cur, em_of);
+            last_space = cur.rfind(' ');
+        }
+        cur += ch;
+        cur_px += w;
+        if (ch == " ") last_space = cur.size() - 1;
+    }
+    push(cur);
+    if (more && !lines.empty()) {
+        std::string& last = lines.back();
+        const std::string dots = "...";
+        while (!last.empty() && drawn_px(last + dots, em_of) > max_px) {
+            size_t k = last.size() - 1;
+            while (k > 0 && ((unsigned char)last[k] & 0xC0) == 0x80) --k;
+            last.erase(k);
+        }
+        last += dots;
+    }
+    return lines;
+}
+
+std::wstring paste_text(const std::wstring& clipboard, size_t max_units) {
+    std::wstring out;
+    const auto room = [&](size_t units) { return out.size() + units <= max_units; };
+    for (size_t i = 0; i < clipboard.size(); ++i) {
+        const wchar_t ch = clipboard[i];
+        if (ch == L'\r' || ch == L'\n') {
+            if (ch == L'\r' && i + 1 < clipboard.size() && clipboard[i + 1] == L'\n') ++i;
+            if (!room(2)) break;
+            out += L"/n";
+        } else if (ch == L'\t') {
+            if (!room(1)) break;
+            out += L' ';
+        } else if (ch < 0x20 || (ch >= 0x7F && ch < 0xA0) || ch == L'<' || ch == L'>') {
+            continue;
+        } else if (ch >= 0xD800 && ch < 0xDC00) {        // a pair goes whole
+            if (i + 1 >= clipboard.size() || clipboard[i + 1] < 0xDC00 || clipboard[i + 1] > 0xDFFF) continue;
+            if (!room(2)) break;
+            out += ch;
+            out += clipboard[++i];
+        } else if (ch >= 0xDC00 && ch <= 0xDFFF) {
+            continue;
+        } else {
+            if (!room(1)) break;
+            out += ch;
+        }
+    }
+    return out;
 }
 
 std::string error_key(const std::string& code) {

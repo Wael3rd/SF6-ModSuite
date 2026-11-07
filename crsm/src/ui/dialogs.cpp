@@ -625,6 +625,21 @@ void ticker(const std::string& text) { ui::ticker::push(text); }
 
 bool text_available() { return dlg::ok_result && dlg::ok_cancel && dlg::ok_hide; }
 
+static void field_texts(gx::MO* e, int depth, std::string* out) {
+    int n = 0;
+    for (gx::MO* k = gx::first_child(e); k && n < 64; k = gx::next(k), ++n) {
+        if (gx::is_type(k, "via.gui.Text")) *out += gx::msg(k) + "\n";
+        if (depth < 5) field_texts(k, depth + 1, out);
+    }
+}
+std::string text_field_shown() {
+    if (!dlg::g_job || dlg::g_job->finished || !game::gm::is_managed(reinterpret_cast<void*>(dlg::g_job->addr))) return "";
+    gx::MO* field = gx::call_obj(gx::ref(reinterpret_cast<gx::MO*>(dlg::g_job->addr), "TextInputParts"), "get_Control");
+    std::string out;
+    if (field) field_texts(field, 0, &out);
+    return out;
+}
+
 bool busy() {                                    // lock-free but for the request queue's own small mutex
     if (dlg::g_naming.load() || dlg::g_job_up.load() || dlg::g_box_up.load() || ui::com::open() || ui::details::is_open()) return true;
     std::lock_guard lk(dlg::g_q_mx);

@@ -409,8 +409,10 @@ int64_t g_group = -1;
 std::vector<int64_t> g_entries;                  // the rows now
 std::vector<rp::Row> g_roles;                    // what each of them is
 std::string g_built;                             // what the page was built from
+std::atomic<bool> g_paste_on{false}, g_pasting{false};   // the text dialog is up; a Ctrl+V is being typed
 std::atomic<int> g_pressed{-1};                  // a row's Confirm (the core's callback): run on the frame
 std::atomic<int> g_chosen{-1};                   // STATUS moved (the core's callback): run on the frame
+bool g_mark_due = false;                         // MARK AS FIXED pressed: goes out as soon as the client is free
 // What is read off the game thread: the summary's values and the key when the menu opens, the whole command at Send
 std::mutex g_prep_mx;
 std::optional<nlohmann::json> g_prep;
@@ -431,11 +433,12 @@ struct Frame { float shadow_w, shadow_h, bg_w, bg_h, line_w, line_h, main_y, tit
 constexpr Frame kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 };   // its 8-row page
 // The text under the rows, strictly under the last one: GuideMessageText grown upward to just below it, its bottom kept, aligned LeftTop, its fit off: the game otherwise shrinks
 // what does not fit. Read in game on 07/11 at 1080p: the rows at y 258 + 64 a row, 48 high; this text's bottom at 857; at its font x 1.1 it drew 38 px a line and 21 px per em of
-// lg::text_em. So at x 0.9: 31 px a line, 17.3 px per em: rp::kSummaryLines (12) in the 405 px under three rows, with room for one more if the game wraps one, 44 em in its 800 px.
+// lg::text_em. So at x 0.9: 31 px a line: rp::kSummaryLines (12) in the 405 px under three rows, with room for one more if the game wraps one. As wide as the rows, 800 px, the
+// description's bar at their right edge: its text never reaches the bar: kTextPx, wrapped here by rp::wrap_px, and by the game (its force wrap) if a character ever draws wider.
 // The rows' own descriptions stay empty: the game writes the focused row's there, and the same long text written twice is R7's crash (two rows with this text, or a page
 // rebuilt, would do that). So this one place writes it, comparing the whole text first (the core's compare reads 511 bytes).
 constexpr float kSummaryAreaH3 = 405.0f, kRowPitch = 64.0f, kSummaryScale = 0.9f;
-constexpr double kSummaryEm = 44.0;
+constexpr float kTextPx = 784.0f;
 
 bool near_f(float a, float b, float eps) { return std::abs(a - b) <= eps; }
 void dock_control(MO* cm) {
@@ -471,6 +474,8 @@ void summary_box(MO* gmt, int rows) {
                    gx::call_i32(gmt, "get_ControlPoint", &g_box.cp) && g_box.h > 1.0f && g_box.h < kSummaryAreaH3 - 1.0f && g_box.w > 100.0f && g_box.fh > 1.0f;
         set_by_name(gmt, "set_AutoRegionFit", gx::I(0));   // never squeezed: the lines are cut to the width, rp::kSummaryLines of them
         set_by_name(gmt, "set_PageAlignment", gx::I(0));   // LeftTop, under the rows whatever its length (the game's: at the bottom)
+        set_by_name(gmt, "set_AutoWrap", gx::B(true));
+        set_by_name(gmt, "set_ForceAutoWrap", gx::B(true));   // inside a word too: nothing passes kTextPx, "AAAA..." included
         cmn::journal("bug report: the text under the rows: %s (font %.1f, region %.0f x %.0f, at %.0f, point %d)", g_box.ok ? "placed" : "left as the game made it", g_box.fh, g_box.w, g_box.h, g_box.pos[1], g_box.cp);
     }
     if (!g_box.ok) return;
@@ -481,8 +486,9 @@ void summary_box(MO* gmt, int rows) {
     const float fw = g_box.fw * kSummaryScale, fh = g_box.fh * kSummaryScale;
     float w = 0, h = 0, p[3] = {};
     if (!gx::size_of(gmt, "get_FontSize", &w, &h) || !near_f(w, fw, 0.05f) || !near_f(h, fh, 0.05f)) gx::set_font(gmt, fw, fh);
-    if (!gx::size_of(gmt, "get_RegionSize", &w, &h) || !near_f(w, g_box.w, 0.5f) || !near_f(h, area, 0.5f)) gx::set_region(gmt, g_box.w, area);
-    if (!gx::vec3_of(gmt, "get_Position", p) || !near_f(p[0], g_box.pos[0], 0.5f) || !near_f(p[1], y_new, 0.5f)) gx::set_pos(gmt, g_box.pos[0], y_new, g_box.pos[2]);
+    if (!gx::size_of(gmt, "get_RegionSize", &w, &h) || !near_f(w, kTextPx, 0.5f) || !near_f(h, area, 0.5f)) gx::set_region(gmt, kTextPx, area);
+    const float x_new = slots::scroll::left_of(g_box.pos[0], g_box.cp, g_box.w) + (float)(g_box.cp % 4) * 0.5f * kTextPx;   // its left edge kept, under the rows'
+    if (!gx::vec3_of(gmt, "get_Position", p) || !near_f(p[0], x_new, 0.5f) || !near_f(p[1], y_new, 0.5f)) gx::set_pos(gmt, x_new, y_new, g_box.pos[2]);
 }
 // The row Send is on (the third), dimmed while it does nothing: its text says why. The dialog's own row: put back before the window is forgotten, the pool may keep it.
 constexpr const char* kSendUnit = "p_OptionUnit_2_switch_show";
@@ -519,7 +525,7 @@ constexpr const char* kMsgName = "e_text_crsm_report_msg";
 constexpr const char* kTrackName = "e_rect_crsm_report_track";
 constexpr const char* kThumbName = "e_rect_crsm_report_thumb";
 constexpr float kMsgBeyond = 70.0f;              // the window's inner right edge: that far past the rows' right end (read in game: 930 and 1022 of its frame)
-constexpr float kMeasureW = 4000.0f, kBarGap = 14.0f, kBarWidth = 8.0f;
+constexpr float kMeasureW = 4000.0f, kBarWidth = 8.0f;
 constexpr float kSummaryLinePx = 31.0f;          // a line of the text under the rows, at its font
 constexpr uint32_t kTrackColor = 0xCC463C3Cu, kThumbColor = 0xFFCC24CEu;   // the drill details' (0xAABBGGRR)
 constexpr int kMaxCopies = 8, kCopyPriority = 10;
@@ -704,7 +710,7 @@ void bar_frame(MO* gmt, void* param) {
         perf::counted(a)->ui_set_color(gx::cl(), track, kTrackColor);
         perf::counted(a)->ui_set_color(gx::cl(), th, kThumbColor);
     }
-    const float x = slots::scroll::left_of(g_box.pos[0], g_box.cp, g_box.w) + g_box.w + kBarGap;
+    const float x = slots::scroll::left_of(g_box.pos[0], g_box.cp, g_box.w) + g_box.w - kBarWidth;   // at the rows' right edge
     const float y = g_box.top + (float)g_scroll.first_line * kSummaryLinePx;
     const float h = (float)g_scroll.window * kSummaryLinePx;
     const ui::details::Thumb tb = ui::details::thumb(h, g_scroll.total, g_scroll.window, g_scroll.top);
@@ -791,7 +797,7 @@ std::string g_scroll_text;
 uint64_t g_scroll_since = 0;
 std::string summary_now() {
     if (g_scroll_text != g_session.text()) { g_scroll_text = g_session.text(); g_scroll_since = tick(); }
-    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return lg::desc_lines(line, rp::wrap_em(line, kSummaryEm), max_lines); }, tick() - g_scroll_since, &g_scroll);
+    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return rp::wrap_px(line, kTextPx, max_lines, [](const std::string& ch) { return lg::text_em(ch); }); }, tick() - g_scroll_since, &g_scroll);
 }
 void forget();
 // The group made again with the same key (the Color Mod's pattern for per-page texts)
@@ -807,7 +813,7 @@ bool build_group() {
     if (g_group < 0) { cmn::journal("bug report: opt_group failed"); return false; }
     for (const rp::Row role : g_session.rows()) {
         const std::string name = lg::cut_em(rp::row_title(g_session, role, tr), lg::kComRowEm);
-        const char* key = role == rp::Row::Status ? "report_status" : role == rp::Row::Text ? "report_text" : "report_send";
+        const char* key = role == rp::Row::Status ? "report_status" : role == rp::Row::Text ? "report_text" : role == rp::Row::Send ? "report_send" : "report_mark_fixed";
         SF6CoreOptEntryDesc d{};
         d.struct_size = sizeof d;
         d.key = key;
@@ -872,7 +878,7 @@ void input_block(bool on) {
         g_blocked = nullptr;
     }
 }
-// Nothing stays: the picture, the text, the Steam ID, what the screen showed, and the core's copy of the rows' texts
+// Nothing stays: the picture, the text, what the screen showed, and the core's copy of the rows' texts
 void forget() {
     cmn::set_present_fn(nullptr);
     cap::discard();
@@ -895,7 +901,9 @@ void forget() {
     g_copy_param.store(nullptr);
     g_copy_for = nullptr;
     g_copy_tries = 0;
+    g_paste_on.store(false);
     g_asked = false;
+    g_mark_due = false;
     g_step = SendStep::None;
     g_box = SummaryBox{};
     const SF6CoreAPI* a = api();
@@ -909,6 +917,7 @@ void forget() {
     g_preview = Preview{};
 }
 void closed_now(const char* why) {
+    g_paste_on.store(false);
     input_block(false);
     g_naming = false;
     const SF6CoreAPI* a = api();
@@ -1090,17 +1099,83 @@ void send_tick() {
         default: break;
     }
 }
+// Ctrl+V in the text dialog (Wael, 07/11: the game's own does nothing here, though it does from Training's pause menu; same dialog, same request, cause not found). While the
+// dialog is up only: a moment after the keys, if the field shows the same as before them (the game's own would have changed it: the Multi Menu is Training too), the clipboard's
+// text is typed into the field with real key events, so that the game's caret, cap and filters apply. Off the game thread; stops if the dialog goes.
+uint32_t g_v_seen = 0;
+uint64_t g_paste_check_at = 0;
+std::string g_paste_before;
+constexpr uint64_t kPasteCheckFrames = 10;
+void paste_body() {
+    for (int i = 0; i < 300 && (GetAsyncKeyState(VK_CONTROL) & 0x8000 || GetAsyncKeyState('V') & 0x8000); ++i) Sleep(10);   // typed with Ctrl down they would be shortcuts
+    if (GetAsyncKeyState(VK_CONTROL) & 0x8000 || !g_paste_on.load()) return;
+    std::wstring raw;
+    for (int i = 0; i < 5 && !OpenClipboard(nullptr); ++i) { Sleep(20); if (i == 4) return; }
+    if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
+        if (const wchar_t* w = static_cast<const wchar_t*>(GlobalLock(h))) {
+            const size_t n = wcsnlen(w, GlobalSize(h) / sizeof(wchar_t));
+            raw.assign(w, (std::min)(n, (size_t)16384));
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    const std::wstring text = rp::paste_text(raw, rp::kTextMaxUnits);
+    for (size_t i = 0; i < text.size() && g_paste_on.load() && !cmn::closing(); i += 32) {
+        INPUT in[64] = {};
+        UINT n = 0;
+        for (size_t k = i; k < text.size() && k < i + 32; ++k) {
+            for (const DWORD flags : { (DWORD)KEYEVENTF_UNICODE, (DWORD)(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP) }) {
+                in[n].type = INPUT_KEYBOARD;
+                in[n].ki.wScan = (WORD)text[k];
+                in[n].ki.dwFlags = flags;
+                ++n;
+            }
+        }
+        SendInput(n, in, sizeof(INPUT));
+        Sleep(2);
+    }
+}
+void paste_tick() {
+    const uint32_t n = cmn::key_presses('V');
+    if (n != g_v_seen) {
+        g_v_seen = n;
+        if ((GetAsyncKeyState(VK_CONTROL) & 0x8000) && !g_paste_check_at && !g_pasting.load()) {
+            g_paste_before = ui::dialogs::text_field_shown();
+            g_paste_check_at = tick() + kPasteCheckFrames;
+        }
+    }
+    if (!g_paste_check_at || tick() < g_paste_check_at) return;
+    g_paste_check_at = 0;
+    const std::string now = ui::dialogs::text_field_shown();
+    const bool own = g_paste_before.empty() || now == g_paste_before;
+    cmn::journal("bug report: Ctrl+V in the text dialog: %s", own ? "ours" : "the game's own");
+    if (!own || g_pasting.exchange(true)) return;
+    try {
+        std::thread([] {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+            paste_body();
+            g_pasting.store(false);
+        }).detach();
+    } catch (...) { g_pasting.store(false); }
+}
 void press_row(rp::Row row) {
     if (row == rp::Row::Text) {
         if (g_session.busy() != rp::Busy::None || !ui::dialogs::text_available()) return;
         input_block(true);
         g_naming = true;
+        g_v_seen = cmn::key_presses('V');
+        g_paste_check_at = 0;
+        g_paste_on.store(true);
         ui::dialogs::text_input("bug report", ui::details::edit_text(g_session.text()), rp::kTextMaxUnits, [](bool ok, const std::string& text) {
+            g_paste_on.store(false);
             if (ok) { g_session.set_text(ui::details::edit_result(text)); cmn::journal("bug report: text set (%zu bytes)", g_session.text().size()); }
             g_naming = false;
             g_settle_until = tick() + kSettle;       // its Confirm must not reach the page; the page takes input again after it
             g_dirty = true;
         }, false);                                   // not the training pause menu's input: wherever this screen was opened from, it is not on top
+    } else if (row == rp::Row::MarkFixed) {
+        g_mark_due = true;
+        cmn::journal("bug report: Mark as fixed");
     } else if (row == rp::Row::Send) {
         if (!g_session.send()) { g_dirty = true; return; }
         ++g_reports;
@@ -1164,7 +1239,7 @@ void session_tick() {
     dock_all();
     take_results();
     ask_status();
-    if (g_naming) { g_pressed.store(-1); g_chosen.store(-1); return; }   // the text dialog is over it: what reached the page counts for nothing
+    if (g_naming) { paste_tick(); g_pressed.store(-1); g_chosen.store(-1); return; }   // the text dialog is over it: what reached the page counts for nothing
     if (g_blocked) {
         g_pressed.store(-1);
         g_chosen.store(-1);
@@ -1175,10 +1250,11 @@ void session_tick() {
     if (chosen >= 0) {
         if (g_session.choose(chosen)) g_dirty = true;
         else if (chosen != g_session.option_index()) { g_built.clear(); g_dirty = true; }     // refused (a request is on its way): the row goes back to the truth
+        g_mark_due = false;                      // moved away: nothing goes
     }
     const int pressed = g_pressed.exchange(-1);
     if (pressed >= 0 && pressed < (int)g_roles.size()) press_row(g_roles[(size_t)pressed]);
-    if (g_session.confirm_due()) post_status(rp::action_confirm(), rp::Server::Confirmed);       // (as soon as the client is free)
+    if (g_mark_due && post_status(rp::action_confirm(), rp::Server::Confirmed)) g_mark_due = false;       // (as soon as the client is free)
     if ((t & 15) == 0) g_summary = summary_now();       // (the description's window moves by itself)
     if (g_dirty && !g_naming) {
         g_dirty = false;
@@ -1201,6 +1277,7 @@ void begin_report(MO* main) {
     g_shot_at = tick();
     g_pressed.store(-1);
     g_chosen.store(-1);
+    g_mark_due = false;
     g_dirty = false;
     g_step = SendStep::None;
     g_snap = rp::Snapshot{};
@@ -1217,6 +1294,7 @@ void begin_report(MO* main) {
     g_snap.core_version = a && a->get_version ? a->get_version() : "";
     g_values.character = g_snap.fighter > 0 ? ui::lang::fighter(g_snap.character) : std::string();
     g_values.outfit = rp::row_name(g_snap.outfit_row);
+    g_values.colour = rp::row_name(g_snap.colour_row);
     start_preview();
     cmn::journal("bug report: key pressed (fighter %d, outfit %d)", g_snap.fighter, g_snap.costume_no);
 }

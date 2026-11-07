@@ -86,8 +86,8 @@ json make_command(const Report& r);
 // Wael, 07/11. Rows are real actions only. The first row is STATUS:
 //   no report on this costume             OK (default): nothing else shows.     BUG: Describe the problem / Change the description, Send.
 //   a report on the server, waiting       WAITING FOR FIX, no choice: the player cannot change it, only the admin's action moves it on. Change the description, Update.
-//   the admin marked it fixed             TO TEST: its choices are MARK AS FIXED (it goes at once: the admin sees the tester says it is fixed; STATUS is OK again) and BUG
-//                                         (still broken: as a report waiting, WAITING FOR FIX once sent).
+//   the admin marked it fixed             TO TEST, OK, BUG. OK changes nothing yet: one row shows, MARK AS FIXED, and only that row sends it (the admin sees the tester says it is
+//                                         fixed); moving STATUS away cancels. BUG: still broken: as a report waiting, WAITING FOR FIX once sent. A row's text never changes by itself.
 //   the tester said it is fixed           OK, as with no report; BUG: the old text, Update (the row on the server is replaced).
 // Update does nothing until the text differs from what was sent: dimmed. Under the rows: Character, Outfit, Description only; all the rest still goes, it is just not listed.
 // The messages (sent, not sent, what is missing, what Update replaces, what goes with a report) are on the guide's line, message_text.
@@ -97,7 +97,7 @@ enum class Stage { Idle, Shooting, Open };
 enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed };
 enum class Pick { Ok, Bug, Held };              // Held: the status the server has (WAITING FOR FIX, TO TEST, Checking...)
 enum class Busy { None, Sending, Status };
-enum class Row { Status, Text, Send };
+enum class Row { Status, Text, Send, MarkFixed };
 
 // The server's answer to "my report on this costume": { exists, status, text }
 Server server_from(bool exists, const std::string& status);
@@ -124,8 +124,6 @@ public:
     int option_index() const;
     // The player moved STATUS. true: something changed.
     bool choose(int index);
-    // What to do now because of a choice: the player said OK on TO TEST: confirm it (once)
-    bool confirm_due() const { return server_ == Server::Fixed && pick_ == Pick::Ok && busy_ == Busy::None; }
     // The action rows under STATUS
     std::vector<Row> rows() const;
     void set_text(const std::string& text) { text_ = text; text_typed_ = true; outcome_ = Outcome::None; error_.clear(); }
@@ -137,7 +135,7 @@ public:
     bool send_disabled() const { return needs_text() || update_blocked(); }
     // The Send / Update row: true = it goes out now. Never twice at once; never with nothing to say while the field works; never the same text again.
     bool send();
-    // confirm_due: the status request goes out now
+    // MARK AS FIXED's row: the status request goes out now
     bool start_status();
     enum class Outcome { None, Sent, Failed };
     void answered(bool sent, const std::string& error);         // Send's answer: sent = WAITING FOR FIX
@@ -161,7 +159,7 @@ private:
 
 using Tr = std::function<std::string(const std::string& key, const std::vector<std::string>& args)>;
 // What the text under the rows names
-struct MenuValues { std::string character, outfit; };
+struct MenuValues { std::string character, outfit, colour; };
 // A row's title in the player's language
 std::string row_title(const Session& s, Row row, const Tr& tr);
 // The list under the rows, as lines to wrap at the window's width: Character, Outfit, the label of the description. Empty: nothing shows.
@@ -182,7 +180,14 @@ size_t wide_chars(const std::string& s);
 // The width in text_em's terms to wrap this line at so that it holds in `em`: a wide character draws about 1.35 of what text_em counts (the game's font is condensed for Latin
 // only: what took Japanese past its room on 07/11).
 constexpr double kWideDrawn = 1.35;
-double wrap_em(const std::string& line, double em);
+// How wide a text draws at the text-under-the-rows' font, from the table of text_em (given by the caller, em_of(one character)): never less than the game draws, as far as it was read
+// in game (07/11): a capital 'A' 12.8 px, a digit 11.6, lower-case text 8.9 a character. The game's font is condensed unevenly: one figure per em cannot hold for "AAAA...".
+using EmOf = std::function<double(const std::string&)>;
+double drawn_px(const std::string& s, const EmOf& em_of);
+// Lines at most max_px wide: at spaces, inside a word that does not fit a line. Past max_lines the last one is cut with "...".
+std::vector<std::string> wrap_px(const std::string& text, double max_px, int max_lines, const EmOf& em_of);
+// What Ctrl+V puts in the text field (UTF-16): line breaks as /n (edit_result turns them back), control characters out, < and > dropped as the game does, max_units at most.
+std::wstring paste_text(const std::wstring& clipboard, size_t max_units);
 // The message on the guide's line: "" = none. focus: the row with the cursor. One message at a time, the most urgent.
 std::string message_text(const Session& s, Row focus, const Tr& tr);
 // A text of a player's or a mod's for a game text: < > [ ] made ( ), one line (an unknown message tag crashes the game's render thread)

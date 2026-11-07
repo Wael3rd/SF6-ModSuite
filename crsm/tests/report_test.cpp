@@ -179,6 +179,7 @@ static void test_sources(const fs::path& crsm) {
     check(!has(report, "ithdraw") && !has(logic_src, "ithdraw") && !has(texts, "report_row_withdraw") && !has(texts, "report_sum_withdraw") && !has(readme, "ithdraw"), "no withdraw left");
     check(has(report, "ui_clone_control") && has(slurp(crsm / "src/ui/community_dialog.cpp"), "bug_report::dialog_update()"), "copies only inside the dialog's own update (R19)");
     check(has(report, "kMsgName") && has(report, "slots::scroll") && has(report, "set_ScissorRect(via.Rect)"), "the message slides as a long name does");
+    check(has(report, "g_paste_on.store(true)") && has(report, "if (g_naming) { paste_tick();") && !has(report, "paste_tick();\n    dock_all"), "Ctrl+V only while our text dialog is up");
     check(has(report, "kDockX = -430.0f") && has(report, "kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 }"), "on the side, as the Color Mod's Edit Drive Colors");
 }
 
@@ -223,7 +224,7 @@ static void test_session() {
     check(s.stage() == S::Open, "the menu");
     // Checking: nothing else shows, nothing can be done
     check(s.server() == V::Checking && opts_are(s, { "report_st_checking" }) && rows_are(s, {}), "checking: the one row");
-    check(!s.choose(1) && !s.confirm_due(), "checking: STATUS does nothing");
+    check(!s.choose(1), "checking: STATUS does nothing");
     // No report: OK by default, nothing else; BUG the form
     s.server_answer(V::None, "");
     check(opts_are(s, { "report_st_ok", "report_st_bug" }) && s.option_index() == 0 && s.pick() == rp::Pick::Ok && rows_are(s, {}), "no report: OK, and nothing else");
@@ -264,7 +265,7 @@ static void test_session() {
     // A report on the server: its text comes back; Update needs another text; the player cannot change the status
     s = opened(V::Waiting, "from the server");
     check(s.text() == "from the server" && s.pick() == rp::Pick::Held && s.option_index() == 0 && rows_are(s, { R::Text, R::Send }), "waiting: the server's text, the form");
-    check(opts_are(s, { "report_st_waiting" }) && !s.choose(1) && !s.confirm_due() && rows_are(s, { R::Text, R::Send }), "WAITING FOR FIX: no choice at all");
+    check(opts_are(s, { "report_st_waiting" }) && !s.choose(1) && rows_are(s, { R::Text, R::Send }), "WAITING FOR FIX: no choice at all");
     check(s.update_blocked() && s.send_disabled() && !s.send(), "Update does nothing while the text is what was sent");
     s.set_text("from the server, more");
     check(!s.update_blocked() && !s.send_disabled(), "another text: it may go");
@@ -275,9 +276,9 @@ static void test_session() {
     s.answered(true, "");
     check(s.server() == V::Waiting && s.update_blocked() && !s.send(), "waiting again: what was sent is that text");
 
-    // TO TEST: nothing but STATUS; MARK AS FIXED goes at once, BUG is the form
+    // TO TEST: nothing but STATUS; OK shows the row that sends it, BUG is the form
     s = opened(V::Fixed, "old text");
-    check(opts_are(s, { "report_st_to_test", "report_st_mark_fixed", "report_st_bug" }) && s.option_index() == 0 && rows_are(s, {}) && !s.confirm_due(), "to test: STATUS alone");
+    check(opts_are(s, { "report_st_to_test", "report_st_ok", "report_st_bug" }) && s.option_index() == 0 && rows_are(s, {}), "to test: STATUS alone");
     check(s.choose(2) && rows_are(s, { R::Text, R::Send }) && s.text() == "old text" && s.has_report(), "BUG: still broken: Change and Update");
     check(s.update_blocked() && !s.send(), "from TO TEST too: Update needs another text");
     s.set_text("old text, still broken");
@@ -285,14 +286,17 @@ static void test_session() {
     s.answered(true, "");
     check(s.server() == V::Waiting && s.option_index() == 0 && opts_are(s, { "report_st_waiting" }), "WAITING FOR FIX once sent");
     s = opened(V::Fixed);
-    check(s.choose(1) && s.confirm_due(), "MARK AS FIXED: confirm is due");
-    check(s.start_status() && !s.confirm_due(), "once");
+    check(s.choose(1) && s.server() == V::Fixed && s.busy() == rp::Busy::None && rows_are(s, { R::MarkFixed }), "OK: nothing goes yet, one row shows");
+    check(s.option_index() == 1 && opts_are(s, { "report_st_to_test", "report_st_ok", "report_st_bug" }), "and STATUS stays as he left it");
+    check(s.choose(0) && rows_are(s, {}), "moved away: cancelled");
+    s.choose(1);
+    check(s.start_status() && !s.start_status(), "the row: one request");
     s.status_answered(true, V::Confirmed, "");
-    check(s.server() == V::Confirmed && !s.confirm_due() && s.pick() == rp::Pick::Ok && rows_are(s, {}) && opts_are(s, { "report_st_ok", "report_st_bug" }), "confirmed: OK again for the player");
+    check(s.server() == V::Confirmed && s.pick() == rp::Pick::Ok && rows_are(s, {}) && opts_are(s, { "report_st_ok", "report_st_bug" }), "confirmed: OK for the player");
     s = opened(V::Fixed);
     s.choose(1); s.start_status();
     s.status_answered(false, V::Confirmed, "network");
-    check(s.server() == V::Fixed && s.pick() == rp::Pick::Held && !s.confirm_due() && s.outcome() == rp::Session::Outcome::Failed, "a confirm that failed: TO TEST again");
+    check(s.server() == V::Fixed && s.option_index() == 1 && rows_are(s, { R::MarkFixed }) && s.outcome() == rp::Session::Outcome::Failed, "a confirm that failed: the row can try again, nothing moved");
     // Confirmed: as no report, but a new report replaces the row
     s = opened(V::Confirmed, "t");
     check(s.pick() == rp::Pick::Ok && rows_are(s, {}) && s.has_report(), "confirmed: OK");
@@ -326,12 +330,12 @@ static void test_summary() {
     using R = rp::Row;
     const rp::Tr tr = [](const std::string& k, const std::vector<std::string>& a) { std::string s = k; for (const auto& x : a) s += "(" + x + ")"; return s; };
     rp::MenuValues v;
-    v.character = "Ryu"; v.outfit = "Outfit <VII>";
+    v.character = "Ryu"; v.outfit = "Outfit <VII>"; v.colour = "02";
     rp::Session s = opened(V::None);
     check(rp::summary_lines(s, v, tr).empty() && rp::message_text(s, R::Status, tr).empty(), "OK: no text at all");
     s.choose(1);
     std::string t = joined(rp::summary_lines(s, v, tr));
-    check(t == "report_sum_character(Ryu)\nreport_sum_outfit(Outfit (VII))\n", "Character and Outfit alone, no markup: " + t);
+    check(t == "report_sum_character(Ryu)\nreport_sum_outfit(Outfit (VII), 02)\n", "Character, Outfit and its colour, no markup: " + t);
     s.set_text("line one\nline two <x>");
     t = joined(rp::summary_lines(s, v, tr));
     check(has(t, "report_sum_description\n"), "the label");
@@ -361,7 +365,7 @@ static void test_summary() {
     rp::Session f = opened(V::Fixed, "x");
     check(rp::message_text(f, R::Status, tr) == "report_msg_to_test" && rp::summary_lines(f, v, tr).empty(), "to test: what to do, alone");
     f.choose(1); f.start_status(); f.status_answered(false, V::Confirmed, "network");
-    check(rp::message_text(f, R::Status, tr) == "report_failed(report_err_network)", "its failure is said");
+    check(rp::message_text(f, R::MarkFixed, tr) == "report_failed(report_err_network)" && rp::row_title(f, R::MarkFixed, tr) == "report_row_mark_fixed", "its failure is said, the row's text stays");
     rp::Session u = opened(V::Unknown);
     check(rp::message_text(u, R::Status, tr) == "report_msg_unreachable", "the server not reached: said at once");
     u.choose(1);
@@ -393,6 +397,35 @@ static void test_summary() {
     check(std::equal(at0.begin(), at0.begin() + 3, later.begin()), "Character, Outfit and the label stay still");
     check(at0[3] == "line00--li" && later[3] != at0[3], "only the text moves: " + later[3]);
     check(sc0.first_line == 3 && sc0.window == rp::kSummaryLines - 3 && sc0.total > sc0.window && sc0.top == 0 && sc1.top == 4, "what the bar follows");
+    // the width: never past it, whatever the text: "AAAA..." with no space, CJK, digits; as drawn in game on 07/11 at this font
+    const rp::EmOf em = [](const std::string& ch) { return ui::logic::text_em(ch); };
+    constexpr double kPx = 784.0;                // bug_report.cpp's kTextPx: the rows' 800 less the bar's 8 and a gap
+    const auto widest = [&](const std::string& text, size_t* biggest = nullptr) {
+        double w = 0;
+        size_t most = 0;
+        const std::vector<std::string> ls = rp::wrap_px(text, kPx, rp::kDescriptionMaxLines, em);
+        for (const std::string& l : ls) { w = (std::max)(w, rp::drawn_px(l, em)); most = (std::max)(most, l.size()); }
+        if (biggest) *biggest = most;
+        return w;
+    };
+    size_t per_line = 0;
+    check(widest(std::string(1000, 'A'), &per_line) <= kPx, "AAAA... within the width");
+    check((double)per_line * 12.83 <= kPx, "and as the game draws it: 'A' is 12.83 px at this font: " + std::to_string(per_line) + " a line");
+    check(per_line >= 50, "not needlessly short: " + std::to_string(per_line));
+    check(widest(std::string(1000, '7'), &per_line) <= kPx && (double)per_line * 11.6 <= kPx, "digits, read in game at 11.6 px");
+    std::string cjk;
+    for (int i = 0; i < 1000; ++i) cjk += "æ¼¢";
+    check(widest(cjk) <= kPx, "CJK");
+    check(widest("WWWWWWWWWW MMMMMMMMMMMMMMMM wide words and a very_long_word_" + std::string(300, 'W')) <= kPx, "spaces and a word wider than a line");
+    const std::vector<std::string> cut = rp::wrap_px(std::string(1000, 'A'), kPx, 1, em);
+    check(cut.size() == 1 && cut[0].size() > 3 && cut[0].substr(cut[0].size() - 3) == "..." && rp::drawn_px(cut[0], em) <= kPx, "one line at most: cut with ...");
+    check(rp::wrap_px("one two\nthree", 2000, 9, em) == std::vector<std::string>({ "one two", "three" }), "its own line breaks stay");
+    // Ctrl+V: what goes in the field
+    check(rp::paste_text(L"a\r\nb\nc\rd", 100) == L"a/nb/nc/nd", "line breaks as /n");
+    check(rp::paste_text(L"a\tb\x01\x7f<c>", 100) == L"a bc", "tab a space, control characters out, < > dropped");
+    check(rp::paste_text(std::wstring(2000, L'x'), rp::kTextMaxUnits).size() == rp::kTextMaxUnits, "capped to the field");
+    check(rp::paste_text(L"abc\n", 4) == L"abc", "a /n does not go half");
+    check(rp::paste_text(L"ab\xD83D\xDE00", 3) == L"ab" && rp::paste_text(L"ab\xD83D\xDE00", 4) == L"ab\xD83D\xDE00" && rp::paste_text(L"\xD83Dx\xDE00", 9) == L"x", "a surrogate pair whole or not at all");
     check(!has(rp::summary_text(big, v, plain, whole, 100000), "<"), "no markup from the text either");
     rp::SummaryScroll sc2;
     rp::Session small = opened(V::Waiting, "short");
@@ -421,8 +454,9 @@ static void test_summary_fits(const fs::path& crsm) {
     const json all = json::parse(slurp(crsm / "data/SF6_CRSM_data/locale.json"), nullptr, false);
     check(all.is_object(), "the texts");
     if (!all.is_object()) return;
-    constexpr double kEm = 44.0;                 // bug_report.cpp's kSummaryEm: 17.3 px per em in its 800 px
-    const rp::Wrap wrap = [](const std::string& line, int max_lines) { return ui::logic::desc_lines(line, rp::wrap_em(line, kEm), max_lines); };
+    const rp::EmOf em = [](const std::string& ch) { return ui::logic::text_em(ch); };
+    constexpr double kPx = 784.0;                // bug_report.cpp's kTextPx
+    const rp::Wrap wrap = [&em](const std::string& line, int max_lines) { return rp::wrap_px(line, kPx, max_lines, em); };
     // read in game on 07/11: EN ATTENTE DE CORRECTION is 280 px between arrows 296 px apart
     const double px_per_em = 280.0 / ui::logic::text_em("EN ATTENTE DE CORRECTION");
     // the guide's line at 1080p: the entries end at 410 + one font width, the window's inner edge is at 1000. [F] Confirm / [Esc] Back in French, the longest seen; 21 px per em
@@ -438,7 +472,7 @@ static void test_summary_fits(const fs::path& crsm) {
             return s;
         };
         rp::MenuValues v;
-        v.character = "Chun-Li"; v.outfit = "VEGETA MAJIN Black Hair Long Name Outfit 126-1-1-1686741947.rar";
+        v.character = "Chun-Li"; v.outfit = "VEGETA MAJIN Black Hair Long Name Outfit 126-1-1-1686741947.rar"; v.colour = "02";
         const std::string long_text = lang.rfind("zh", 0) == 0 || lang == "ja" || lang == "ko" ? [] { std::string t; for (int i = 0; i < 300; ++i) t += "\xE6\xBC\xA2"; return t; }() : std::string(900, 'x');
         rp::Session s = opened(rp::Server::Waiting, long_text);
         s.set_text(long_text + "y");
@@ -447,7 +481,7 @@ static void test_summary_fits(const fs::path& crsm) {
             check(!l.text.empty() && !has(l.text, "%s"), lang + ": a line with its value");
             info += (int)wrap(l.text, l.max_lines).size();
         }
-        check(info == 3, lang + ": three lines of list: " + std::to_string(info));
+        check(info >= 3 && info <= 4, lang + ": the list's lines: " + std::to_string(info));
         const std::string text = rp::summary_text(s, v, tr, wrap, 0);
         int lines = 1;
         size_t p = 0;
@@ -455,15 +489,15 @@ static void test_summary_fits(const fs::path& crsm) {
             size_t e = text.find('\n', p);
             if (e == std::string::npos) e = text.size();
             else ++lines;
-            check(drawn_em(text.substr(p, e - p)) <= kEm * 1.05, lang + ": a line within the width: " + text.substr(p, e - p));
+            check(rp::drawn_px(text.substr(p, e - p), em) <= kPx, lang + ": a line within the width: " + text.substr(p, e - p));
             p = e + 1;
         }
         check(lines == rp::kSummaryLines, lang + ": the room: " + std::to_string(lines));
-        for (const char* k : { "report_st_ok", "report_st_bug", "report_st_waiting", "report_st_to_test", "report_st_mark_fixed", "report_st_checking" }) {
+        for (const char* k : { "report_st_ok", "report_st_bug", "report_st_waiting", "report_st_to_test", "report_st_checking" }) {
             const std::string o = tr(k, {});
             check(!o.empty() && drawn_em(o) * px_per_em <= 264.0, lang + ": " + k + " keeps a margin to its arrows: " + o);
         }
-        for (const char* k : { "report_row_describe", "report_row_change", "report_row_send", "report_row_update" }) {
+        for (const char* k : { "report_row_describe", "report_row_change", "report_row_send", "report_row_update", "report_row_mark_fixed" }) {
             const std::string o = tr(k, {});
             check(!o.empty() && drawn_em(o) <= ui::logic::kComRowEm, lang + ": " + k + " fits its row: " + o);
         }

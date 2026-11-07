@@ -717,7 +717,7 @@
       "max": 40
     },
     "rsm.report_sum_outfit": {
-      "where": "Fighter Settings > Report a bug: a line of the plain list under the rows, one line of about 80 Latin characters, no sentence around the value. %s = an outfit's name, cut with ... when too long.",
+      "where": "Fighter Settings > Report a bug: a line of the list under the rows. %s = the outfit's name, a comma, its colour.",
       "max": 30
     },
     "rsm.report_err_status": {
@@ -727,10 +727,6 @@
     "rsm.report_sum_character": {
       "where": "Fighter Settings > Report a bug: a line of the plain list under the rows, one line of about 80 Latin characters, no sentence around the value. %s = a fighter's name. Shares its line with the colour.",
       "max": 30
-    },
-    "rsm.report_st_mark_fixed": {
-      "where": "Fighter Settings > Report a bug: an option of the STATUS row while a report is TO TEST: the player says it is fixed. In capitals; keeps a margin to its arrows.",
-      "max": 22
     },
     "rsm.report_sum_description": {
       "where": "Fighter Settings > Report a bug: the label over what the player wrote; it stays still, his text moves under it.",
@@ -763,6 +759,10 @@
     "rsm.report_msg_also": {
       "where": "Fighter Settings > Report a bug: the message on the guide's line, right-justified at the window's right edge; past its room it slides. While the focus is on Send or Update: what goes with the report.",
       "max": 90
+    },
+    "rsm.report_row_mark_fixed": {
+      "where": "Fighter Settings > Report a bug: the row shown when STATUS is OK at TO TEST: pressing it tells the author it is fixed. Capitals, as Wael wrote it.",
+      "max": 40
     }
   },
   "en": {
@@ -967,15 +967,15 @@
     "rsm.report_sum_outfit": "Outfit: %s",
     "rsm.report_err_status": "its status changed: open this menu again",
     "rsm.report_sum_character": "Character: %s",
-    "rsm.report_st_mark_fixed": "MARK AS FIXED",
     "rsm.report_sum_description": "Description:",
     "rsm.report_msg_unreachable": "The server could not be reached.",
-    "rsm.report_msg_to_test": "The author marked it fixed: try it, then choose MARK AS FIXED or BUG.",
+    "rsm.report_msg_to_test": "The author marked it fixed: try it, then choose OK or BUG.",
     "rsm.report_msg_sent": "Sent. Thank you!",
     "rsm.report_msg_replace": "Update replaces what was sent.",
     "rsm.report_msg_need_text": "Describe the problem first.",
     "rsm.report_msg_same_text": "Change the description first.",
-    "rsm.report_msg_also": "Also sends your Steam ID, your logs and your mod list."
+    "rsm.report_msg_also": "Also sends your Steam ID, your logs and your mod list.",
+    "rsm.report_row_mark_fixed": "MARK AS FIXED"
   },
   "fr": {
     "rsm.page": "Gestion",
@@ -1179,15 +1179,15 @@
     "rsm.report_sum_outfit": "Tenue : %s",
     "rsm.report_err_status": "son statut a changé : rouvrez ce menu",
     "rsm.report_sum_character": "Personnage : %s",
-    "rsm.report_st_mark_fixed": "MARQUER CORRIGÉ",
     "rsm.report_sum_description": "Description :",
     "rsm.report_msg_unreachable": "Serveur injoignable.",
-    "rsm.report_msg_to_test": "L'auteur l'a corrigé : essayez, puis choisissez MARQUER CORRIGÉ ou BUG.",
+    "rsm.report_msg_to_test": "L'auteur l'a corrigé : essayez, puis choisissez OK ou BUG.",
     "rsm.report_msg_sent": "Envoyé. Merci !",
     "rsm.report_msg_replace": "Mettre à jour remplace ce qui a été envoyé.",
     "rsm.report_msg_need_text": "Décrivez d'abord le problème.",
     "rsm.report_msg_same_text": "Modifiez d'abord la description.",
-    "rsm.report_msg_also": "Envoie aussi votre ID Steam, vos journaux et votre liste de mods."
+    "rsm.report_msg_also": "Envoie aussi votre ID Steam, vos journaux et votre liste de mods.",
+    "rsm.report_row_mark_fixed": "MARQUER CORRIGÉ"
   },
   "ja": {
     "rsm.page": "マネージャー",
@@ -1391,15 +1391,15 @@
     "rsm.report_sum_outfit": "コスチューム: %s",
     "rsm.report_err_status": "状況が変わりました。開き直してください",
     "rsm.report_sum_character": "キャラクター: %s",
-    "rsm.report_st_mark_fixed": "修正済みにする",
     "rsm.report_sum_description": "内容:",
     "rsm.report_msg_unreachable": "サーバーに接続できません。",
-    "rsm.report_msg_to_test": "作者が修正しました。確認して、修正済みにするか不具合を選んでください。",
+    "rsm.report_msg_to_test": "作者が修正しました。確認してOKか不具合を選んでください。",
     "rsm.report_msg_sent": "送信しました。",
     "rsm.report_msg_replace": "更新で送信済みの内容を置き換えます。",
     "rsm.report_msg_need_text": "先に問題の内容を入力してください。",
     "rsm.report_msg_same_text": "先に内容を変更してください。",
-    "rsm.report_msg_also": "Steam ID、ログ、MOD一覧も送信します。"
+    "rsm.report_msg_also": "Steam ID、ログ、MOD一覧も送信します。",
+    "rsm.report_row_mark_fixed": "修正済みにする"
   },
   "zh-Hans": {
     "rsm.page": "管理",
@@ -1603,15 +1603,15 @@
     "rsm.report_sum_outfit": "服装:%s",
     "rsm.report_err_status": "状态已变化:请重新打开此菜单",
     "rsm.report_sum_character": "角色:%s",
-    "rsm.report_st_mark_fixed": "标记为已修复",
     "rsm.report_sum_description": "描述:",
     "rsm.report_msg_unreachable": "无法连接服务器。",
-    "rsm.report_msg_to_test": "作者已修复:请测试,然后选择标记为已修复或错误。",
+    "rsm.report_msg_to_test": "作者已修复:请测试,然后选择 OK 或错误。",
     "rsm.report_msg_sent": "已发送。谢谢!",
     "rsm.report_msg_replace": "更新将替换已发送的内容。",
     "rsm.report_msg_need_text": "请先描述问题。",
     "rsm.report_msg_same_text": "请先修改描述。",
-    "rsm.report_msg_also": "同时发送你的 Steam ID、日志和模组列表。"
+    "rsm.report_msg_also": "同时发送你的 Steam ID、日志和模组列表。",
+    "rsm.report_row_mark_fixed": "标记为已修复"
   },
   "it": {
     "rsm.page": "Gestione",
@@ -1815,15 +1815,15 @@
     "rsm.report_sum_outfit": "Costume: %s",
     "rsm.report_err_status": "il suo stato è cambiato: riapri il menu",
     "rsm.report_sum_character": "Personaggio: %s",
-    "rsm.report_st_mark_fixed": "SEGNA CORRETTO",
     "rsm.report_sum_description": "Descrizione:",
     "rsm.report_msg_unreachable": "Server non raggiungibile.",
-    "rsm.report_msg_to_test": "L'autore l'ha corretta: provala, poi scegli SEGNA CORRETTO o BUG.",
+    "rsm.report_msg_to_test": "L'autore l'ha corretta: provala, poi scegli OK o BUG.",
     "rsm.report_msg_sent": "Inviata. Grazie!",
     "rsm.report_msg_replace": "Aggiorna sostituisce quanto inviato.",
     "rsm.report_msg_need_text": "Prima descrivi il problema.",
     "rsm.report_msg_same_text": "Prima modifica la descrizione.",
-    "rsm.report_msg_also": "Invia anche il tuo ID Steam, i log e l'elenco delle mod."
+    "rsm.report_msg_also": "Invia anche il tuo ID Steam, i log e l'elenco delle mod.",
+    "rsm.report_row_mark_fixed": "SEGNA COME CORRETTO"
   },
   "de": {
     "rsm.page": "Verwaltung",
@@ -2027,15 +2027,15 @@
     "rsm.report_sum_outfit": "Outfit: %s",
     "rsm.report_err_status": "ihr Status hat sich geändert: Menü neu öffnen",
     "rsm.report_sum_character": "Charakter: %s",
-    "rsm.report_st_mark_fixed": "ALS BEHOBEN",
     "rsm.report_sum_description": "Beschreibung:",
     "rsm.report_msg_unreachable": "Server nicht erreichbar.",
-    "rsm.report_msg_to_test": "Der Autor hat es behoben: Teste es, dann wähle ALS BEHOBEN oder FEHLER.",
+    "rsm.report_msg_to_test": "Der Autor hat es behoben: Teste es, dann wähle OK oder FEHLER.",
     "rsm.report_msg_sent": "Gesendet. Danke!",
     "rsm.report_msg_replace": "Aktualisieren ersetzt das Gesendete.",
     "rsm.report_msg_need_text": "Zuerst das Problem beschreiben.",
     "rsm.report_msg_same_text": "Zuerst die Beschreibung ändern.",
-    "rsm.report_msg_also": "Sendet auch deine Steam-ID, deine Logs und deine Mod-Liste."
+    "rsm.report_msg_also": "Sendet auch deine Steam-ID, deine Logs und deine Mod-Liste.",
+    "rsm.report_row_mark_fixed": "ALS BEHOBEN MARKIEREN"
   },
   "es": {
     "rsm.page": "Gestión",
@@ -2239,15 +2239,15 @@
     "rsm.report_sum_outfit": "Atuendo: %s",
     "rsm.report_err_status": "su estado cambió: abre este menú de nuevo",
     "rsm.report_sum_character": "Personaje: %s",
-    "rsm.report_st_mark_fixed": "MARCAR CORREGIDO",
     "rsm.report_sum_description": "Descripción:",
     "rsm.report_msg_unreachable": "No se pudo contactar con el servidor.",
-    "rsm.report_msg_to_test": "El autor lo corrigió: pruébalo y elige MARCAR CORREGIDO o ERROR.",
+    "rsm.report_msg_to_test": "El autor lo corrigió: pruébalo y elige OK o ERROR.",
     "rsm.report_msg_sent": "Enviado. ¡Gracias!",
     "rsm.report_msg_replace": "Actualizar reemplaza lo enviado.",
     "rsm.report_msg_need_text": "Primero describe el problema.",
     "rsm.report_msg_same_text": "Primero cambia la descripción.",
-    "rsm.report_msg_also": "También envía tu ID de Steam, tus registros y tu lista de mods."
+    "rsm.report_msg_also": "También envía tu ID de Steam, tus registros y tu lista de mods.",
+    "rsm.report_row_mark_fixed": "MARCAR COMO CORREGIDO"
   },
   "es-419": {
     "rsm.page": "Gestión",
@@ -2451,15 +2451,15 @@
     "rsm.report_sum_outfit": "Atuendo: %s",
     "rsm.report_err_status": "su estado cambió: abre este menú de nuevo",
     "rsm.report_sum_character": "Personaje: %s",
-    "rsm.report_st_mark_fixed": "MARCAR CORREGIDO",
     "rsm.report_sum_description": "Descripción:",
     "rsm.report_msg_unreachable": "No se pudo contactar al servidor.",
-    "rsm.report_msg_to_test": "El autor lo corrigió: pruébalo y elige MARCAR CORREGIDO o ERROR.",
+    "rsm.report_msg_to_test": "El autor lo corrigió: pruébalo y elige OK o ERROR.",
     "rsm.report_msg_sent": "Enviado. ¡Gracias!",
     "rsm.report_msg_replace": "Actualizar reemplaza lo enviado.",
     "rsm.report_msg_need_text": "Primero describe el problema.",
     "rsm.report_msg_same_text": "Primero cambia la descripción.",
-    "rsm.report_msg_also": "También envía tu ID de Steam, tus registros y tu lista de mods."
+    "rsm.report_msg_also": "También envía tu ID de Steam, tus registros y tu lista de mods.",
+    "rsm.report_row_mark_fixed": "MARCAR COMO CORREGIDO"
   },
   "ru": {
     "rsm.page": "Менеджер",
@@ -2663,15 +2663,15 @@
     "rsm.report_sum_outfit": "Костюм: %s",
     "rsm.report_err_status": "статус изменился: откройте меню снова",
     "rsm.report_sum_character": "Персонаж: %s",
-    "rsm.report_st_mark_fixed": "ИСПРАВЛЕНО",
     "rsm.report_sum_description": "Описание:",
     "rsm.report_msg_unreachable": "Нет связи с сервером.",
-    "rsm.report_msg_to_test": "Автор исправил это: проверьте и выберите ИСПРАВЛЕНО или ОШИБКА.",
+    "rsm.report_msg_to_test": "Автор исправил это: проверьте и выберите OK или ОШИБКА.",
     "rsm.report_msg_sent": "Отправлено. Спасибо!",
     "rsm.report_msg_replace": "Обновить заменит отправленное.",
     "rsm.report_msg_need_text": "Сначала опишите проблему.",
     "rsm.report_msg_same_text": "Сначала измените описание.",
-    "rsm.report_msg_also": "Также отправляет ваш Steam ID, журналы и список модов."
+    "rsm.report_msg_also": "Также отправляет ваш Steam ID, журналы и список модов.",
+    "rsm.report_row_mark_fixed": "ОТМЕТИТЬ ИСПРАВЛЕННЫМ"
   },
   "pl": {
     "rsm.page": "Menedżer",
@@ -2875,15 +2875,15 @@
     "rsm.report_sum_outfit": "Strój: %s",
     "rsm.report_err_status": "status się zmienił: otwórz menu ponownie",
     "rsm.report_sum_character": "Postać: %s",
-    "rsm.report_st_mark_fixed": "NAPRAWIONE",
     "rsm.report_sum_description": "Opis:",
     "rsm.report_msg_unreachable": "Brak połączenia z serwerem.",
-    "rsm.report_msg_to_test": "Autor to naprawił: sprawdź, potem wybierz NAPRAWIONE lub BŁĄD.",
+    "rsm.report_msg_to_test": "Autor to naprawił: sprawdź, potem wybierz OK lub BŁĄD.",
     "rsm.report_msg_sent": "Wysłano. Dziękujemy!",
     "rsm.report_msg_replace": "Aktualizuj zastąpi to, co wysłano.",
     "rsm.report_msg_need_text": "Najpierw opisz problem.",
     "rsm.report_msg_same_text": "Najpierw zmień opis.",
-    "rsm.report_msg_also": "Wysyła też twój identyfikator Steam, dzienniki i listę modów."
+    "rsm.report_msg_also": "Wysyła też twój identyfikator Steam, dzienniki i listę modów.",
+    "rsm.report_row_mark_fixed": "OZNACZ JAKO NAPRAWIONE"
   },
   "pt": {
     "rsm.page": "Gerenciador",
@@ -3087,15 +3087,15 @@
     "rsm.report_sum_outfit": "Traje: %s",
     "rsm.report_err_status": "o status mudou: abra este menu de novo",
     "rsm.report_sum_character": "Personagem: %s",
-    "rsm.report_st_mark_fixed": "MARCAR CORRIGIDO",
     "rsm.report_sum_description": "Descrição:",
     "rsm.report_msg_unreachable": "Não foi possível contatar o servidor.",
-    "rsm.report_msg_to_test": "O autor corrigiu: teste e escolha MARCAR CORRIGIDO ou ERRO.",
+    "rsm.report_msg_to_test": "O autor corrigiu: teste e escolha OK ou ERRO.",
     "rsm.report_msg_sent": "Enviado. Obrigado!",
     "rsm.report_msg_replace": "Atualizar substitui o que foi enviado.",
     "rsm.report_msg_need_text": "Primeiro descreva o problema.",
     "rsm.report_msg_same_text": "Primeiro altere a descrição.",
-    "rsm.report_msg_also": "Também envia seu ID Steam, seus logs e sua lista de mods."
+    "rsm.report_msg_also": "Também envia seu ID Steam, seus logs e sua lista de mods.",
+    "rsm.report_row_mark_fixed": "MARCAR COMO CORRIGIDO"
   },
   "ko": {
     "rsm.page": "매니저",
@@ -3299,15 +3299,15 @@
     "rsm.report_sum_outfit": "의상: %s",
     "rsm.report_err_status": "상태가 변경되었습니다. 다시 여세요",
     "rsm.report_sum_character": "캐릭터: %s",
-    "rsm.report_st_mark_fixed": "수정됨으로 표시",
     "rsm.report_sum_description": "설명:",
     "rsm.report_msg_unreachable": "서버에 연결할 수 없습니다.",
-    "rsm.report_msg_to_test": "제작자가 수정했습니다. 확인 후 수정됨으로 표시 또는 버그를 선택하세요.",
+    "rsm.report_msg_to_test": "제작자가 수정했습니다. 확인 후 OK 또는 버그를 선택하세요.",
     "rsm.report_msg_sent": "보냈습니다. 감사합니다!",
     "rsm.report_msg_replace": "업데이트하면 보낸 내용을 대체합니다.",
     "rsm.report_msg_need_text": "먼저 문제를 설명하세요.",
     "rsm.report_msg_same_text": "먼저 설명을 변경하세요.",
-    "rsm.report_msg_also": "Steam ID, 로그, 모드 목록도 보냅니다."
+    "rsm.report_msg_also": "Steam ID, 로그, 모드 목록도 보냅니다.",
+    "rsm.report_row_mark_fixed": "수정됨으로 표시"
   },
   "zh-Hant": {
     "rsm.page": "管理",
@@ -3511,15 +3511,15 @@
     "rsm.report_sum_outfit": "服裝:%s",
     "rsm.report_err_status": "狀態已變更:請重新開啟此選單",
     "rsm.report_sum_character": "角色:%s",
-    "rsm.report_st_mark_fixed": "標記為已修復",
     "rsm.report_sum_description": "描述:",
     "rsm.report_msg_unreachable": "無法連線伺服器。",
-    "rsm.report_msg_to_test": "作者已修復:請測試,然後選擇標記為已修復或錯誤。",
+    "rsm.report_msg_to_test": "作者已修復:請測試,然後選擇 OK 或錯誤。",
     "rsm.report_msg_sent": "已送出。謝謝!",
     "rsm.report_msg_replace": "更新將取代已送出的內容。",
     "rsm.report_msg_need_text": "請先描述問題。",
     "rsm.report_msg_same_text": "請先修改描述。",
-    "rsm.report_msg_also": "同時送出你的 Steam ID、記錄檔和模組清單。"
+    "rsm.report_msg_also": "同時送出你的 Steam ID、記錄檔和模組清單。",
+    "rsm.report_row_mark_fixed": "標記為已修復"
   },
   "ar": {
     "rsm.page": "المدير",
@@ -3723,14 +3723,14 @@
     "rsm.report_sum_outfit": "الزي: %s",
     "rsm.report_err_status": "تغيرت حالته: افتح هذه القائمة مجددًا",
     "rsm.report_sum_character": "الشخصية: %s",
-    "rsm.report_st_mark_fixed": "تم الإصلاح",
     "rsm.report_sum_description": "الوصف:",
     "rsm.report_msg_unreachable": "تعذر الوصول إلى الخادم.",
-    "rsm.report_msg_to_test": "أصلحه المؤلف: جربه ثم اختر تم الإصلاح أو خطأ.",
+    "rsm.report_msg_to_test": "أصلحه المؤلف: جربه ثم اختر OK أو خطأ.",
     "rsm.report_msg_sent": "تم الإرسال. شكرًا!",
     "rsm.report_msg_replace": "التحديث يحل محل ما أُرسل.",
     "rsm.report_msg_need_text": "صف المشكلة أولًا.",
     "rsm.report_msg_same_text": "غيّر الوصف أولًا.",
-    "rsm.report_msg_also": "يرسل أيضًا معرف Steam والسجلات وقائمة التعديلات."
+    "rsm.report_msg_also": "يرسل أيضًا معرف Steam والسجلات وقائمة التعديلات.",
+    "rsm.report_row_mark_fixed": "وضع علامة تم الإصلاح"
   }
 }

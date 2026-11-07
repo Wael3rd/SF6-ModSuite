@@ -88,7 +88,7 @@ The first row is STATUS. On OK, the default, nothing else shows. On BUG: Describ
 description, which moves by itself when it is too long for its place, with a bar beside it. A message on the guide's line says what you should know: with the focus
 on Send, that your Steam ID, your logs and your mod list go too. After Send, or when you already have a report on this costume, STATUS shows WAITING FOR FIX, which only
 the author's action can change; your text comes back and Send becomes Update, which replaces what was sent and does nothing until your text differs from it. When the
-author marks it fixed, STATUS shows TO TEST: choose MARK AS FIXED if it is fixed, or BUG if it is still broken. You can never see anyone else's report.
+author marks it fixed, STATUS shows TO TEST: choose OK and press MARK AS FIXED if it is fixed, or choose BUG if it is still broken. You can never see anyone else's report.
 
 What Send sends, over HTTPS to the same Community server, with your Steam-verified token (see above):
 

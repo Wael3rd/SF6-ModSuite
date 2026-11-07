@@ -44,4 +44,6 @@ void confirm(const std::string& text, const std::string& title, std::function<vo
 bool busy();
 // A text dialog can open: its hooks are in place
 bool text_available();
+// What the open text dialog's field shows now, to see whether a key changed it: "" = no dialog, or nothing read
+std::string text_field_shown();
 }
