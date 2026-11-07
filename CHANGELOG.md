@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.26.0 (2026-11-07) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.22.0 | the classic Stage Select lists the extra stages past its last cell |
+| SF6 Color Mod | 0.24.5 | Opponent Outfit Settings: T turns everything off, whatever cell the cursor is on |
+| SF6 Native Core | 0.9.7 | unchanged |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.21.0 and SF6 Color Mod 0.24.4, then install Slots Loader 1.22.0
+and Color Mod 0.24.5 together. Native Core 0.9.7, Recording Manager 2.2.9 and Profile Mod 1.0.0 are the same files as in 1.25.0: keep
+them. With the all-in-one package, replace 1.25.0 with 1.26.0. Neither the costume pak nor the stage pak is rebuilt at the first launch.
+
+### SF6 Slots Loader 1.22.0
+- Stage select of Fighting Ground > Versus: a stage mod that is really another stage (a Suzaku Castle over the Training Room) is now an
+  entry of its own, after the game's stages, as in Battle Settings and Training. An arrow in the corner beside the last cell says there
+  are more; RIGHT on that cell moves what the cells show, and the mirrored arrow beside the first cell says there are more on that
+  side. The outlines stay where they are.
+- UP / DOWN now only change the look of the focused entry: a stage's own look and its variations (lighting...). Stage mods over one
+  stage whose names start with the same word ("Aokigahara (no NPC)", "Aokigahara with NPCs") are one entry with several looks.
+- What the focused entry shows is what the battle loads, on this PC only: the opponent and the replay still see the game's own stage.
+- Without such a mod, the screen is the game's own, as before.
+
+### SF6 Color Mod 0.24.5
+- Opponent Outfit Settings: with 02 as the only one of colours 01-10 ticked and the cursor on an RW / MC cell, T now turns everything
+  off, as everywhere else. It used to tick or untick that cell.
+
+### Known issues
+- Stage select: the arrows beside the list cannot be clicked with the mouse.
+- Stage select: two unrelated stage mods over one stage whose names start with the same word are taken for one stage with two looks;
+  there is no setting yet to keep them apart.
+- Stage select with extra stages: the Random key, a pad, and the cursor coming back to an extra stage after a fight have not been
+  checked in game yet.
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet.
+- Manager mode has not been checked in an online match. Its owned-outfit opt-out was checked by automated tests only.
+- A very long first rebuild can leave the game with no window. In one test a 26-minute rebuild, on a PC busy with other
+  work, left the game stuck at start-up; closing it and launching again worked, and the pak was complete. The cause is not
+  known. Rebuilds of a few minutes were fine.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+- All languages except French are machine translations, not yet reviewed by native speakers.
+- An outfit whose mod gives no usable name still shows the loader's "Outfit I", in English in every language.
+- Two outfits of one fighter with the same mod name look the same on the Costume row. Their numbers differ, so choices
+  do not mix.
+- An outfit named after its archive keeps the file's extension in its name (".rar").
+- Report a bug is on Battle Settings > Character only.
+- Slotsloader Manager: report_mod.dll has not been checked in a package installed by ZZtaii's Manager.
+- The Record and Replay pages' fix was checked in game with the keyboard, not with a pad.
+- Arabic: a long line of Replays > Settings' summary slides as a whole, and scrolling names have not been checked in game.
+- Real outfit names have not been checked in a real online match. They are local text: outfits still travel as numbers.
+- With the full profile, the limited one shows briefly first.
+- Profile Mod has not been checked in an online match.
+
 ## 1.25.0 (2026-11-07) — SF6 Mod Suite
 
 | Package | Version | |
