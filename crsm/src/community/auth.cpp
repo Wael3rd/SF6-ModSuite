@@ -1,5 +1,7 @@
 #include "auth.hpp"
 
+#include <windows.h>
+
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -96,24 +98,74 @@ std::string token_path(const std::string& config_path) {
     return p;
 }
 
+// Opened so that the other DLL's rename never has to wait for this read. A rename going on right now can still refuse it for an instant: `tries` reads, 2 ms apart; no file is no file, at once.
+std::string read_token_file(const std::string& path, int tries) {
+    const std::wstring w = std::filesystem::path(path).wstring();
+    HANDLE h = INVALID_HANDLE_VALUE;
+    for (int i = 0; i < tries; ++i) {
+        if (i) Sleep(2);
+        h = CreateFileW(w.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) break;
+        const DWORD e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) return "";
+    }
+    if (h == INVALID_HANDLE_VALUE) return "";
+    std::string text;
+    char buf[4096];
+    DWORD got = 0;
+    while (ReadFile(h, buf, sizeof buf, &got, nullptr) && got) text.append(buf, got);
+    CloseHandle(h);
+    return text;
+}
+
 std::string load_token(const std::string& path, const std::string& api_base) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return "";
-    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const std::string text = read_token_file(path, 100);   // the worker thread: it may wait for a rename
+    if (text.empty()) return "";
     Token t;
     if (!token_from_json(json::parse(text, nullptr, false), &t)) return "";
     return t.api_base == api_base ? t.token : std::string();
 }
 
+// Whole or not at all: a reader in the other DLL never sees half a file. The rename may have to wait for that reader to close it.
 bool save_token(const std::string& path, const Token& t, std::string* err) {
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) { if (err) *err = "cannot write " + path; return false; }
-    f << token_json(t).dump(2, ' ', false, json::error_handler_t::replace);
-    f.close();
-    if (!f) { if (err) *err = "cannot write " + path; return false; }
-    return true;
+    const std::string tmp = path + ".tmp" + std::to_string(GetCurrentProcessId()) + "." + std::to_string(GetCurrentThreadId());
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) { if (err) *err = "cannot write " + tmp; return false; }
+        f << token_json(t).dump(2, ' ', false, json::error_handler_t::replace);
+        f.close();
+        if (!f) { if (err) *err = "cannot write " + tmp; std::filesystem::remove(tmp, ec); return false; }
+    }
+    for (int i = 0; i < 200; ++i) {
+        std::filesystem::rename(tmp, path, ec);
+        if (!ec) return true;
+        Sleep(5);
+    }
+    std::filesystem::remove(tmp, ec);
+    if (err) *err = "cannot replace " + path;
+    return false;
+}
+
+bool drop_token_if(const std::string& path, const std::string& api_base, const std::string& refused) {
+    if (token_changed(load_token(path, api_base), refused)) return false;
+    return drop_token(path);
+}
+
+TokenLock::TokenLock(int wait_ms) {
+    wchar_t name[64];
+    swprintf_s(name, L"Local\\SF6CommunityToken.%lu", GetCurrentProcessId());
+    mutex_ = CreateMutexW(nullptr, FALSE, name);
+    if (!mutex_) return;
+    const DWORD w = WaitForSingleObject(static_cast<HANDLE>(mutex_), (DWORD)wait_ms);
+    held_ = w == WAIT_OBJECT_0 || w == WAIT_ABANDONED;
+}
+
+TokenLock::~TokenLock() {
+    if (!mutex_) return;
+    if (held_) ReleaseMutex(static_cast<HANDLE>(mutex_));
+    CloseHandle(static_cast<HANDLE>(mutex_));
 }
 
 bool drop_token(const std::string& path) {

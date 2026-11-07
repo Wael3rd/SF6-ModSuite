@@ -47,7 +47,26 @@ std::string token_path(const std::string& config_path);
 // The token of identity.json when it was issued by this api_base ("" otherwise: a token of a local test Worker never goes
 // to the real one, and the other way round)
 std::string load_token(const std::string& path, const std::string& api_base);
+std::string read_token_file(const std::string& path, int tries);   // the whole file, "" when there is none
 bool save_token(const std::string& path, const Token& t, std::string* err);
+// What was refused (401 invalid_token) against what the file holds now: another DLL of this game got a new token since: use that one, no new ticket
+inline bool token_changed(const std::string& stored, const std::string& refused) { return !stored.empty() && stored != refused; }
+// Removes the file only if it still holds `refused`: under TokenLock
+bool drop_token_if(const std::string& path, const std::string& api_base, const std::string& refused);
+// Two DLLs of the game share identity.json (the Recording Manager and report_mod): getting a token, or dropping one, is one at a time, across the DLLs (a mutex named for this
+// process). The second one waits, then finds the first one's token in the file and asks Steam for nothing. Given up after wait_ms: then both go on, each with its own ticket: both
+// tokens are valid, the last one written stays, and a refused one is read again.
+class TokenLock {
+public:
+    explicit TokenLock(int wait_ms);
+    ~TokenLock();
+    TokenLock(const TokenLock&) = delete;
+    TokenLock& operator=(const TokenLock&) = delete;
+    bool held() const { return held_; }
+private:
+    void* mutex_ = nullptr;
+    bool held_ = false;
+};
 bool drop_token(const std::string& path);
 
 // The request headers (CRLF separated, no trailing CRLF): Content-Type / Accept json, x-api-key when set, x-client-version

@@ -285,7 +285,7 @@ Worker::Done Worker::run_job(const Job& j) {
     if (!build_request(cmd, cfg, &rq, &err)) { logf("http: " + d.cmd + ": " + err); return finish(error_reply(err)); }
 
     // the Steam-verified identity (auth.hpp): the token of this api_base, got first when a write has none
-    const std::string tpath = auth::token_path(j.config_path);
+    const std::string tpath = j.token_path.empty() ? auth::token_path(j.config_path) : j.token_path;
     std::string bearer = auth::load_token(tpath, cfg.api_base);
     token_state_.store(bearer.empty() ? 0 : 1);
     const bool write = tickets_ && auth::needs_token(d.cmd);
@@ -301,7 +301,8 @@ Worker::Done Worker::run_job(const Job& j) {
     }
     if (write && bearer.empty()) {
         std::string code;
-        bearer = acquire(cfg, tpath, cmd, &code);
+        const std::string none;
+        bearer = acquire(cfg, tpath, cmd, &code, &none);
         if (bearer.empty()) { logf("http: " + d.cmd + ": not sent (" + code + ")"); return finish(auth::refused_reply(code)); }
         fresh = true;
         linked_session_ = true;
@@ -313,15 +314,31 @@ Worker::Done Worker::run_job(const Job& j) {
     // 401 invalid_token: the token is gone (revoked, or more than 5 newer ones): identity.json deleted, a new one once
     auto refused = [&] { return write && hr.sent && hr.status == 401 && auth::error_code(rep.data) == "invalid_token"; };
     auto drop = [&] {
-        auth::drop_token(tpath);
-        token_state_.store(0);
-        logf("http: " + d.cmd + ": the token was refused (401 invalid_token): identity.json deleted");
+        auth::TokenLock lock(kTokenLockMs);
+        if (auth::drop_token_if(tpath, cfg.api_base, bearer)) {
+            token_state_.store(0);
+            logf("http: " + d.cmd + ": the token was refused (401 invalid_token): identity.json deleted");
+        } else {
+            logf("http: " + d.cmd + ": the token was refused (401 invalid_token): identity.json holds another one now");
+        }
     };
     if (refused()) {
+        // read again first: the other DLL of the game may have a new one since (a sixth token revokes the oldest)
+        const std::string stored = auth::load_token(tpath, cfg.api_base);
+        if (auth::token_changed(stored, bearer)) {
+            logf("http: " + d.cmd + ": the token was refused, identity.json holds a newer one: sent again with it");
+            bearer = stored;
+            hr = perform(rq, cfg, bearer);
+            why.clear();
+            rep = make_reply(d.cmd, hr, &why);
+        }
+    }
+    if (refused()) {
+        const std::string was_refused = bearer;
         drop();
         if (!fresh) {                                   // once: a token just issued and refused is not asked again
             std::string code;
-            bearer = acquire(cfg, tpath, cmd, &code);
+            bearer = acquire(cfg, tpath, cmd, &code, &was_refused);
             if (bearer.empty()) { logf("http: " + d.cmd + ": not sent again (" + code + ")"); return finish(auth::refused_reply(code)); }
             hr = perform(rq, cfg, bearer);
             why.clear();
@@ -350,10 +367,22 @@ HttpResult Worker::perform(const Request& rq, const Config& cfg, const std::stri
     return hr;
 }
 
-std::string Worker::acquire(const Config& cfg, const std::string& tpath, const json& cmd, std::string* code) {
+// refused: nullptr = a new token whatever the file holds (the first list of a session); else what the caller knows is no good: the file holding another one (the other DLL's, got
+// while this one waited here) is used as it is, and no ticket is asked.
+std::string Worker::acquire(const Config& cfg, const std::string& tpath, const json& cmd, std::string* code, const std::string* refused) {
     Flag busy(authenticating_);
     *code = auth::kUnavailable;
     const int64_t t0 = now_ms();
+    auth::TokenLock lock(kTokenLockMs);
+    if (refused) {
+        const std::string stored = auth::load_token(tpath, cfg.api_base);
+        if (auth::token_changed(stored, *refused)) {
+            logf("auth: identity.json already holds a token (the other DLL's): no ticket asked");
+            token_state_.store(1);
+            code->clear();
+            return stored;
+        }
+    }
     TicketSource::Ticket t = tickets_->get(kTicketWaitMs);
     if (!t.ok || t.bytes.empty()) {
         logf("auth: no Steam ticket (" + (t.why.empty() ? std::string("?") : t.why) + ")");

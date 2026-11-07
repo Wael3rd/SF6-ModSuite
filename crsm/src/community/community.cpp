@@ -235,9 +235,8 @@ Client& client() { return g_client; }
 Identity identity(const std::string& banner_cfn) { return identity_now(banner_cfn); }
 
 std::string linked_cfn() {
-    std::ifstream f(auth::token_path(kConfigPath), std::ios::binary);
-    if (!f) return "";
-    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const std::string text = auth::read_token_file(auth::token_path(kConfigPath), 1);   // (a screen's question: one try, it never waits)
+    if (text.empty()) return "";
     auth::Token t;
     if (!auth::token_from_json(nlohmann::json::parse(text, nullptr, false), &t) || !auth::public_cfn(t.cfn)) return "";
     return t.cfn;

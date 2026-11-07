@@ -16,10 +16,11 @@ void call(const Client::Callback& cb, bool ok, const json& data) {
 
 }  // namespace
 
-void Client::configure(std::string config_path, std::string response_path) {
+void Client::configure(std::string config_path, std::string response_path, std::string token_path) {
     std::lock_guard<std::mutex> lk(mx_);
     config_path_ = std::move(config_path);
     response_path_ = std::move(response_path);
+    token_path_ = std::move(token_path);
 }
 
 void Client::start() { worker_.start(); }
@@ -50,6 +51,7 @@ bool Client::send(json cmd, Callback cb, int timeout_ticks) {
             job.id = pending_.id;
             job.cmd = std::move(cmd);
             job.config_path = config_path_;
+            job.token_path = token_path_;
             job.response_path = response_path_;
         } else {
             ++counters_.busy_refusals;
