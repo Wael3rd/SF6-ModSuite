@@ -40,7 +40,7 @@ struct Scrub {
     std::vector<std::string> names;             // the Windows user name, the PC's name (replaced wherever they appear, any case; 3 bytes at least)
     std::string game_root;                      // the game folder: "<game>" in every path
 };
-// The text with: any path under a user's folder cut down to "<user>" (C:\Users\Name\..., both slashes, escaped, \\?\), the game folder to
+// The text with: any path under a user's folder cut down to "<user>" (with its drive, both slashes, escaped, long-path prefix), the game folder to
 // "<game>", the names to "<user>", and whatever looks like a platform ID to "<id>": a SteamID64, Steam's other forms ([U:1:n], STEAM_0:1:n),
 // a Steam profile address, any lone run of 9 digits or more (CFN short ids, Xbox and PSN numbers).
 std::string clean_log(const std::string& text, const Scrub& s);

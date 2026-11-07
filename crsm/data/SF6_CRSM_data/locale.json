@@ -3253,7 +3253,7 @@
     "rsm.report_need_text": "보내기: 먼저 문제를 설명하세요",
     "rsm.report_sending": "보내는 중...",
     "rsm.report_sent": "보냈습니다. 감사합니다!",
-    "rsm.report_sent_desc": "신고를 보냈습니다. 뒤로를 누르면 이 메뉴가 닫힙니다.",
+    "rsm.report_sent_desc": "신고를 보냈습니다. 이 메뉴를 닫으려면 뒤로를 누르세요.",
     "rsm.report_failed": "보내지 못함: %s",
     "rsm.report_err_network": "서버 응답 없음. 확인을 눌러 재시도",
     "rsm.report_err_steam": "Steam 인증 실패. 확인을 눌러 재시도",
