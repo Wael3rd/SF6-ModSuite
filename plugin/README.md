@@ -131,7 +131,7 @@ list). Every outfit stays in the list for the rest of the page (outfit, colours,
 
 The game's list shows 5 lines (the sixth widget is written and stays hidden). The lines past the fifth outfit are ours: copies of
 its text under the list's parent, in its style and step, made in the guide list's update (R19), found by name each frame (R35), only
-on this page. Each shows the outfit's name (`CostumeInventory.GetName`) and its count (`ValidColorIdList`), with what goes round them
+on this page. Each shows the outfit's name (`CostumeInventory.GetName`) and its count (`ValidColorIdList`, plus the Color Mod's RW / MC ticks of that outfit), with what goes round them
 taken from a line the game wrote. A name too long for the place slides while the count stays. Up to 19 rows, so 24 lines; with more,
 the rows follow the outfit shown on the Costume row, and a row at an end says how many are past it.
 

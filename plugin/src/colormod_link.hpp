@@ -81,4 +81,11 @@ inline void clear(int scope) {
     if (f.clear) f.clear(scope);
 }
 
+// How many entries are ticked for an outfit on Opponent Outfit Settings: 0 with no Color Mod or an older one
+inline int opponent_ticks(int fighter, int costume) {
+    HMODULE h = GetModuleHandleW(L"SF6_ColorModNative.dll");
+    auto* fn = h ? reinterpret_cast<SF6ColorMod_OpponentTicksFn>(GetProcAddress(h, "SF6ColorMod_OpponentTicks")) : nullptr;
+    return fn ? fn(fighter, costume) : 0;
+}
+
 }  // namespace slots::colormod

@@ -1204,8 +1204,39 @@ requests.
 
 **Opponent Outfit Settings** lists the same entries in the game's own colour grid, each as colour 02 for the game. The Color
 Mod gives each RW / MC cell its own squares and dresses the preview with the selected cell through the same scope 1 request
-(`colour_track.cpp` `tick_opponent`), only while that page is up. A tick on such a cell is still the game's: it saves colour 02
-of that outfit (`ValidColorIdList` holds colour numbers), and an opponent then wears plain colour 02.
+(`colour_track.cpp` `tick_opponent`), only while that page is up.
+
+Each RW / MC cell ticks on its own. For the game such a tick is colour 02, so the page's list is watched (`opp_watch`,
+`engine/opponent_ticks.hpp` `classify`): the game's list is put back and the tick goes to
+`reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt` (a header line, then `fighter<TAB>outfit<TAB>entry's file`),
+written at each change. The game's save only ever holds real colours, and colour 02 stays a cell of its own. The summary's lines
+count both (`SF6ColorMod_OpponentTicks` for the lines the Slots Loader copies). The all-colours key: with only entries ticked it
+turns them off; otherwise it follows the game (all on, entries included, then all off). The EX / DX key leaves entries alone.
+One case can't be told apart from the list: colour 02 the only one of 01-10 ticked, the cursor on an entry: the all-colours key
+then looks like a tick on that cell, and toggles it instead of turning everything off.
+
+In a match the pick stays the game's rule (`OtherFighterSettingSaveData.TryGetRandomCostumeAndColor`: evenly among the
+(outfit, colour) pairs of every ticked outfit of that fighter, not the player's own look when there is another, not the last one
+when there is another), with three hooks, each put once the check found no other method entering its code (R18, cached in
+`SF6_ColorSpinExtra_data\codecheck.txt`):
+
+- `GetSelectables`, post: one more pair (outfit, 1) per ticked entry that still exists, in the list of that one call. Nothing goes
+  to the save.
+- `TryGetRandomCostumeAndColor`, post: when the pick lands on colour 1 of an outfit with entries ticked, what it means is settled
+  there (`look_after_pick`: evenly among the entries and colour 02 if 02 is ticked itself; not the player's own look; not last
+  time's). The opponent's model wears it online only (`resolve_tree`). It's a local override, what the game itself does for this
+  page: the game's filter only looks for an empty list, it doesn't check what is owned, and nothing in the code read sends it.
+- `CheckVerify`, post: the page's back key is its only caller. "You haven't chosen a colour" becomes OK when an entry that still
+  exists is ticked for that fighter, since RW 6 alone is a choice.
+
+What can happen: an entry removed after the pick came to it: plain colour 02 of that outfit, and a journal line (`entry ... is
+gone`). Every ticked entry removed before the pick, or the Color Mod gone, with nothing else ticked: the game's pick finds nothing
+and the opponent keeps his own look. The first two hooks refused by R18: a journal line (`hooks REFUSED`), and RW / MC ticks don't
+apply in a match. `CheckVerify` refused: a journal line, and a fighter with only entries ticked keeps the game's warning. A fighter
+with no entry ticked isn't touched: the hooks return at once.
+
+Don't call the page's `UpdateColorGrid` or `UpdateCosColorTextList` from frame code: doing it after a key press crashed the game
+(07/11). What the game drew is repainted cell by cell (`UpdateColorGridItemCheck`).
 
 ## Costume options for Replays > Settings (`plugin/src/replay_tab.cpp`, `rto_menu.cpp`, `replay_options.hpp`)
 

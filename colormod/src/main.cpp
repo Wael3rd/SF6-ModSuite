@@ -63,6 +63,10 @@ extern "C" __declspec(dllexport) int SF6ColorMod_PanelCaps() { return 1 | 2; }
 extern "C" __declspec(dllexport) int SF6ColorMod_EntriesVersion() {
     try { return engine::decide::entries_version(); } catch (...) { return 0; }
 }
+// Opponent Outfit Settings: how many entries are ticked for an outfit (the summary's lines of the Slots Loader count them). Any thread.
+extern "C" __declspec(dllexport) int SF6ColorMod_OpponentTicks(int fighter, int costume) {
+    try { return engine::decide::opp_count(fighter, costume); } catch (...) { return 0; }
+}
 extern "C" __declspec(dllexport) int SF6ColorMod_Entries(int fighter, int costume, SF6CMEntry* out, int cap) {
     try { return engine::decide::entries_export(fighter, costume, out, cap); } catch (...) { return 0; }
 }

@@ -41,6 +41,9 @@ typedef int (*SF6ColorMod_EntriesFn)(int fighter, int costume, SF6CMEntry* out, 
 typedef int (*SF6ColorMod_RequestFn)(int scope, int fighter, int costume, const char* id, void* battle);
 /* Every request of that scope goes. */
 typedef void (*SF6ColorMod_ClearRequestsFn)(int scope);
+/* Added with the ticks of Opponent Outfit Settings, absent from older Color Mods: how many entries are ticked for an outfit there, on top of the colour numbers the
+ * game's save holds for it. Any thread. */
+typedef int (*SF6ColorMod_OpponentTicksFn)(int fighter, int costume);
 
 #ifdef __cplusplus
 }

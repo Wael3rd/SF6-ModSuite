@@ -8,6 +8,8 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <random>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -23,6 +25,8 @@
 #include "color_mods.hpp"
 #include "live.hpp"
 #include "live_internal.hpp"
+#include "code_check.hpp"
+#include "opponent_ticks.hpp"
 #include "requests.hpp"
 #include "../../include/sf6colormod_entries.h"
 
@@ -353,7 +357,7 @@ Sel side_sel(int side) {
 // session member, offline a fighter on a pad. Its model is the one of that fighter; in a mirror match (the other
 // player on the same fighter), the one on its team's side (team 0 = P1).
 struct BsOwn { int fighter = -1; int team = -1; bool mirror = false; };
-struct Bs { bool on = false; std::vector<BsOwn> own; };
+struct Bs { bool on = false, net = false; std::vector<BsOwn> own; };
 Bs g_bs;
 MO* g_bs_desc = nullptr;                              // the description read last (compared only, never dereferenced)
 uint64_t g_bs_frame = UINT64_MAX, g_bs_read = 0;
@@ -423,6 +427,7 @@ const Bs& bs_read(uint64_t fr) {
         for (BsOwn& o : bs.own)
             for (int f : others) if (f == o.fighter) o.mirror = true;
         bs.on = !picked && !bs.own.empty();
+        bs.net = net;
         char b[64];
         std::snprintf(b, sizeof b, "%s mode %d %s:", bs.on ? "on" : "off", (int)mode, net ? "online" : "offline");
         sig = b;
@@ -448,6 +453,8 @@ bool bs_applies(MO* ctrl, int side, int fighter) {
         if (o.fighter == fighter && (!o.mirror || o.team + 1 == side)) return true;
     return false;
 }
+
+std::string opp_wear(int fighter, int costume);       // the online opponent: the entry the game's pick came to ("" none); below
 
 rsz::NodeRef entry_tree(const Entry& e) {             // its override when one exists, else the file itself
     if (!e.okey.empty()) if (auto ov = live::file_tree(kOverridesPrefix + e.okey + ".user.2")) return ov;
@@ -553,6 +560,24 @@ Resolved resolve_tree(MO* ctrl, int side) {
     if (side == 1 || side == 2) {
         const int fc = path_identity(ctrl).first;
         if (bs_applies(ctrl, side, fc)) return resolve_bs(ctrl, fc, *id);
+        // the online opponent, on what Opponent Outfit Settings' ticks came to (not the player's: above, by its side in a mirror match)
+        if (*id == kBaseColor && bs_state().on && bs_state().net) {
+            const auto [of, oc] = path_identity(ctrl);
+            const std::string wear = opp_wear(of, oc);
+            if (!wear.empty()) {
+                const int k = g_cat.find_ident(of, oc, wear);
+                const auto* entries = k > 0 ? g_cat.entries(of, oc) : nullptr;
+                if (entries && (size_t)k <= entries->size()) {
+                    const Entry& e = (*entries)[(size_t)k - 1];
+                    out.tree = entry_tree(e);
+                    out.entry = e;
+                    out.k = k;
+                    return out;
+                }
+                cmn::journal("opponent colours: entry %s of %d / %d is gone: the plain colour 02", wear.c_str(), of, oc);
+                return out;
+            }
+        }
     }
     const Sel sel = side_sel(side);
     // a side's remembered entry / game-colour override belongs to its remembered fighter only: another fighter on that
@@ -1167,11 +1192,14 @@ static void color_mods_tick() {
     rebuild_locked();
 }
 
+namespace { void opp_hooks_tick(); }
+
 void on_frame() {
     std::lock_guard lk(live::mx());
     if (!active()) return;
     try {
         ++g_tick;
+        opp_hooks_tick();
         if (g_tick % 30 == 0) bs_state();             // journals the Battle Settings colours' state when it changes
         if (g_tick % 20 == 0) {                       // other mods' replay requests: over once their replay is
             const uintptr_t running = running_flow_map();
@@ -1353,6 +1381,256 @@ bool install() {
 }
 
 // ---- other mods (include/sf6colormod_entries.h) ----------------------------------------------------------------------
+// ---- Opponent Outfit Settings' ticks of entries ------------------------------------------------------------------------
+namespace {
+constexpr const char* kOppFile = "reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt";
+std::mutex g_opp_mx;
+opponent::Ticks g_opp_ticks;
+bool g_opp_loaded = false;
+void opp_load() {                                     // g_opp_mx held
+    if (g_opp_loaded) return;
+    g_opp_loaded = true;
+    std::ifstream in(kOppFile, std::ios::binary);
+    if (!in) return;
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (!g_opp_ticks.from_text(text)) cmn::journal("opponent colours: %s is of another format: left aside, nothing ticked", kOppFile);
+}
+void opp_save() {                                     // g_opp_mx held. To a temp file, then renamed: a crash leaves the former one.
+    const std::string tmp = std::string(kOppFile) + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) { cmn::journal("opponent colours: cannot write %s", tmp.c_str()); return; }
+        out << g_opp_ticks.to_text();
+    }
+    if (!MoveFileExA(tmp.c_str(), kOppFile, MOVEFILE_REPLACE_EXISTING)) cmn::journal("opponent colours: cannot replace %s", kOppFile);
+}
+}  // namespace
+
+// ---- the fight's pick ------------------------------------------------------------------------------------------------
+// The game picks with OtherFighterSettingSaveData.TryGetRandomCostumeAndColor: evenly among GetSelectables' (outfit, colour) pairs, not the player's own look when there is
+// another, not last time's when there is another, then FighterDesc.SetOverwriteDesc: a local override, what the game itself does for this page (read 07/11; its only
+// filter is an empty list, no ownership check). So each ticked entry is one more pair (outfit, 1) in the list GetSelectables returns, a list of that one call: nothing is
+// added to the save. When the pick lands on colour 1 of an outfit with entries ticked, what it means is settled here, and the opponent's model wears it (resolve_tree). A
+// fighter with no entry ticked isn't touched: the hooks return at once. Hooked once the check found no other method entering their code (R18).
+namespace {
+constexpr const char* kOppCheckFile = "reframework/data/SF6_ColorSpinExtra_data/codecheck.txt";
+struct OppWear { int costume = -1; std::string id; };
+std::map<int, OppWear> g_opp_wears;                   // g_opp_mx: what the game's last pick came to, per fighter
+std::map<int, OppWear> g_opp_last;                    // g_opp_mx: what it was before, for "not twice in a row"
+code_check::Batch g_opp_check;
+bool g_opp_check_asked = false, g_opp_hooked = false;
+enum { kOppSelectables, kOppPick, kOppVerify };
+thread_local MO* tl_sel_this = nullptr;
+thread_local MO* tl_ver_this = nullptr;
+struct PickCall { MO* self = nullptr; uint32_t* out_c = nullptr; uint32_t* out_col = nullptr; int sf = -1, sc = -1, scol = -1; };
+thread_local PickCall tl_pick;
+
+// The entries ticked for an outfit that still exist
+std::vector<std::string> opp_entries(int fighter, int costume) {
+    std::vector<std::string> ticked, out;
+    {
+        std::lock_guard lk(g_opp_mx);
+        opp_load();
+        ticked = g_opp_ticks.of(fighter, costume);
+    }
+    const auto* l = ticked.empty() ? nullptr : g_cat.entries(fighter, costume);
+    if (l) for (const Entry& e : *l) for (const std::string& id : ticked) if (e.ident == id) out.push_back(id);
+    return out;
+}
+int pre_selectables(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_sel_this = argc >= 2 && !cmn::closing() ? reinterpret_cast<MO*>(argv[1]) : nullptr;
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_selectables(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    MO* self = tl_sel_this;
+    tl_sel_this = nullptr;
+    if (!self || !ret_val || !*ret_val || cmn::closing()) return;
+    try {
+        int32_t fid = -1;
+        if (!ll::read_field_i32(self, "FighterId", fid)) return;
+        std::vector<int> costumes;
+        {
+            std::lock_guard lk(g_opp_mx);
+            opp_load();
+            costumes = g_opp_ticks.costumes(fid);
+        }
+        if (costumes.empty()) return;
+        std::lock_guard lk(live::mx());
+        MO* list = reinterpret_cast<MO*>(*ret_val);
+        const int before = list_count(list);
+        int added = 0;
+        for (int c : costumes)
+            for (size_t i = 0, n = opp_entries(fid, c).size(); i < n; ++i) {
+                uint32_t pair[2] = { (uint32_t)c, kBaseColor };
+                call(list, "Add(System.ValueTuple`2<System.UInt32,System.UInt32>)", { pair });
+                ++added;
+            }
+        cmn::journal("opponent colours: fighter %d: %d pairs from the game, %d entries added, %d now", fid, before, added, list_count(list));
+    } catch (...) {
+        cmn::journal("opponent colours: EXCEPTION at the list of colours");
+    }
+}
+int pre_pick(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_pick = PickCall{};
+    if (argc < 7 || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    const auto out_ptr = [](void* p) { return reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(p) & 0x7FFFFFFFFFFFFFFFull); };
+    tl_pick.self = reinterpret_cast<MO*>(argv[1]);
+    tl_pick.out_c = out_ptr(argv[2]);
+    tl_pick.out_col = out_ptr(argv[3]);
+    tl_pick.sf = (int)(intptr_t)argv[4]; tl_pick.sc = (int)(intptr_t)argv[5]; tl_pick.scol = (int)(intptr_t)argv[6];
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_pick(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const PickCall p = tl_pick;
+    tl_pick = PickCall{};
+    if (!p.self || !ret_val || cmn::closing()) return;
+    try {
+        int32_t fid = -1;
+        if (!ll::read_field_i32(p.self, "FighterId", fid)) return;
+        const bool ok = ((uintptr_t)*ret_val & 0xFF) != 0;
+        const int c = ok ? (int)*p.out_c : -1, col = ok ? (int)*p.out_col : -1;
+        std::lock_guard lock(live::mx());
+        const std::vector<std::string> entries = ok && col == (int)kBaseColor ? opp_entries(fid, c) : std::vector<std::string>();
+        std::string look;
+        if (!entries.empty()) {
+            // colour 02 itself, if the player really ticked it for that outfit
+            bool plain = false;
+            MO* all = ll::read_field_object(p.self, "CostumeSettings");
+            for (int i = 0, n = list_count(all); i < n; ++i) {
+                MO* pc = list_item(all, i);
+                int32_t id = -1;
+                if (!pc || !ll::read_field_i32(pc, "CostumeId", id) || id != c) continue;
+                MO* ids = ll::read_field_object(pc, "ValidColorIdList");
+                for (int k = 0, m = list_count(ids); k < m; ++k)
+                    if ((uint32_t)call(ids, "get_Item(System.Int32)", { ll::arg_i32(k) }).dword == kBaseColor) plain = true;
+            }
+            // what the player wears when it's that same look: the player's Fighter Settings entry, else the plain colour
+            std::optional<std::string> own;
+            if (p.sf == fid && p.sc == c && p.scol == (int)kBaseColor) {
+                own = std::string();
+                const Sel& fs = g_sel[2];
+                const auto* l = g_cat.entries(fid, c);
+                if (fs.rw > 0 && fs.fighter == fid && fs.costume == c && l && (size_t)fs.rw <= l->size()) own = (*l)[(size_t)fs.rw - 1].ident;
+            }
+            std::optional<std::string> last;
+            {
+                std::lock_guard lk(g_opp_mx);
+                auto it = g_opp_last.find(fid);
+                if (it != g_opp_last.end() && it->second.costume == c) last = it->second.id;
+            }
+            static std::mt19937 rng{ std::random_device{}() };
+            look = opponent::look_after_pick(plain, entries, own, last, rng());
+            cmn::journal("opponent colours: fighter %d: the pick is outfit %d colour 1: %s", fid, c, look.empty() ? "the plain colour 02" : look.c_str());
+        }
+        std::lock_guard lk(g_opp_mx);
+        g_opp_wears[fid] = OppWear{ c, look };
+        if (ok && col == (int)kBaseColor) g_opp_last[fid] = OppWear{ c, look };
+    } catch (...) {
+        cmn::journal("opponent colours: EXCEPTION after the pick");
+    }
+}
+// The page's back key asks CheckVerify (its only caller, read 07/11): "you haven't chosen a colour" when every list of the game's is empty. RW 6 alone is a choice: the answer
+// becomes OK (0) when an existing entry of that fighter is ticked. Any other answer stays the game's.
+int pre_verify(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_ver_this = argc >= 2 && !cmn::closing() ? reinterpret_cast<MO*>(argv[1]) : nullptr;
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_verify(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    MO* self = tl_ver_this;
+    tl_ver_this = nullptr;
+    if (!self || !ret_val || ((uintptr_t)*ret_val & 0xFFFFFFFF) != 1 || cmn::closing()) return;   // 1: NoValidColor
+    try {
+        int32_t fid = -1;
+        if (!ll::read_field_i32(self, "FighterId", fid)) return;
+        std::vector<int> costumes;
+        {
+            std::lock_guard lk(g_opp_mx);
+            opp_load();
+            costumes = g_opp_ticks.costumes(fid);
+        }
+        std::lock_guard lk(live::mx());
+        for (int c : costumes)
+            if (!opp_entries(fid, c).empty()) {
+                *ret_val = nullptr;
+                cmn::journal("opponent colours: fighter %d: only RW / MC ticked, the game's \"no colour\" warning doesn't apply", fid);
+                return;
+            }
+    } catch (...) {
+        cmn::journal("opponent colours: EXCEPTION at the page's check");
+    }
+}
+// From the frame: the check asked for once, the hooks put when it's done
+void opp_hooks_tick() {
+    if (g_opp_hooked) return;
+    if (!g_opp_check_asked) {
+        g_opp_check_asked = true;
+        auto* tdb = API::get()->tdb();
+        g_opp_check.add(tdb->find_method("app.OtherFighterSettingSaveData", "GetSelectables"), "app.OtherFighterSettingSaveData.GetSelectables");
+        g_opp_check.add(tdb->find_method("app.OtherFighterSettingSaveData", "TryGetRandomCostumeAndColor"), "app.OtherFighterSettingSaveData.TryGetRandomCostumeAndColor");
+        g_opp_check.add(tdb->find_method("app.OtherFighterSettingSaveData", "CheckVerify"), "app.OtherFighterSettingSaveData.CheckVerify");
+        g_opp_check.start(kOppCheckFile, "opponent colours");
+        return;
+    }
+    if (!g_opp_check.done()) return;
+    g_opp_hooked = true;
+    if (!g_opp_check.unique(kOppSelectables) || !g_opp_check.unique(kOppPick)) {
+        cmn::journal("opponent colours: hooks REFUSED (R18), or a method missing: RW / MC ticks don't apply in a match (shared: %d, %d)", g_opp_check.entry(kOppSelectables).shared, g_opp_check.entry(kOppPick).shared);
+        return;
+    }
+    g_opp_check.method(kOppSelectables)->add_hook(pre_selectables, post_selectables, false);
+    g_opp_check.method(kOppPick)->add_hook(pre_pick, post_pick, false);
+    cmn::journal("opponent colours: hooks on GetSelectables and TryGetRandomCostumeAndColor installed (their own code)");
+    if (g_opp_check.unique(kOppVerify)) g_opp_check.method(kOppVerify)->add_hook(pre_verify, post_verify, false);
+    else cmn::journal("opponent colours: CheckVerify not hooked (R18, shared: %d): a fighter with only RW / MC ticked keeps the game's \"no colour\" warning", g_opp_check.entry(kOppVerify).shared);
+}
+std::string opp_wear(int fighter, int costume) {
+    std::lock_guard lk(g_opp_mx);
+    auto it = g_opp_wears.find(fighter);
+    return it != g_opp_wears.end() && it->second.costume == costume ? it->second.id : std::string();
+}
+}  // namespace
+
+bool opp_ticked(int fighter, int costume, const std::string& id) {
+    std::lock_guard lk(g_opp_mx);
+    opp_load();
+    return g_opp_ticks.has(fighter, costume, id);
+}
+void opp_toggle(int fighter, int costume, const std::string& id) {
+    std::lock_guard lk(g_opp_mx);
+    opp_load();
+    const bool on = g_opp_ticks.toggle(fighter, costume, id);
+    opp_save();
+    cmn::journal("opponent colours: fighter %d costume %d: %s %s", fighter, costume, id.c_str(), on ? "ticked" : "unticked");
+}
+void opp_set_entries(int fighter, int costume, bool on) {
+    std::vector<std::string> ids;
+    {
+        std::lock_guard lk(live::mx());
+        if (const auto* l = g_cat.entries(fighter, costume)) for (const Entry& e : *l) ids.push_back(e.ident);
+    }
+    std::lock_guard lk(g_opp_mx);
+    opp_load();
+    if (!on) g_opp_ticks.clear(fighter, costume);
+    else for (const std::string& id : ids) g_opp_ticks.set(fighter, costume, id, true);
+    opp_save();
+    cmn::journal("opponent colours: fighter %d costume %d: every entry %s", fighter, costume, on ? "ticked" : "unticked");
+}
+int opp_count(int fighter, int costume) {
+    std::vector<std::string> ticked;
+    {
+        std::lock_guard lk(g_opp_mx);
+        opp_load();
+        ticked = g_opp_ticks.of(fighter, costume);
+    }
+    if (ticked.empty()) return 0;
+    std::lock_guard lk(live::mx());
+    const auto* l = g_cat.entries(fighter, costume);
+    if (!l) return 0;
+    int n = 0;
+    for (const Entry& e : *l) for (const std::string& id : ticked) if (e.ident == id) ++n;
+    return n;
+}
+
 int entries_version() { return active() ? SF6CM_ENTRIES_VERSION : 0; }   // requests act only while the decisions are ours
 
 int entries_export(int fighter, int costume, SF6CMEntry* out, int cap) {

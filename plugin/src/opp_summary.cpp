@@ -34,6 +34,7 @@
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "opp_summary.hpp"
+#include "colormod_link.hpp"
 #include "name_scroll.hpp"
 #include "perf.hpp"
 #include "scroll_logic.hpp"
@@ -281,12 +282,12 @@ void read_lines(Obj* page, Obj* list) {
     for (int i = 0; i < n; ++i) {
         Obj* o = list_item(outfits, i);
         Row row;
-        if (o) { get_i32(o, "CostumeId", row.costume); row.count = list_count(get_obj(o, "ValidColorIdList")); }
+        if (o) { get_i32(o, "CostumeId", row.costume); row.count = list_count(get_obj(o, "ValidColorIdList")) + colormod::opponent_ticks(fid, row.costume); }
         if (row.costume == shown_cos && i >= g_first) current = i - g_first;
         rows.push_back(row);
     }
     LineFormat fmt;
-    Obj* item = call_obj(list, "get_Child");
+    void* item = A()->ui_find_child(list, "c_item", 0);    // the first line: the list's items come last first (read 07/11)
     void* first = item ? A()->ui_find_child(item, kLineName, 3) : nullptr;
     if (first && !rows.empty())
         fmt = line_format(str(call_obj(static_cast<Obj*>(first), "get_Message")), outfit_name(fid, rows[0].costume), rows[0].count);
