@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — SF6 Recording Manager 2.2.8: Report a bug
+
+### SF6 Recording Manager
+- **Report a bug**: on Battle Settings > Character, Character tab, R / pad X opens a menu to send the mod's author a bug report: a picture of the
+  game taken at the press, your text, the character, outfit and colour with the outfit's record, the mods' versions and list, the Slots Loader's two
+  logs (cleaned of your Windows user name, user folder paths and platform IDs, capped), and your Steam ID, which the server takes from your Steam
+  verification. Nothing leaves until you choose Send; Back sends nothing and keeps nothing. One report per account per costume, kept 90 days.
+  [crsm/README.md](crsm/README.md#report-a-bug) lists it all. Needs the Community server's update.
+
 ## Unreleased — SF6 Slots Loader: Manager mode (Slotsloader Manager contract 2)
 
 ### SF6 Slots Loader

@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
@@ -277,7 +278,7 @@ void hint_pass(const std::string& text) {
         g_hint.written.clear();
         g_hint.cp = -1;
         g_hint.region = 0;
-        gx::invoke(copy, "set_AutoRegionFit(System.Boolean)", { gx::B(false) });   // never squeezed: its region is its text's (below)
+        gx::invoke(copy, "set_AutoRegionFit", { gx::I(0) });   // never squeezed: its region is its text's (below)
     }
     if (cp != g_hint.cp) { gx::invoke(copy, "set_ControlPoint(via.gui.ControlPoint)", { gx::I(cp) }); g_hint.cp = cp; }
     if (text != g_hint.written) { gx::set_text(copy, text); g_hint.written = text; }
@@ -336,8 +337,6 @@ rp::ScreenRead screen_read(MO* agent, MO* main) {
     if (MO* ti = gx::ref(agent, "_TabItem")) gx::call_i32(ti, "get_SelectedIndex", &tab);
     s.tab = tab;
     s.costume_row = actual_visible(costume_spin(main));
-    int64_t input = 1;
-    s.input_on = !gx::get_i64(agent, "_IsEnableInput", &input) || input != 0;
     const SF6CoreAPI* a = api();
     s.window_open = !a || perf::counted(a)->opt_window_open() != 0;
     s.dialog_up = ui::dialogs::busy();
@@ -448,6 +447,7 @@ std::vector<rp::RowText> rows_now() {
     in.cut = [](const std::string& s, double em) { return lg::cut_em(s, em); };
     return rp::menu_rows(in, [](const std::string& k, const std::vector<std::string>& args) { return ui::T(k, args); });
 }
+void forget();
 // The group made again with the same key (the Color Mod's pattern for per-page texts)
 bool build_group() {
     const SF6CoreAPI* a = api();
@@ -472,7 +472,7 @@ bool build_group() {
 }
 void open_window() {
     const SF6CoreAPI* a = api();
-    if (!a || !build_group()) { g_session.closed(); cap::discard(); cmn::journal("bug report: no window"); return; }
+    if (!a || !build_group()) { g_session.closed(); forget(); cmn::journal("bug report: no window"); return; }
     g_window_seen = false;
     g_window_deadline = tick() + kWindowWait;
     if (!perf::counted(a)->opt_window_open()) {
@@ -526,10 +526,10 @@ void closed_now(const char* why) {
 }
 
 void start_prep() {
+    if (g_snap.jpeg.empty() && cap::state() == cap::State::Ready) g_snap.jpeg = cap::take();    // kept here for a second try
+    if (g_snap.jpeg.empty() && !cap::why().empty()) g_snap.jpeg_note = cap::why();
     rp::Snapshot snap = g_snap;
     snap.text = g_session.text();
-    if (cap::state() == cap::State::Ready) { g_snap.jpeg = cap::take(); snap.jpeg = g_snap.jpeg; }
-    else if (g_snap.jpeg.empty()) snap.jpeg_note = cap::why();
     { std::lock_guard lk(g_prep_mx); g_prep.reset(); g_prep_failed = false; }
     g_step = SendStep::Preparing;
     try {
@@ -633,7 +633,11 @@ void session_tick() {
     const rp::Stage st = g_session.stage();
     if (st == rp::Stage::Shooting) {
         if (cap::settled(cap::state()) || t - g_shot_at > kShotWait) {
-            if (!cap::settled(cap::state())) cmn::journal("bug report: no Present within %llu frames: no picture", (unsigned long long)kShotWait);
+            if (!cap::settled(cap::state())) {
+                cap::discard();
+                g_snap.jpeg_note = "no frame was presented within " + std::to_string(kShotWait) + " frames";
+                cmn::journal("bug report: no Present within %llu frames: no picture", (unsigned long long)kShotWait);
+            }
             g_session.set_text_field_ok(ui::dialogs::text_available());
             g_session.shot_settled();
             open_window();
@@ -650,9 +654,12 @@ void session_tick() {
         else if (t > g_window_deadline) closed_now("the window never opened");
         return;
     }
-    if (g_naming) return;                                // the text dialog is over it
-    if (g_blocked && t >= g_settle_until) input_block(false);
-    if (g_blocked) return;
+    if (g_naming) { g_pressed.store(-1); return; }       // the text dialog is over it: a press that reached the page counts for nothing
+    if (g_blocked) {
+        g_pressed.store(-1);
+        if (t < g_settle_until) return;
+        input_block(false);
+    }
     const int pressed = g_pressed.exchange(-1);
     if (pressed >= 0) press_row(pressed);
     if (g_dirty && !g_naming) { g_dirty = false; rebuild_page(); }
@@ -676,7 +683,9 @@ void begin_report(MO* agent, MO* main) {
     g_what = shown;
     for (const std::string& part : { rp::row_name(g_snap.outfit_row), rp::row_name(g_snap.colour_row) })
         if (!part.empty()) g_what += (g_what.empty() ? "" : ", ") + part;
-    cmn::journal("bug report: key pressed (fighter %d)", g_snap.fighter);
+    int64_t input = -1;
+    gx::get_i64(agent, "_IsEnableInput", &input);        // (not a gate yet: read here to see what it says on this screen)
+    cmn::journal("bug report: key pressed (fighter %d, _IsEnableInput %lld)", g_snap.fighter, (long long)input);
 }
 bool key_pressed() {
     const uint64_t t = tick();
@@ -722,7 +731,11 @@ void frame(bool training) {
     const bool allowed = rp::entry_allowed(s);
     hint_frame(allowed);
     const bool press = key_pressed();            // read every frame here: a press while it is not allowed is lost, never queued
-    if (allowed && press) { hint_hide(); begin_report(agent, main); }
+    if (allowed && press) {
+        hint_hide();
+        g_up = false;                            // back on the screen after it: as an arrival (an R typed in the text field is no press)
+        begin_report(agent, main);
+    }
 }
 
 void start() {
@@ -737,8 +750,10 @@ void start() {
 
 void hand_back() {
     const SF6CoreAPI* a = api();
-    if (g_session.stage() != rp::Stage::Idle && a && g_opt_client) perf::counted(a)->opt_close(g_opt_client);
-    closed_now("the UI stopped");
+    if (g_session.stage() != rp::Stage::Idle) {
+        if (a && g_opt_client) perf::counted(a)->opt_close(g_opt_client);
+        closed_now("the UI stopped");
+    }
     try { hint_hide(); } catch (...) { g_hint.shown = false; }
 }
 

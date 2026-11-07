@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "../../../common/outfit_display.hpp"            // what the loader writes in the game's own list for a label
+
 namespace report {
 namespace {
 
@@ -150,8 +152,8 @@ std::string lower_hex_only(const std::string& s) {
     return out;
 }
 
-// What can differ between a label and the row showing it: the loader leaves out what the game's text would read as a tag or cannot draw
-std::string plain(const std::string& s) {
+// No control characters, no tag marks, no spaces around
+std::string plain(const std::string& s) {   // (a row's own text)
     std::string out;
     for (const unsigned char c : s) if (c >= 0x20 && c != 0x7F && c != '<' && c != '>') out += (char)c;
     size_t a = 0, b = out.size();
@@ -287,7 +289,7 @@ const json* find_outfit(const json& outfits, int fighter, const std::string& row
     for (const json& o : *it) {
         if (int_of(o, "fighter", -1) != fighter) continue;
         if (str_of(o, "name") == want) return &o;            // "Outfit VII": one per fighter, the row's own word
-        if (!by_label && plain(str_of(o, "label")) == want) by_label = &o;
+        if (!by_label && outfit_display_name(str_of(o, "label")) == want) by_label = &o;
     }
     return by_label;
 }
@@ -404,7 +406,7 @@ std::vector<RowText> menu_rows(const MenuInput& in, const Tr& tr) {
     const auto fit = [&](const std::string& t) { return in.cut ? in.cut(t, in.row_em) : t; };
     std::vector<RowText> rows;
     const auto add = [&](Row r, std::string title, std::string desc) { rows.push_back({ r, fit(title), std::move(desc) }); };
-    add(Row::Text, s.text().empty() ? tr("report_row_text", {}) : tr("report_row_text_set", { shown_safe(s.text()) }), tr("report_row_text_desc", {}));
+    add(Row::Text, s.text().empty() ? tr("report_row_text", {}) : tr("report_row_text_set", { shown_safe(s.text()) }), tr("report_row_text_desc", { std::to_string(kTextMaxUnits) }));
     add(Row::Shot, tr(in.shot_ok ? "report_row_shot" : "report_row_shot_none", {}), tr(in.shot_ok ? "report_row_shot_desc" : "report_row_shot_none_desc", {}));
     add(Row::Outfit, tr("report_row_outfit", { shown_safe(in.what) }), tr("report_row_outfit_desc", {}));
     add(Row::Versions, tr("report_row_versions", {}), tr("report_row_versions_desc", {}));
