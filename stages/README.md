@@ -45,7 +45,8 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
   entry. A tile (see below) is an entry of its own after the game's stages: an arrow in the corner beside the last cell
   says there are more, RIGHT at that cell moves what the cells show, and the mirrored arrow beside the first cell says
   there are more on that side. Tiles over one stage whose names start with the same word are one entry with several
-  looks, cycled with UP / DOWN.
+  looks, cycled with UP / DOWN. Random (R) draws among every entry, the extra stages included, then among that entry's
+  looks; the cursor goes there and that look stays chosen. After a fight, the list opens on the stage fought.
 - To remove a mod, delete its archive or folder: the stage pak is rebuilt at the next launch. Archives are
   unpacked once into `stage_mods\.cache` (as much disk space as their unpacked size, 120 MB for the lighting
   pack); that folder can be deleted at any time.

@@ -14,6 +14,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace slots::stagelogic {
@@ -199,6 +200,18 @@ struct MoreArrows { bool left = false, right = false; };
 inline MoreArrows more_arrows(int first, int view, int count) {
     if (view <= 0 || count <= view) return {};
     return { first > 0, first + view != count };
+}
+// The list opened on entry `sel`: the cursor's place among the `view` cells (UIPartsScrollList.InitList's third argument, read
+// 07/11: the cursor's place, not the scroll; the scroll follows from it). Past the cells on screen: the last cell, the list
+// scrolled so that the entry is on it.
+inline int view_cursor(int sel, int view) { return view > 0 && sel >= view ? view - 1 : sel; }
+// Random on the classic screen: every entry as likely (a game's stage, a tile), then every look of that entry (its own, its
+// variations; a tile group's). looks: how many looks each entry has. {-1, -1} for an empty list.
+inline std::pair<int, int> random_pick(const std::vector<int>& looks, uint32_t r_entry, uint32_t r_look) {
+    if (looks.empty()) return { -1, -1 };
+    const int e = static_cast<int>(r_entry % looks.size());
+    const int n = looks[static_cast<size_t>(e)];
+    return { e, n > 0 ? static_cast<int>(r_look % static_cast<uint32_t>(n)) : 0 };
 }
 // What the loader serves while an entry has the focus: the classic screen's choices, with the look of this entry for its stage
 // ("" its own look). A tile key left among the choices by an older version is no stage's look any more: is_tile tells.

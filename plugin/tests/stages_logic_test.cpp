@@ -301,6 +301,15 @@ static void test_classic_list() {
     check(classic_served(own, 0, "red", tile) == Choice({ { 0, "red" }, { 70000, "banner" } }), "the focused entry's look is served for its stage");
     check(classic_served(own, 0, "", tile) == Choice({ { 70000, "banner" } }), "its own look: nothing served, a tile left by an older version dropped");
 
+    check(view_cursor(4, 21) == 4 && view_cursor(20, 21) == 20, "an entry on screen: the cursor on its own cell");
+    check(view_cursor(22, 21) == 20 && view_cursor(27, 21) == 20, "past the cells: the last cell (the list scrolled to it)");
+    const std::vector<int> looks = { 1, 3, 1 };
+    check(random_pick(looks, 4, 2) == std::make_pair(1, 2) && random_pick(looks, 2, 7) == std::make_pair(2, 0), "Random: an entry, then one of its looks");
+    check(random_pick({}, 1, 1).first == -1, "Random on an empty list: nothing");
+    int seen[3] = {};
+    for (uint32_t i = 0; i < 300; ++i) ++seen[random_pick(looks, i, i / 3).first];
+    check(seen[0] == 100 && seen[1] == 100 && seen[2] == 100, "Random: every entry as likely, whatever its looks");
+
     State st;
     st.active[0] = "a2";
     st.tile_pick["a1"] = "a2";

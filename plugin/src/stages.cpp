@@ -839,6 +839,7 @@ API::Field *f_decide = nullptr, *f_rand_off = nullptr;         // mDecideStageId
 Method *m_owner = nullptr, *m_is_show = nullptr, *m_sel_index = nullptr, *m_items = nullptr, *m_list_index = nullptr;
 Method *m_list_count = nullptr, *m_list_item = nullptr, *m_list_insert = nullptr;   // List<UInt32>
 API::Field *f_map_desc = nullptr, *f_desc_stage = nullptr, *f_stage_id = nullptr, *f_desc_net = nullptr;   // replays
+API::Field *f_param_random = nullptr;                          // app.menu.UIFlowStageSelect.Param.IsRandom
 
 
 
@@ -2056,6 +2057,10 @@ void grid_tick(uint32_t ev) {
 //     InitList: the game itself duplicates this list's cells there (07/11: a copy of the whole panel, made from the guide
 //     bar's update, another screen's, crashed the game; no per-frame update of this screen's own was found: its Wait.OnUpdate
 //     and UIPartsBgmSelect.OnUpdate do not run). Every other write is the frame's, through the core (R1, R35).
+//   - Random (R): the game draws among its first cells only; the frame that sees its IsRandom draws again among every entry, then
+//     among that entry's looks (Wael 07/11: Random lands on the extra stages and on variations too), and moves the cursor there
+//     the game's way (section "Random" below).
+//   - The list opens on the entry last fought (a tile too), scrolled so that it is on screen (sl::view_cursor).
 // Without a tile, or with the hook refused, none of this runs: the screen works as before.
 
 struct ClassicList {
@@ -2065,6 +2070,7 @@ struct ClassicList {
     int scroll = -1;                   // the list's ScrollIndex last refreshed
     uint32_t arrows_at = 0;            // the arrows' last pass
     bool ready = false;                // the game's previews have loaded
+    bool random_done = false;          // this Random's pick is made (IsRandom seen)
     std::map<uint32_t, std::string> last;   // a stage -> the tile last fought over it: the cursor opens there
 } g_cl;
 thread_local uintptr_t tl_init_stage = 0;
@@ -2134,6 +2140,7 @@ void post_init_stage(void**, REFrameworkTypeDefinitionHandle, unsigned long long
         g_cl.slots.clear();
         g_cl.entry = g_cl.scroll = -1;
         g_cl.ready = false;
+        g_cl.random_done = false;
         g_classic_keys.store(false, std::memory_order_relaxed);
         bool ok_mode = false;
         const bool event_mode = call_bool(param, "get_IsEventMode", {}, &ok_mode);
@@ -2168,7 +2175,10 @@ void post_init_stage(void**, REFrameworkTypeDefinitionHandle, unsigned long long
             const int e = sl::entry_index(slots, last->first, last->second);
             if (e >= 0) sel = e;
         }
-        const Ret r = call(parts, "InitList", { arg_i32(static_cast<int32_t>(slots.size())), arg_i32(sel), arg_i32(sel) });
+        Obj* cells = get_obj(param, "stCtrl");
+        const Ret rv = cells ? call(cells, "get_ItemCount") : Ret{};
+        const int view = cells && !rv.exception_thrown ? static_cast<int32_t>(rv.dword) : n;   // the game's InitList: one cell per stage
+        const Ret r = call(parts, "InitList", { arg_i32(static_cast<int32_t>(slots.size())), arg_i32(sel), arg_i32(sl::view_cursor(sel, view)) });
         if (r.exception_thrown) {
             logf("stages: classic list: InitList threw: list left at the game's %d entries", n);
             perf::end(perf::HkStgGrid, pt);
@@ -2284,6 +2294,39 @@ bool strip_entries() {
     return done;
 }
 
+// ---- Random ----
+// R: the game draws among its first cells and puts the cursor there (UIPartsScrollList.SetSelectedIndex), then sets IsRandom and
+// IsActive off, then IsDecide 22 frames later; BattleFlowMap.onStageSelectEnd writes the focused entry's stage (probe 07/11). The
+// frame that first sees IsRandom draws again among every entry, then among that entry's looks, and moves the cursor there the
+// game's way: what is shown, what is fought and the list after the fight are that one entry.
+void classic_random(Obj* param) {
+    std::vector<int> counts;
+    for (auto& e : g_cl.slots) counts.push_back(static_cast<int>(entry_looks(e).size()));
+    static uint32_t s_seed = GetTickCount() ^ 0x5bd1e995u;
+    s_seed = s_seed * 1664525u + 1013904223u;
+    const uint32_t r1 = s_seed >> 8;
+    s_seed = s_seed * 1664525u + 1013904223u;
+    const auto [e, l] = sl::random_pick(counts, r1, s_seed >> 8);
+    if (e < 0) return;
+    const sl::Slot s = g_cl.slots[static_cast<size_t>(e)];
+    const std::string key = entry_looks(s)[static_cast<size_t>(l)];
+    // the look, as UP / DOWN sets it
+    if (s.tile) { if (key == s.key) g_state.tile_pick.erase(s.key); else g_state.tile_pick[s.key] = key; }
+    else if (key.empty()) g_selected.erase(s.base);
+    else g_selected[s.base] = key;
+    const Ret ri = call(param, "GetSelectIndex");
+    Obj* parts = get_obj(param, "partsScrollList");
+    const Ret r = parts ? call(parts, "SetSelectedIndex", { arg_i32(e), arg_bool(false) }) : Ret{ };
+    const Ret rn = call(param, "GetSelectIndex");
+    const int now = rn.exception_thrown ? -1 : static_cast<int32_t>(rn.dword);
+    logf("stages: classic list: Random: entry %d of %zu (stage %u, %s) in place of the game's entry %d%s", e, g_cl.slots.size(), s.base,
+         key.empty() ? "its own look" : key.c_str(), ri.exception_thrown ? -1 : static_cast<int32_t>(ri.dword),
+         !parts || r.exception_thrown || now != e ? ": the cursor did not move, the game's pick stays" : "");
+    g_scr.settle = std::max(g_scr.settle, 1);                  // the game rewrites the banner for the new focus: ours over it
+    g_scr.need = true;
+    strip_open();
+}
+
 // ---- the arrows ----
 const char* const kArrowName = "e_tex_slots_stage_more";       // not "p_...": never taken for a UI part (R20)
 const char* const kArrowPanel[2] = { "p_MouseDecideOperable_L", "p_MouseDecideOperable_R" };
@@ -2347,6 +2390,9 @@ void classic_frame() {
     std::lock_guard<std::recursive_mutex> lk(g_mx);
     Obj* param = g_scr.param;
     if (!alive(param) || !classic_on(param)) return;
+    const bool rnd = bool_field(param, f_param_random);
+    if (rnd && !g_cl.random_done) { g_cl.random_done = true; classic_random(param); }
+    else if (!rnd) g_cl.random_done = false;
     if (!g_cl.ready) {
         bool ok = false;
         const bool loaded = call_bool(param, "IsPreviewTexCahceReady", {}, &ok);
@@ -2415,6 +2461,7 @@ void start_grid_check() {
     f_desc_stage = t_desc ? field_of(t_desc, "Stage") : nullptr;
     f_desc_net = t_desc ? field_of(t_desc, "IsNetwork") : nullptr;
     f_stage_id = t_stage ? field_of(t_stage, "StageId") : nullptr;
+    if (TD* t_param = tdb->find_type("app.menu.UIFlowStageSelect.Param")) f_param_random = field_of(t_param, "IsRandom");
     const bool grid_ok = t_simple && f_scroll && f_state && f_preview && m_owner && m_sel_index && m_items && m_list_index &&
                          m_list_count && m_list_item && m_list_insert;
     if (!grid_ok) logf("stages: the stage grids' types or members not all found (game update?): no tiles in Battle Settings / Training");
