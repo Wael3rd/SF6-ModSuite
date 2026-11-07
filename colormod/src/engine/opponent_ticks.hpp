@@ -106,9 +106,11 @@ private:
 //   kAllOn:   the "all the outfit's colours" key turned them on (several of 01-10 added)
 //   kAllOff:  that key turned them off (several of 01-10 gone, or one that isn't what the cursor is on)
 //   kGame:    anything else: a tick on a colour of the game, the EX / DX key
+// all_key: the game's handler of that key ran (EventOnToggleAllColors, hooked): the change is that key's, whatever the cursor is on. Without it, the
+// list alone can't tell that key from a tick under the cursor when it turns off a single colour (02 alone ticked, the cursor on an entry or on 02).
 enum class Change { kNone, kEntry, kAllOn, kAllOff, kGame };
 constexpr int kBaseColorId = 1, kOutfitColors = 10;     // ids 0-9 are the colours 01-10
-inline Change classify(const std::vector<int>& before, const std::vector<int>& after, bool cursor_on_entry, int cursor_color) {
+inline Change classify(const std::vector<int>& before, const std::vector<int>& after, bool cursor_on_entry, int cursor_color, bool all_key = false) {
     const std::set<int> b(before.begin(), before.end()), a(after.begin(), after.end());
     if (a == b) return Change::kNone;
     std::vector<int> added, removed;
@@ -119,6 +121,11 @@ inline Change classify(const std::vector<int>& before, const std::vector<int>& a
         for (int id : ids) if (id >= 0 && id < kOutfitColors) ++n;
         return n;
     };
+    if (all_key) {
+        if (outfit_colors(added) > 0) return Change::kAllOn;
+        if (outfit_colors(removed) > 0) return Change::kAllOff;
+        return Change::kGame;
+    }
     const size_t changed = added.size() + removed.size();
     if (changed == 1 && (added.empty() ? removed[0] : added[0]) == kBaseColorId && cursor_on_entry) return Change::kEntry;
     if (outfit_colors(added) > 1) return Change::kAllOn;

@@ -866,7 +866,8 @@ void opp_watch(MO* param, const Opt& f, const Opt& c, MO* selected) {
     const auto msg = selected ? message(opp_find(selected, "e_text")) : std::nullopt;
     int cursor_color = -1;                                         // the colour under the cursor, as its label says: "01" .. "10"
     if (!e && msg && msg->size() == 2 && std::isdigit((unsigned char)(*msg)[0]) && std::isdigit((unsigned char)(*msg)[1])) cursor_color = std::stoi(*msg) - 1;
-    const auto change = engine::opponent::classify(g_opp.list, now, e != nullptr, e ? (int)kBaseColor : cursor_color);
+    const bool all_key = engine::decide::opp_all_key_pressed();   // T made this change (its handler ran just before)
+    const auto change = engine::opponent::classify(g_opp.list, now, e != nullptr, e ? (int)kBaseColor : cursor_color, all_key);
     const int fi = (int)*f, ci = (int)*c;
     switch (change) {
     case engine::opponent::Change::kEntry:

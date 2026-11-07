@@ -70,5 +70,7 @@ bool opp_ticked(int fighter, int costume, const std::string& id);
 void opp_toggle(int fighter, int costume, const std::string& id);
 void opp_set_entries(int fighter, int costume, bool on);              // all the entries of an outfit, as the catalogue has them
 int opp_count(int fighter, int costume);                              // those ticked that still exist
+// The page's all-colours key (T, the game's EventOnToggleAllColors) ran in the last few frames; the answer is used up. False when that hook is not in.
+bool opp_all_key_pressed();
 
 }  // namespace engine::decide

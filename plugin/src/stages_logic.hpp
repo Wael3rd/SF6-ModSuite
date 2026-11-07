@@ -37,6 +37,7 @@ struct State {
     Choice menu[kMenus];            // each menu's own choice
     Off off[kMenus];                // unticked entries in each menu's Random Stage Settings
     bool random[kMenus] = {};       // the menu's stage is Random (999999)
+    std::map<std::string, std::string> tile_pick;   // classic Stage Select: a tile's key -> the look of its group it shows
 };
 
 // "selected" first and flat (the loader's tolerant scan reads the first object after the word), then "menus".
@@ -69,7 +70,13 @@ inline std::string state_json(const State& s) {
         }
         o += "}}";
     }
-    o += "\n    }\n}\n";
+    o += "\n    },\n    \"tile_pick\": {";
+    bool first_pick = true;
+    for (auto& [tile, key] : s.tile_pick) {
+        o += std::string(first_pick ? "" : ", ") + "\"" + json_escape(tile) + "\": \"" + json_escape(key) + "\"";
+        first_pick = false;
+    }
+    o += "}\n}\n";
     return o;
 }
 
@@ -107,6 +114,8 @@ inline bool parse_state(const std::string& text, State& out) {
                 for (auto& e : v.arr) if (e.kind == Json::String) set.insert(e.s);
             }
         }
+    if (const Json* t = j.get("tile_pick"); t && t->kind == Json::Object)
+        for (auto& [k, v] : t->obj) if (v.kind == Json::String && !v.s.empty() && !k.empty()) out.tile_pick[k] = v.s;
     return true;
 }
 
@@ -156,6 +165,49 @@ inline int entry_index(const std::vector<Slot>& slots, uint32_t base, const std:
         if (!slots[i].tile && own < 0) own = static_cast<int>(i);
     }
     return own;
+}
+
+// ---- the classic Stage Select's list ---------------------------------------------------------------------------------------
+// Its tiles come after the game's stages, past the 21 cells on screen: UP / DOWN only changes the look of the focused entry,
+// RIGHT at the last cell scrolls the list (stages.cpp, section "Classic list"). Tiles over one stage whose names start with
+// the same word are one entry with several looks, the first one's (names as registry.json gives them).
+struct NamedTile { uint32_t base = 0; std::string key, name; };
+struct TileGroup { uint32_t base = 0; std::vector<std::string> keys; };
+inline std::string first_word(const std::string& name) {
+    std::string w;
+    for (unsigned char c : name) {
+        if (!std::isalnum(c) && c < 0x80) { if (w.empty()) continue; break; }
+        w += static_cast<char>(std::tolower(c));
+    }
+    return w;
+}
+inline std::vector<TileGroup> tile_groups(const std::vector<NamedTile>& tiles) {
+    std::vector<TileGroup> out;
+    std::vector<std::string> words;
+    for (auto& t : tiles) {
+        const std::string w = first_word(t.name);
+        bool joined = false;
+        for (size_t i = 0; i < out.size() && !joined; ++i)
+            if (out[i].base == t.base && w.size() >= 4 && words[i] == w) { out[i].keys.push_back(t.key); joined = true; }
+        if (!joined) { out.push_back({ t.base, { t.key } }); words.push_back(w); }
+    }
+    return out;
+}
+// The arrows beside the list: entries past its left end, past its right end. first: the entry in the first cell; view: the
+// cells on screen. A list that wrapped round (first + view > count) has entries on both sides.
+struct MoreArrows { bool left = false, right = false; };
+inline MoreArrows more_arrows(int first, int view, int count) {
+    if (view <= 0 || count <= view) return {};
+    return { first > 0, first + view != count };
+}
+// What the loader serves while an entry has the focus: the classic screen's choices, with the look of this entry for its stage
+// ("" its own look). A tile key left among the choices by an older version is no stage's look any more: is_tile tells.
+template <class IsTile>
+inline Choice classic_served(const Choice& own, uint32_t base, const std::string& key, IsTile is_tile) {
+    Choice c;
+    for (auto& [id, k] : own) if (!k.empty() && !is_tile(id, k)) c[id] = k;
+    if (key.empty()) c.erase(base); else c[base] = key;
+    return c;
 }
 
 // ---- variations ----------------------------------------------------------------------------------------------------------

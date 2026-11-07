@@ -55,6 +55,11 @@ int main() {
     check(classify(V{ 0, 1, 2 }, V{}, true, 1) == Change::kAllOff && classify(V{ 0, 1, 15 }, V{ 15 }, false, 5) == Change::kAllOff, "the all key turns them off, EX / DX stay");
     check(classify(V{ 3 }, V{}, true, 1) == Change::kAllOff && classify(V{ 3 }, V{}, false, 5) == Change::kAllOff, "the all key with one tick that isn't under the cursor");
     check(classify(V{}, V{ 12, 13, 14, 15 }, false, 2) == Change::kGame && classify(V{ 12, 13 }, V{}, true, 1) == Change::kGame, "the EX / DX key isn't ours");
+    check(classify(V{ 1 }, V{}, true, 1, true) == Change::kAllOff, "T with 02 alone ticked, the cursor on an entry: everything off, not that cell");
+    check(classify(V{ 1, 15 }, V{ 15 }, true, 1, true) == Change::kAllOff, "the same with EX / DX ticked too");
+    check(classify(V{ 3 }, V{}, false, 3, true) == Change::kAllOff, "T with one colour ticked, the cursor on it: everything off, entries too");
+    check(classify(V{}, V{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }, true, 1, true) == Change::kAllOn, "T with nothing ticked: all on");
+    check(classify(V{}, V{ 1 }, true, 1, false) == Change::kEntry && classify(V{ 1 }, V{}, true, 1, false) == Change::kEntry, "without T, a tick on the cell is still the cell's");
 
     using S = std::vector<std::string>;
     const std::nullopt_t no = std::nullopt;

@@ -1212,8 +1212,11 @@ Each RW / MC cell ticks on its own. For the game such a tick is colour 02, so th
 written at each change. The game's save only ever holds real colours, and colour 02 stays a cell of its own. The summary's lines
 count both (`SF6ColorMod_OpponentTicks` for the lines the Slots Loader copies). The all-colours key: with only entries ticked it
 turns them off; otherwise it follows the game (all on, entries included, then all off). The EX / DX key leaves entries alone.
-One case can't be told apart from the list: colour 02 the only one of 01-10 ticked, the cursor on an entry: the all-colours key
-then looks like a tick on that cell, and toggles it instead of turning everything off.
+The list alone can't tell that key from a tick under the cursor when it turns off a single colour (02 the only one of 01-10
+ticked, the cursor on an entry): a pre-hook on the game's handler of the key (`UIParam.EventOnToggleAllColors`: any of 01-10
+ticked, it unticks them all, else it ticks them all; every call is an action) tells `opp_watch` that the key made the change
+(`classify`'s `all_key`, seen within 10 frames, used once). Without that hook (R18 refused) that one case toggles the cell, as in
+0.24.4.
 
 In a match the pick stays the game's rule (`OtherFighterSettingSaveData.TryGetRandomCostumeAndColor`: evenly among the
 (outfit, colour) pairs of every ticked outfit of that fighter, not the player's own look when there is another, not the last one

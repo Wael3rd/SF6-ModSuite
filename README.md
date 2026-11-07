@@ -86,8 +86,9 @@ Costume mods can also go straight into `reframework\costume_mods\<Character>\`, 
 unpack, nothing to convert.
 
 **Stage mods** (experimental, since 1.9.0) go into `reframework\stage_mods\`, as downloaded too. On the stage
-select screen of Fighting Ground > Versus, UP / DOWN cycles a stage through its original look and each mod
-made for it. Since 1.20.0 they also show in **Battle Settings > Other > Stage Settings** and **Training pause >
+select screen of Fighting Ground > Versus, UP / DOWN cycles a stage through its original look and its variations;
+since 1.26.0 the mods that are other stages are entries of their own after the game's stages (an arrow beside the last
+cell, RIGHT there moves the list). Since 1.20.0 they also show in **Battle Settings > Other > Stage Settings** and **Training pause >
 Environment Settings > Change Stage**: a mod that is really another stage (a Suzaku Castle over the Training Room) gets
 a cell of its own, with its picture and name, and a mod that only changes a stage's look (lighting) is a variation of
 that stage, cycled with X / R and confirmed. Random Stage Settings has a tick per cell. Only the game's own stage ids

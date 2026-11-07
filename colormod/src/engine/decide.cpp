@@ -1,5 +1,6 @@
 #include "decide.hpp"
 
+#include <atomic>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -1419,7 +1420,9 @@ std::map<int, OppWear> g_opp_wears;                   // g_opp_mx: what the game
 std::map<int, OppWear> g_opp_last;                    // g_opp_mx: what it was before, for "not twice in a row"
 code_check::Batch g_opp_check;
 bool g_opp_check_asked = false, g_opp_hooked = false;
-enum { kOppSelectables, kOppPick, kOppVerify };
+enum { kOppSelectables, kOppPick, kOppVerify, kOppAllKey };
+std::atomic<uint64_t> g_opp_all_key{ 0 };            // the frame the page's all-colours key last ran (0: not since it was used)
+constexpr uint64_t kOppAllKeyFrames = 10;             // its change is seen at the latest the next frame: a tick by hand that soon after it can't be
 thread_local MO* tl_sel_this = nullptr;
 thread_local MO* tl_ver_this = nullptr;
 struct PickCall { MO* self = nullptr; uint32_t* out_c = nullptr; uint32_t* out_col = nullptr; int sf = -1, sc = -1, scol = -1; };
@@ -1559,6 +1562,12 @@ void post_verify(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long 
         cmn::journal("opponent colours: EXCEPTION at the page's check");
     }
 }
+// Opponent Outfit Settings' all-colours key (T; the game's UIParam.EventOnToggleAllColors, read 07/11: every call is an action, it doesn't look at the input
+// flag): any of 01-10 ticked, it unticks them all, else it ticks them all. The page side (colour_track.cpp opp_watch) asks whether that's what changed the list.
+int pre_all_key(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (!cmn::closing()) g_opp_all_key.store(cmn::frame() + 1, std::memory_order_relaxed);   // + 1: frame 0 is a real frame too
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
 // From the frame: the check asked for once, the hooks put when it's done
 void opp_hooks_tick() {
     if (g_opp_hooked) return;
@@ -1568,11 +1577,16 @@ void opp_hooks_tick() {
         g_opp_check.add(tdb->find_method("app.OtherFighterSettingSaveData", "GetSelectables"), "app.OtherFighterSettingSaveData.GetSelectables");
         g_opp_check.add(tdb->find_method("app.OtherFighterSettingSaveData", "TryGetRandomCostumeAndColor"), "app.OtherFighterSettingSaveData.TryGetRandomCostumeAndColor");
         g_opp_check.add(tdb->find_method("app.OtherFighterSettingSaveData", "CheckVerify"), "app.OtherFighterSettingSaveData.CheckVerify");
+        g_opp_check.add(tdb->find_method("app.UIFlowOtherMatchingFighterSetting.UIParam", "EventOnToggleAllColors"),
+                        "app.UIFlowOtherMatchingFighterSetting.UIParam.EventOnToggleAllColors");
         g_opp_check.start(kOppCheckFile, "opponent colours");
         return;
     }
     if (!g_opp_check.done()) return;
     g_opp_hooked = true;
+    if (g_opp_check.unique(kOppAllKey) && g_opp_check.method(kOppAllKey)->add_hook(pre_all_key, nullptr, false))
+        cmn::journal("opponent colours: the page's all-colours key followed (EventOnToggleAllColors, its own code)");
+    else cmn::journal("opponent colours: EventOnToggleAllColors not hooked (R18, shared: %d, or missing): with 02 alone ticked, T can look like a tick under the cursor", g_opp_check.entry(kOppAllKey).shared);
     if (!g_opp_check.unique(kOppSelectables) || !g_opp_check.unique(kOppPick)) {
         cmn::journal("opponent colours: hooks REFUSED (R18), or a method missing: RW / MC ticks don't apply in a match (shared: %d, %d)", g_opp_check.entry(kOppSelectables).shared, g_opp_check.entry(kOppPick).shared);
         return;
@@ -1594,6 +1608,10 @@ bool opp_ticked(int fighter, int costume, const std::string& id) {
     std::lock_guard lk(g_opp_mx);
     opp_load();
     return g_opp_ticks.has(fighter, costume, id);
+}
+bool opp_all_key_pressed() {
+    const uint64_t at = g_opp_all_key.exchange(0, std::memory_order_relaxed);
+    return at != 0 && cmn::frame() + 1 - at <= kOppAllKeyFrames;
 }
 void opp_toggle(int fighter, int costume, const std::string& id) {
     std::lock_guard lk(g_opp_mx);

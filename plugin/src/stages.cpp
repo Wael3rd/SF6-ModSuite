@@ -1,10 +1,11 @@
 // SF6 Slots — native plugin: stage slots.
 //
-// On the stage select screen, UP / DOWN cycles the focused stage between its vanilla look and the
-// stage mods installed for it. The loader (amd_ags_x64.dll) serves the chosen variant's files when
+// On the stage select screen, UP / DOWN cycles the focused entry between its looks: a stage's own entry between its vanilla
+// look and its variations. The tiles are entries of their own after the game's stages: RIGHT at the last cell scrolls the
+// list to them (section "Classic list"). The loader (amd_ags_x64.dll) serves the chosen variant's files when
 // the stage loads; this module keeps the choice (data/SF6_StageSlots_Data/state.json, which the
-// loader watches) and shows it: stage name between UP / DOWN hints, preview, the focused stage's cell
-// of the stage strip (core 0.8.1+), VS screen.
+// loader watches) and shows it: stage name between UP / DOWN hints, preview, the stage strip's cells (core 0.8.1+),
+// VS screen.
 //
 // Events: the stage select screen shown / hidden, focus changed or name and preview rewritten by the
 // game, UP / DOWN on it, the VS screen shown or rewritten. Without stage mods: no hook at all.
@@ -36,6 +37,8 @@
 namespace slots::stages {
 namespace {
 
+namespace sl = stagelogic;
+
 const char* kRegistry = "reframework/data/SF6_StageSlots_Data/registry.json";
 const char* kState    = "reframework/data/SF6_StageSlots_Data/state.json";
 
@@ -48,6 +51,8 @@ stagelogic::State g_state;
 stagelogic::Choice g_applied;                              // what the loader was last told to serve
 std::map<uint32_t, std::string>& g_selected = g_state.menu[stagelogic::kClassic];   // the classic screen's (stage id -> key)
 std::vector<stagelogic::TileRef> g_tiles;                  // every tile, registry order (the stage grids' extra entries)
+std::vector<stagelogic::TileGroup> g_tile_groups;          // the tiles as the classic list's entries: each with its looks
+std::vector<stagelogic::TileRef> g_classic_tiles;          // the first tile of each group: the classic list's extra entries
 std::map<std::string, uint32_t> g_ess_stage;               // "ess0000_00" (lower case) -> stage id, stages with variants
 
 // ---- written by hooks ----
@@ -90,6 +95,14 @@ uint32_t g_preview_wait = 0;              // a preview is loading: frame when th
 void strip_open();                        // stage strip (below): look at the cells again for a while
 Obj* find_child(Obj* ctrl, const char* name, int depth);
 void strip_restore();                     // the game's images back on the cells, references released
+// The classic list (section "Classic list", at the end of this namespace)
+bool classic_on(Obj* param);              // this screen's list holds the tiles
+void classic_work(Obj* param, bool input);
+void classic_shown();
+void classic_hidden();
+void classic_frame();
+bool strip_entries();
+bool is_tile(uint32_t base, const std::string& key);
 
 // ---------------------------------------------------------------------------------------------
 // Files
@@ -126,7 +139,13 @@ void load_registry() {
 // The tiles in registry order (the grids' extra entries)
 void collect_tiles() {
     g_tiles.clear();
-    for (auto& [id, vars] : g_variants) for (auto& v : vars) if (v.tile) g_tiles.push_back({ id, v.key });
+    std::vector<stagelogic::NamedTile> named;
+    for (auto& [id, vars] : g_variants)
+        for (auto& v : vars)
+            if (v.tile) { g_tiles.push_back({ id, v.key }); named.push_back({ id, v.key, v.name }); }
+    g_tile_groups = stagelogic::tile_groups(named);
+    g_classic_tiles.clear();
+    for (auto& g : g_tile_groups) g_classic_tiles.push_back({ g.base, g.keys.front() });
 }
 
 void load_state() {
@@ -391,6 +410,7 @@ void screen_shown(Obj* agent) {
     g_pending.store(0);
     strip_restore();                                       // a visit that ended without its hide
     strip_open();
+    classic_shown();
     if (g_state.active != g_selected) save_state(stagelogic::kClassic, "the classic stage select is shown");   // what its battle loads (as before)
     logf("stages: stage select shown (param %s, agent %s)", g_scr.param ? "ok" : "-", agent ? "ok" : "-");
 }
@@ -398,6 +418,7 @@ void screen_shown(Obj* agent) {
 void screen_hidden() {
     logf("stages: stage select hidden");
     strip_restore();
+    classic_hidden();
     g_scr.active = false;
     g_scr.param = nullptr;
     g_stage_agent.store(0);
@@ -411,6 +432,7 @@ void screen_work(bool input) {
     perf::Scope ps(perf::StgScreen);
     Obj* param = g_scr.param;
     if (!alive(param)) { param = find_stage_param(); g_scr.param = param; if (!param) return; }
+    if (classic_on(param)) { classic_work(param, input); return; }
     uint32_t stage = 0;
     if (!focused_stage(param, stage)) return;
     g_scr.decided = stage;
@@ -648,6 +670,7 @@ bool strip_work() {
         if (!g_strip_off) { g_strip_off = true; logf("stages: the core has no ui_set_material_texture (core 0.8.1+): the stage strip shows the game's images"); }
         return true;
     }
+    if (classic_on(g_scr.param)) return strip_entries();
     const uint32_t focused = g_scr.stage;
     if (focused == UINT32_MAX || g_scr.settle > 0) return false;   // the game is writing the screen
     // the selected variants' thumbnails, loaded ahead (each cell shows its own stage's selected variant)
@@ -748,14 +771,19 @@ template <perf::Id ID> int pre_hidden(int, void**, REFrameworkTypeDefinitionHand
 template <perf::Id ID> void post_dirty(void**, REFrameworkTypeDefinitionHandle, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return; int64_t pt = perf::begin(); post(EV_STAGE_DIRTY); perf::end(ID, pt); }
 
 constexpr uint32_t kTrigger = 2, kRepeat = 8;
+std::atomic<bool> g_classic_keys{ false };                     // the list holds tiles: it can scroll, and the game's UP / DOWN would turn its pages
+bool up_down_ours(void** argv) {
+    const uintptr_t agent = g_stage_agent.load(std::memory_order_relaxed);
+    return agent && reinterpret_cast<uintptr_t>(argv[1]) == agent && g_classic_keys.load(std::memory_order_relaxed);
+}
 void direction(void** argv, int step) {
     uintptr_t agent = g_stage_agent.load(std::memory_order_relaxed);
     if (!agent || reinterpret_cast<uintptr_t>(argv[1]) != agent) return;
     uint32_t flag = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(argv[2])) & 0xF;
     if (flag & (kTrigger | kRepeat)) { g_pending.fetch_add(step); post(EV_STAGE_INPUT); }
 }
-int pre_up(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); if (argc >= 3) direction(argv, -1); perf::end(perf::HkAgentInputUp, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
-int pre_down(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); if (argc >= 3) direction(argv, 1); perf::end(perf::HkAgentInputDown, pt); return REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_up(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long)   { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); if (argc >= 3) direction(argv, -1); const bool ours = argc >= 3 && up_down_ours(argv); perf::end(perf::HkAgentInputUp, pt); return ours ? REFRAMEWORK_HOOK_SKIP_ORIGINAL : REFRAMEWORK_HOOK_CALL_ORIGINAL; }
+int pre_down(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) { if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL; int64_t pt = perf::begin(); if (argc >= 3) direction(argv, 1); const bool ours = argc >= 3 && up_down_ours(argv); perf::end(perf::HkAgentInputDown, pt); return ours ? REFRAMEWORK_HOOK_SKIP_ORIGINAL : REFRAMEWORK_HOOK_CALL_ORIGINAL; }
 
 int pre_vs(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -796,12 +824,10 @@ template <perf::Id ID> void post_vs(void**, REFrameworkTypeDefinitionHandle, uns
 //     picker, replay_variation_hint).
 // Every hook is installed only after the R18 code check of its method (codecheck_rt.hpp, cache codecheck_stages.txt).
 
-namespace sl = stagelogic;
-
 constexpr const char* kCodecheckCache = "reframework/data/SF6_CostumeSlots_data/codecheck_stages.txt";
 
 enum Hook : size_t { kSetupList, kGetList, kConvert, kDecide, kUpdateList, kSelChanged, kBattleDesc, kTrainStage, kReplayDesc,
-                     kHooks };
+                     kInitStageList, kHooks };
 codecheck::Batch g_check;
 bool g_check_started = false, g_hooks_done = false;
 bool g_hooked[kHooks] = {};
@@ -2002,6 +2028,360 @@ void grid_tick(uint32_t ev) {
     if (!grid_work()) g_grid.until = std::min(std::max(g_grid.until, g_frame + 30), g_grid.cap);
 }
 
+// =============================================================================================
+// Classic list: the full-screen Stage Select's strip with the tiles after the game's stages
+// =============================================================================================
+// Read 07/11 in the game's code. UIFlowStageSelect.Param.InitStageList: StageIdList = hGUI.GetStageSelectStageIdList ->
+// partsScrollList.InitList(count, index, index), all of them cells (its _DefaultItemCount is written with the count) -> the
+// list centred from that count -> UpdateStageList (each cell's picture from StageIdList[its ListIndex]; called from nowhere
+// else) -> the previews' cache, one per id. The via.gui.ScrollList scrolls by itself once it holds more entries than cells
+// (ItemCount: cells on screen, ItemMax: entries; ScrollTime 0: at once, the outlines stay and what is in them moves), with
+// its cursor inside CursorRange (the whole row).
+//   - So the screen is built by the game as ever, with its own stages; then (post-hook of InitStageList) the tiles' vanilla
+//     ids go on the list and InitList runs again with the longer count: the game's own count of cells and place stay.
+//   - Which entry an index is: our slots (sl::plan_slots, as the grids). The game only ever holds vanilla ids: Confirm,
+//     the opponent and the replay see the vanilla stage, only this PC loads the tile.
+//   - UP / DOWN only changes the focused entry's look: a stage's own entry between its own look and its variations, a tile
+//     among its group (sl::tile_groups). What the focused entry shows is served at once.
+//   - UP / DOWN reach the game no more on this screen: a list that scrolls turns its pages with them (07/11).
+//   - The list scrolled: the cells' pictures are ours, by ListIndex, in the same frame, and UpdateShopIcon (only the cells'
+//     owned / not owned state) follows. UpdateStageList is never called again: the game calls it once, from its flow (07/11:
+//     called a second and third time, the game crashed in its prefab workers as the previews were loading; that or the
+//     arrows' first copies, see below).
+//   - Nothing but the banner's text is touched while the previews load (IsPreviewTexCahceReady): a texture handed to the
+//     GUI while it loads crashes the game.
+//   - The arrows: copies of the music selector's own arrow, a plain Texture (e_tex_arrow), in the free corner beside the first
+//     and the last cell, shown while entries lie past that end. Each under its own p_MouseDecideOperable_L / _R, whose scale
+//     mirrors it (a Texture has no scale of its own). R19: the copy is made in the post-hook of InitStageList, right after
+//     InitList: the game itself duplicates this list's cells there (07/11: a copy of the whole panel, made from the guide
+//     bar's update, another screen's, crashed the game; no per-frame update of this screen's own was found: its Wait.OnUpdate
+//     and UIPartsBgmSelect.OnUpdate do not run). Every other write is the frame's, through the core (R1, R35).
+// Without a tile, or with the hook refused, none of this runs: the screen works as before.
+
+struct ClassicList {
+    Obj* param = nullptr;              // the screen's Param; no reference held
+    std::vector<sl::Slot> slots;       // its entries, once the tiles are in (empty: none)
+    int entry = -1;                    // the focused entry
+    int scroll = -1;                   // the list's ScrollIndex last refreshed
+    uint32_t arrows_at = 0;            // the arrows' last pass
+    bool ready = false;                // the game's previews have loaded
+    std::map<uint32_t, std::string> last;   // a stage -> the tile last fought over it: the cursor opens there
+} g_cl;
+thread_local uintptr_t tl_init_stage = 0;
+void arrows_make_copies(Obj* param);
+
+bool classic_on(Obj* param) { return param && !g_cl.slots.empty() && g_cl.param == param; }
+
+const sl::TileGroup* group_of(const std::string& first_key) {
+    for (auto& g : g_tile_groups) if (g.keys.front() == first_key) return &g;
+    return nullptr;
+}
+// An entry's looks: "" (its own) and its variations; a tile: its group's
+std::vector<std::string> entry_looks(const sl::Slot& s) {
+    std::vector<std::string> looks;
+    if (s.tile) {
+        if (const sl::TileGroup* g = group_of(s.key)) looks = g->keys;
+        else looks.push_back(s.key);
+        return looks;
+    }
+    looks.push_back(std::string());
+    for (const Variant* v : variations_of(s.base)) looks.push_back(v->key);
+    return looks;
+}
+// The look an entry shows now
+std::string entry_key(const sl::Slot& s) {
+    const auto looks = entry_looks(s);
+    std::string key;
+    if (s.tile) {
+        auto it = g_state.tile_pick.find(s.key);
+        key = it != g_state.tile_pick.end() ? it->second : s.key;
+    } else {
+        auto it = g_selected.find(s.base);
+        if (it != g_selected.end()) key = it->second;
+    }
+    return std::find(looks.begin(), looks.end(), key) != looks.end() ? key : looks.front();
+}
+// UP / DOWN on an entry. True when its look changed.
+bool entry_cycle(const sl::Slot& s, int step) {
+    const auto looks = entry_looks(s);
+    if (looks.size() < 2) return false;
+    const std::string now = entry_key(s);
+    const int at = static_cast<int>(std::find(looks.begin(), looks.end(), now) - looks.begin());
+    const std::string& next = looks[static_cast<size_t>(sl::cycle(at, static_cast<int>(looks.size()) - 1, step))];
+    if (next == now) return false;
+    if (s.tile) {
+        if (next == s.key) g_state.tile_pick.erase(s.key); else g_state.tile_pick[s.key] = next;
+    } else if (next.empty()) g_selected.erase(s.base);
+    else g_selected[s.base] = next;
+    logf("stages: classic list: stage %u -> %s", s.base, next.empty() ? "vanilla" : next.c_str());
+    return true;
+}
+
+// ---- the list ----
+int pre_init_stage(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    tl_init_stage = (argc >= 2 && !g_closing.load(std::memory_order_relaxed)) ? reinterpret_cast<uintptr_t>(argv[1]) : 0;
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+void post_init_stage(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    const uintptr_t p = tl_init_stage;
+    tl_init_stage = 0;
+    if (!p || g_closing.load(std::memory_order_relaxed)) return;
+    int64_t pt = perf::begin();
+    try {
+        std::lock_guard<std::recursive_mutex> lk(g_mx);
+        Obj* param = reinterpret_cast<Obj*>(p);
+        g_cl.param = param;
+        g_cl.slots.clear();
+        g_cl.entry = g_cl.scroll = -1;
+        g_cl.ready = false;
+        g_classic_keys.store(false, std::memory_order_relaxed);
+        bool ok_mode = false;
+        const bool event_mode = call_bool(param, "get_IsEventMode", {}, &ok_mode);
+        Obj* list = call_obj(param, "get_StageIdList");
+        Obj* parts = get_obj(param, "partsScrollList");
+        const int n = list ? list_count(list) : 0;
+        if (!list || !parts || n <= 0 || !ok_mode || event_mode || g_classic_tiles.empty()) { perf::end(perf::HkStgGrid, pt); return; }
+        std::vector<uint32_t> ids;
+        for (int i = 0; i < n; ++i) {
+            const Ret r = call(m_list_item, list, { arg_i32(i) });
+            if (r.exception_thrown) { perf::end(perf::HkStgGrid, pt); return; }
+            ids.push_back(r.dword);
+        }
+        size_t pos = 0;
+        std::vector<uint32_t> ins;
+        auto slots = sl::plan_slots(ids, g_classic_tiles, pos, ins);
+        if (ins.empty()) { perf::end(perf::HkStgGrid, pt); return; }
+        bool ok = true;
+        for (size_t k = 0; k < ins.size() && ok; ++k)
+            ok = !call(m_list_insert, list, { arg_i32(static_cast<int32_t>(pos + k)), arg_i32(static_cast<int32_t>(ins[k])) }).exception_thrown;
+        if (!ok || list_count(list) != static_cast<int>(slots.size())) {
+            logf("stages: classic list: the tiles could not be put in the list (%d entries now): list left as the game made it", list_count(list));
+            perf::end(perf::HkStgGrid, pt);
+            return;
+        }
+        // the cursor: the game's, or the tile last fought over that stage
+        int32_t sel = n - 1;
+        get_i32(param, "DefaultIndex", sel);
+        sel = std::max(0, std::min(sel, n - 1));
+        auto last = g_cl.last.find(ids[static_cast<size_t>(sel)]);
+        if (last != g_cl.last.end()) {
+            const int e = sl::entry_index(slots, last->first, last->second);
+            if (e >= 0) sel = e;
+        }
+        const Ret r = call(parts, "InitList", { arg_i32(static_cast<int32_t>(slots.size())), arg_i32(sel), arg_i32(sel) });
+        if (r.exception_thrown) {
+            logf("stages: classic list: InitList threw: list left at the game's %d entries", n);
+            perf::end(perf::HkStgGrid, pt);
+            return;
+        }
+        g_cl.slots = std::move(slots);
+        g_classic_keys.store(true, std::memory_order_relaxed);
+        logf("stages: classic list: %d stages + %zu tile(s), cursor on entry %d", n, ins.size(), sel);
+        arrows_make_copies(param);
+    } catch (...) {
+        logf("stages: EXCEPTION while putting the tiles in the classic list");
+    }
+    perf::end(perf::HkStgGrid, pt);
+}
+
+void classic_shown() {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    if (g_cl.slots.empty()) return;
+    bool dropped = false;
+    for (auto it = g_selected.begin(); it != g_selected.end();) {     // a tile chosen with UP / DOWN by an older version
+        if (is_tile(it->first, it->second)) { logf("stages: classic list: tile %s is an entry of its own now", it->second.c_str()); it = g_selected.erase(it); dropped = true; }
+        else ++it;
+    }
+    if (dropped) save_state(-1, "the tiles are entries of their own");
+    g_cl.entry = -1;
+    g_cl.arrows_at = 0;
+}
+void classic_hidden() {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    if (g_cl.entry < 0 || g_cl.entry >= static_cast<int>(g_cl.slots.size())) return;
+    const sl::Slot& s = g_cl.slots[static_cast<size_t>(g_cl.entry)];
+    if (s.tile) g_cl.last[s.base] = s.key; else g_cl.last.erase(s.base);
+    g_cl.entry = -1;
+}
+
+// The banner: the focused entry's name and picture. False while its picture loads.
+bool classic_banner(Obj* param, const sl::Slot& s, const std::string& key, size_t looks) {
+    Obj* text0 = get_obj(param, "text0");
+    Obj* tex0 = get_obj(param, "texture0");
+    if (!text0 || !tex0) return true;
+    const std::string& own = vanilla_name(s.base);
+    if (!own.empty()) g_scr.vanilla_name[s.base] = own;
+    const Variant* v = key.empty() ? nullptr : variant_of(s.base, key);
+    const std::string name = !v ? own : s.tile ? v->name : display_name(s.base, *v);
+    if (!name.empty() && (v || looks > 1)) {                    // a stage with one look: the game's own text stays
+        const std::string shown_text = looks > 1 ? decorate(name) : name;
+        g_ours.insert(shown_text);
+        set_text(text0, shown_text);
+    }
+    if (v && !v->preview.empty()) {
+        if (!g_cl.ready) return false;
+        Obj* h = preview_holder(v->preview);
+        if (!h) return false;
+        set_texture(tex0, h);
+        return true;
+    }
+    // its own look: the game's picture, unless one of ours is left on it
+    if (shown_pic(tex0).find("_stageslots/") != std::string::npos) {
+        if (!g_cl.ready) return false;
+        set_texture(tex0, vanilla_holder(param, s.base));
+    }
+    return true;
+}
+
+void classic_work(Obj* param, bool input) {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    const Ret ri = call(param, "GetSelectIndex");
+    const int sel = ri.exception_thrown ? -1 : static_cast<int32_t>(ri.dword);
+    if (sel < 0 || sel >= static_cast<int>(g_cl.slots.size())) return;
+    const sl::Slot s = g_cl.slots[static_cast<size_t>(sel)];
+    g_scr.decided = g_scr.stage = s.base;
+    if (sel != g_cl.entry) {
+        g_cl.entry = sel;
+        g_scr.settle = 2;                                       // the game writes its banner for this id: ours again over it
+    }
+    const int pending = g_pending.exchange(0);
+    const bool settling = g_scr.settle > 0;                     // presses during a change are dropped
+    if (settling) --g_scr.settle;
+    const bool changed = !settling && input && pending && entry_cycle(s, pending);
+    const std::string key = entry_key(s);
+    const sl::Choice served = sl::classic_served(g_selected, s.base, key, [](uint32_t b, const std::string& k) { return is_tile(b, k); });
+    if (changed || served != g_state.active) save_state(sl::kClassic, nullptr, &served);
+    if (changed) strip_open();
+    const bool ready = classic_banner(param, s, key, entry_looks(s).size());
+    g_scr.need = settling || !ready;
+}
+
+// ---- the cells: each shows its entry's look, read from its ListIndex (a cell's image names no entry: a tile shares its id) ----
+bool strip_entries() {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    if (!g_cl.ready) return false;                              // the game's previews still load
+    if (!g_strip.scanned || (g_strip.cells.empty() && g_frame - g_strip.scanned_at >= 30)) { if (!strip_scan()) return false; }
+    for (auto& c : g_strip.cells) if (!alive(c.ctrl) || (c.mat && !alive(c.mat))) { if (!strip_scan()) return false; break; }
+    bool done = true;
+    for (auto& c : g_strip.cells) {
+        if (!c.mat || call_bool(c.ctrl, "get_Dummy")) continue;
+        const Ret ri = call(m_list_index, c.ctrl);
+        const int li = ri.exception_thrown ? -1 : static_cast<int32_t>(ri.dword);
+        if (li < 0 || li >= static_cast<int>(g_cl.slots.size())) continue;
+        const sl::Slot& s = g_cl.slots[static_cast<size_t>(li)];
+        const std::string key = entry_key(s);
+        const Variant* v = key.empty() ? nullptr : variant_of(s.base, key);
+        // what it must show: its look's thumbnail, else its stage's own
+        const std::string path = v && !v->thumb.empty() ? v->thumb : vanilla_pic(s.base, true);
+        Obj* cur = slots::ui::get_mat_tex(c.mat, kStageImage);
+        const bool same = cur && lower_s(res_path(cur)).find(lower_s(path)) != std::string::npos;
+        if (cur) cur->release();
+        if (same) continue;
+        Obj* want = preview_holder(path);
+        if (want) slots::ui::set_mat_tex(c.mat, kStageImage, want);
+        else done = false;                                      // loading: the cell keeps what it shows
+    }
+    return done;
+}
+
+// ---- the arrows ----
+const char* const kArrowName = "e_tex_slots_stage_more";       // not "p_...": never taken for a UI part (R20)
+const char* const kArrowPanel[2] = { "p_MouseDecideOperable_L", "p_MouseDecideOperable_R" };
+// From the centre of the first / last cell to the arrow, in the free corner its slanted side leaves (Wael's marks, 07/11)
+constexpr float kArrowDx = 57, kArrowDy = 86;
+
+// From the post-hook of InitStageList (R19): hidden and ForceInvisible, the frame places and shows them. Found again by name:
+// they live and die with the screen's tree, which outlives a visit.
+void arrows_make_copies(Obj* param) {
+    const SF6CoreAPI* a = slots::ui::core();
+    SF6CoreClient* cl = slots::ui::client();
+    if (!a || !cl || !SF6CORE_HAS(a, ui_clone_control)) { logf("stages: classic list: the core has no ui_clone_control (0.8.2+): no arrows"); return; }
+    Obj* part = get_obj(param, "partsBgmSelect");
+    Obj* bgm = part ? get_obj(part, "<Control>k__BackingField") : nullptr;
+    for (int i = 0; i < 2; ++i) {
+        Obj* panel = bgm ? find_child(bgm, kArrowPanel[i], 0) : nullptr;
+        if (!panel) { logf("stages: classic list: %s not found: no arrow on that side", kArrowPanel[i]); continue; }
+        if (a->ui_find_child(panel, kArrowName, 0)) continue;
+        void* tmpl = a->ui_find_child(panel, "e_tex_arrow", 0);
+        void* c = nullptr;
+        const SF6CoreStatus st = tmpl ? a->ui_clone_control(cl, tmpl, panel, kArrowName, &c) : SF6CORE_ERR_NOT_FOUND;
+        if (st != SF6CORE_OK || !c) { logf("stages: classic list: arrow under %s not copied (status %d)", kArrowPanel[i], static_cast<int>(st)); continue; }
+        a->ui_set_force_invisible(cl, c, 1);
+        a->ui_set_visible(cl, c, 0);
+        logf("stages: classic list: arrow under %s copied", kArrowPanel[i]);
+    }
+}
+
+void arrows_pass(Obj* param, int first, int count) {
+    const SF6CoreAPI* a = slots::ui::core();
+    SF6CoreClient* cl = slots::ui::client();
+    Obj* cm = alive(g_scr.agent) ? call_obj(g_scr.agent, "get_ControlMain") : nullptr;
+    Obj* bgm = cm ? find_child_kept(cm, "p_BgmSelect_0") : nullptr;
+    Obj* list = get_obj(param, "stCtrl");
+    if (!a || !bgm || !list) return;
+    const Ret rv = call(list, "get_ItemCount");
+    const int view = rv.exception_thrown ? 0 : static_cast<int32_t>(rv.dword);
+    float pos[3] = {}, step[3] = {}, bpos[3] = {};
+    if (!floats_of(list, "get_Position", pos, 3) || !floats_of(list, "get_ItemOffset", step, 3) || !floats_of(bgm, "get_Position", bpos, 3)) return;
+    const sl::MoreArrows more = sl::more_arrows(first, view, count);
+    const float cell_x[2] = { pos[0], pos[0] + static_cast<float>(view - 1) * step[0] };
+    for (int i = 0; i < 2; ++i) {
+        const bool want = i ? more.right : more.left;
+        Obj* panel = find_child(bgm, kArrowPanel[i], 0);
+        Geo g;
+        if (!panel || !geo_of(panel, g) || g.sx == 0 || g.sy == 0) continue;
+        void* c = a->ui_find_child(panel, kArrowName, 0);
+        if (!c) continue;
+        if (want) {
+            // the place in the panel's own space: it sits in the music selector, and its scale mirrors the arrow
+            const float x = cell_x[i] + (i ? kArrowDx : -kArrowDx), y = pos[1] + (i ? kArrowDy : -kArrowDy);
+            a->ui_set_position(cl, c, (x - bpos[0] - g.x) / g.sx, (y - bpos[1] - g.y) / g.sy, 0.0f);
+            a->ui_set_force_invisible(cl, c, 0);
+        }
+        a->ui_set_visible(cl, c, want ? 1 : 0);
+    }
+}
+
+// Every frame the screen is up with its tiles: the previews loaded?, the list scrolled?, the arrows
+void classic_frame() {
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    Obj* param = g_scr.param;
+    if (!alive(param) || !classic_on(param)) return;
+    if (!g_cl.ready) {
+        bool ok = false;
+        const bool loaded = call_bool(param, "IsPreviewTexCahceReady", {}, &ok);
+        if (!ok || !loaded) return;
+        g_cl.ready = true;
+        std::set<uint32_t> bases;                              // ahead of the cursor: the tiles' pictures
+        for (auto& t : g_tiles) bases.insert(t.base);
+        for (uint32_t b : bases) preload_previews(b);
+        for (auto& e : g_cl.slots) preview_holder(vanilla_pic(e.base, true));
+        strip_open();
+        g_scr.need = true;
+        logf("stages: classic list: the game's previews are loaded");
+    }
+    Obj* list = get_obj(param, "stCtrl");
+    if (!list) return;
+    const Ret rs = call(list, "get_ScrollIndex");
+    if (rs.exception_thrown) return;
+    const int scroll = static_cast<int32_t>(rs.dword);
+    const bool moved = scroll != g_cl.scroll;
+    if (moved) {
+        const bool scrolled = g_cl.scroll >= 0 || scroll > 0;  // not the list's first look, as the game left it
+        g_cl.scroll = scroll;
+        if (scrolled) call(param, "UpdateShopIcon");
+        strip_entries();
+        strip_open();
+        const Ret rc = call(list, "get_CursorIndex"), rv = call(list, "get_ItemCount"), rm = call(list, "get_ItemMax");
+        logf("stages: classic list: scroll %d, cursor %d (%d cells, %d entries)", scroll, rc.exception_thrown ? -1 : static_cast<int32_t>(rc.dword),
+             rv.exception_thrown ? -1 : static_cast<int32_t>(rv.dword), rm.exception_thrown ? -1 : static_cast<int32_t>(rm.dword));
+    }
+    if (moved || g_frame - g_cl.arrows_at >= 10 || !g_cl.arrows_at) {
+        g_cl.arrows_at = g_frame;
+        arrows_pass(param, scroll, static_cast<int>(g_cl.slots.size()));
+    }
+}
+
 // ---- install: the code check first, the hooks once it answered ----
 void start_grid_check() {
     auto* tdb = api().tdb();
@@ -2050,6 +2430,8 @@ void start_grid_check() {
     add(t_session, "SetupBattleDesc", 2, "app.network.FGBattleSession.SetupBattleDesc(BattleDesc,Boolean)", true);
     add(t_training, "SetStage", 1, "app.training.TrainingManager.SetStage(StageDesc)", true);
     add(t_replay, "setupDesc", 0, "app.battle.ReplayFlowMap.setupDesc()", f_map_desc && f_desc_stage && f_stage_id);
+    add(tdb->find_type("app.menu.UIFlowStageSelect.Param"), "InitStageList", 0, "app.menu.UIFlowStageSelect.Param.InitStageList()",
+        !g_classic_tiles.empty() && m_list_item && m_list_insert && m_list_index);
     g_check.start(kCodecheckCache, "stage grids");
     g_check_started = true;
 }
@@ -2069,6 +2451,7 @@ void install_grid_hooks() {
         { kBattleDesc, pre_battle_desc, post_battle_desc },
         { kTrainStage, pre_training_stage, nullptr },
         { kReplayDesc, pre_replay_desc, post_replay_desc },
+        { kInitStageList, pre_init_stage, post_init_stage },
     };
     // the tiles need the list, its owner (SetupList) and Decide: one refused, none of the three
     const bool core = g_check.unique(kSetupList) && g_check.unique(kGetList) && g_check.unique(kDecide);
@@ -2217,6 +2600,7 @@ bool busy() {
     if (!g_variant_count) return g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2);
     if ((g_check_started && !g_hooks_done) || g_grid.until != 0 || g_decided.pending || g_cycle_pending.load() != 0) return true;
     if (g_grid.on_screen || g_grid_watch || g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2)) return true;   // the key, the hint
+    if (g_scr.active && classic_on(g_scr.param)) return true;   // the list's scroll, the arrows
     return (g_scr.active && (g_scr.need || g_scr.settle > 0 || g_strip.until != 0)) || g_vs.until != 0 || g_scr.check_until != 0;
 }
 
@@ -2267,6 +2651,7 @@ void tick(uint32_t ev) {
     if (g_scr.active && !g_scr.check_until && g_frame % 30 == 0 && !shown(g_scr.agent)) screen_hidden();
     if (g_scr.active) {
         bool input = (ev & EV_STAGE_INPUT) != 0;
+        classic_frame();
         if (ev & EV_STAGE_DIRTY) { g_scr.settle = std::max(g_scr.settle, 1); g_scr.need = true; }
         if (input || g_scr.need || g_scr.settle > 0) screen_work(input);
         // stage strip: looked at for 2 s after each change, longer while a preview loads (10 s at most)
