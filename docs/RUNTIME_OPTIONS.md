@@ -855,8 +855,8 @@ does, the fallback above is the next step.
 - **Title**: the outfit's name in capitals and the side (`MINI DRESS MAI C1 SWAP  -  P1`); a name longer than 40
   characters (UTF-8; 30 when the menu has several pages) is cut and ends with `...`, so the side stays readable.
   Several pages: the Color Mod's colour editor's paged title, `<ICON KeyA>   MINI DRESS MAI C1 SWAP  -  P1   1/2
-  <ICON KeyE>` (pad: `<ICON BtnL1>` / `<ICON BtnR1>`; the glyphs of the device in use when the pages were built). The costume row shows the game's
-  "Outfit VII"; the outfit's name is also at the right of the guide bar ("Outfit name on Fighter Settings" below).
+  <ICON KeyE>` (pad: `<ICON BtnL1>` / `<ICON BtnR1>`; the glyphs of the device in use when the pages were built). The costume row shows the outfit's label
+  (the loader's name message, "Outfit VII" for an outfit with none: `docs/MANAGER_CONTRACT.md`, "What the game shows"); the outfit's name is also at the right of the guide bar ("Outfit name on Fighter Settings" below).
 - **Pages** (7 rows at most, the dialog's pool; split by `split_pages`, `rto_data.cpp`, unit-tested): page 1 = Player
   side (P1 / P2), the first 5 option rows, Restore defaults; later pages = 7 option rows each (no "More options" row
   since 20/10). Player side and Restore defaults are on page 1 only, like the colour editor's extra rows (its cluster
@@ -910,10 +910,11 @@ does, the fallback above is the next step.
   another of ours = its label in `outfits.json`, any other game outfit = the costume row's own text (the game's
   name, e.g. "DriveTech Wear"). Cut at 40 characters ("..."). The outfit: an `app.UIPartsMatchingFighterSetting`
   (`FighterId`, `GetCostumeId()`) in the screen's parts list or its flow's settings, else the fighter of the
-  preview model built since the screen came up (`esfNNNv..`) and the outfit by the costume row's name ("Outfit II"
-  = the registry's name of a slot of ours). Worked with `RuntimeOptions` off too in 1.13 - 1.15 (its own module; the preview's
+  preview model built since the screen came up (`esfNNNv..`) and the outfit by the costume row's text (a slot's label as the
+  loader wrote it, or the registry's "Outfit II"). Worked with `RuntimeOptions` off too in 1.13 - 1.15 (its own module; the preview's
   fighter then only came from the screen).
-- **Shown** while Fighter Settings is on screen and no option window is open; **hidden** under our options menu and
+- **Shown** while Fighter Settings is on screen on its Character tab (the costume row shown: its Titles and Profile tabs keep the
+  agent and main control visible, read 07/11) and no option window is open; **hidden** under our options menu and
   the Color Mod's colour editor (their own guide bar and camera hints are there), off that screen, and when it would
   come within 48 px of the bar's own text (its entries change with the focused row).
 - **How**: never the bar's text (one writer, see above). A copy of the bar's item template `e_text_0` (the element

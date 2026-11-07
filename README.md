@@ -51,7 +51,8 @@ The rest of this page is about the Slots Loader.
 
 Street Fighter 6 costume mods replace an existing outfit: install a Ryu mod and Outfit 1 is gone until you
 uninstall it. This loader turns every installed costume mod into an **extra** outfit slot and puts the original
-outfit back, so Outfit 1 and the mod live side by side in the costume spinner.
+outfit back, so Outfit 1 and the mod live side by side in the costume spinner. An extra outfit shows under its mod's name in the
+game's lists ("Outfit VII" when the mod gives none); that name is local, online it travels as its outfit number only.
 
 Install it once. After that nothing changes in how you use the game: install costume mods the way you already
 do, start the game, and the new outfits are there.

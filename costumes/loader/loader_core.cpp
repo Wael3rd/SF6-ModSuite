@@ -14,6 +14,7 @@
 #include "archive.hpp"
 #include "nsfw_keywords.hpp"
 #include "manager_mode.hpp"
+#include "outfit_display.hpp"
 #include "swap_repairs.hpp"
 #include <climits>
 
@@ -132,10 +133,12 @@ static const int   N_OLD_TEX = 1;
 // variants.json, colour swatches): the next launch writes them again and keeps the pak (3d). The json
 // files name the loader by LOADER_PAK_ID.
 // Outfit names follow each other per character in costume number order (Outfit I, II, III...), while a
-// slot keeps its number for good: saved choices and replays name slots by number. Id of the static
-// table's first name message ("Outfit I"), static_meta.json msg_id_base.
+// slot keeps its number for good: saved choices and replays name slots by number. Those names stay what
+// registry.json, outfits.json and variants.json say; what the game shows for a slot is its mod's label
+// (apply_outfit_labels), "Outfit VII" when it has none. Id of the static table's first name message ("Outfit I"),
+// static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_PAK_ID = "2026-10-20-physics";
+static const char* LOADER_PAK_ID = "2026-11-07-outfit-labels";
 static const char* LOADER_META_ID = "2026-10-20-fastpak";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
@@ -10782,6 +10785,11 @@ struct StructuralFiles {
     std::vector<int> fighters;
     struct File { std::string pak; std::vector<uint8_t> data; };
     std::vector<File> files;                   // the costume table holds every record (trimmed later)
+    // what the table and the name file were made from, for the slots' labels (apply_outfit_labels)
+    std::vector<uint8_t> game_table, game_msg;
+    std::vector<CostumeSlotRecord> add;
+    std::vector<std::vector<uint8_t>> guids;
+    std::vector<MsgEntry> names;
 };
 
 static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int slot_max) {
@@ -10869,14 +10877,19 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
             st.records.push_back({ f, slot_min + so, (int)id, (int)id });
         }
     }
+    st.game_table = table;
     if (!add_costume_records(table, add, STATIC_MSG_ID_BASE, guids, &err)) return fail("costume table: " + err);
     st.files.push_back({ COSTUME_TBL, std::move(table) });
 
     // Names
     std::vector<uint8_t> msg;
     if (!load(COSTUME_MSG, msg)) return fail("costume name file not found");
+    st.game_msg = msg;
     if (!add_msg_entries(msg, names, &err)) return fail("costume name file: " + err);
     st.files.push_back({ COSTUME_MSG, std::move(msg) });
+    st.add = std::move(add);
+    st.guids = std::move(guids);
+    st.names = std::move(names);
 
     st.fighters.assign(fighters.begin(), fighters.end());
     st.ok = true;
@@ -11634,6 +11647,42 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         }
     }
 
+    // What the game shows for each slot: its mod's label, one name message per slot after the "Outfit I".."Outfit C" ones.
+    // Only the text a record points at changes: its number, its "Outfit V" in the json files, its id stay. Local display: the
+    // game's name file and table, read on this PC; a slot travels as its number (the online alias shows the carrier). With the
+    // shipped copies (no table built here), or if the labels' files can't be made: the "Outfit V" ones.
+    std::unordered_map<uint32_t, uint32_t> label_message;   // record id -> message id
+    if (structural.ok) {
+        std::vector<MsgEntry> names = structural.names;
+        std::vector<std::vector<uint8_t>> guids = structural.guids;
+        size_t no_label = 0;
+        for (auto& sl : slots) {
+            auto nm = g_mod_names.find(sl.mod_id);
+            const std::string text = nm == g_mod_names.end() ? std::string() : outfit_display_name(nm->second);
+            if (text.empty()) { ++no_label; continue; }
+            char g[64];
+            const size_t at = names.size();
+            snprintf(g, sizeof g, "a1b2c3d4-%04x-4000-8000-%012x", (unsigned)(at + 1), (unsigned)(STATIC_MSG_ID_BASE + at));
+            std::vector<uint8_t> gb;
+            if (!guid_bytes(g, gb)) continue;
+            names.push_back({ g, "FighterCostumeMessage" + std::to_string(6 + at), text });
+            guids.push_back(std::move(gb));
+            label_message[(uint32_t)sl.record_id] = STATIC_MSG_ID_BASE + (uint32_t)at;
+        }
+        std::vector<uint8_t> table = structural.game_table, msg = structural.game_msg;
+        std::string err;
+        if (add_costume_records(table, structural.add, STATIC_MSG_ID_BASE, guids, &err) && add_msg_entries(msg, names, &err)) {
+            for (auto& f : structural.files) {
+                if (f.pak == COSTUME_TBL) f.data = std::move(table);
+                else if (f.pak == COSTUME_MSG) f.data = std::move(msg);
+            }
+            printf("  outfit names: %zu slots show their mod's label, %zu their \"Outfit\" name\n", label_message.size(), no_label);
+        } else {
+            label_message.clear();
+            logf("  WARN: outfit labels not written (%s): the slots show their \"Outfit\" names\n", err.c_str());
+        }
+    }
+
     // Structural files: built from the game's (4b), else the shipped copies (static_meta.json's list, else
     // the 3 hardcoded names)
     struct SFile { std::string local; std::string pak; };
@@ -11669,8 +11718,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             std::unordered_map<uint32_t, uint32_t> message_for_record;
             for (auto& sl : slots) {
                 keep.insert((uint32_t)sl.record_id);
-                message_for_record[(uint32_t)sl.record_id] =
-                    STATIC_MSG_ID_BASE + uint32_t(roman_to_int(sl.outfit_name.substr(7)) - 1);
+                auto lm = label_message.find((uint32_t)sl.record_id);
+                message_for_record[(uint32_t)sl.record_id] = lm != label_message.end() ? lm->second
+                    : STATIC_MSG_ID_BASE + uint32_t(roman_to_int(sl.outfit_name.substr(7)) - 1);
             }
             size_t kept = 0, removed = 0;
             if (trim_costume_table(data, keep, &kept, &removed, &message_for_record))

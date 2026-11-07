@@ -22,6 +22,7 @@
 #include "ownership.hpp"
 #include "manager_marker.hpp"
 #include "../../common/manager_mode.hpp"
+#include "../../common/outfit_display.hpp"
 #include "carrier.hpp"
 #include "perf.hpp"
 #include "wjournal.hpp"
@@ -1819,7 +1820,8 @@ std::string slot_label(int fighter, int costume_no) {
 int slot_by_name(int fighter, const std::string& name) {
     auto f = g_slot_of.find(fighter);
     if (f == g_slot_of.end() || name.empty()) return -1;
-    for (auto& [cos, i] : f->second) if (g_slots[i].name == name) return cos;
+    // what a costume row shows: the label the loader wrote in the game's name file, or "Outfit VII" when it has none
+    for (auto& [cos, i] : f->second) if (g_slots[i].name == name || outfit_display_name(g_slots[i].label) == name) return cos;
     return -1;
 }
 
