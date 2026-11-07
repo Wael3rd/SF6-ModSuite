@@ -1132,6 +1132,86 @@ void test_auth_session_link() {
     stub.stop();
 }
 
+// "Report a bug" (report/report_logic.hpp) on the wire: a write like the others, with its own time, and no identity but the token
+void test_report_wire() {
+    section("report: the bug report's request");
+    Config cfg;
+    cfg.api_base = "https://w.example";
+    Request rq;
+    std::string err;
+    const json cmd = C({{"cmd", "report"}, {"costume_key", "mod:ab:f1:c0"}, {"text", "t"}, {"fighter_id", 1}, {"image", "/9j/"}, {"logs", C({{"loader", "x"}})},
+                        {"steamid", "76561198000000001"}, {"cfn", "Alpha"}, {"player", "76561198000000001"}});
+    check(build_request(cmd, cfg, &rq, &err), "report: a request");
+    check(rq.method == "POST" && rq.url == "https://w.example/api/report" && rq.has_body && rq.timeout_ms == kReportTimeoutMs, "report: POST /api/report, its own time");
+    const json body = json::parse(rq.body, nullptr, false);
+    check(body.is_object() && body["costume_key"] == "mod:ab:f1:c0" && body["image"] == "/9j/" && body["logs"]["loader"] == "x", "report: its members");
+    check(!body.contains("steamid") && !body.contains("cfn") && !body.contains("player") && !body.contains("cmd"), "report: no identity in the body, whatever the command held");
+    check(auth::needs_token("report"), "report: needs the token");
+    Request get;
+    check(build_request(C({{"cmd", "report_get"}, {"costume_key", "mod:ab:f1:c0"}, {"image", "x"}, {"logs", "x"}}), cfg, &get, &err) && get.method == "GET" && !get.has_body &&
+          get.url == "https://w.example/api/report?costume_key=mod%3Aab%3Af1%3Ac0" && auth::needs_token("report_get"), "report_get: a GET of the key alone, nothing else leaves: " + get.url);
+    Request set;
+    check(build_request(C({{"cmd", "report_status"}, {"costume_key", "mod:ab"}, {"action", "confirm"}, {"steamid", "76561198000000001"}, {"text", "x"}}), cfg, &set, &err) && set.method == "POST" && set.url == "https://w.example/api/report/status" && auth::needs_token("report_status"), "report_status: POST");
+    const json setb = json::parse(set.body, nullptr, false);
+    check(setb.is_object() && setb.size() == 2 && setb["costume_key"] == "mod:ab" && setb["action"] == "confirm", "report_status: only its key and action");
+    Request plain;
+    build_request(C({{"cmd", "list"}, {"char", "Ken"}, {"sort", "recent"}, {"page", "1"}}), cfg, &plain, &err);
+    check(plain.timeout_ms == 0, "the other requests keep their 15 s");
+
+    Stub stub;
+    std::mutex sm;
+    int reports = 0;
+    size_t size = 0;
+    std::string bearer;
+    bool refuse = false;
+    stub.handler = [&](const StubReq& r) {
+        StubResp s;
+        std::lock_guard<std::mutex> lk(sm);
+        if (r.target == "/auth/steam/ticket") { s.body = C({{"ok", true}, {"token", kTok1}, {"cfn", "Alpha"}}).dump(); return s; }
+        if (r.target == "/api/report" && r.method == "POST") {
+            ++reports;
+            size = r.body.size();
+            auto a = r.h.find("authorization");
+            bearer = a == r.h.end() ? std::string() : a->second;
+            if (refuse) { s.status = 403; s.body = R"({"error":"banned","message":"This Steam account is banned from SF6 Community."})"; return s; }
+            s.body = R"({"ok":true,"id":"x","replaced":false,"retention_days":90})";
+            return s;
+        }
+        s.status = 404;
+        s.body = "{}";
+        return s;
+    };
+    check(stub.start(), "report stub starts");
+    const fs::path dir = g_work / "report_wire";
+    fs::remove_all(dir);
+    const fs::path cfgp = dir / "config.json";
+    write_cfg(cfgp, stub.base(), "K");
+    FakeTickets tickets;
+    tickets.bytes = { 0x14, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef };
+    Client c;
+    c.configure(slash(cfgp));
+    c.worker().set_tickets(&tickets);
+    c.start();
+    json big = cmd;
+    big["image"] = std::string(1200 * 1024, 'A');          // a picture's base64 at its largest
+    Answer a = ask(c, big, 5000, 5);
+    check(a.done && a.ok && a.data["ok"] == true, "report: a large body goes and is answered");
+    { std::lock_guard<std::mutex> lk(sm);
+      check(reports == 1 && size > 1200 * 1024, "report: all of it on the wire");
+      check(bearer == std::string("Bearer ") + kTok1, "report: the token was got first, as for any write"); }
+    { std::lock_guard<std::mutex> lk(sm); refuse = true; }
+    a = ask(c, cmd, 3000, 5);
+    check(a.done && a.ok && auth::error_code(a.data) == "banned", "report: a refusal reaches the callback with its code");
+    tickets.fail = true;
+    auth::drop_token(auth::token_path(slash(cfgp)));
+    { std::lock_guard<std::mutex> lk(sm); reports = 0; }
+    a = ask(c, cmd, 3000, 5);
+    { std::lock_guard<std::mutex> lk(sm); check(reports == 0, "report: no Steam verification: nothing leaves"); }
+    check(a.done && auth::error_code(a.data) == auth::kUnavailable, "report: and it says so");
+    c.stop();
+    stub.stop();
+}
+
 void test_auth_page() {
     section("auth: the list shows author_cfn and the verified mark");
     const fs::path root = g_work / "auth_page";
@@ -1382,6 +1462,7 @@ int main(int argc, char** argv) {
     test_auth_pure();
     test_auth_flow();
     test_auth_session_link();
+    test_report_wire();
     test_auth_page();
     test_steam_engine();
 

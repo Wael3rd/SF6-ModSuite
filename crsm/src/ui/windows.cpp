@@ -880,7 +880,9 @@ bool key_down(int vk) { return cmn::key_down(vk); }   // reframework:is_key_down
 
 // RMT:1755-1770: the one reader of the name keys (T / pad Y, G / R / pad X) for the slot rows (P4) and the Manager page (P5)
 void name_key_tick() {
-    if (com::open()) { g_t.reset(); g_del.reset(); return; }   // the Community dialog has its own T (like)
+    // the Community dialog has its own T (like); Fighter Settings, over this menu from the Multi Menu, is another screen with R as Report a bug and T as the
+    // game's: never a slot name of the page underneath
+    if (com::open() || bug_report::awake()) { g_t.reset(); g_del.reset(); return; }
     const uint32_t mask = pad_mask();
     const bool pressed = g_t.press(key_down(kKeyT) || (mask & g_pad_y) != 0);
     const bool dpressed = g_del.press(key_down(kKeyG) || key_down(kKeyR) || (mask & g_pad_x) != 0);

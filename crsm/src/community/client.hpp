@@ -19,6 +19,7 @@
 namespace community {
 
 constexpr int kTimeoutTicks = 600;     // CommunityBridge.lua TIMEOUT: ~10 s at 60 fps
+constexpr int kReportTimeoutTicks = 4800;   // a bug report: beyond its 60 s upload limit (kReportTimeoutMs) at 60 fps
 
 // Pure: true exactly once per request, at the first poll where the worker is getting the Steam-verified token (ticket +
 // /auth, ~3-4 s on a player's first write): the "Verifying with Steam..." ticker. `*announced` is the request's own flag.
@@ -44,7 +45,7 @@ public:
     // called from poll() (outside the lock), once per request, when its Steam verification starts (verify_notice)
     void set_verifying_hook(std::function<void()> h);
     // false = refused (busy): the callback was called with the busy error.
-    bool send(json cmd, Callback cb);
+    bool send(json cmd, Callback cb, int timeout_ticks = kTimeoutTicks);
     void poll();
     // Forget the request in flight without calling its callback (the Lua shim timed out first); its answer is dropped.
     void abandon();
@@ -54,7 +55,7 @@ public:
     Worker& worker() { return worker_; }
 
 private:
-    struct Pending { uint64_t id = 0; Callback cb; int ticks = 0; };
+    struct Pending { uint64_t id = 0; Callback cb; int ticks = 0; int limit = kTimeoutTicks; };
 
     mutable std::mutex mx_;
     Worker worker_;

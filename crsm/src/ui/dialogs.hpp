@@ -3,7 +3,8 @@
 // the Manager page (phase P5) calls.
 //
 // Behaviour of the Lua it replaces (RecordingManagerTab.lua RMT, NativeTicker.lua TK):
-//  * text_input: app.UITextInputDialog.OpenTextInputDialog(no delegate, RequestType 16 "ReciperMemo", VisualType 1 FG,
+//  * text_input (one line: a line break is typed as /n, details_logic.hpp; tried with 1000 characters, Ctrl+V works):
+//    app.UITextInputDialog.OpenTextInputDialog(no delegate, RequestType 16 "ReciperMemo", VisualType 1 FG,
 //    initial, max_bytes) (RMT:1426-1438); the game's "Maximum 15 characters" line reads T("press_enter"); the pause menu's
 //    input and its tab moves are blocked while it is up. `done(ok, text)`: ok = something to apply (a decide, even with the
 //    initial text; or a close without a decide after the text changed); ok = false for a cancel, a close with nothing
@@ -27,7 +28,7 @@
 namespace ui::dialogs {
 // All run their work on the game thread (frame callback); 'done' is called there too.
 void text_input(const std::string& title, const std::string& initial, size_t max_bytes,
-                std::function<void(bool ok, const std::string& text)> done);
+                std::function<void(bool ok, const std::string& text)> done, bool pause_menu = true);   // pause_menu: it is over the training pause menu, whose input it holds
 void confirm(const std::string& text, std::function<void(bool yes)> done);
 void community_open();    // Manager "Download Loadouts"
 void community_share();   // Manager "Share loadout"
@@ -41,4 +42,8 @@ void confirm(const std::string& text, const std::string& title, std::function<vo
 // confirm_box then return end`, RMT:1459, 1464; T / G / R ignored, RMT:1762) for the keys of the Manager page (T =
 // rename, Confirm on the Drill row = the details).
 bool busy();
+// A text dialog can open: its hooks are in place
+bool text_available();
+// What the open text dialog's field shows now, to see whether a key changed it: "" = no dialog, or nothing read
+std::string text_field_shown();
 }

@@ -456,6 +456,7 @@ void update_post_body() {
     try { make_hint_clone(); } catch (...) { ui::fault("OptionBGDialog OnUpdate post"); }
 }
 void update_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    bug_report::dialog_update();                 // (its copies: one load while it wants none)
     if (!g_clone_due.load() || cmn::closing() || !ui::active()) return;   // nothing asked: one load per update
     __try { update_post_body(); } __except (EXCEPTION_EXECUTE_HANDLER) { ui::fault("OptionBGDialog OnUpdate post (SEH)"); }
 }
