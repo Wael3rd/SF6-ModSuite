@@ -22,6 +22,11 @@
 // Rules: writes only from LateUpdateBehavior through the core (R1); the guide bar's copy inside the guide list's own update (R19);
 // controls found by name each frame, no reference kept (R35); no state OnEnter / OnExit hook (R18); set_Message only when the text
 // differs (rule 15). While neither screen exists: two core registry reads every 15 frames, nothing else.
+//
+// On screen means on screen: Battle Settings keeps CFNFighterProfileSimpleTop loaded, not drawn, its controls still ActualVisible, its
+// line still holding his id: the agents alone say nothing (Wael 07/11: "(X) ID Steam" on Fighter Settings). The key, the entry and the
+// swap work only when the GameObject is drawn and no newer flow is over the profile; leaving gives the line back at once, and on any
+// other screen the key reads nothing, sends nothing, writes nothing.
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
@@ -519,16 +524,50 @@ void give_back(Obj* t, bool write_it) {
     g_line = Line{};
 }
 
-// The screen's main control, shown; nullptr when neither screen is up
-Obj* screen_up() {
-    for (const char* name : kScreens) {
-        void* buf[2] = {};
-        const uint32_t n = g_core->ui_agents(name, buf, 2);
-        for (uint32_t i = 0; i < n && i < 2; ++i) {
-            Obj* main = call_obj(reinterpret_cast<Obj*>(buf[i]), "get_ControlMain");
-            if (actual_visible(main)) return main;
-        }
+// The main control of an agent of that name really drawn; nullptr none (psn::profile_drawn)
+Obj* drawn_main(const char* name) {
+    void* buf[2] = {};
+    const uint32_t n = g_core->ui_agents(name, buf, 2);
+    for (uint32_t i = 0; i < n && i < 2; ++i) {
+        Obj* agent = reinterpret_cast<Obj*>(buf[i]);
+        Obj* go = call_obj(agent, "get_GameObject");
+        bool ok = false;
+        const bool draw = go && call_bool(go, "get_DrawSelf", &ok) && ok;
+        Obj* main = draw ? call_obj(agent, "get_ControlMain") : nullptr;
+        if (psn::profile_drawn(draw, actual_visible(main))) return main;
     }
+    return nullptr;
+}
+// Nothing over the profile: the newest flow that is not a background widget is one of the profile's. Read every kHintPass frames.
+bool profile_on_top() {
+    static uint32_t at = 0;
+    static bool top = false;
+    static std::string last_other;
+    if (at && g_frame - at < kHintPass) return top;
+    at = g_frame;
+    top = false;
+    std::string other;
+    auto* fm = API::get()->get_managed_singleton("app.UIFlowManager");
+    Obj* hs = fm ? get_obj(fm, "_Handles") : nullptr;
+    for (int i = 0, n = list_count(hs); i < n; ++i) {
+        Obj* h = list_item(hs, i);
+        Obj* p = h ? get_obj(h, "<Param>k__BackingField") : nullptr;
+        if (!p) continue;
+        const std::string type = p->get_type_definition()->get_full_name();
+        if (psn::flow_is_background(type)) continue;
+        if (psn::flow_is_profile(type)) top = true; else other = type;
+        break;
+    }
+    if (other != last_other) {                // a type's name: nothing of a player
+        last_other = other;
+        if (!other.empty()) logi("profile_mod: a screen is over the profile: %s", other.c_str());
+    }
+    return top;
+}
+// The screen's main control, drawn and on top; nullptr otherwise: nothing to do, anywhere else
+Obj* screen_up() {
+    for (const char* name : kScreens)
+        if (Obj* main = drawn_main(name)) return profile_on_top() ? main : nullptr;
     return nullptr;
 }
 Obj* find_line(Obj* main) {
@@ -645,10 +684,6 @@ Method* m_top_start = nullptr;
 psn::SwapTracker g_swap;
 uint32_t g_swap_frame = 0;
 
-bool agent_exists(const char* name) {
-    void* buf[2] = {};
-    return g_core->ui_agents(name, buf, 2) != 0;
-}
 struct Flows { Obj* simple_handle = nullptr; Obj* simple_param = nullptr; bool top = false; };
 Flows walk_flows() {
     Flows f;
@@ -689,12 +724,14 @@ bool do_swap(Obj* h, Obj* param) {
 void swap_tick() {
     ++g_swap_frame;
     if (!g_swap.pending && (g_swap_frame % kPollEvery) != 0) return;   // nothing awaited: the two registry reads every 15 frames only
-    bool top = agent_exists(kAgentTop);
+    bool top = drawn_main(kAgentTop) != nullptr;
+    const bool simple_drawn = drawn_main(kAgentSimple) != nullptr;   // Battle Settings keeps one loaded, not drawn: not a profile opened
     Flows f;
-    if (agent_exists(kAgentSimple) || g_swap.pending) {
+    if (simple_drawn || g_swap.pending) {
         f = walk_flows();
         top = top || f.top;
     }
+    if (!simple_drawn) f.simple_handle = nullptr;
     switch (g_swap.step(reinterpret_cast<uintptr_t>(f.simple_handle), top, g_swap_frame)) {
     case psn::SwapTracker::Do::Swap:
         if (f.simple_handle && do_swap(f.simple_handle, f.simple_param)) g_swap.swapped(g_swap_frame);

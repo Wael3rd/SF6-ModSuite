@@ -126,6 +126,26 @@ int main() {
         check(ans.result == NameResult::NetFail, "requests: the XML did not answer: may retry");
         check(std::string(word_unavailable("fr")) == "Pseudo indisponible" && std::string(word_unavailable("en")) == "Name unavailable", "the guide's words");
     }
+    // on screen means on screen
+    {
+        check(!profile_drawn(false, true), "screen: Battle Settings' hidden SimpleTop (not drawn, controls ActualVisible): no");
+        check(!profile_drawn(true, false), "screen: drawn, its main control hidden: no");
+        check(profile_drawn(true, true), "screen: drawn and visible: yes");
+        const auto on_top = [](std::initializer_list<const char*> newest_first) {
+            for (const char* t : newest_first) {
+                if (flow_is_background(t)) continue;
+                return flow_is_profile(t);
+            }
+            return false;
+        };
+        check(on_top({ "app.UICFNFightersProfileTabPlayChildTab1.FlowParam", "app.UICFNFightersProfileTop.FlowParam", "app.UICFNDetailedMenu.FlowParam" }), "screen: the profile's flows newest: on top");
+        check(on_top({ "app.UICFNFightersProfileChildTabAvatarEquip.FlowParam", "app.UIMatchingSettingFightersProfileSimpleTop.FlowParam", "app.UIFlowMatchingSetting.Param" }), "screen: Battle Settings' Fighter Profile tab: on top");
+        check(on_top({ "app.UIWidget.BaseParam_CreateByPrefab", "app.commentator.UICommentatorSubTitle.Param", "app.UICFNFightersProfileSimpleTop.FlowParam" }), "screen: background widgets don't count");
+        check(!on_top({ "app.UIFlowDialog.MessageBoxParam", "app.UICFNFightersProfileTop.FlowParam" }), "screen: a dialog over it: no");
+        check(!on_top({ "app.UICFNDetailedMenu.FlowParam", "app.UICFNFightersProfileSimpleTop.FlowParam" }), "screen: another menu over it: no");
+        check(!on_top({ "app.UIFlowMatchingSetting.Param", "app.menu.UIFlowFGMainMenuList.Param" }), "screen: no profile flow at all: no");
+        check(!on_top({ "app.UIWidget.BaseParam_CreateByPrefab" }) && !on_top({}), "screen: nothing but widgets, or nothing: no");
+    }
     // the swap's decisions
     {
         using D = SwapTracker::Do;
