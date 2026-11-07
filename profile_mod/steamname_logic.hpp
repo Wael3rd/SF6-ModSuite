@@ -8,6 +8,16 @@
 
 namespace psn {
 
+// Is the profile what the player is on? The agents alone don't say: Battle Settings keeps CFNFighterProfileSimpleTop loaded while its
+// other tabs show (read: GameObject DrawSelf false, View visible, and the controls' ActualVisible stays true). So: its GameObject drawn
+// and its main control visible,
+inline bool profile_drawn(bool go_draw_self, bool main_actual_visible) { return go_draw_self && main_actual_visible; }
+// and nothing over it: UIFlowManager._Handles holds the newest flows first (read on Battle Settings), so the first one that is not a
+// background widget must be one of the profile's. Empty: nothing says it is there.
+inline bool flow_is_background(const std::string& type) { return type.rfind("app.UIWidget.", 0) == 0 || type.rfind("app.commentator.", 0) == 0; }
+inline bool flow_is_profile(const std::string& type) { return type.find("FightersProfile") != std::string::npos; }
+
+
 constexpr size_t kIdLen = 17;
 constexpr size_t kNameMaxBytes = 96;        // far above Steam's 32 characters
 
