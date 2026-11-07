@@ -59,6 +59,15 @@ int main() {
     const double period = 2 * kRestSeconds + 2 * slide;
     check(offset_at(120, period + 0.1) == 0 && offset_at(120, period + kRestSeconds + slide / 2) == 60, "it repeats");
     check(offset_at(120, -1) == 0, "before it starts: its start");
+    bool goes_on = true;
+    for (int k = 1; k < 120; ++k) {
+        if (offset_at(120, time_at(120, k)) != k) goes_on = false;
+        if (offset_at(120, time_at(120, k, true), true) != k) goes_on = false;
+    }
+    check(goes_on, "a new width: the slide goes on from where it is, both ways");
+    check(time_at(120, 0) == 0 && time_at(120, 0, true) == kRestSeconds + 120 / kUnitsPerSecond, "from its start or its end");
+    check(offset_at(100, time_at(100, 150)) == 100, "the new end is nearer than where it was: at that end");
+    check(time_at(0, 50) == 0, "no overflow any more");
     bool in_range = true;
     int steps = 0, last = -1;
     for (double t = 0; t < 3 * period; t += 1.0 / 60) {

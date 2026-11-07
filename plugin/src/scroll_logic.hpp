@@ -33,12 +33,22 @@ inline int offset_at(float overflow, double t, bool right_to_left = false) {
     return right_to_left ? last - clamped : clamped;
 }
 
+// When offset_at gives `offset`, on its way to the end: to go on from there when the overflow changes. Never past the new overflow.
+inline double time_at(float overflow, int offset, bool right_to_left = false) {
+    if (!(overflow > 0)) return 0;
+    const int last = static_cast<int>(std::lround(overflow));
+    int along = right_to_left ? last - offset : offset;
+    along = along < 0 ? 0 : along > last ? last : along;
+    return along == 0 ? 0.0 : kRestSeconds + along / kUnitsPerSecond;
+}
+
 // Where the text goes and what shows of it, for a text placed by its left point at `left`, in a place `width` wide: the clip is in the
 // text's own space. Top and bottom far enough never to cut a glyph, whatever the point the text's height is measured from.
+constexpr float kClipTop = -200.0f, kClipBottom = 400.0f;
 struct Window { float x, clip_left, clip_top, clip_right, clip_bottom; };
 inline Window window_at(float left, float width, int offset) {
     const float off = static_cast<float>(offset);
-    return { left - off, off, -200.0f, off + width, 400.0f };
+    return { left - off, off, kClipTop, off + width, kClipBottom };
 }
 
 // The left edge of a place, from the point a text was placed by (via.gui.ControlPoint: its column 0 left, 1 centre, 2 right)

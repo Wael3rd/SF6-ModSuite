@@ -125,9 +125,10 @@ void on_late_update() {
 }
 
 void on_post_late_update() {
-    if (!rto::camera::active() || g_closing.load(std::memory_order_relaxed)) return;
+    if (g_closing.load(std::memory_order_relaxed)) return;
     try {
-        rto::camera::post_frame();
+        namescroll::post_frame();           // a row's sliding name, if the game's focus animation moved it this frame
+        if (rto::camera::active()) rto::camera::post_frame();
     } catch (...) {
         logf("EXCEPTION (post frame)");
     }

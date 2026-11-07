@@ -10,6 +10,10 @@ namespace slots::namescroll {
 // registry reads only.
 void frame();
 
+// After LateUpdateBehavior: a Costume row's sliding name back where it was slid, if the game's focus animation moved it this frame, before it is
+// drawn. Looks at nothing while no row's name slides.
+void post_frame();
+
 // One text, found this frame (R35): measured, and slid when it is wider than its place; left as the game has it when it fits. `width`: its
 // place's width, 0 its region's. `poll`: frames between looks while it isn't moving (1 for a text the game writes itself).
 // `allowed` false, or the text hidden: put back as it was found. From LateUpdateBehavior only, as all of this.

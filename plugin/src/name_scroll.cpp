@@ -17,6 +17,12 @@
 // message stays what it is, so nothing mixes a message id and a plain text. All of it is put back when the text changes, hides or the row's
 // owner takes it.
 //
+// On the character select's panels and Training's popup the row's focus animation (states FOCUS / SELECT, UNFOCUS / DEFAULT) writes the text's
+// Position back to the game's, and its font size: 443 wide with the focus, 407 without on the same name (read in game, 07/11). A state's first write
+// comes inside LateUpdateBehavior, the next ones after the frame is drawn. So while a name slides its place is read before that phase and after
+// it (post_frame), and put back when moved: the frame drawn has it right, and the name doesn't wait for its next offset, which comes only after a
+// rest. Its width is read too, and followed once it holds still: the slide then goes on from where it is, to a new end.
+//
 // To measure, the text's fit is turned off and its region widened at the same anchor for two frames, which does not move a text that fits. A
 // width once measured is kept for that control and text, so the next time needs no such frames.
 //
@@ -39,11 +45,13 @@ namespace {
 
 constexpr uint32_t kPollEvery = 15, kLayoutFrames = 2, kMeasureMax = 30, kForgetFrames = 600;
 constexpr uint32_t kGapFrames = 5;          // not looked at for longer: the control at this address may be another one
+constexpr uint32_t kSteadyFrames = 12;      // a sliding text's width the same for so long: the row's focus animation is over
 constexpr float kMeasureRegionW = 4000;     // wider than any name
 constexpr float kArrowHalf = 6;             // a row's arrow: 12 wide, on every row
 constexpr float kArrowMargin = 8;           // a name never touches it
 constexpr size_t kWidthsKept = 64;
 constexpr int kSummaryItems = 40;           // Opponent Outfit Settings' summary: its lines, at most
+constexpr int kNotYet = -1000000;           // no offset written yet
 constexpr const char* kFitSig = "set_AutoRegionFit(via.gui.RegionFitType)";
 constexpr const char* kWrapSig = "set_AutoWrap(System.Boolean)";
 
@@ -64,15 +72,18 @@ struct State {
     bool settled = false;                   // what msg needs is decided, for settled_w
     float settled_w = 0;
     bool measuring = false, sliding = false, clipped = false, fit_off = false;
-    float width = 0, natural = 0, left = 0, last_x = 0;
+    float width = 0, natural = 0, left = 0, last_x = 0, seen_w = 0;
+    uint32_t seen_at = 0;
     bool rtl = false;
     uint64_t t0 = 0;
-    int last = -1;
+    int last = kNotYet;
+    bool centred = false;                   // by its centre as found: one that fits sits in the middle of its place
     bool logged = false;
 };
 std::unordered_map<uintptr_t, State> g_states;
 uint32_t g_frame = 0;
 bool g_any = false;
+bool g_row_sliding = false;                 // a Costume row's name is sliding: post_frame has something to look at
 
 const SF6CoreAPI* A() { return ui::core(); }
 SF6CoreClient* C() { return ui::client(); }
@@ -148,7 +159,7 @@ void put_back(Obj* t, State& s) {
     }
     s.found = Found{};
     s.measuring = s.sliding = s.clipped = s.fit_off = false;
-    s.last = -1;
+    s.last = kNotYet;
 }
 // Its fit off, its region wide, at the same anchor: a text that fits does not move. A text placed by its left point is clipped at once: what
 // doesn't fit never shows, not even those frames.
@@ -182,9 +193,10 @@ void start_slide(Obj* t, State& s, float natural, float place, float left) {
     no_fit(t, s);
     set_i64(t, "set_ControlPoint(via.gui.ControlPoint)", (f.cp / 4) * 4);
     set_i64(t, "set_PageAlignment(via.gui.PageAlignment)", (f.align / 4) * 4);
+    s.centred = f.cp % 4 == 1;
     s.sliding = s.clipped = true;
     s.t0 = GetTickCount64();
-    s.last = -1;
+    s.last = kNotYet;
 }
 // What a text of this width needs in its place
 void settle(Obj* t, State& s, float natural, float width, void* row) {
@@ -201,7 +213,7 @@ void settle(Obj* t, State& s, float natural, float width, void* row) {
     }
     if (!fits) {
         const float left = spanned ? f.x + f.span.l : scroll::left_of(f.x, column, place);
-        if (s.sliding) { s.width = place; s.left = left; s.last = -1; }     // its place changed
+        if (s.sliding) { s.width = place; s.left = left; s.last = kNotYet; }     // its place changed
         else start_slide(t, s, natural, place, left);
         return;
     }
@@ -214,9 +226,21 @@ void settle(Obj* t, State& s, float natural, float width, void* row) {
     if (s.found.have) put_back(t, s);
 }
 void slide_step(Obj* t, State& s) {
-    const double secs = static_cast<double>(GetTickCount64() - s.t0) / 1000.0;
-    const int off = scroll::offset_at(s.natural - s.width, secs, s.rtl);
-    if (off == s.last) return;
+    float d[2] = {}, p[3] = {};
+    const uint64_t now = GetTickCount64();
+    if (floats_of(t, "get_DisplaySize", d, 2) && std::isfinite(d[0]) && d[0] > 0) {      // its fit is off: its real width, in this focus state
+        if (std::fabs(d[0] - s.seen_w) > 0.5f) { s.seen_w = d[0]; s.seen_at = g_frame; }
+        else if (g_frame - s.seen_at >= kSteadyFrames && std::fabs(d[0] - s.natural) > 0.5f) {
+            s.natural = d[0];
+            s.t0 = now - static_cast<uint64_t>(scroll::time_at(s.natural - s.width, s.last, s.rtl) * 1000.0);
+        }
+    }
+    const bool moved = s.last != kNotYet && floats_of(t, "get_Position", p, 3) && std::fabs(p[0] - s.last_x) > 0.25f;
+    const double secs = static_cast<double>(now - s.t0) / 1000.0;
+    // a name that fits only in the smaller font of a row without the focus: in the middle of its place, as any name that fits
+    const int off = s.centred && s.natural < s.width ? -static_cast<int>(std::lround((s.width - s.natural) * 0.5f))
+                                                     : scroll::offset_at(s.natural - s.width, secs, s.rtl);
+    if (off == s.last && !moved) return;
     s.last = off;
     const scroll::Window w = scroll::window_at(s.left, s.width, off);
     const float rect[4] = { w.clip_left, w.clip_top, w.clip_right, w.clip_bottom };
@@ -224,10 +248,10 @@ void slide_step(Obj* t, State& s) {
     A()->ui_set_position(C(), t, w.x, s.found.y, s.found.z);
     s.last_x = w.x;
 }
-// Not looked at for a while: still where it was slid, the same control. Otherwise nothing of this state is its own.
-bool still_ours(Obj* t, const State& s) {
-    float p[3] = {};
-    return floats_of(t, "get_Position", p, 3) && p[0] == s.last_x;
+// Not looked at for a while: still clipped as only this code clips, the same control. Otherwise nothing of this state is its own.
+bool still_ours(Obj* t) {
+    float r[4] = {};
+    return floats_of(t, "get_ScissorRect", r, 4) && r[1] == scroll::kClipTop && r[3] == scroll::kClipBottom;
 }
 void sweep() {
     static uint32_t at = 0;
@@ -241,7 +265,7 @@ void step(void* text, float width, void* row, uint32_t poll, bool allowed) {
     if (!text || !A() || !C()) return;
     Obj* t = static_cast<Obj*>(text);
     State& s = g_states[reinterpret_cast<uintptr_t>(text)];
-    if (s.seen && g_frame - s.seen > kGapFrames && s.sliding && !still_ours(t, s)) s = State{};
+    if (s.seen && g_frame - s.seen > kGapFrames && s.sliding && !still_ours(t)) s = State{};
     s.seen = g_frame;
     if (s.looked && !s.sliding && !s.measuring && poll > 1 && g_frame - s.checked < poll) return;
     s.checked = g_frame;
@@ -271,6 +295,14 @@ void step(void* text, float width, void* row, uint32_t poll, bool allowed) {
         if (s.widths.size() >= kWidthsKept) s.widths.clear();
         s.widths[msg] = got ? d[0] : 0;             // 0: no width to go on, left as it is
         close_measure(t, s);
+    }
+    if (row && s.settled && !s.sliding) {           // the focus changes a row's font: wider than it was measured, what it needs again
+        float d[2] = {};
+        auto known = s.widths.find(msg);
+        if (known != s.widths.end() && floats_of(t, "get_DisplaySize", d, 2) && std::isfinite(d[0]) && d[0] > known->second + 1) {
+            known->second = d[0];
+            s.settled = false;
+        }
     }
     if (!s.settled || s.settled_w != width) {
         auto known = s.widths.find(msg);
@@ -335,7 +367,7 @@ bool busy(void* text, float x, float y) {
     State& s = it->second;
     if (s.found.have && (s.found.x != x || s.found.y != y)) {
         s.found.x = x; s.found.y = y;
-        if (s.sliding) { s.left = x; s.last = -1; }   // these are texts placed by their left point
+        if (s.sliding) { s.left = x; s.last = kNotYet; }   // these are texts placed by their left point
         else A()->ui_set_position(C(), text, x, y, s.found.z);
     }
     return true;
@@ -355,6 +387,7 @@ void frame() {
     if (!a || !C() || !SF6CORE_HAS(a, ui_agents) || !SF6CORE_HAS(a, ui_find_cached) || !SF6CORE_HAS(a, ui_find_child)) return;
     try {
         g_any = false;
+        g_row_sliding = false;
         for (const Screen& sc : kScreens) {
             void* buf[2] = {};
             const uint32_t n = a->ui_agents(sc.agent, buf, 2);
@@ -365,7 +398,10 @@ void frame() {
                 const bool on = drawn(agent) && shown(cm);
                 g_any = g_any || on;
                 void* spin = a->ui_find_cached(cm, "p_Spin_costume");
-                if (void* text = spin ? a->ui_find_cached(spin, "e_text") : nullptr) step(text, 0, spin, 1, on && !claimed(sc.side));
+                if (void* text = spin ? a->ui_find_cached(spin, "e_text") : nullptr) {
+                    step(text, 0, spin, 1, on && !claimed(sc.side));
+                    if (busy(text)) g_row_sliding = true;
+                }
                 if (!sc.summary) continue;
                 // Opponent Outfit Settings' summary: its lines, "<outfit>: <colours on>"
                 Obj* list = static_cast<Obj*>(a->ui_find_cached(cm, "p_ScrollList_texts_v"));
@@ -377,6 +413,28 @@ void frame() {
     } catch (...) {
         static bool once = false;
         if (!once) { once = true; logf("name scroll: EXCEPTION in a frame"); }
+    }
+}
+
+void post_frame() {
+    if (!g_row_sliding) return;
+    const SF6CoreAPI* a = A();
+    if (!a || !C()) return;
+    for (const Screen& sc : kScreens) {
+        void* buf[2] = {};
+        const uint32_t n = a->ui_agents(sc.agent, buf, 2);
+        for (uint32_t i = 0; i < n && i < 2; ++i) {
+            Obj* cm = call_obj(static_cast<Obj*>(buf[i]), "get_ControlMain");
+            void* spin = cm ? a->ui_find_cached(cm, "p_Spin_costume") : nullptr;
+            void* text = spin ? a->ui_find_cached(spin, "e_text") : nullptr;
+            if (!text) continue;
+            auto it = g_states.find(reinterpret_cast<uintptr_t>(text));
+            if (it == g_states.end() || !it->second.sliding || it->second.last == kNotYet) continue;
+            const State& s = it->second;
+            float p[3] = {};
+            if (floats_of(static_cast<Obj*>(text), "get_Position", p, 3) && std::fabs(p[0] - s.last_x) > 0.25f)
+                a->ui_set_position(C(), text, s.last_x, s.found.y, s.found.z);
+        }
     }
 }
 

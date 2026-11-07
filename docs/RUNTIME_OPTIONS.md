@@ -924,7 +924,8 @@ ScissorRect, local to the text, moves the other way. That class itself isn't use
   (two frames apart, to measure a text not seen yet): those two modes save it, restore it and lay their rows out from it. No text is written: the
   game's message stays.
 - **Cost:** a look at the agents every 15 frames while none is drawn; while one is, a read of the row's message each frame, and writes only when the
-  whole offset changes.
+  whole offset changes or the game moved the text. On the character select's panels and Training's popup the row's focus animation writes the text's
+  Position and font size, so a sliding name's place is read before and after LateUpdateBehavior and put back in time for the frame's drawing.
 - **Right to left:** a name whose first strong character is Arabic or Hebrew starts from its other end, since its beginning is on the right.
   Not tested in game, in Arabic or otherwise; what the game does with an Arabic name when the game's language isn't Arabic isn't known.
 - **Not this:** `crsm/src/ui/ticker.cpp` is only the game's own ticker strip (`TickerRequestData`); Profile Mod's Steam name keeps its cut;
