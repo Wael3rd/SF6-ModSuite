@@ -9,7 +9,61 @@
   verification. Nothing leaves until you choose Send; Back sends nothing and keeps nothing. One report per account per costume, kept 90 days.
   [crsm/README.md](crsm/README.md#report-a-bug) lists it all. Needs the Community server's update.
 
-## Unreleased — SF6 Slots Loader: Manager mode (Slotsloader Manager contract 2)
+## 1.23.0 (2026-11-07) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.20.0 | real outfit names in the game's lists; long names scroll |
+| SF6 Color Mod | 0.24.2 | X does nothing on Fighter Settings |
+| SF6 Native Core | 0.9.6 | unchanged |
+| SF6 Recording Manager | 2.2.7 | unchanged |
+| SF6 Profile Mod | 1.0.0 | same file as the one in 1.22.0 since 2026-11-07 |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.19.0 and SF6 Color Mod 0.24.1, then install Slots
+Loader 1.20.0 and Color Mod 0.24.2. Native Core 0.9.6 and Recording Manager 2.2.7 are the same files as in 1.22.0: keep
+them. Profile Mod 1.0.0: if you downloaded it before 2026-11-07, install it again (its fix kept the same number). With the
+all-in-one package, replace 1.22.0 with 1.23.0.
+
+**The costume pak is rebuilt once at the first launch**, so that launch takes longer; the next one says "Up to date". Saved
+choices do not move.
+
+### SF6 Slots Loader 1.20.0
+- New: an extra outfit shows under its mod's name in the game's own lists: Fighter Settings, the character select, Training's
+  pause menu, Opponent Outfit Settings. Game outfits keep the game's names. This text stays on your PC: outfits still travel as
+  numbers, and a mod with no usable name keeps "Outfit I".
+- New: a long name slides inside its place, resting at each end, instead of being cut or squeezed: on a Costume row, between
+  its arrows; in Replays > Settings' summary, where "Luke :" stays still and only the value moves; in the stage banner of the
+  three stage menus, still right-aligned. A name that fits does not move.
+- Fix: the outfit's name at the bottom right of Fighter Settings stays on its Character tab.
+- Fix: a stage hint in the bottom guide bar could stay there after leaving its screen.
+
+### SF6 Color Mod 0.24.2
+- Fix: on Fighter Settings, X opened the Drive colours from any row and any tab. It now does nothing there: A on a Drive row
+  opens that row's page, as before. The character select and Training's pause menu keep their key.
+
+### Known issues
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet.
+- Manager mode has not been checked in an online match. Its owned-outfit opt-out was checked by automated tests only.
+- A very long first rebuild can leave the game with no window. In one test a 26-minute rebuild, on a PC busy with other
+  work, left the game stuck at start-up; closing it and launching again worked, and the pak was complete. The cause is not
+  known. Rebuilds of a few minutes were fine.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+- All languages except French are machine translations, not yet reviewed by native speakers.
+- An outfit whose mod gives no usable name still shows the loader's "Outfit I", in English in every language.
+- Two outfits of one fighter with the same mod name look the same on the Costume row. Their numbers differ, so choices
+  do not mix.
+- Opponent Outfit Settings' summary shows no line for an extra outfit on a fighter whose game outfits fill its five
+  visible lines (Luke): the game keeps the sixth line hidden.
+- Arabic: a long line of Replays > Settings' summary slides as a whole, and scrolling names have not been checked in game.
+- Real outfit names have not been checked in a real online match. They are local text: outfits still travel as numbers.
+- With the full profile, the limited one shows briefly first.
+- Profile Mod has not been checked in an online match.
+
+## Manager mode in detail (released in 1.21.0, SF6 Slots Loader 1.18.0, contract 2)
 
 ### SF6 Slots Loader
 - **Manager mode** ([docs/MANAGER_CONTRACT.md](docs/MANAGER_CONTRACT.md), contract 2): when ZZtaii's Slotsloader
