@@ -41,7 +41,7 @@ The loader therefore does two things at every launch where something changed:
 | Character played on trial, or DLC unlocked by a script | 100 empty outfits, loading stalls on the first one | Only the slots in use are declared to the game |
 | A Street Fighter 6 still closing holds the old pak | Old costumes kept for good | Waits for it, and if it does not let go, changes nothing and retries at the next launch |
 | A mod is removed while the game still remembers its outfit (last choice, replay) | Loading stalls on the removed outfit | Every unused slot number shows the character's Outfit 1 instead |
-| Slots keep their number after a mod is removed | Gaps in the names (Outfit I, III, IV) | Names follow each other per character (Outfit I, II, III); the numbers behind them stay |
+| Slots keep their number after a mod is removed | Gaps in the names (Outfit I, III, IV) | Names follow each other per character (Outfit I, II, III, in the loader's files; the game shows the mod's label); the numbers behind them stay |
 | Modular mod built for Fluffy (main files, "pick one" groups, optional extras) | Every option combined with every other: over a hundred outfits, the character full | One outfit per shape option (body, shoes, jacket), first texture option (skin), optional parts left out, as Fluffy installs by default |
 | Options of one mod replacing the same files | Two options on the same slot | Each option gets its own identity; outfits made of exactly the same files are installed once |
 | A character with more than 100 outfits | Outfits past the 100th silently missing | Named in the log |

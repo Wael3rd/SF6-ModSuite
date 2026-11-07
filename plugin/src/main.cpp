@@ -10,6 +10,7 @@
 #include "perf.hpp"
 #include "wjournal.hpp"
 #include "replay_tab.hpp"
+#include "name_scroll.hpp"
 
 namespace slots {
 
@@ -67,6 +68,7 @@ void on_late_update() {
     }
 
     language_tick();                        // the language of our words (words.hpp): at most every 60 frames
+    namescroll::frame();                    // long names scroll in the Costume rows: its own gate (registry reads every 15 frames)
     replaytab::frame();                     // the Replays menu's "Replay Outfits" tab: its own gate (replay_tab.cpp)
 
     uint32_t ev = g_events.exchange(0, std::memory_order_acq_rel);
@@ -123,9 +125,10 @@ void on_late_update() {
 }
 
 void on_post_late_update() {
-    if (!rto::camera::active() || g_closing.load(std::memory_order_relaxed)) return;
+    if (g_closing.load(std::memory_order_relaxed)) return;
     try {
-        rto::camera::post_frame();
+        namescroll::post_frame();           // a row's sliding name, if the game's focus animation moved it this frame
+        if (rto::camera::active()) rto::camera::post_frame();
     } catch (...) {
         logf("EXCEPTION (post frame)");
     }
