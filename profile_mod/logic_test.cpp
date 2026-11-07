@@ -131,22 +131,24 @@ int main() {
         check(!profile_drawn(false, true), "screen: Battle Settings' hidden SimpleTop (not drawn, controls ActualVisible): no");
         check(!profile_drawn(true, false), "screen: drawn, its main control hidden: no");
         check(profile_drawn(true, true), "screen: drawn and visible: yes");
-        using V = std::vector<std::string>;
-        const auto on_top = [](const V& newest_first) { return profile_blocked_by(newest_first).empty(); };
-        check(on_top({ "app.UICFNFightersProfileTabPlayChildTab1.FlowParam", "app.UICFNFightersProfileTop.FlowParam", "app.UICFNDetailedMenu.FlowParam" }), "screen: the profile's flows newest: on top");
-        check(on_top({ "app.UIWidget.BaseParam_CreateByPrefab", "app.commentator.UICommentatorSubTitle.Param", "app.UICFNFightersProfileSimpleTop.FlowParam" }), "screen: background widgets don't count");
-        check(!on_top({ "app.UIFlowDialog.MessageBoxParam", "app.UICFNFightersProfileTop.FlowParam" }), "screen: a dialog over it: no");
-        check(!on_top({ "app.UICFNDetailedMenu.FlowParam", "app.UICFNFightersProfileSimpleTop.FlowParam" }), "screen: another menu over it: no");
-        check(!on_top({ "app.menu.UIFlowFGMainMenuList.Param" }), "screen: no profile flow at all: no");
-        check(!on_top({ "app.UIWidget.BaseParam_CreateByPrefab" }) && !on_top({}), "screen: nothing but widgets, or nothing: no");
-        // Battle Settings, as read on its tabs (g62, g67): whatever comes first, nothing
-        check(!on_top({ "app.UICFNFightersProfileChildTabAvatarEquip.FlowParam", "app.UIMatchingSettingFightersProfileSimpleTop.FlowParam", "app.UICFNFightersProfileTabPlayChildTab1.FlowParam",
-                        "app.UIMatchingSettingFightersProfileSimpleTop.FlowParam", "app.UIFlowMatchingSetting.Param", "app.menu.UIFlowFGMainMenuList.Param" }), "screen: Battle Settings, its profile tab's flows newest: no");
-        check(!on_top({ "app.UIFlowMatchingFighterSetting.Param", "app.UICFNFightersProfileChildTabAvatarEquip.FlowParam", "app.UIFlowMatchingSetting.Param" }), "screen: Battle Settings > Character: no");
-        check(!on_top({ "app.UIFlowOtherMatchingFighterSetting.UIParam", "app.UIFlowMatchingSetting.Param" }), "screen: Opponent Outfit Settings: no");
-        check(!on_top({ "app.UIFlowAvatarMatchingSetting.Param", "app.UICFNFightersProfileTop.FlowParam" }), "screen: the hub's own settings: no");
-        check(profile_blocked_by({ "app.UICFNFightersProfileTop.FlowParam", "app.UIFlowMatchingSetting.Param" }) == "app.UIFlowMatchingSetting.Param", "screen: it says which");
-        check(!flow_is_battle_settings("app.UICFNFightersProfileSimpleTop.FlowParam") && !flow_is_battle_settings("app.UICFNFightersProfileTop.FlowParam"), "screen: another player's profile is not Battle Settings");
+        const char* full = "app.UICFNFightersProfileTop.FlowParam";
+        const char* limited = "app.UICFNFightersProfileSimpleTop.FlowParam";
+        // real profiles: post-game, replay details, the hub (the limited one, its Details popup under it, or the full one in its place)
+        check(profile_allowed({ limited, "app.UICFNDetailedMenu.FlowParam", "app.UIWidget.BaseParam_CreateByPrefab" }, false), "screen: the limited profile, its flow there: yes");
+        check(profile_allowed({ "app.UICFNFightersProfileTabPlayChildTab1.FlowParam", full, "app.UICFNDetailedMenu.FlowParam" }, true), "screen: the full one after the swap: yes");
+        check(profile_allowed({ full, "app.menu.UIFlowFGMultiMenu.Param" }, true), "screen: the full one from the Multi Menu: yes");
+        // each screen its own flow
+        check(!profile_allowed({ limited }, true), "screen: the full profile's GUI with only the limited one's flow: no");
+        check(!profile_allowed({ full }, false), "screen: the limited profile's GUI with only the full one's flow: no");
+        check(!profile_allowed({}, false) && !profile_allowed({ "app.UIWidget.BaseParam_CreateByPrefab" }, true), "screen: no flow of it: no");
+        // Battle Settings, as read on its tabs (g62, g67): never, whatever else is there
+        check(!profile_allowed({ "app.UICFNFightersProfileChildTabAvatarEquip.FlowParam", "app.UIMatchingSettingFightersProfileSimpleTop.FlowParam", "app.UICFNFightersProfileTabPlayChildTab1.FlowParam",
+                                 "app.UIMatchingSettingFightersProfileSimpleTop.FlowParam", "app.UIFlowMatchingSetting.Param", "app.menu.UIFlowFGMainMenuList.Param" }, false), "screen: Battle Settings: no");
+        check(!profile_allowed({ "app.UIMatchingSettingFightersProfileSimpleTop.FlowParam" }, false), "screen: its profile tab's flow is no profile, even alone: no");
+        check(!profile_allowed({ "app.UIFlowMatchingFighterSetting.Param", "app.UIFlowMatchingSetting.Param", limited }, false), "screen: Fighter Settings, a limited flow there too: no");
+        check(!profile_allowed({ limited, "app.UIFlowMatchingSetting.Param" }, false) && !profile_allowed({ full, "app.UIFlowMatchingFighterSetting.Param" }, true), "screen: Battle Settings' flow anywhere in the list: no");
+        check(flow_is_battle_settings("app.UIFlowMatchingSetting.Param") && flow_is_battle_settings("app.UIFlowMatchingFighterSetting.Param"), "screen: its two flows");
+        check(!flow_is_battle_settings(limited) && !flow_is_battle_settings(full) && !flow_is_battle_settings("app.UIMatchingSettingFightersProfileSimpleTop.FlowParam"), "screen: nothing else counts as them");
     }
     // the swap's decisions
     {
