@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace psn {
 
@@ -16,6 +17,20 @@ inline bool profile_drawn(bool go_draw_self, bool main_actual_visible) { return 
 // background widget must be one of the profile's. Empty: nothing says it is there.
 inline bool flow_is_background(const std::string& type) { return type.rfind("app.UIWidget.", 0) == 0 || type.rfind("app.commentator.", 0) == 0; }
 inline bool flow_is_profile(const std::string& type) { return type.find("FightersProfile") != std::string::npos; }
+// Battle Settings and its sub-screens (their flows: UIFlowMatchingSetting, UIFlowMatchingFighterSetting, UIMatchingSettingFightersProfile
+// SimpleTop...): only ever his own profile there, its child tabs among the newest flows. Nothing at all while one exists (Wael 07/11).
+inline bool flow_is_battle_settings(const std::string& type) {
+    return type.find("MatchingSetting") != std::string::npos || type.find("MatchingFighterSetting") != std::string::npos;
+}
+// All of it, on the flows newest first: "" when the profile is what the player is on, else the type that says no
+inline std::string profile_blocked_by(const std::vector<std::string>& newest_first) {
+    for (const std::string& t : newest_first) if (flow_is_battle_settings(t)) return t;
+    for (const std::string& t : newest_first) {
+        if (flow_is_background(t)) continue;
+        return flow_is_profile(t) ? std::string() : t;
+    }
+    return "(no flow)";
+}
 
 
 constexpr size_t kIdLen = 17;

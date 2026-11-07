@@ -25,8 +25,10 @@
 //
 // On screen means on screen: Battle Settings keeps CFNFighterProfileSimpleTop loaded, not drawn, its controls still ActualVisible, its
 // line still holding his id: the agents alone say nothing (Wael 07/11: "(X) ID Steam" on Fighter Settings). The key, the entry and the
-// swap work only when the GameObject is drawn and no newer flow is over the profile; leaving gives the line back at once, and on any
-// other screen the key reads nothing, sends nothing, writes nothing.
+// swap work only when the GameObject is drawn, no newer flow is over the profile and no Battle Settings flow exists (its Fighter Profile
+// tab is only ever his own); leaving gives the line back at once, and on any other screen the key reads nothing, sends nothing, writes
+// nothing. The entry is a copy on the resident InputGuide's bar, which every screen shows: a copy left visible comes back with that bar
+// everywhere, so hiding it never depends on the bar being on screen, and goes over every bar.
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
@@ -341,11 +343,23 @@ bool hint_bar_live() {
     return false;
 }
 void* hint_copy() { return g_hbar.parent ? g_core->ui_find_child(g_hbar.parent, kHintName, 0) : nullptr; }
+// The copy, on every bar of every InputGuide, on screen or not: found by name under each live bar (R35)
 void hint_hide() {
     if (!g_hint.shown) return;
-    if (hint_bar_live())
-        if (void* c = hint_copy()) g_core->ui_set_visible(g_client, c, 0);
     g_hint.shown = false;
+    void* buf[4] = {};
+    const uint32_t n = g_core->ui_agents("InputGuide", buf, 4);
+    for (uint32_t i = 0; i < n && i < 4; ++i) {
+        Obj* lst = get_obj(get_obj(reinterpret_cast<Obj*>(buf[i]), "_PartsManager"), "_List");
+        for (int k = 0, cnt = list_count(lst); k < cnt; ++k) {
+            Obj* part = list_item(lst, k);
+            if (!part || part->get_type_definition()->get_full_name() != "app.UIPartsInputGuideList") continue;
+            Obj* ctrl = get_obj(part, "<Control>k__BackingField");
+            Obj* btn = ctrl ? reinterpret_cast<Obj*>(g_core->ui_find_child(ctrl, "c_guideBtn", 8)) : nullptr;
+            Obj* parent = btn ? call_obj(btn, "get_Parent") : nullptr;
+            if (void* c = parent ? g_core->ui_find_child(parent, kHintName, 0) : nullptr) g_core->ui_set_visible(g_client, c, 0);
+        }
+    }
 }
 // The game uses the key on this screen now: its own entries in the bar show its symbol (ours is not one of them). Read every kHintPass frames.
 bool key_taken() {
@@ -538,29 +552,26 @@ Obj* drawn_main(const char* name) {
     }
     return nullptr;
 }
-// Nothing over the profile: the newest flow that is not a background widget is one of the profile's. Read every kHintPass frames.
+// What the flows say (psn::profile_blocked_by): the profile is what the player is on. Read every kHintPass frames.
 bool profile_on_top() {
     static uint32_t at = 0;
     static bool top = false;
     static std::string last_other;
     if (at && g_frame - at < kHintPass) return top;
     at = g_frame;
-    top = false;
-    std::string other;
+    std::vector<std::string> flows;
     auto* fm = API::get()->get_managed_singleton("app.UIFlowManager");
     Obj* hs = fm ? get_obj(fm, "_Handles") : nullptr;
     for (int i = 0, n = list_count(hs); i < n; ++i) {
         Obj* h = list_item(hs, i);
         Obj* p = h ? get_obj(h, "<Param>k__BackingField") : nullptr;
-        if (!p) continue;
-        const std::string type = p->get_type_definition()->get_full_name();
-        if (psn::flow_is_background(type)) continue;
-        if (psn::flow_is_profile(type)) top = true; else other = type;
-        break;
+        if (p) flows.push_back(p->get_type_definition()->get_full_name());
     }
+    const std::string other = psn::profile_blocked_by(flows);
+    top = other.empty();
     if (other != last_other) {                // a type's name: nothing of a player
         last_other = other;
-        if (!other.empty()) logi("profile_mod: a screen is over the profile: %s", other.c_str());
+        if (!other.empty()) logi("profile_mod: not on a profile of ours: %s", other.c_str());
     }
     return top;
 }
@@ -674,6 +685,7 @@ void on_late_update() {
         g_line = Line{};
         g_wanted.clear();
         g_up = false;
+        try { hint_hide(); } catch (...) { g_hint.shown = false; }
     }
 }
 
@@ -684,7 +696,7 @@ Method* m_top_start = nullptr;
 psn::SwapTracker g_swap;
 uint32_t g_swap_frame = 0;
 
-struct Flows { Obj* simple_handle = nullptr; Obj* simple_param = nullptr; bool top = false; };
+struct Flows { Obj* simple_handle = nullptr; Obj* simple_param = nullptr; bool top = false, battle_settings = false; };
 Flows walk_flows() {
     Flows f;
     auto* fm = API::get()->get_managed_singleton("app.UIFlowManager");
@@ -696,6 +708,7 @@ Flows walk_flows() {
         TD* td = p->get_type_definition();
         if (td == t_simple) { f.simple_handle = h; f.simple_param = p; }
         else if (td == t_top) f.top = true;
+        else if (psn::flow_is_battle_settings(td->get_full_name())) f.battle_settings = true;
     }
     return f;
 }
@@ -731,7 +744,7 @@ void swap_tick() {
         f = walk_flows();
         top = top || f.top;
     }
-    if (!simple_drawn) f.simple_handle = nullptr;
+    if (!simple_drawn || f.battle_settings) f.simple_handle = nullptr;
     switch (g_swap.step(reinterpret_cast<uintptr_t>(f.simple_handle), top, g_swap_frame)) {
     case psn::SwapTracker::Do::Swap:
         if (f.simple_handle && do_swap(f.simple_handle, f.simple_param)) g_swap.swapped(g_swap_frame);
