@@ -184,8 +184,8 @@ inline std::string variation_label(const std::string& stage, const std::string& 
 
 // ---- the banner's name: never squeezed (Wael 05/11) ------------------------------------------------------------------------
 // A name that fits stays where the game puts it (centred, 180 from the banner's right edge, its region 361 wide). A longer one
-// is right-aligned 10 from that edge and runs left over the picture at full size; only one wider than the banner is cut with
-// "...". Decided from the text alone, before it is written, so the first frame is already right (a drawn width is only known
+// is right-aligned 10 from that edge and runs left over the picture at full size; one wider than the banner scrolls inside it
+// (name_scroll.cpp). Decided from the text alone, before it is written, so the first frame is already right (a drawn width is only known
 // a frame later). Its width: the advances of the game's name font (slot 6, 30), within 2 % on the names measured: "The Macho
 // Ring" 187 (read, DisplaySize), "Training Room" 169, "SIRN Training Room" 233, "Suzaku Castle Over Training Room" 412
 // (screenshots). The fit limit stays under 361 by that error: such a name right-aligned moves by a few units only.
@@ -215,17 +215,7 @@ struct BannerName { std::string text; bool right = false; };
 inline BannerName banner_name(const std::string& name) {
     const float w = name_width(name);
     if (w <= kNameFitW) return { name, false };
-    if (w <= kNameMaxW) return { name, true };
-    const float room = kNameMaxW - name_width("...");
-    size_t end = 0;
-    for (size_t i = 0; i < name.size();) {             // whole characters only
-        size_t n = 1;
-        while (i + n < name.size() && (static_cast<unsigned char>(name[i + n]) & 0xC0) == 0x80) ++n;
-        if (name_width(name.substr(0, i + n)) > room) break;
-        i += n;
-        end = i;
-    }
-    return { name.substr(0, end) + "...", true };
+    return { name, true };
 }
 
 // ---- the VS screen ---------------------------------------------------------------------------------------------------------

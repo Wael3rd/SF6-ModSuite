@@ -1210,7 +1210,8 @@ void editor_tick() {
     } else if (fsm.visible || ed_active()) device_tick();
     bool down = false, di_down = false;
     if (fsm.visible) {                                                 // (C opened it from any row too: a Lua-era shortcut, removed 0.19.4)
-        di_down = key_down(0x58) || pad_btn_down();                    // X / Square: the Drive colour menu
+        // X / the pad's key do nothing here (Wael 07/11: it opened the Drive colours from any row, on any tab): A / F on a Drive row
+        // opens that row's page, below, the only way there on this screen
         if (fsm.color_focused) {
             down = key_down(0x46) || (pad_mask() & g_pad.a) != 0;       // F / A on the Color row
             if (key_down(0x01) && mouse_over_color_row()) down = true; // left click on the row only
@@ -1289,8 +1290,6 @@ void editor_tick() {
         } else {
             cmn::journal("DI panel (training popup): no MatchingFighterSetting");
         }
-    } else if (di_down && !edit.di_was_down && !edit.active && !window_open() && settled_since_close()) {
-        open_di_editor("");
     }
     edit.di_was_down = di_down;
     if (nb("screens_rows")) {                                          // the Drive rows: Decide / F / A / click opens that page

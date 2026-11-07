@@ -23,6 +23,7 @@
 #include "stages.hpp"
 #include "stages_logic.hpp"
 #include "codecheck_rt.hpp"
+#include "name_scroll.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1446,6 +1447,7 @@ bool grid_work() {
         if (!s.tile && nvar > 0) name = sl::variation_label(vanilla_name(s.base), l.v ? l.v->name : std::string(), l.v ? l.v->bundle : std::string());
         if (ptext && !name.empty()) {
             const sl::BannerName bn = sl::banner_name(name);
+            namescroll::release_unless(ptext, bn.text);          // another name: its place back first
             name_layout(ptext, bn.right);
             if (s.tile || nvar > 0 || bn.text != name) set_text(ptext, bn.text);
         }
@@ -1719,18 +1721,18 @@ bool hint_find_bar(HintBar& b) {
     }
     return false;
 }
-bool hint_bar_live() {
+bool hint_bar_live(bool on_screen = true) {
     if (!g_hbar.agent) return false;
     void* buf[4] = {};
     const uint32_t n = slots::ui::core()->ui_agents("InputGuide", buf, 4);
     for (uint32_t i = 0; i < n && i < 4; ++i)
-        if (buf[i] == g_hbar.agent) return agent_visible(g_hbar.agent) && alive(g_hbar.parent) && alive(g_hbar.btn);
+        if (buf[i] == g_hbar.agent) return (!on_screen || agent_visible(g_hbar.agent)) && alive(g_hbar.parent) && alive(g_hbar.btn);
     return false;
 }
 void* hint_copy() { return g_hbar.parent ? slots::ui::core()->ui_find_child(g_hbar.parent, kHintName, 0) : nullptr; }
 void hint_hide(const char* why) {
     if (!g_hint.shown) return;
-    if (hint_bar_live())
+    if (hint_bar_live(false))                                // its agent hidden too: the copy would come back with it on every screen
         if (void* c = hint_copy()) slots::ui::core()->ui_set_visible(slots::ui::client(), c, 0);
     g_hint.shown = false;
     logf("stages: guide bar hint hidden (%s)", why);
@@ -1921,7 +1923,14 @@ void grid_frame() {
         // off screen: its name back at the game's place (the same text may come back with a stage of the game's)
         if (grid && !on && g_grid.name_right == 1)
             if (Obj* prv = obj_field(grid, f_preview))
-                if (Obj* ptext = get_obj(prv, "mTextStageName")) name_layout(ptext, false);
+                if (Obj* ptext = get_obj(prv, "mTextStageName")) { namescroll::release(ptext); name_layout(ptext, false); }
+        // the banner's name, wider than the banner: it scrolls inside it (right-aligned with the banner's width: name_layout)
+        if (grid && on)
+            if (Obj* prv = obj_field(grid, f_preview))
+                if (Obj* ptext = get_obj(prv, "mTextStageName")) {
+                    if (g_grid.name_right == 1) namescroll::drive(ptext, sl::kNameMaxW);
+                    else namescroll::release(ptext);
+                }
         // it came on screen (Battle Settings' tab, its Stage Settings row): the pictures and the banner at once
         if (on && !g_grid.on_screen) { g_grid.until = 0; open_grid_window(); }
         if (g_grid_watch) {

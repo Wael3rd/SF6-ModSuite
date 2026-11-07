@@ -6,7 +6,7 @@ outfit slots of their own, like mods dropped in `reframework\costume_mods\`.
 ## What you get
 
 - **One slot per mod ticked in Fluffy**, even when several mods replace the same outfit. Two Mai
-  Outfit 1 mods ticked together give two slots, for example Outfit VII and Outfit VIII.
+  Outfit 1 mods ticked together give two slots, for example Outfit VII and Outfit VIII, shown in the game under their mods' names.
 - **Unticking a mod in Fluffy removes its slot** at the next launch. Ticking one adds it.
 - The first launch after a change in Fluffy rebuilds the costume pak: the game window takes up to a
   minute to appear. Launch the game once and wait.

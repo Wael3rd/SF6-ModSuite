@@ -1,9 +1,9 @@
 // SF6 Slots — the name of the outfit on Fighter Settings' preview, at the right end of the bottom input guide bar
 // (docs/RUNTIME_OPTIONS.md, "Outfit name on Fighter Settings").
 //
-// Battle Settings > character (Fighter Settings, agent MatchingFighterSetting): the costume row shows the game's
-// name of a slot ("Outfit VII"); the bar's line gets, right-aligned, the outfit's real name, the one the options
-// menu's title shows: an outfit of the options manifest = its label (the mod's name, "Aloha Ryu"; a game outfit
+// Battle Settings > character (Fighter Settings, agent MatchingFighterSetting): the costume row shows a slot's label
+// as the loader wrote it (the game's own name message; "Outfit VII" when it has none); the bar's line gets, right-aligned,
+// the outfit's real name in full, the one the options menu's title shows: an outfit of the options manifest = its label (the mod's name, "Aloha Ryu"; a game outfit
 // with options: its name, "Outfit 1"), another of ours = its label in outfits.json, any other game outfit = the
 // costume row's own text (what the game shows).
 //
@@ -19,13 +19,15 @@
 //   - R35: the copy is not a managed object: found again by name under its live parent (ui_find_child), every
 //     write through the core (type check, compare-before-write, SEH).
 //   - R1: every other write (text, place, visibility) from LateUpdateBehavior, by us only.
-// Shown while Fighter Settings is on screen and no option window is open (our options menu and the Color Mod's
-// colour editor have their own guide bar and camera hints there); hidden otherwise, and when it would run into the
-// bar's own text.
+// Shown while Fighter Settings is on screen on its Character tab (the costume row shown; the Titles and Profile tabs
+// keep the agent and its main control visible and hide the rows: read 07/11) and no option window is open (our options
+// menu and the Color Mod's colour editor have their own guide bar and camera hints there); hidden otherwise, at once,
+// and when it would run into the bar's own text.
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "rto.hpp"
 #include "words.hpp"
+#include "../../common/outfit_display.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -223,8 +225,16 @@ Sel fs_selection(Obj* agent, const std::string& row) {
     s.fid = g_fid; s.how = "the preview's fighter, the outfit by the costume row's name";
     s.cos = costumes::slot_by_name(g_fid, row);
     if (s.cos < 0 && rto::on())
-        for (auto& k : rto::manifest().slots) if (k.fighter == g_fid && k.name == row) { s.cos = k.costume_no; break; }
+        for (auto& k : rto::manifest().slots) if (k.fighter == g_fid && (k.name == row || outfit_display_name(k.label) == row)) { s.cos = k.costume_no; break; }
     return s;
+}
+// The Character tab is up: its costume row is shown (the screen's other tabs hide it)
+bool character_tab(Obj* agent) {
+    Obj* cm = call_obj(agent, "get_ControlMain");
+    Obj* spin = cm ? reinterpret_cast<Obj*>(A()->ui_find_cached(cm, "p_Spin_costume")) : nullptr;
+    bool ok = false;
+    const bool v = spin && call_bool(spin, "get_ActualVisible", {}, &ok);
+    return ok && v;
 }
 std::string read_name(Obj* agent) {
     const SF6CoreAPI* a = A();
@@ -527,6 +537,7 @@ void tick(uint32_t ev) {
         }
         g_bs_seen = g_frame;
         if (A()->opt_window_open()) { hide("an option window is open"); return; }
+        if (!character_tab(agent)) { hide("another tab of the screen"); g_pass_at = 0; return; }   // back at once on returning
         update(agent);
     } catch (...) {
         logf("fs name: EXCEPTION in tick");      // g_shown kept: the next frames still hide it

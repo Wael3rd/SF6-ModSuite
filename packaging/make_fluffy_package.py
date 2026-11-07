@@ -51,7 +51,7 @@ COSTUME_MODS_TXT = CRLF.join([
     "  reframework/costume_mods/<Character>/<Costume name>/",
     "",
     "Nothing to unpack, nothing to convert. Restart the game: each costume becomes an EXTRA",
-    "outfit slot (Outfit I, II, ...). Bundles with several options give one slot per option,",
+    "outfit slot, shown under the mod's name. Bundles with several options give one slot per option,",
     "and add-on options (no gloves, alternative hair...) are combined with their base outfit.",
     "Modular mods (main files, body options, skin options, optional extras) give one slot whose",
     "options you choose in game (runtime costume options, below). A mod that only",

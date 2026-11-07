@@ -49,8 +49,8 @@ tests: the new `SF6_CostumeSlotsNative.dll` in `reframework\plugins\` (game clos
    `ownership taken back from N hidden slots`; probe: those outfits absent from `list=[...]`, their records `has 0
    save 0 default 0 valid 1 dlc 0`. On the select screen and in Battle Settings, a character with such a slot no
    longer lists it; its slots made from Outfit 1 or DriveTech, and from an outfit really owned (bought: `save 1`,
-   DLC: `dlc 1`), are still there. Known: the names of the slots left keep their numbers (Outfit I, Outfit III when
-   Outfit II is hidden).
+   DLC: `dlc 1`), are still there. Known: the loader's names of the slots left keep their numbers (Outfit I, Outfit III when
+   Outfit II is hidden); they show only for an outfit with no label.
 3. **A choice kept**: with the unlock-all script, pick in Battle Settings a slot made from an outfit not owned; close
    the game, move the script out, launch: Battle Settings shows DriveTech for that character, `state.json` keeps the
    slot; Combo Trials in DriveTech Wear: DriveTech, no `slot vN mounted` line. Put the script back: the slot is

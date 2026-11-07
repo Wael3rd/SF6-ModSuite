@@ -37,6 +37,10 @@ contract `N - 1` unless this page says otherwise.
 3. **New outfits are numbered after the highest number in use** for their fighter (a later install is listed
    last instead of filling a gap a removed mod left); gaps are filled only once the last reserved number is taken.
    An outfit already in `registry.json` keeps its number (saved choices, colours, replays name outfits by number).
+   **What the game shows** (loader `2026-11-07-outfit-labels`): the text of an extra outfit in the game's own lists is its mod's
+   label (`outfits.json`'s `label`, without control characters and `<` `>`), through one name message per slot in the pak's
+   `fightercostumemessage.msg.21`; "Outfit V" when it has none. Only that text changes: `slot` here, `outfits.json`'s `name`,
+   `registry.json` and the numbers stay as they are, and a slot still travels as its number.
 4. Unchanged files the Manager already reads: `outfits.json` (`source`, `name`, `label`, `left_out`, `pak`) and
    `registry.json`'s `"fingerprint"` (emptied by the Manager to force a rebuild).
 5. **`outfits.json`'s `"loose_files_kept": true`** (added after Slots Loader 1.16.3; the key, place and meaning of
