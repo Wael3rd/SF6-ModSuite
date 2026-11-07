@@ -232,9 +232,25 @@ int main() {
             many.push_back(one);
             all[one.fid] = lc;
         }
+        {   // a line's two parts, in the languages' own patterns
+            const LineParts en = line_parts("%s: %s, %s", { "Luke", "Outfit 4", "01" });
+            check(en.fixed == "Luke: " && en.moving == "Outfit 4, 01" && en.whole() == "Luke: Outfit 4, 01", "parts: the name and its colon stay, the rest moves");
+            const LineParts fr = line_parts("%s : %s, %s", { "Luke", "Type 1", "01" });
+            check(fr.fixed == "Luke : " && fr.moving == "Type 1, 01", "parts: French, a space before the colon");
+            const LineParts ja = line_parts("%s\xEF\xBC\x9A%s\xE3\x80\x81%s", { "L", "A", "01" });
+            check(ja.fixed == "L\xEF\xBC\x9A" && ja.moving == "A\xE3\x80\x81" "01", "parts: Japanese, its own colon and comma");
+            const LineParts one_value = line_parts("%s: %s", { "Luke", "Default" });
+            check(one_value.fixed == "Luke: " && one_value.moving == "Default", "parts: a name and one value");
+            const LineParts pct = line_parts("%s%%: %s", { "A", "b" });
+            check(pct.fixed == "A%: " && pct.moving == "b", "parts: a percent sign of the pattern");
+            const LineParts no_value = line_parts("nothing", {});
+            check(no_value.fixed == "nothing" && no_value.moving.empty(), "parts: no value at all");
+        }
         const std::vector<std::string> capped = summary_lines(many, all, 20);
         check(capped.size() == 20 && capped[18] == "F18: Outfit 4, 01" && capped[19] == "+ 6 more",
               "summary: 25 On, 19 lines and \"+ 6 more\"");
+        const std::vector<LineParts> capped_parts = summary_parts(many, all, 20);
+        check(capped_parts[18].fixed == "F18: " && capped_parts[19].fixed.empty(), "summary: a character's line has a fixed part, \"+ 6 more\" none");
         // Battle Settings > Other's "Game Settings" (read 05/11, its own units): Stage Settings (its picture), Battle BGM,
         // Commentary Settings (6 lines), Side Settings, Battle HUD Design; and as measured on screen (y = 189 + 0.81 x layout)
         using K = SumKind;

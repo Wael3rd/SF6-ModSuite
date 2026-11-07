@@ -179,27 +179,58 @@ inline std::string row_text(const Fighter& f, const Choice& c) {
 // ---- the summary on the right (as the game's: Battle Settings > Other's "Game Settings", the Opponent Outfit page's) ------
 // A character set to On: "Luke: Outfit 4, 01" (its outfit, its colour as the page shows it); an outfit no longer listed:
 // "Luke: Default", as its row
-inline std::string summary_line(const Fighter& f, const Choice& c) {
-    const int i = outfit_index(f, c);
-    if (i < 0) return words::trf(words::W::FmtNameValue, { f.name, words::game(words::G::Default) });
-    const Outfit& o = f.outfits[static_cast<size_t>(i)];
-    return words::trf(words::W::FmtFighterOutfit, { f.name, o.name, choice_color_label(o, c) });
+// In two parts, from the language's own pattern (fmt.fighter_outfit: "%s : %s, %s" in French, "%s\uFF1A%s\u3001%s" in Japanese): what stays when the
+// line doesn't fit (the character's name, the game's, and what follows it up to the second value) and what moves (the rest)
+struct LineParts {
+    std::string fixed, moving;
+    std::string whole() const { return fixed + moving; }
+};
+inline LineParts line_parts(const char* tmpl, std::initializer_list<std::string> args) {
+    LineParts out;
+    auto a = args.begin();
+    int seen = 0;
+    for (const char* p = tmpl; *p; ++p) {
+        if (*p == '%' && (p[1] == 's' || p[1] == 'd')) {
+            std::string& to = seen == 0 ? out.fixed : out.moving;
+            if (a != args.end()) to += *a++;
+            ++seen;
+            ++p;
+        } else {
+            std::string& to = seen >= 2 ? out.moving : out.fixed;
+            if (*p == '%' && p[1] == '%') { to += '%'; ++p; }
+            else to += *p;
+        }
+    }
+    return out;
 }
+inline LineParts summary_line_parts(const Fighter& f, const Choice& c) {
+    const int i = outfit_index(f, c);
+    if (i < 0) return line_parts(words::tr(words::W::FmtNameValue), { f.name, words::game(words::G::Default) });
+    const Outfit& o = f.outfits[static_cast<size_t>(i)];
+    return line_parts(words::tr(words::W::FmtFighterOutfit), { f.name, o.name, choice_color_label(o, c) });
+}
+inline std::string summary_line(const Fighter& f, const Choice& c) { return summary_line_parts(f, c).whole(); }
 // The lines under "Replay Outfit Settings": one per character set to On (the catalog's order, the grid's), at most `max`
 // (the last one then says how many more); "Default" when none is On
-inline std::vector<std::string> summary_lines(const std::vector<Fighter>& cat, const Choices& cs, size_t max) {
-    std::vector<std::string> on;
+// (a line with no fixed part: "Default", "+ 6 more")
+inline std::vector<LineParts> summary_parts(const std::vector<Fighter>& cat, const Choices& cs, size_t max) {
+    std::vector<LineParts> on;
     for (const Fighter& f : cat) {
         auto it = cs.find(f.fid);
-        if (it != cs.end() && it->second.forced) on.push_back(summary_line(f, it->second));
+        if (it != cs.end() && it->second.forced) on.push_back(summary_line_parts(f, it->second));
     }
-    if (on.empty()) return { words::game(words::G::Default) };
+    if (on.empty()) return { { std::string(), words::game(words::G::Default) } };
     if (max > 0 && on.size() > max) {
         const size_t more = on.size() - (max - 1);
         on.resize(max - 1);
-        on.push_back(words::trf(words::W::ReplayMore, { std::to_string(more) }));
+        on.push_back({ std::string(), words::trf(words::W::ReplayMore, { std::to_string(more) }) });
     }
     return on;
+}
+inline std::vector<std::string> summary_lines(const std::vector<Fighter>& cat, const Choices& cs, size_t max) {
+    std::vector<std::string> out;
+    for (const LineParts& p : summary_parts(cat, cs, max)) out.push_back(p.whole());
+    return out;
 }
 // The panel's items, top to bottom, and their place in the game's units (the panel is drawn at 0.81): a name's or a line's
 // middle, a picture's top. Read 05/11 on Battle Settings > Other's "Game Settings" (MatchingSetting

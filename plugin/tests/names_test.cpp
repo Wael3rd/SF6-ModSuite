@@ -81,6 +81,22 @@ int main() {
     check(left_of(412, 5, 200) == 312 && left_of(412, 4, 200) == 412 && left_of(412, 6, 200) == 212, "the place's left edge, from a centre, left or right point");
     check(left_of(412, 9, 200) == 312, "whatever its row");
     check(!overflows(200, 200) && !overflows(200.4f, 200) && overflows(201, 200), "wider than its place");
+    // a Costume row's place, between its arrows (row at 348 and 700, arrows 12 wide, the text's point at 524: as read on Opponent Outfit Settings)
+    const Span sp = span_between(524 + 100, 354 + 100, 694 + 100, 1.0f, 8);
+    check(sp.ok && sp.l == -162 && sp.r == 162, "the place: arrow to arrow, a margin inside each, from the text's point");
+    const Span spu = span_between(1000, 900, 1100, 2.0f, 8);
+    check(spu.ok && spu.l == -192 && spu.r == 192, "in the units of the text's parent");
+    check(!span_between(500, 490, 510, 1, 8).ok, "arrows that leave no room: not valid");
+    check(fits_span(300, sp, 1) && fits_span(324, sp, 1) && !fits_span(326, sp, 1), "centred: fits the place or not");
+    const Span off_centre = span_between(500, 340, 700, 1, 0);        // the text's point 40 left of the place's middle
+    check(fits_span(320, off_centre, 1) && !fits_span(360, off_centre, 1), "centred, off the place's middle: what's left of its point counts");
+    check(fits_span(200, off_centre, 0) && !fits_span(201, off_centre, 0), "by its left point: what's right of it counts");
+    check(fits_span(160, off_centre, 2) && !fits_span(161, off_centre, 2), "by its right point: what's left of it counts");
+    // a line in two parts
+    const SplitPlace split = split_place(320, 260, 259);
+    check(split.ok && split.offset == 60 && split.window == 199, "the value starts where it starts in the whole line; its window, from there to the place's end");
+    check(!split_place(320, 320, 259).ok && !split_place(300, 310, 259).ok, "no fixed part, or a width not to be trusted: not split");
+    check(!split_place(320, 140, 259).ok && split_place(320, 141, 259).ok, "a window too small to read: not split");
     check(!text_is_rtl("Aloha Ryu") && !text_is_rtl("") && !text_is_rtl("123 (x)"), "Latin: left to right");
     check(text_is_rtl("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x8A") && text_is_rtl("12 \xD8\xB9\xD8\xB1") && text_is_rtl("\xD7\x90\xD7\x91"), "Arabic, Hebrew: right to left");
     check(!text_is_rtl("\xE6\x97\xA5\xE6\x9C\xAC") && !text_is_rtl("Jos\xC3\xA9") && !text_is_rtl("Ryu \xD8\xB9"), "CJK, accents, Latin first: left to right");

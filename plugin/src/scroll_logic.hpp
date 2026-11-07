@@ -47,6 +47,40 @@ inline float left_of(float x, int control_point, float width) { return x - stati
 // A name that needs to move
 inline bool overflows(float natural, float width) { return natural > width + 0.5f; }
 
+// A Costume row's place, from the point its text is placed by, in the units of the text's parent: from its left arrow's inner edge to its right
+// arrow's, a margin inside each. `per_unit`: those units for one global unit. Too narrow to show a name (the arrows not where they should be): not valid.
+constexpr float kSpanMinWidth = 60;
+struct Span { float l = 0, r = 0; bool ok = false; };
+inline Span span_between(float text_gx, float left_edge_gx, float right_edge_gx, float per_unit, float margin) {
+    Span s;
+    s.l = (left_edge_gx - text_gx) * per_unit + margin;
+    s.r = (right_edge_gx - text_gx) * per_unit - margin;
+    s.ok = s.r - s.l >= kSpanMinWidth;
+    return s;
+}
+// Whether a text placed by that point stays inside the place (column of its point: 0 left, 1 centre, 2 right)
+inline bool fits_span(float natural, const Span& s, int column) {
+    constexpr float kSlack = 0.5f;
+    if (column == 1) return natural * 0.5f <= (s.r < -s.l ? s.r : -s.l) + kSlack;
+    if (column == 0) return natural <= s.r + kSlack;
+    return natural <= -s.l + kSlack;
+}
+
+// A line in two parts, "Luke : " and "RE8 Ethan Winter Outfit, 01": where the moving part starts and how wide its window is, from what was measured:
+// the whole line and the moving part alone. So the fixed part's width, spaces and kerning included, is the language's and the line's own, and the
+// moving part is where it is in the whole line. A window too small to read: not split.
+constexpr float kSplitMinWindow = 80;
+struct SplitPlace { bool ok = false; float offset = 0, window = 0; };
+inline SplitPlace split_place(float whole, float moving, float place) {
+    SplitPlace s;
+    const float fixed = whole - moving;
+    if (!(fixed > 0) || place - fixed < kSplitMinWindow) return s;
+    s.ok = true;
+    s.offset = fixed;
+    s.window = place - fixed;
+    return s;
+}
+
 // Right-to-left: its first strong character is Arabic or Hebrew (what is measured is not reordered here: only the direction of the
 // slide depends on this)
 inline bool text_is_rtl(const std::string& s) {

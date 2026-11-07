@@ -20,7 +20,9 @@ void release(void* text);
 void release_unless(void* text, const std::string& message);
 // The scroller holds it: its region, alignment and place are not to be written meanwhile.
 bool busy(void* text);
-// The same, for a text whose place may change: `x`, `y` is where it should be now (by the point it was found with).
+// The same, for a text placed by its left point, whose place may change: `x`, `y` is where it should be now.
 bool busy(void* text, float x, float y);
+// What this control measured for this text; -1 not yet. 0: it could not be measured.
+float known_width(void* text, const std::string& message);
 
 }  // namespace slots::namescroll

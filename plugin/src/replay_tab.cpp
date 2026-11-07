@@ -87,6 +87,7 @@
 #include "slots_ui.hpp"
 #include "replay_logic.hpp"
 #include "name_scroll.hpp"
+#include "scroll_logic.hpp"
 #include "replay_music.hpp"
 #include "replay_tab.hpp"
 #include "words.hpp"
@@ -208,6 +209,7 @@ constexpr float kSumTitleRegionW = 430, kSumTitleRegionH = 37, kSumRegionW = 320
 constexpr float kFontSumTitle = 24, kFontSumLine = 23;
 constexpr int64_t kSumFontSlot = 8;
 constexpr int kSumTexts = 25, kSumMaxFighters = 20;   // 3 names + 20 outfit lines + the stage's line + the music's, the page's 6
+constexpr float kSumOffScreen = -4000;             // a value while it is measured, before its place is known
 constexpr float kSumDrawRegionW = 1200;            // a line's region: wider than any line (never clips what is measured)
 constexpr uint32_t kColSumTitle = 0xFFD9D9D9, kColSumName = 0xFFFFBF65, kColSumLine = 0xFFEEEEEE;
 // The pill's frames can't be had on a copied Scale9Grid: a copy keeps the BorderRect of the frames it was loaded with
@@ -341,6 +343,7 @@ const std::vector<Copy>& copies() {
     v.push_back({ "e_ro_sumpic", kImage });        // picture and texts
     v.push_back({ "e_ro_sumtitle", kLabel });
     for (int i = 0; i < kSumTexts; ++i) v.push_back({ cname("sum", i), kLabel });
+    for (int i = 0; i < kSumTexts; ++i) v.push_back({ cname("sumv", i), kLabel });   // the moving part of a line too long for its place
     return v;
 }
 
@@ -1942,8 +1945,6 @@ void style_sum_text(void* t, bool head) {
     }
     set_priority(t, kPrioText);
 }
-// A line's real width, in screen pixels (AutoRegionFit is off and its region far wider than any line: nothing squeezes or
-// clips it): its display size; -1 unknown
 // A line: `text` at the game's size, never squeezed: wider than the game's region (320 x 0.81), it scrolls inside it (name_scroll.cpp).
 // Always written as text, never by a message id: a copy shows one line then another, and a text written over a message id leaves the id
 // behind, so the core's compare would skip the same id later and keep the old text (the stage agent's finding, 05/11).
@@ -1962,8 +1963,49 @@ void put_sum_text(void* title, const std::string& name, bool head, const std::st
     show(t, on);
 }
 // The summary: the title pill and its heading, then the items (names, lines, a picture: text = its path) where
-// summary_layout puts them
-struct SumItem { SumKind kind; std::string text; };
+// summary_layout puts them. `fixed`: the start of a line's text that stays when the line is too long for its place ("Luke : ").
+struct SumItem { SumKind kind; std::string text; std::string fixed; };
+float g_sum_window[kSumTexts] = {};                // each line's moving part: its window, 0 when it shows none
+// A line. It stays one text, as any line, while it fits. Too long, and with a fixed part: the fixed part in that text, and the rest, in a second
+// text (sumv) that starts where the rest starts in the whole line (both widths measured, scroll_logic.hpp split_place), in a window from there to
+// the place's end; only that one moves. Until both widths are known, the whole text in its place, clipped at the place's end: the same letters
+// where they will be. Arabic stays whole: the order of a split line there isn't known (the line's start is on its right), so it moves as one.
+void put_sum_line(void* title, int i, const SumItem& it, float x, float y, uint32_t col) {
+    void* t = copy_of(title, cname("sum", i));
+    void* v = copy_of(title, cname("sumv", i));
+    if (!t) return;
+    if (g_styled.insert(reinterpret_cast<uintptr_t>(t)).second) style_sum_text(t, false);
+    const float place_w = kSumRegionW * kSumScale;
+    const bool can_split = v && !it.fixed.empty() && it.fixed.size() < it.text.size() && std::strcmp(words::lang(), "ar") != 0;
+    const std::string moving = can_split ? it.text.substr(it.fixed.size()) : std::string();
+    const float whole = can_split ? namescroll::known_width(t, it.text) : -1;
+    const bool wide = whole > 0 && scroll::overflows(whole, place_w);
+    const float value = wide ? namescroll::known_width(v, moving) : -1;
+    const scroll::SplitPlace sp = value > 0 ? scroll::split_place(whole, value, place_w) : scroll::SplitPlace{};
+    if ((can_split && whole < 0) || (wide && value < 0)) g_dirty = true;       // the next step comes with those widths
+    const std::string& in_t = sp.ok ? it.fixed : it.text;
+    namescroll::release_unless(t, in_t);               // another text: its place back first
+    if (!namescroll::busy(t, x, y)) {
+        A()->ui_set_text(C(), t, in_t.c_str());
+        place(t, x, y);
+    }
+    A()->ui_set_color(C(), t, col);
+    show(t, true);
+    if (!v) return;
+    const bool value_up = wide && (value < 0 || sp.ok);
+    g_sum_window[i] = value_up ? (sp.ok ? sp.window : place_w) : 0;
+    if (value_up) {
+        if (g_styled.insert(reinterpret_cast<uintptr_t>(v)).second) style_sum_text(v, false);
+        const float vx = sp.ok ? x + sp.offset : kSumOffScreen;
+        namescroll::release_unless(v, moving);
+        if (!namescroll::busy(v, vx, y)) {
+            A()->ui_set_text(C(), v, moving.c_str());
+            place(v, vx, y);
+        }
+        A()->ui_set_color(C(), v, col);
+    }
+    show(v, value_up);
+}
 void render_summary(void* title, bool on, const std::string& heading, const std::vector<SumItem>& items) {
     put_pill(title, on);
     if (on) log_pill(title);
@@ -1979,10 +2021,13 @@ void render_summary(void* title, bool on, const std::string& heading, const std:
         if (it.kind == SumKind::Picture) { pic = it.text; pic_y = ys[i]; continue; }
         if (t >= kSumTexts) continue;
         const bool name = it.kind == SumKind::Name;
-        put_sum_text(title, cname("sum", t++), false, it.text, sum_x(name ? kSumNameX : kSumLineX), sum_y(ys[i]),
-                     name ? kColSumName : kColSumLine, true);
+        put_sum_line(title, t++, it, sum_x(name ? kSumNameX : kSumLineX), sum_y(ys[i]), name ? kColSumName : kColSumLine);
     }
-    for (; t < kSumTexts; ++t) put_sum_text(title, cname("sum", t), false, std::string(), 0, 0, 0, false);
+    for (; t < kSumTexts; ++t) {
+        put_sum_text(title, cname("sum", t), false, std::string(), 0, 0, 0, false);
+        g_sum_window[t] = 0;
+        if (void* v = copy_of(title, cname("sumv", t))) show(v, false);
+    }
     put_stage_picture(title, "e_ro_sumpic", pic, sum_x(kSumPicX), sum_y(pic_y), kSumPicW * kSumScale, kSumPicH * kSumScale, kColText,
                       on && !pic.empty());
 }
@@ -2011,7 +2056,7 @@ void stage_summary(std::string& pic, std::string& name) {
 std::vector<SumItem> grid_summary() {
     std::vector<SumItem> v;
     v.push_back({ SumKind::Name, list_label(0) });
-    for (const std::string& l : summary_lines(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, l });
+    for (const LineParts& l : summary_parts(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, l.whole(), l.fixed });
     v.push_back({ SumKind::Name, list_label(1) });
     std::string pic, name;
     stage_summary(pic, name);
@@ -2288,7 +2333,11 @@ void tick() {
         input();
         render(main);                             // sets the wanted model
         if (void* title = find(main, "c_title")) {     // long names scroll inside their place (name_scroll.cpp)
-            for (int i = 0; i < kSumTexts; ++i) namescroll::drive(copy_of(title, cname("sum", i)), kSumRegionW * kSumScale, 10);
+            for (int i = 0; i < kSumTexts; ++i) {
+                namescroll::drive(copy_of(title, cname("sum", i)), kSumRegionW * kSumScale, 10);
+                const float window = g_sum_window[i];
+                namescroll::drive(copy_of(title, cname("sumv", i)), window > 0 ? window : kSumRegionW * kSumScale, window > 0 ? 1 : 10);
+            }
             namescroll::drive(copy_of(title, "e_ro_sname"), stagelogic::kNameMaxW);
         }
         preview::frame();

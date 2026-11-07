@@ -913,6 +913,12 @@ ScissorRect, local to the text, moves the other way. That class itself isn't use
 - **Where:** the Costume row of Fighter Settings, of the character select's panels, of Training's popup, of Opponent Outfit Settings; the
   summary lines of Opponent Outfit Settings and of Replays > Settings; the big stage banner's name in Battle Settings, Training and Replays >
   Settings (there, only a name wider than the banner scrolls, inside it).
+- **A Costume row's place** runs between its two arrows, read on that row, 8 units inside each; the text's own region doesn't count (it reaches
+  past the arrows on the character select and stops well inside them on Opponent Outfit Settings). A name wider than its region but inside the
+  arrows stays where it is at full size.
+- **Replays > Settings' character lines** split when too long: "Luke :" stays and the rest moves, in a second text, in a window from where the rest
+  starts to the place's end. The rest's start is the difference of two measures (the whole line, the rest alone), so a language's spacing is its
+  own. A line that fits stays one text. Not in Arabic (the whole line moves), and not when under 80 units would be left.
 - **On a text the game owns:** its AutoRegionFit and AutoWrap off, its alignment and control point on its row's left while it slides, all put
   back when its text changes, it hides, or the row's owner claims it (the costume options, the Color Mod's DI mode). Its region stays the game's
   (two frames apart, to measure a text not seen yet): those two modes save it, restore it and lay their rows out from it. No text is written: the
