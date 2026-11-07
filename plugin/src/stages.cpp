@@ -23,6 +23,7 @@
 #include "stages.hpp"
 #include "stages_logic.hpp"
 #include "codecheck_rt.hpp"
+#include "name_scroll.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1446,6 +1447,7 @@ bool grid_work() {
         if (!s.tile && nvar > 0) name = sl::variation_label(vanilla_name(s.base), l.v ? l.v->name : std::string(), l.v ? l.v->bundle : std::string());
         if (ptext && !name.empty()) {
             const sl::BannerName bn = sl::banner_name(name);
+            namescroll::release_unless(ptext, bn.text);          // another name: its place back first
             name_layout(ptext, bn.right);
             if (s.tile || nvar > 0 || bn.text != name) set_text(ptext, bn.text);
         }
@@ -1921,7 +1923,14 @@ void grid_frame() {
         // off screen: its name back at the game's place (the same text may come back with a stage of the game's)
         if (grid && !on && g_grid.name_right == 1)
             if (Obj* prv = obj_field(grid, f_preview))
-                if (Obj* ptext = get_obj(prv, "mTextStageName")) name_layout(ptext, false);
+                if (Obj* ptext = get_obj(prv, "mTextStageName")) { namescroll::release(ptext); name_layout(ptext, false); }
+        // the banner's name, wider than the banner: it scrolls inside it (right-aligned with the banner's width: name_layout)
+        if (grid && on)
+            if (Obj* prv = obj_field(grid, f_preview))
+                if (Obj* ptext = get_obj(prv, "mTextStageName")) {
+                    if (g_grid.name_right == 1) namescroll::drive(ptext, sl::kNameMaxW);
+                    else namescroll::release(ptext);
+                }
         // it came on screen (Battle Settings' tab, its Stage Settings row): the pictures and the banner at once
         if (on && !g_grid.on_screen) { g_grid.until = 0; open_grid_window(); }
         if (g_grid_watch) {

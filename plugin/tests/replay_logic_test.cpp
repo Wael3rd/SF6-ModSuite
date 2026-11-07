@@ -235,19 +235,6 @@ int main() {
         const std::vector<std::string> capped = summary_lines(many, all, 20);
         check(capped.size() == 20 && capped[18] == "F18: Outfit 4, 01" && capped[19] == "+ 6 more",
               "summary: 25 On, 19 lines and \"+ 6 more\"");
-        check(cut_utf8("Short", 32) == "Short" && cut_utf8("abcdefghij", 8) == "abcde...", "summary: long lines cut with ...");
-        check(cut_utf8("ab\xC3\xA9" "cdefgh", 6) == "ab...", "summary: never cut inside a UTF-8 sequence");
-        check(fit_length(32, 259.0f, 259.2f) == 32 && fit_length(32, -1.0f, 259.2f) == 32, "fit: a line that fits stays whole");
-        check(fit_length(32, 320.0f, 259.2f) == 25, "fit: too wide, cut in proportion (32 x 259.2 / 320)");
-        check(fit_length(26, 262.0f, 259.2f) == 25 && fit_length(5, 900.0f, 259.2f) == 4, "fit: always fewer, never under 4");
-        {
-            const std::string s = "Suzaku Castle Over Training Room";   // 32 bytes, drew ~300 px wide at the game's size
-            size_t len = s.size();
-            float wd = 300.0f;
-            for (int i = 0; i < 6 && wd > 259.7f; ++i) { len = fit_length(len, wd, 259.2f); wd = 300.0f * static_cast<float>(len) / 32.0f; }
-            check(wd <= 259.7f && cut_utf8(s, len).size() == len && cut_utf8(s, len).substr(len - 3) == "...",
-                  "fit: converges to a cut with ... inside the region");
-        }
         // Battle Settings > Other's "Game Settings" (read 05/11, its own units): Stage Settings (its picture), Battle BGM,
         // Commentary Settings (6 lines), Side Settings, Battle HUD Design; and as measured on screen (y = 189 + 0.81 x layout)
         using K = SumKind;

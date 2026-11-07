@@ -1,6 +1,7 @@
 // Unit test of common/outfit_display.hpp: the text the game shows for an extra outfit (the loader's costume name message). Made-up
 // names only. Build and run: build_names_test.bat (prints "all ok" and exits 0 when every check passes).
 #include "../../common/outfit_display.hpp"
+#include "../src/scroll_logic.hpp"
 
 #include <cstdio>
 #include <string>
@@ -45,6 +46,44 @@ int main() {
     const std::string cut = outfit_display_name(wide);
     check(cut.size() <= kOutfitDisplayMaxBytes && (cut.size() - 3) % 3 == 0 && outfit_display_name(cut) == cut, "beyond it, never inside a UTF-8 sequence");
     check(outfit_display_name(outfit_display_name("  <a> b\x01 ")) == outfit_display_name("  <a> b\x01 "), "twice is once");
+
+    // ---- the scrolling ----
+    using namespace slots::scroll;
+    check(offset_at(0, 5) == 0 && offset_at(-10, 5) == 0, "a name that fits doesn't move");
+    check(offset_at(120, 0) == 0 && offset_at(120, 1.4) == 0, "it rests at its start");
+    const double slide = 120 / kUnitsPerSecond;     // 2 s
+    check(offset_at(120, kRestSeconds + slide / 2) == 60, "it slides, half way");
+    check(offset_at(120, kRestSeconds + slide - 0.01) >= 119, "it reaches the end");
+    check(offset_at(120, kRestSeconds + slide + 0.2) == 120 && offset_at(120, kRestSeconds + slide + 1.4) == 120, "it rests at its end");
+    check(offset_at(120, 2 * kRestSeconds + slide + slide / 2) == 60, "it comes back");
+    const double period = 2 * kRestSeconds + 2 * slide;
+    check(offset_at(120, period + 0.1) == 0 && offset_at(120, period + kRestSeconds + slide / 2) == 60, "it repeats");
+    check(offset_at(120, -1) == 0, "before it starts: its start");
+    bool in_range = true;
+    int steps = 0, last = -1;
+    for (double t = 0; t < 3 * period; t += 1.0 / 60) {
+        const int o = offset_at(120, t);
+        if (o < 0 || o > 120) in_range = false;
+        if (o != last) ++steps;
+        last = o;
+    }
+    check(in_range, "never outside its overflow");
+    check(steps < 3 * 2 * 125, "a whole unit at a time: a write only when it changes");
+    check(offset_at(120, 0, true) == 120 && offset_at(120, kRestSeconds + slide + 0.2, true) == 0, "right to left: from its other end");
+    check(offset_at(0.4f, 3) == 0 || offset_at(0.4f, 3) == 1, "a sliver of overflow stays sane");
+    // the window stays where it is on the screen: the clip, local to the text, moves as the text does the other way
+    for (const int off : { 0, 37, 120 }) {
+        const Window w = window_at(500, 200, off);
+        check(w.x + w.clip_left == 500 && w.x + w.clip_right == 700, "the window stays put");
+    }
+    const Window w0 = window_at(500, 200, 0);
+    check(w0.clip_top < 0 && w0.clip_bottom > 100, "no glyph cut at the top or the bottom");
+    check(left_of(412, 5, 200) == 312 && left_of(412, 4, 200) == 412 && left_of(412, 6, 200) == 212, "the place's left edge, from a centre, left or right point");
+    check(left_of(412, 9, 200) == 312, "whatever its row");
+    check(!overflows(200, 200) && !overflows(200.4f, 200) && overflows(201, 200), "wider than its place");
+    check(!text_is_rtl("Aloha Ryu") && !text_is_rtl("") && !text_is_rtl("123 (x)"), "Latin: left to right");
+    check(text_is_rtl("\xD8\xB9\xD8\xB1\xD8\xA8\xD9\x8A") && text_is_rtl("12 \xD8\xB9\xD8\xB1") && text_is_rtl("\xD7\x90\xD7\x91"), "Arabic, Hebrew: right to left");
+    check(!text_is_rtl("\xE6\x97\xA5\xE6\x9C\xAC") && !text_is_rtl("Jos\xC3\xA9") && !text_is_rtl("Ryu \xD8\xB9"), "CJK, accents, Latin first: left to right");
 
     std::printf(fails ? "%d FAILED\n" : "all ok\n", fails);
     return fails ? 1 : 0;

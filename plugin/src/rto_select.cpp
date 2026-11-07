@@ -57,6 +57,7 @@
 // update), then followed each frame while it shows.
 #include "perf.hpp"
 #include "rto.hpp"
+#include "name_scroll.hpp"
 #include "slots_ui.hpp"
 #include "words.hpp"
 
@@ -1220,6 +1221,7 @@ bool enter(int s, const char** why) {
         RowParts p = parts_of(cm, kd, k);
         if (!p.ctrl) { release(claim); *why = "a row is missing"; return false; }
         rs.visible = call_bool(reinterpret_cast<Obj*>(p.ctrl), "get_Visible");
+        if (p.text) namescroll::release(p.text);            // a long name stops scrolling before what the row is now is saved
         if (k >= n.n) continue;
         rs.spin = pop ? spin_of_row(spins, kd.names[k], k) : list_item(spins, k);
         if (!rs.spin && pop && k >= kPanelRows) { n.n = k; continue; }

@@ -1,0 +1,26 @@
+// SF6 Slots -- long names scroll inside their place instead of being squeezed or cut (name_scroll.cpp, scroll_logic.hpp).
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+namespace slots::namescroll {
+
+// Every LateUpdateBehavior: the Costume rows and the Opponent Outfit summary, on their screens. A look every 15 frames while none is up:
+// registry reads only.
+void frame();
+
+// One text, found this frame (R35): measured, and slid when it is wider than its place; left as the game has it when it fits. `width`: its
+// place's width, 0 its region's. `poll`: frames between looks while it isn't moving (1 for a text the game writes itself).
+// `allowed` false, or the text hidden: put back as it was found. From LateUpdateBehavior only, as all of this.
+void drive(void* text, float width = 0, uint32_t poll = 1, bool allowed = true);
+// Back as it was found, and measured again next time (before moving it or changing its text by other means)
+void release(void* text);
+// The same, unless it already holds this text
+void release_unless(void* text, const std::string& message);
+// The scroller holds it: its region, alignment and place are not to be written meanwhile.
+bool busy(void* text);
+// The same, for a text whose place may change: `x`, `y` is where it should be now (by the point it was found with).
+bool busy(void* text, float x, float y);
+
+}  // namespace slots::namescroll

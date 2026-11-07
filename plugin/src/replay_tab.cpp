@@ -86,6 +86,7 @@
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "replay_logic.hpp"
+#include "name_scroll.hpp"
 #include "replay_music.hpp"
 #include "replay_tab.hpp"
 #include "words.hpp"
@@ -207,11 +208,7 @@ constexpr float kSumTitleRegionW = 430, kSumTitleRegionH = 37, kSumRegionW = 320
 constexpr float kFontSumTitle = 24, kFontSumLine = 23;
 constexpr int64_t kSumFontSlot = 8;
 constexpr int kSumTexts = 25, kSumMaxFighters = 20;   // 3 names + 20 outfit lines + the stage's line + the music's, the page's 6
-constexpr size_t kSumLineMax = 38;                 // units (words.hpp), at most, whatever is measured: stays on the screen (then cut to the region, put_line_text)
-constexpr size_t kSumAlwaysFits = 15;              // bytes that fit the region whatever the letters (15 x the widest glyph, about 17 px)
 constexpr float kSumDrawRegionW = 1200;            // a line's region: wider than any line (never clips what is measured)
-constexpr float kSumOffScreen = -4000;             // a line while its cut is not settled
-constexpr uint32_t kSumLayoutFrames = 2, kSumMeasureMax = 30;   // frames for the game's layout of a new text; at most, without a width
 constexpr uint32_t kColSumTitle = 0xFFD9D9D9, kColSumName = 0xFFFFBF65, kColSumLine = 0xFFEEEEEE;
 // The pill's frames can't be had on a copied Scale9Grid: a copy keeps the BorderRect of the frames it was loaded with
 // (setSequenceNo, setPatternNo and giving the sheet again leave it: 124.5 and 86 against the game's 25.5 and 22, log 05/11),
@@ -1804,9 +1801,13 @@ void render_stage(void* title, bool on, bool grid) {
     put_stage_picture(title, "e_ro_sbanner", stage_look(shown).pic, kBannerX, kBannerY, kBannerW, kBannerH, kColText, on);
     // its name: never squeezed. All written in one go, before the frame draws: right from the first frame.
     const stagelogic::BannerName bname = stagelogic::banner_name(cell_name(shown));
-    put_center_text(title, "e_ro_sname", bname.text.c_str(), nullptr, bname.right ? kStageNameX + stagelogic::kNameRightFromCentre : kStageNameX,
-                    kStageNameY, kStageNameW, kFontStageName, kColStageName, on);
-    if (void* c = on ? copy_of(title, "e_ro_sname") : nullptr) {
+    void* sname = copy_of(title, "e_ro_sname");
+    if (sname && on) namescroll::release_unless(sname, bname.text);      // another name: its place back first
+    const bool name_moves = sname && on && namescroll::busy(sname);      // the same name, wider than the banner: its place is the scroller's
+    if (name_moves) show(sname, true);
+    else put_center_text(title, "e_ro_sname", bname.text.c_str(), nullptr, bname.right ? kStageNameX + stagelogic::kNameRightFromCentre : kStageNameX,
+                         kStageNameY, kStageNameW, kFontStageName, kColStageName, on);
+    if (void* c = on && !name_moves ? sname : nullptr) {
         banner_name_style(c);
         const int64_t point = bname.right ? kRightCenter : kCenterCenter;
         set_enum(c, "set_ControlPoint(via.gui.ControlPoint)", point);
@@ -1921,7 +1922,7 @@ void style_sum_text(void* t, bool head) {
     const float font = (head ? kFontSumTitle : kFontSumLine) * s;
     A()->ui_set_font_size(C(), t, font, font);
     set_enum(t, "set_FontSlot(via.gui.FontSlot)", kSumFontSlot);
-    set_enum(t, "set_AutoRegionFit(System.Boolean)", 0);   // never squeezed (the game's is on): a long line is cut (put_line_text)
+    set_enum(t, "set_AutoRegionFit(System.Boolean)", 0);   // never squeezed (the game's is on): a long line scrolls (name_scroll.cpp)
     set_enum(t, "set_Bold(System.Boolean)", 0);
     set_enum(t, "set_ShadowEnable(System.Boolean)", 1);
     uint32_t shadow = k.shadow;
@@ -1943,49 +1944,20 @@ void style_sum_text(void* t, bool head) {
 }
 // A line's real width, in screen pixels (AutoRegionFit is off and its region far wider than any line: nothing squeezes or
 // clips it): its display size; -1 unknown
-float drawn_width(void* t) {
-    float ds[2] = { -1, -1 };
-    if (auto r = call(static_cast<Obj*>(t), "get_DisplaySize"); !r.exception_thrown) std::memcpy(ds, r.bytes.data(), sizeof ds);
-    return ds[0];
-}
-// A line's fit (per copy): the text it shows, the bytes of it kept (then "..."), the frame that was written, its cut settled
-struct SumFit { std::string full; size_t len = 0; uint32_t since = 0, born = 0; bool settled = false; };
-std::map<std::string, SumFit> g_sum_fit;
-// A line: `text` at the game's size, never squeezed: cut with "..." when wider than the game's region (320 x 0.81), as measured
-// on what the game laid out (from the next frame on; a new cut, measured again). Returns true once its cut is settled: until
-// then it is kept off the screen (a short line fits whatever its letters: settled at once, nothing blinks). Always written as
-// text, never by a message id: a copy shows one line then another, and a text written over a message id leaves the id
+// A line: `text` at the game's size, never squeezed: wider than the game's region (320 x 0.81), it scrolls inside it (name_scroll.cpp).
+// Always written as text, never by a message id: a copy shows one line then another, and a text written over a message id leaves the id
 // behind, so the core's compare would skip the same id later and keep the old text (the stage agent's finding, 05/11).
-bool put_line_text(void* t, const std::string& name, const std::string& text) {
-    const float region = kSumRegionW * kSumScale;
-    SumFit& f = g_sum_fit[name];
-    if (f.full != text || f.since == 0) {
-        f.full = text; f.len = text.size(); f.since = f.born = g_frame;
-        f.settled = text.size() <= kSumAlwaysFits;
-    }
-    A()->ui_set_text(C(), t, cut_utf8(f.full, f.len).c_str());
-    if (f.settled) return true;
-    g_dirty = true;
-    if (g_frame < f.since + kSumLayoutFrames) return false;
-    const float drawn = drawn_width(t);
-    if (drawn <= 0 && g_frame - f.born < kSumMeasureMax) return false;   // not laid out yet
-    const size_t next = fit_length(f.len, drawn, region);
-    if (drawn > 0 && next != f.len) { f.len = next; f.since = g_frame; return false; }
-    f.settled = true;
-    logf("replay tab: summary line \"%s\": %.0f px wide (region %.0f), %zu of %zu bytes", cut_utf8(f.full, f.len).c_str(), drawn, region, f.len,
-         f.full.size());
-    return true;
-}
 void put_sum_text(void* title, const std::string& name, bool head, const std::string& text, float x, float y, uint32_t col, bool on) {
     void* t = copy_of(title, name);
     if (!t) return;
     if (on) {
         if (g_styled.insert(reinterpret_cast<uintptr_t>(t)).second) style_sum_text(t, head);
-        bool settled = true;
-        if (head) A()->ui_set_text(C(), t, text.c_str());
-        else settled = put_line_text(t, name, text);
+        if (!head) namescroll::release_unless(t, text);   // another line: its place back first
+        if (head || !namescroll::busy(t, x, y)) {
+            A()->ui_set_text(C(), t, text.c_str());
+            place(t, x, y);
+        }
         A()->ui_set_color(C(), t, col);
-        place(t, settled ? x : kSumOffScreen, y);
     }
     show(t, on);
 }
@@ -2039,14 +2011,14 @@ void stage_summary(std::string& pic, std::string& name) {
 std::vector<SumItem> grid_summary() {
     std::vector<SumItem> v;
     v.push_back({ SumKind::Name, list_label(0) });
-    for (const std::string& l : summary_lines(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, words::cut_units(l, kSumLineMax) });
+    for (const std::string& l : summary_lines(g_cat, g_choices, kSumMaxFighters)) v.push_back({ SumKind::Line, l });
     v.push_back({ SumKind::Name, list_label(1) });
     std::string pic, name;
     stage_summary(pic, name);
     v.push_back({ SumKind::Picture, pic });
-    v.push_back({ SumKind::Line, words::cut_units(name, kSumLineMax) });
+    v.push_back({ SumKind::Line, name });
     v.push_back({ SumKind::Name, bgm_title() });
-    v.push_back({ SumKind::Line, words::cut_units(bgm_summary_line(), kSumLineMax) });
+    v.push_back({ SumKind::Line, bgm_summary_line() });
     return v;
 }
 
@@ -2092,7 +2064,7 @@ void render_page(void* title, const Fighter* f) {
     for (int r = 0; r < kRows; ++r) put_row(title, r, labels[r], values[r], on, r == g_row, r > 0 && !c.forced);
     // the summary: "Outfit Settings (Replay)", the three settings (Off: the outfit and colour are the replay's own)
     if (on) {
-        const std::string costume = c.forced && oi >= 0 ? words::cut_units(f->outfits[static_cast<size_t>(oi)].name, kSumLineMax) : game(G::Default);
+        const std::string costume = c.forced && oi >= 0 ? f->outfits[static_cast<size_t>(oi)].name : game(G::Default);
         const std::string color = c.forced && oi >= 0 ? choice_color_label(f->outfits[static_cast<size_t>(oi)], c) : game(G::Default);
         std::vector<SumItem> items = { { SumKind::Name, labels[0] }, { SumKind::Line, values[0] },
                                        { SumKind::Name, labels[1] }, { SumKind::Line, costume },
@@ -2102,7 +2074,7 @@ void render_page(void* title, const Fighter* f) {
             const std::vector<std::string> lines = rto::option_lines(rto::manifest(), *slot, rto::forced_options(rto::manifest(), *slot, saved));
             if (!lines.empty()) items.push_back({ SumKind::Name, tr(W::OptionsTitle) });
             for (size_t i = 0; i < lines.size() && static_cast<int>(items.size()) < kSumTexts; ++i)
-                items.push_back({ SumKind::Line, words::cut_units(lines[i], kSumLineMax) });
+                items.push_back({ SumKind::Line, lines[i] });
         }
         render_summary(title, true, tr(W::ReplaySumPage), items);
     }
@@ -2162,7 +2134,6 @@ void enter(Obj* main) {
     g_level.store(kLevelList);
     g_list_row = 0;                               // the first option row, as the game's tab opens
     g_dirty = true;
-    g_sum_fit.clear();                            // the summary's lines measured again
     g_pill_logged = false;
     build_catalog();                              // each time: the NSFW setting may have changed
     load_faces();
@@ -2316,6 +2287,10 @@ void tick() {
         if (g_frame % 30 == 0 && g_hidden.empty()) hide_page(true);   // the page's agents were not up yet at entry
         input();
         render(main);                             // sets the wanted model
+        if (void* title = find(main, "c_title")) {     // long names scroll inside their place (name_scroll.cpp)
+            for (int i = 0; i < kSumTexts; ++i) namescroll::drive(copy_of(title, cname("sum", i)), kSumRegionW * kSumScale, 10);
+            namescroll::drive(copy_of(title, "e_ro_sname"), stagelogic::kNameMaxW);
+        }
         preview::frame();
         if (preview::showing() != g_model_shown) g_dirty = true;
     } else {

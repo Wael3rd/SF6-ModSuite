@@ -856,7 +856,8 @@ does, the fallback above is the next step.
   characters (UTF-8; 30 when the menu has several pages) is cut and ends with `...`, so the side stays readable.
   Several pages: the Color Mod's colour editor's paged title, `<ICON KeyA>   MINI DRESS MAI C1 SWAP  -  P1   1/2
   <ICON KeyE>` (pad: `<ICON BtnL1>` / `<ICON BtnR1>`; the glyphs of the device in use when the pages were built). The costume row shows the outfit's label
-  (the loader's name message, "Outfit VII" for an outfit with none: `docs/MANAGER_CONTRACT.md`, "What the game shows"); the outfit's name is also at the right of the guide bar ("Outfit name on Fighter Settings" below).
+  (the loader's name message, "Outfit VII" for an outfit with none: `docs/MANAGER_CONTRACT.md`, "What the game shows"), scrolling when it
+  is wider than the row ("Long names scroll" below); the outfit's name is also at the right of the guide bar ("Outfit name on Fighter Settings" below).
 - **Pages** (7 rows at most, the dialog's pool; split by `split_pages`, `rto_data.cpp`, unit-tested): page 1 = Player
   side (P1 / P2), the first 5 option rows, Restore defaults; later pages = 7 option rows each (no "More options" row
   since 20/10). Player side and Restore defaults are on page 1 only, like the colour editor's extra rows (its cluster
@@ -902,7 +903,28 @@ does, the fallback above is the next step.
   while its editor is open, never with our menu), and the only back and forth is one hide and one show per block
   every 30 frames (texts written only when they differ).
 
-### Outfit name on Fighter Settings: `plugin/src/fs_name.cpp` (no new core capability)
+### Long names scroll
+
+A name wider than its place scrolls inside it; one that fits doesn't move. It rests about 1.5 s at its start, slides to its end at 60 units a
+second, rests about 1.5 s, comes back, and so on (`plugin/src/scroll_logic.hpp`, tested by `plugin/tests/names_test.cpp`;
+`plugin/src/name_scroll.cpp` is the game side). It is the game's own method, read in `app.UIPartsScrollText`: the text's Position moves, its
+ScissorRect, local to the text, moves the other way. That class itself isn't used: it belongs to the controls the game builds with it.
+
+- **Where:** the Costume row of Fighter Settings, of the character select's panels, of Training's popup, of Opponent Outfit Settings; the
+  summary lines of Opponent Outfit Settings and of Replays > Settings; the big stage banner's name in Battle Settings, Training and Replays >
+  Settings (there, only a name wider than the banner scrolls, inside it).
+- **On a text the game owns:** its AutoRegionFit and AutoWrap off, its alignment and control point on its row's left while it slides, all put
+  back when its text changes, it hides, or the row's owner claims it (the costume options, the Color Mod's DI mode). Its region stays the game's
+  (two frames apart, to measure a text not seen yet): those two modes save it, restore it and lay their rows out from it. No text is written: the
+  game's message stays.
+- **Cost:** a look at the agents every 15 frames while none is drawn; while one is, a read of the row's message each frame, and writes only when the
+  whole offset changes.
+- **Right to left:** a name whose first strong character is Arabic or Hebrew starts from its other end, since its beginning is on the right.
+  Not tested in game, in Arabic or otherwise; what the game does with an Arabic name when the game's language isn't Arabic isn't known.
+- **Not this:** `crsm/src/ui/ticker.cpp` is only the game's own ticker strip (`TickerRequestData`); Profile Mod's Steam name keeps its cut;
+  Replays > Settings' own Costume row keeps its cut at 24 units.
+
+## Outfit name on Fighter Settings: `plugin/src/fs_name.cpp` (no new core capability)
 
 - **What**: on Fighter Settings, the name of the outfit on the preview, right-aligned at the right end of the bottom
   input guide bar's line (the bar's left margin mirrored). The options menu's title without "- P1": an outfit of

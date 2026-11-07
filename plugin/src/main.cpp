@@ -10,6 +10,7 @@
 #include "perf.hpp"
 #include "wjournal.hpp"
 #include "replay_tab.hpp"
+#include "name_scroll.hpp"
 
 namespace slots {
 
@@ -67,6 +68,7 @@ void on_late_update() {
     }
 
     language_tick();                        // the language of our words (words.hpp): at most every 60 frames
+    namescroll::frame();                    // long names scroll in the Costume rows: its own gate (registry reads every 15 frames)
     replaytab::frame();                     // the Replays menu's "Replay Outfits" tab: its own gate (replay_tab.cpp)
 
     uint32_t ev = g_events.exchange(0, std::memory_order_acq_rel);

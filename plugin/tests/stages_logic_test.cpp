@@ -168,9 +168,7 @@ static void test_banner_name() {
     check(s.right && s.text == "Black Training stage Mod-2943-1-1759553342", "the longest today: right-aligned, whole");
     const std::string longest(80, 'a');
     s = banner_name(longest);
-    check(s.right && s.text.size() > 3 && s.text.compare(s.text.size() - 3, 3, "...") == 0 && name_width(s.text) <= kNameMaxW,
-          "wider than the banner: cut with ...");
-    check(name_width(s.text) > kNameMaxW - 20, "and cut no shorter than it must be");
+    check(s.right && s.text == longest, "wider than the banner: whole, it scrolls inside it");
     s = banner_name("\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82\xE3\x81\x82");
     check(s.right && s.text.size() == 39, "13 square characters: right-aligned, whole characters");
     check(!banner_name("").right && banner_name("").text.empty(), "no name");
