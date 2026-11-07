@@ -183,13 +183,26 @@ static void test_sources(const fs::path& repo) {
         check(mine != std::string::npos && theirs != std::string::npos && mine < theirs, "the first spec is the report's");
         const size_t beat = report.find("\"app.UIFlowMatchingFighterSetting.Main\", \"OnUpdate\", beat_pre"), dlg_hook = report.find("\"app.UIFlowOptionBGDialog.Main\", \"OnUpdate\"");
         check(beat != std::string::npos && dlg_hook != std::string::npos && beat < dlg_hook, "and its first is the screen's own update");
-        // The first wake: the others, one per frame, and nothing reaches the menu before
-        const size_t body = report.find("void frame_body() {"), step = report.find("mech::hooks::hook_next() == 0", body);
-        const size_t session = report.find("session_tick();", body), entry = report.find("hint_frame(allowed)", body);
-        check(body != std::string::npos && step != std::string::npos && step < session && step < entry, "the hooks before the session and the entry");
-        const size_t first = report.find("if (!g_hooks_in) {", body), second = report.find("if (!g_hooks_in) {", first + 1), rest = report.find("ui::report_needs_dialogs(g_session.stage()", body);
-        check(second != std::string::npos && second < rest && report.find("return;", second) < rest, "no entry and no key until they are in");
-        check(has(host, "first_wake();") && has(host, "ui::lang::load();") && !has(report, "lang::load"), "the texts, the worker and the Steam engine at the first wake");
+        // The first press: the picture, then the others, one per frame, then the menu; nothing before the press
+        const size_t body = report.find("void frame_body() {"), body_end = report.find("void SF6CORE_CALL on_core_frame(uint64_t core_frame", body);
+        check(body != std::string::npos && !has(report.substr(body, body_end - body), "hook_next"), "no hook goes in before a press");
+        const size_t tick_at = report.find("void session_tick() {"), step = report.find("mech::hooks::hook_next() == 0", tick_at), opens = report.find("open_window();", tick_at);
+        const size_t picture = report.find("g_picture_done = true;", tick_at), unblock = report.find("screen_unblock();", tick_at);
+        check(tick_at != std::string::npos && picture < step && step < unblock && unblock < opens, "the picture, the hooks, the screen's input back, the menu");
+        check(report.find("open_window();", opens + 1) == std::string::npos, "the menu opens from there only");
+        const size_t held = report.find("if (!g_hooks_in) return;", step);
+        check(held != std::string::npos && held < opens, "not before they are in");
+        const size_t press = report.find("if (allowed && press) {", body), block = report.find("if (!g_hooks_in) screen_block(agent);", press), begin_at = report.find("begin_report(main);", press);
+        check(press != std::string::npos && block != std::string::npos && block < begin_at, "the first press: the screen's input off");
+        const size_t closed = report.find("void closed_now(const char* why) {");
+        check(has(report.substr(closed, 200), "screen_unblock();"), "and back whatever closes the report");
+        check(has(report, "the screen went before the hooks were in"), "a screen that went: the report ends, the hooks go on at the next press");
+        const size_t stage = report.find("if (g_session.stage() != rp::Stage::Idle) {", body), key = report.find("key_pressed();            // read every frame", body);
+        check(stage != std::string::npos && key != std::string::npos && stage < key && report.find("return;", stage) < key, "in a report no key is read: a second press does nothing");
+        check(has(host, "ui::lang::load();") && !has(report, "lang::load"), "the texts at the first wake");
+        const size_t net = host.find("void start_network() {");
+        check(net != std::string::npos && host.find("g_com.start();", net) != std::string::npos && host.find("g_com.start();") == host.find("g_com.start();", net) && host.find("new community::steam::Engine") > net, "the network only at the press");
+        check(has(report, "report_host::start_network();") && report.find("report_host::start_network();") > report.find("void begin_report(MO* main) {"), "from begin_report");
     }
     // The closing guard is the core's: the probe's answer stands on the order of that function's checks
     {
@@ -243,6 +256,9 @@ static void test_lazy() {
     check(rp::key_press(false, false, true), "a tap between two reads is a press");
     check(!rp::key_press(false, false, false), "nothing is none");
     check(!rp::key_press(true, true, false) && !rp::key_press(true, true, true) && !rp::key_press(true, false, true) && !rp::key_press(true, false, false), "held, an auto-repeat and the release are none");
+    check(rp::before_menu(false, false) == rp::BeforeMenu::Picture && rp::before_menu(false, true) == rp::BeforeMenu::Picture, "the picture first, every time");
+    check(rp::before_menu(true, false) == rp::BeforeMenu::Hooks, "then the hooks");
+    check(rp::before_menu(true, true) == rp::BeforeMenu::Open, "then the menu");
     rp::HookSteps steps;
     check(!steps.due(0), "no call of the screen's update: no hook");
     check(steps.due(1), "a call: one hook");

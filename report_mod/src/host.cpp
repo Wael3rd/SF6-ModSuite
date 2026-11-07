@@ -1,7 +1,8 @@
 // report_mod.dll: the plugin's entry, and what the sources it shares with the Recording Manager expect of their host (see report_mod.hpp).
 //
-// Until the screen's own update first runs, the DLL is one hook (on that update) and one atomic load per Present. The other hooks go in at that first wake, one per frame
-// (bug_report.cpp's frame_body), with no entry and no key until they are all in. No window message is taken, ever: keys are read once a frame while awake, closing is asked of the core.
+// Until the screen's own update first runs, the DLL is one hook (on that update) and one atomic load per Present. While the screen is up, also what shows the entry and reads the key:
+// its core client, its texts, the keys read once a frame. The other hooks and the network go in at the first press (bug_report.cpp). No window message is taken, ever; closing is asked
+// of the core.
 //
 // Silent and inert, with one line in REFramework's log and no hook, when: the Native Core is missing or too old; no address in its config.json (a build without the local config); or
 // a Recording Manager that has its own "Report a bug" (2.2.8) is running beside it: that one keeps the key, so R never gives two entries.
@@ -72,7 +73,7 @@ std::recursive_mutex g_lock;
 bool g_on = false;
 community::Client g_com;
 community::steam::Engine* g_steam = nullptr;     // never deleted: Steam may be gone when the process exits
-bool g_com_started = false;
+bool g_texts_loaded = false, g_net_started = false;
 
 // ---- the journal: a few lines, written off the game thread ----
 std::mutex g_jmx;
@@ -111,17 +112,6 @@ void read_keys() {
         if (report::key_press(g_down[(size_t)vk], down, (st & 1) != 0) && game_in_front()) ++g_presses[(size_t)vk];
         g_down[(size_t)vk] = down;
     }
-}
-
-// What the first wake needs and a player who never opens the screen should not pay for
-void first_wake() {
-    ui::lang::load();
-    community::set_log([](const std::string& s) { cmn::journal("%s", s.c_str()); });
-    community::set_client_version(std::string("report_mod ") + kVersion);
-    g_steam = new community::steam::Engine(community::steam::resolve, [](const std::string& s) { cmn::journal("%s", s.c_str()); }, [] { return (uint64_t)GetTickCount64(); });
-    g_com.worker().set_tickets(g_steam);
-    g_com.configure(kConfigPath, "", kTokenPath);
-    g_com.start();
 }
 
 // A running Recording Manager that has its own "Report a bug" (2.2.8): the literal only that one holds, the client it gave the core; gone from its sources in 2.2.9. Read once, at the
@@ -309,11 +299,25 @@ void note_paused(bool paused) { g_paused.store(paused, std::memory_order_relaxed
 void frame(uint64_t core_frame) {
     g_awake.store(true, std::memory_order_relaxed);
     g_frame.store(core_frame, std::memory_order_relaxed);
-    if (!g_com_started) { g_com_started = true; first_wake(); }                  // no thread and no table of this DLL before the first opening of the screen
+    if (!g_texts_loaded) { g_texts_loaded = true; ui::lang::load(); }            // the entry's text: no table before the first opening of the screen
     read_keys();
-    if (g_steam) g_steam->frame();                                               // the Steam calls of a ticket, on the game thread (nothing to do: two atomic loads)
-    g_com.poll();
+    if (g_net_started) {
+        if (g_steam) g_steam->frame();                                           // the Steam calls of a ticket, on the game thread (nothing to do: two atomic loads)
+        g_com.poll();
+    }
     if (core_frame % 60 == 0) flush_journal();
+}
+
+// The first press: what the upload needs and a visitor who never presses should not pay for
+void start_network() {
+    if (g_net_started) return;
+    g_net_started = true;
+    community::set_log([](const std::string& s) { cmn::journal("%s", s.c_str()); });
+    community::set_client_version(std::string("report_mod ") + kVersion);
+    g_steam = new community::steam::Engine(community::steam::resolve, [](const std::string& s) { cmn::journal("%s", s.c_str()); }, [] { return (uint64_t)GetTickCount64(); });
+    g_com.worker().set_tickets(g_steam);
+    g_com.configure(kConfigPath, "", kTokenPath);
+    g_com.start();
 }
 
 void asleep() {

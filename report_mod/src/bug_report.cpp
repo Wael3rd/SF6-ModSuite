@@ -19,8 +19,9 @@
 //     hands itself back. No state OnEnter / OnExit hook.
 //   - It works wherever the screen is opened from (main menu, the Multi Menu in Training, the hub) and owes nothing to the Recording Manager: it runs on its own frame callback, and
 //     runs lang::frame and dlg::frame itself.
-//   - Until the first wake of a session the DLL is that one hook and one atomic load per Present. The first wake puts the other hooks in, one per frame (REFramework stops the game's
-//     threads while it patches), only on frames where the screen's update ran; no entry and no key until they are all in. They then stay for the session (report_mod/README.md).
+//   - Until the first press of a session the DLL is that one hook and one atomic load per Present; while the screen is up, also what shows the entry and reads the key (its core client,
+//     its texts). The press takes the picture first, then the other hooks go in, one per frame (REFramework stops the game's threads while it patches), only on frames where the screen's
+//     update ran, with the screen's input off; the menu opens when they are all in. They then stay for the session. A screen left meanwhile closes this report: the next press goes on.
 //   - Encoding and HTTP off the game thread. No real player's id or name in the journal: counts and codes only.
 //   - No squeezed text: the rows are cut with "...", the entry's region is the text's.
 #include <windows.h>
@@ -404,6 +405,11 @@ uint64_t g_gen = 0;                              // this report: an answer of an
 uint64_t g_shot_at = 0, g_window_deadline = 0, g_settle_until = 0, g_send_at = 0, g_busy_until = 0;
 bool g_window_seen = false, g_dirty = false, g_naming = false, g_asked = false;
 MO* g_blocked = nullptr;                         // the option dialog's agent, its input off under the text dialog
+MO* g_screen_blocked = nullptr;                  // this screen's agent, its input off while the first press's hooks go in
+bool g_hooks_in = false;                         // every hook is in (the first press of a session puts them in)
+bool g_picture_done = false;                     // this report's picture was taken, or given up
+rp::HookSteps g_hook_steps;
+std::atomic<uint32_t> g_beats{0};                // calls of the screen's update
 int64_t g_group = -1;
 std::vector<int64_t> g_entries;                  // the rows now
 std::vector<rp::Row> g_roles;                    // what each of them is
@@ -883,6 +889,16 @@ void rebuild_page() {
     for (size_t i = 0; i < g_roles.size(); ++i) if (g_roles[i] == focused) focus = (int)i;
     perf::counted(a)->opt_navigate(g_opt_client, kGroupKey, SF6CORE_OPT_NAV_REBUILD | SF6CORE_OPT_NAV_NOW, focus);
 }
+void screen_block(MO* agent) {
+    if (!agent) return;
+    gx::set_block_input(agent, true);
+    g_screen_blocked = agent;
+}
+void screen_unblock() {
+    if (!g_screen_blocked) return;
+    if (gm::is_managed(g_screen_blocked)) gx::set_block_input(g_screen_blocked, false);
+    g_screen_blocked = nullptr;
+}
 void input_block(bool on) {
     const SF6CoreAPI* a = api();
     if (on) {
@@ -936,6 +952,7 @@ void forget() {
 }
 void closed_now(const char* why) {
     g_paste_on.store(false);
+    screen_unblock();
     input_block(false);
     g_naming = false;
     const SF6CoreAPI* a = api();
@@ -1240,17 +1257,32 @@ void session_tick() {
     const SF6CoreAPI* a = api();
     const uint64_t t = tick();
     if (g_session.stage() == rp::Stage::Shooting) {
-        if (cap::settled(cap::state()) || t - g_shot_at > kShotWait) {
+        if (!g_picture_done && (cap::settled(cap::state()) || t - g_shot_at > kShotWait)) {
             if (!cap::settled(cap::state())) {
                 cmn::set_present_fn(nullptr);
                 cap::discard();
                 g_snap.jpeg_note = "no frame was presented within " + std::to_string(kShotWait) + " frames";
                 cmn::journal("bug report: no Present within %llu frames: no picture", (unsigned long long)kShotWait);
             }
-            g_session.set_text_field_ok(ui::dialogs::text_available());
-            g_session.shot_settled();
-            open_window();
+            g_picture_done = true;
         }
+        switch (rp::before_menu(g_picture_done, g_hooks_in)) {
+        case rp::BeforeMenu::Picture:
+            return;
+        case rp::BeforeMenu::Hooks:
+            if (g_hook_steps.due(g_beats.load(std::memory_order_relaxed)) && mech::hooks::hook_next() == 0) {
+                g_hooks_in = true;
+                cmn::journal("bug report: every hook in, %llu frames after the press", (unsigned long long)(t - g_shot_at));
+            }
+            if (!g_hooks_in) return;
+            break;
+        case rp::BeforeMenu::Open:
+            break;
+        }
+        screen_unblock();                        // before the window asks anything of the screen under it
+        g_session.set_text_field_ok(ui::dialogs::text_available());
+        g_session.shot_settled();
+        open_window();
         return;
     }
     send_tick();
@@ -1305,6 +1337,8 @@ void present_now() {
 }
 void begin_report(MO* main) {
     if (!g_session.begin()) return;
+    report_host::start_network();                // (once: the Steam engine and the worker, no thread of this DLL before the first press)
+    g_picture_done = false;
     cap::request();
     cmn::set_present_fn(present_now);
     g_shot_at = tick();
@@ -1345,12 +1379,9 @@ bool key_pressed() {
 }
 // ---- asleep / awake -----------------------------------------------------------------------------------------------------------------
 std::atomic<bool> g_awake{false};
-std::atomic<uint32_t> g_beats{0};                // calls of the screen's update
 rp::LeftWatch g_left;
 bool ok_hook = false;
 uint64_t g_wakes = 0, g_sleeps = 0, g_wake_frame = 0;
-bool g_hooks_in = false;                         // the first wake's hooks are all in
-rp::HookSteps g_hook_steps;
 uint32_t g_wake_beats = 0;
 
 void SF6CORE_CALL on_core_frame(uint64_t, void*);
@@ -1412,26 +1443,17 @@ void frame_body() {
         g_wake_frame = t;
         cmn::journal("bug report: awake");
     }
-    if (!g_hooks_in) {                           // the first opening: nothing reaches the menu until the hooks are all in, and a press meanwhile is lost
-        if (g_hook_steps.due(g_beats.load(std::memory_order_relaxed)) && mech::hooks::hook_next() == 0) {
-            g_hooks_in = true;
-            cmn::journal("bug report: every hook in, after %llu frames", (unsigned long long)(t - g_wake_frame));
-        }
-        if (!g_hooks_in) {
-            g_up = false;
-            if (g_left.left(g_beats.load(std::memory_order_relaxed), t)) go_to_sleep();   // (the screen was left: the next wake goes on)
-            return;
-        }
-    }
     ui::report_needs_dialogs(g_session.stage() != rp::Stage::Idle);
     ui::lang::frame(t, true, 0);
-    {                                            // over Training's pause menu (the Multi Menu) the text dialog holds the menu's tab too; asked only while a report is open
+    if (g_hooks_in) {                            // over Training's pause menu (the Multi Menu) the text dialog holds the menu's tab too; asked only while a report is open
         const bool paused = g_session.stage() != rp::Stage::Idle && gx::pause_agent() != nullptr;
         report_host::note_paused(paused);
         dlg::frame(paused);
     }
     if (g_session.stage() != rp::Stage::Idle) {
         if (g_hint.shown) hint_hide();
+        // the hooks wait for the screen's update: if it stopped, the game moved on with the screen's input off: this report ends, the next press goes on with the hooks
+        if (g_session.stage() == rp::Stage::Shooting && !g_hooks_in && g_left.left(g_beats.load(std::memory_order_relaxed), t)) { closed_now("the screen went before the hooks were in"); return; }
         g_left.beat(g_beats.load(std::memory_order_relaxed), t);
         session_tick();
         return;
@@ -1457,6 +1479,7 @@ void frame_body() {
     if (allowed && press) {
         hint_hide();
         g_up = false;                            // back on the screen after it: as an arrival (an R typed in the text field is no press)
+        if (!g_hooks_in) screen_block(agent);    // the first press of the session: nothing reaches this screen until the menu asks for it, and a second press does nothing (no key is read in a report)
         ui::report_needs_dialogs(true);
         begin_report(main);
     }

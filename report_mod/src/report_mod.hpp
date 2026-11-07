@@ -33,6 +33,7 @@ namespace report_host {
 // The frame callback's first thing, while the module is awake (asleep there is no frame callback): the frame count, the keys, the client's answers, the Steam calls of a ticket, the journal
 void frame(uint64_t core_frame);
 void flush_journal();
+void start_network();                            // the first press: the Steam engine, the client's config and worker
 void asleep();                                   // the frame callback was given back
 SF6CoreClient* core_client();                    // made at the first wake; nullptr when the core refuses
 void note_paused(bool paused);

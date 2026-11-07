@@ -67,12 +67,15 @@ its mod's id, so a mod's update allows a new report), 100 MB per account at most
 copy. If the picture, a log or the mods' data cannot be read, the report goes without it and says so.
 
 Cost, until the screen first runs in a session: one hook, on the screen's own update, which the game calls only while the screen is up, and one atomic load per frame presented
-(REFramework has no way to take a present callback back). The core does not know the DLL yet: no client in its list. No window-message callback, no thread, no text table. The code check of the hooks runs at game load, from a cache file; the full
-scan runs once per game version.
+(REFramework has no way to take a present callback back). The core does not know the DLL yet: no client in its list. No window-message callback, no thread, no text table. The code check of the
+hooks runs at game load, from a cache file; the full scan runs once per game version.
 
-The first opening puts the other hooks in, one per frame while the screen runs (REFramework stops the game's threads for a few milliseconds each time), about half a second with no entry and no
-key. Those hooks then stay for the session: the text dialog's and its tab blocks fire only on their events and pass through after two atomic loads; the option dialog's fires on its update, only
-while an option dialog is up, and passes through after one load. The DLL's client stays in the core's list, a step of its frame loop with no frame callback, and its worker thread waits, using no time.
+While the screen is up, before any press: what shows the entry and reads the key: a client in the core's list and its frame callback, the texts, a few reads a frame, the keys read once a frame.
+When the screen is left the frame callback goes, and the keys are no longer read.
 
-While the screen is up: a few reads a frame. The keys are read once a frame, only then. The press costs one frame's copy of the image, about a millisecond; the encoding, the reading of the files
-and the requests run off the game thread. When the screen is left it goes back to sleep.
+The first press of a session takes the picture, then puts the other hooks in, one per frame while the screen runs (REFramework stops the game's threads for a few milliseconds each time), with the
+screen's input off: about half a second, and the menu opens. A second press in that time does nothing. It also starts the worker thread. The press costs one frame's copy of the image, about a
+millisecond; the encoding, the reading of the files and the requests run off the game thread.
+
+Those hooks then stay for the session: the text dialog's and its tab blocks fire only on their events and pass through after two atomic loads; the option dialog's fires on its update, only while
+an option dialog is up, and passes through after one load. The DLL's client stays in the core's list, a step of its frame loop with no frame callback, and its worker thread waits, using no time.
