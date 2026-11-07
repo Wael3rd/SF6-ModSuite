@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "common.hpp"
 #include "mech/hooks.hpp"
 
 namespace cmn {
@@ -29,8 +30,10 @@ std::string status();
 }  // namespace ui::bug_report
 
 namespace report_host {
-// The frame callback's first thing, while the module is awake (asleep there is no frame callback): the frame count, the client's answers, the Steam calls of a ticket, the journal
+// The frame callback's first thing, while the module is awake (asleep there is no frame callback): the frame count, the keys, the client's answers, the Steam calls of a ticket, the journal
 void frame(uint64_t core_frame);
 void flush_journal();
+void asleep();                                   // the frame callback was given back
+SF6CoreClient* core_client();                    // made at the first wake; nullptr when the core refuses
 void note_paused(bool paused);
 }  // namespace report_host

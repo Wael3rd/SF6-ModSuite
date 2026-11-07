@@ -169,6 +169,36 @@ static void test_sources(const fs::path& repo) {
     check(!has(report, "ui::active()") && !has(report, "ui::training()") && !has(report, "ui::claimed()") && !has(report, "mech::state()"), "no gate on Training or the pause");
     check(has(report, "set_frame_callback(g_opt_client, on_core_frame, nullptr)") && has(report, "set_frame_callback(g_opt_client, nullptr, nullptr)"), "its own frame callback, on and off");
     check(!has(host, "set_frame_callback(") && !has(host, "on_pre_application_entry") && !has(report, "on_pre_application_entry"), "no frame or update callback at the start: nothing per frame while it sleeps");
+    // Before the first wake: one hook and the Present load. Nothing else goes in at the start
+    check(!has(host, "on_message") && !has(host, "on_frame(") && has(host, "param->functions->on_present(on_present)"), "no window message taken, ever: the Present callback is the only one");
+    {
+        const size_t init = host.find("bool reframework_plugin_initialize"), reg = host.find("register_client(", host.find("SF6CoreClient* core_client()"));
+        check(init != std::string::npos && reg != std::string::npos && host.find("register_client(", init) == std::string::npos, "at the start the core does not even know the DLL: its client at the first wake");
+        check(has(report, "!register_client()) { g_awake.store(false); return; }") && !has(report.substr(report.find("void start() {"), 200), "register_client"), "made by the wake");
+        check(has(host, "drop_pads();") && has(host, "ui::windows::drop_pads()"), "nothing held asleep");
+    }
+    check(!has(host, "add_hook") && !has(host, "mech::hooks::install(") && has(host, "mech::hooks::install_later(specs)") && !has(host, "hook_next"), "at the start: the code check, and the first spec's hook alone");
+    {
+        const size_t mine = host.find("ui::bug_report::specs(specs)"), theirs = host.find("ui::dlg::specs(specs)");
+        check(mine != std::string::npos && theirs != std::string::npos && mine < theirs, "the first spec is the report's");
+        const size_t beat = report.find("\"app.UIFlowMatchingFighterSetting.Main\", \"OnUpdate\", beat_pre"), dlg_hook = report.find("\"app.UIFlowOptionBGDialog.Main\", \"OnUpdate\"");
+        check(beat != std::string::npos && dlg_hook != std::string::npos && beat < dlg_hook, "and its first is the screen's own update");
+        // The first wake: the others, one per frame, and nothing reaches the menu before
+        const size_t body = report.find("void frame_body() {"), step = report.find("mech::hooks::hook_next() == 0", body);
+        const size_t session = report.find("session_tick();", body), entry = report.find("hint_frame(allowed)", body);
+        check(body != std::string::npos && step != std::string::npos && step < session && step < entry, "the hooks before the session and the entry");
+        const size_t first = report.find("if (!g_hooks_in) {", body), second = report.find("if (!g_hooks_in) {", first + 1), rest = report.find("ui::report_needs_dialogs(g_session.stage()", body);
+        check(second != std::string::npos && second < rest && report.find("return;", second) < rest, "no entry and no key until they are in");
+        check(has(host, "first_wake();") && has(host, "ui::lang::load();") && !has(report, "lang::load"), "the texts, the worker and the Steam engine at the first wake");
+    }
+    // The closing guard is the core's: the probe's answer stands on the order of that function's checks
+    {
+        const std::string core = slurp(repo / "core/src/sf6core.cpp");
+        const size_t fn = core.find("api_set_element_hidden(\n"), fn2 = fn == std::string::npos ? core.find("api_set_element_hidden(\r\n") : fn;
+        const size_t closing = core.find("if (core_closing()) return SF6CORE_ERR_DISABLED;", fn2), empty = core.find("gui_owner_name[0] == '\\0'", fn2);
+        check(fn2 != std::string::npos && closing != std::string::npos && empty != std::string::npos && closing < empty, "set_element_hidden: closing is asked before the empty names");
+        check(has(host, "set_element_hidden(g_client, \"\", \"\", 0) == SF6CORE_ERR_DISABLED"), "closing asked of the core");
+    }
     check(!has(report, "add_hook") && !has(report, "on_present("), "no hook but through the code check");
     check(has(report, "app.UIFlowMatchingFighterSetting.Main\", \"OnUpdate"), "woken by the screen's own update, through the code check (mech::hooks)");
     check(!has(report, "\"OnEnter") && !has(report, "\"OnExit") && !has(host, "\"OnEnter") && !has(host, "\"OnExit"), "no state OnEnter or OnExit");
@@ -206,6 +236,18 @@ static void test_sources(const fs::path& repo) {
     // the DLL ships no key, its token is the Community's
     check(has(host, "kTokenPath = \"reframework/data/SF6_Community_data/identity.json\"") && has(host, "g_com.configure(kConfigPath, \"\", kTokenPath)"), "one token file for the two DLLs");
     check(!has(host, "api_key"), "no key in the DLL's own code");
+}
+
+static void test_lazy() {
+    check(rp::key_press(false, true, false) && rp::key_press(false, true, true), "the key going down is a press");
+    check(rp::key_press(false, false, true), "a tap between two reads is a press");
+    check(!rp::key_press(false, false, false), "nothing is none");
+    check(!rp::key_press(true, true, false) && !rp::key_press(true, true, true) && !rp::key_press(true, false, true) && !rp::key_press(true, false, false), "held, an auto-repeat and the release are none");
+    rp::HookSteps steps;
+    check(!steps.due(0), "no call of the screen's update: no hook");
+    check(steps.due(1), "a call: one hook");
+    check(!steps.due(1), "the same count: none (the screen was left)");
+    check(steps.due(3) && !steps.due(3), "several calls in a frame: still one");
 }
 
 // A Recording Manager with its own report, beside the DLL (host.cpp). With --old-crsm and --new-crsm: the real files, mapped as images.
@@ -744,6 +786,7 @@ int main(int argc, char** argv) {
     test_wake();
     if (!repo.empty()) test_sources(repo);
     test_image_scan(old_crsm, new_crsm);
+    test_lazy();
     test_screen();
     test_session();
     test_summary();

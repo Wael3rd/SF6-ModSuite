@@ -18,8 +18,9 @@
 //     wakes the module: it gives our core client a frame callback; when the calls stop (kLeftFrames) and no report is under way, the frame callback
 //     hands itself back. No state OnEnter / OnExit hook.
 //   - It works wherever the screen is opened from (main menu, the Multi Menu in Training, the hub) and owes nothing to the Recording Manager: it runs on its own frame callback, and
-//     runs lang::frame and dlg::frame itself. What is left asleep, the DLL's whole cost (host.cpp): one atomic load per Present and per window message's key test (REFramework has no way
-//     to take those callbacks back), one load in the hook on the option dialog's update, and the text dialog's hooks, which fire only on their events and pass through at once.
+//     runs lang::frame and dlg::frame itself.
+//   - Until the first wake of a session the DLL is that one hook and one atomic load per Present. The first wake puts the other hooks in, one per frame (REFramework stops the game's
+//     threads while it patches), only on frames where the screen's update ran; no entry and no key until they are all in. They then stay for the session (report_mod/README.md).
 //   - Encoding and HTTP off the game thread. No real player's id or name in the journal: counts and codes only.
 //   - No squeezed text: the rows are cut with "...", the entry's region is the text's.
 #include <windows.h>
@@ -787,7 +788,7 @@ void SF6CORE_CALL cb_page(void*, void* param, uint32_t rows) { if (rows) try { p
 // Our own core client: registered at the start, nothing else until the screen runs. Its option callbacks when a report opens its window: they are what
 // installs the core's option engine, which nothing should pay for before.
 bool register_client() {
-    g_opt_client = cmn::client();                // the DLL's one core client (host.cpp)
+    g_opt_client = report_host::core_client();   // the DLL's one core client (host.cpp), made at the first wake
     return g_opt_client != nullptr;
 }
 bool ensure_client() {
@@ -1348,6 +1349,8 @@ std::atomic<uint32_t> g_beats{0};                // calls of the screen's update
 rp::LeftWatch g_left;
 bool ok_hook = false;
 uint64_t g_wakes = 0, g_sleeps = 0, g_wake_frame = 0;
+bool g_hooks_in = false;                         // the first wake's hooks are all in
+rp::HookSteps g_hook_steps;
 uint32_t g_wake_beats = 0;
 
 void SF6CORE_CALL on_core_frame(uint64_t, void*);
@@ -1370,7 +1373,7 @@ void dialog_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
 }
 void wake_up() {
     const SF6CoreAPI* a = cmn::core();
-    if (!a || !g_opt_client || cmn::closing() || !cmn::owns(F::Ui) || !community::on()) { g_awake.store(false); return; }
+    if (!a || cmn::closing() || !cmn::owns(F::Ui) || !community::on() || !register_client()) { g_awake.store(false); return; }
     a->set_frame_callback(g_opt_client, on_core_frame, nullptr);
 }
 int beat_pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
@@ -1397,6 +1400,7 @@ void go_to_sleep() {
                  g_beats.load() - g_wake_beats, (unsigned long long)(cmn::frame() - g_wake_frame));
     cmn::journal("bug report: %s", status().c_str());
     report_host::flush_journal();
+    report_host::asleep();
     g_awake.store(false);
 }
 
@@ -1407,6 +1411,17 @@ void frame_body() {
         g_wake_beats = g_beats.load();
         g_wake_frame = t;
         cmn::journal("bug report: awake");
+    }
+    if (!g_hooks_in) {                           // the first opening: nothing reaches the menu until the hooks are all in, and a press meanwhile is lost
+        if (g_hook_steps.due(g_beats.load(std::memory_order_relaxed)) && mech::hooks::hook_next() == 0) {
+            g_hooks_in = true;
+            cmn::journal("bug report: every hook in, after %llu frames", (unsigned long long)(t - g_wake_frame));
+        }
+        if (!g_hooks_in) {
+            g_up = false;
+            if (g_left.left(g_beats.load(std::memory_order_relaxed), t)) go_to_sleep();   // (the screen was left: the next wake goes on)
+            return;
+        }
     }
     ui::report_needs_dialogs(g_session.stage() != rp::Stage::Idle);
     ui::lang::frame(t, true, 0);
@@ -1468,7 +1483,6 @@ void specs(std::vector<mech::hooks::Spec>& out) {
 
 void start() {
     cap::set_log([](const std::string& s) { cmn::journal("%s", s.c_str()); });
-    register_client();
 }
 
 void hand_back() {                               // the UI stopped: the next frame callback, game thread

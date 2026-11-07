@@ -1,5 +1,8 @@
 // report_mod.dll: the plugin's entry, and what the sources it shares with the Recording Manager expect of their host (see report_mod.hpp).
 //
+// Until the screen's own update first runs, the DLL is one hook (on that update) and one atomic load per Present. The other hooks go in at that first wake, one per frame
+// (bug_report.cpp's frame_body), with no entry and no key until they are all in. No window message is taken, ever: keys are read once a frame while awake, closing is asked of the core.
+//
 // Silent and inert, with one line in REFramework's log and no hook, when: the Native Core is missing or too old; no address in its config.json (a build without the local config); or
 // a Recording Manager that has its own "Report a bug" (2.2.8) is running beside it: that one keeps the key, so R never gives two entries.
 #include <windows.h>
@@ -31,6 +34,7 @@
 #include "perf.hpp"
 #include "report/capture.hpp"
 #include "report/image_scan.hpp"
+#include "report/report_logic.hpp"
 #include "report_mod.hpp"
 #include "ui/drill_details.hpp"
 #include "ui/dump.hpp"
@@ -56,10 +60,12 @@ constexpr int kMaxFaults = 5;
 
 const SF6CoreAPI* g_core = nullptr;
 SF6CoreClient* g_client = nullptr;
-std::atomic<bool> g_closing{false}, g_tripped{false}, g_dialogs{false}, g_paused{false};
+std::atomic<bool> g_awake{false}, g_tripped{false}, g_dialogs{false}, g_paused{false};
 std::atomic<uint64_t> g_frame{0};
 std::atomic<int> g_faults{0};
-std::array<std::atomic<uint32_t>, 256> g_presses{};
+std::vector<int> g_asked;                        // the keys read each awake frame (the game thread's, as all of this)
+std::array<uint32_t, 256> g_presses{};
+std::array<bool, 256> g_down{};
 std::atomic<void (*)()> g_present_fn{nullptr};
 std::recursive_mutex g_lock;
 
@@ -92,13 +98,30 @@ void on_present() {
     if (void (*fn)() = g_present_fn.load(std::memory_order_relaxed)) fn();
 }
 
-bool on_message(void*, unsigned int msg, unsigned long long wparam, long long lparam) {
-    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
-        if (wparam < 256 && !(lparam & (1LL << 30))) g_presses[(size_t)wparam].fetch_add(1, std::memory_order_relaxed);   // (bit 30: down before, an auto-repeat)
-    } else if (msg == WM_CLOSE || msg == WM_DESTROY || msg == WM_ENDSESSION) {
-        g_closing.store(true);
+bool game_in_front() {
+    const HWND front = GetForegroundWindow();
+    DWORD pid = 0;
+    return front && GetWindowThreadProcessId(front, &pid) && pid == GetCurrentProcessId();
+}
+
+void read_keys() {
+    for (const int vk : g_asked) {
+        const SHORT st = GetAsyncKeyState(vk);
+        const bool down = (st & 0x8000) != 0;
+        if (report::key_press(g_down[(size_t)vk], down, (st & 1) != 0) && game_in_front()) ++g_presses[(size_t)vk];
+        g_down[(size_t)vk] = down;
     }
-    return true;
+}
+
+// What the first wake needs and a player who never opens the screen should not pay for
+void first_wake() {
+    ui::lang::load();
+    community::set_log([](const std::string& s) { cmn::journal("%s", s.c_str()); });
+    community::set_client_version(std::string("report_mod ") + kVersion);
+    g_steam = new community::steam::Engine(community::steam::resolve, [](const std::string& s) { cmn::journal("%s", s.c_str()); }, [] { return (uint64_t)GetTickCount64(); });
+    g_com.worker().set_tickets(g_steam);
+    g_com.configure(kConfigPath, "", kTokenPath);
+    g_com.start();
 }
 
 // A running Recording Manager that has its own "Report a bug" (2.2.8): the literal only that one holds, the client it gave the core; gone from its sources in 2.2.9. Read once, at the
@@ -111,9 +134,9 @@ bool crsm_has_its_own_report() {
 
 void start_module() {
     std::vector<mech::hooks::Spec> specs;
-    ui::dlg::specs(specs);                           // the text dialog and its tab blocks: event hooks only, each a load or two when the event fires
-    ui::bug_report::specs(specs);
-    mech::hooks::install(specs);
+    ui::bug_report::specs(specs);                    // first: the screen's own update, the one hook in place before the first wake
+    ui::dlg::specs(specs);                           // the text dialog and its tab blocks: event hooks only
+    mech::hooks::install_later(specs);               // the code check of all, now, in one pass; the others hook at the first wake
     ui::bug_report::start();
 }
 
@@ -135,14 +158,25 @@ namespace cmn {
 const char* feature_name(Feature) { return "report"; }
 bool owns(Feature) { return g_core && !g_tripped.load(std::memory_order_relaxed); }
 bool active() { return g_core != nullptr; }
-bool closing() { return g_closing.load(std::memory_order_relaxed); }
+// The core's own closing guard (it takes the window messages; its frame callbacks stop then too), asked only while awake: asleep nothing here touches the game. set_element_hidden
+// answers ERR_DISABLED while the core is closing, and ERR_INVALID_ARG for these empty names otherwise, touching nothing (a rule of report_test.cpp reads that order in the core).
+bool closing() {
+    return g_awake.load(std::memory_order_relaxed) && g_core && g_client && g_core->set_element_hidden(g_client, "", "", 0) == SF6CORE_ERR_DISABLED;
+}
 uint64_t frame() { return g_frame.load(std::memory_order_relaxed); }
 const SF6CoreAPI* core() { return g_core; }
 SF6CoreClient* client() { return g_client; }
 const char* version() { return kVersion; }
 const char* locale_file() { return kLocalePath; }
 const wchar_t* code_cache_file() { return kCachePath; }
-uint32_t key_presses(int vk) { return vk >= 0 && vk < 256 ? g_presses[(size_t)vk].load(std::memory_order_relaxed) : 0; }
+uint32_t key_presses(int vk) {
+    if (vk <= 0 || vk >= 256) return 0;
+    if (std::find(g_asked.begin(), g_asked.end(), vk) == g_asked.end()) {        // first asked: what it did before does not count
+        g_asked.push_back(vk);
+        g_down[(size_t)vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    }
+    return g_presses[(size_t)vk];
+}
 void set_present_fn(void (*fn)()) { g_present_fn.store(fn, std::memory_order_relaxed); }
 
 static void format_line(bool log, bool warn, const char* fmt, va_list ap) {
@@ -196,6 +230,8 @@ std::optional<bool> guide_mode_pad() {                                          
 }
 }  // namespace com
 namespace windows {
+namespace { std::vector<MO*> g_pads; bool g_pads_held = false; }
+void drop_pads() { for (MO* p : g_pads) p->release(); g_pads.clear(); g_pads_held = false; }
 // X on a connected pad, read every frame while the screen is up (a press must be seen on its frame), as the Recording Manager's pad_held: the devices are listed 1 frame in 30 and held
 // meanwhile, so a frame between two lists is one call per connected pad, none without a pad. A device that is not a managed object is not held: the list is then read every frame.
 PadHeld pad_held(bool) {
@@ -203,8 +239,6 @@ PadHeld pad_held(bool) {
     static API::Method* devices_m = nullptr;
     static uint32_t x_bit = 64;                                                  // via.hid.GamePadButton.RLeft
     static bool looked = false;
-    static std::vector<MO*> held;
-    static bool all_held = false;
     static uint64_t next_list = 0;
     if (!looked) {
         looked = true;
@@ -218,12 +252,11 @@ PadHeld pad_held(bool) {
     };
     PadHeld h;
     uint32_t buttons = 0;
-    if (all_held && cmn::frame() < next_list) {
-        for (MO* p : held) buttons |= buttons_of(p);
+    if (g_pads_held && cmn::frame() < next_list) {
+        for (MO* p : g_pads) buttons |= buttons_of(p);
     } else {
         next_list = cmn::frame() + 30;
-        auto drop = [] { for (MO* p : held) p->release(); held.clear(); all_held = false; };
-        drop();
+        drop_pads();
         if (!pad) pad = API::get()->get_native_singleton("via.hid.GamePad");
         reframework::InvokeRet r{};
         if (!pad || !devices_m || !gm::call(reinterpret_cast<MO*>(pad), devices_m, {}, &r) || !r.ptr) return h;
@@ -234,10 +267,10 @@ PadHeld pad_held(bool) {
             MO* p = gm::list_item(devices, i);
             if (!p) continue;
             buttons |= buttons_of(p);
-            if (can_hold && gm::is_managed(p)) { p->add_ref(); held.push_back(p); }
+            if (can_hold && gm::is_managed(p)) { p->add_ref(); g_pads.push_back(p); }
             else can_hold = false;
         }
-        if (can_hold) all_held = true; else drop();
+        if (can_hold) g_pads_held = true; else drop_pads();
     }
     h.x = (buttons & x_bit) != 0;
     return h;
@@ -274,11 +307,34 @@ void flush_journal() {
 void note_paused(bool paused) { g_paused.store(paused, std::memory_order_relaxed); }
 
 void frame(uint64_t core_frame) {
+    g_awake.store(true, std::memory_order_relaxed);
     g_frame.store(core_frame, std::memory_order_relaxed);
-    if (!g_com_started) { g_com_started = true; g_com.start(); }                 // no thread of this DLL before the first opening of the screen
-    if (g_steam && !cmn::closing()) g_steam->frame();                            // the Steam calls of a ticket, on the game thread (nothing to do: two atomic loads)
+    if (!g_com_started) { g_com_started = true; first_wake(); }                  // no thread and no table of this DLL before the first opening of the screen
+    read_keys();
+    if (g_steam) g_steam->frame();                                               // the Steam calls of a ticket, on the game thread (nothing to do: two atomic loads)
     g_com.poll();
     if (core_frame % 60 == 0) flush_journal();
+}
+
+void asleep() {
+    g_awake.store(false, std::memory_order_relaxed);
+    ui::windows::drop_pads();
+}
+
+// The DLL's one core client, made at the first wake: before that the core does not know this DLL (a client is a step of its frame loop). Refused: off for the session.
+SF6CoreClient* core_client() {
+    if (g_client || !g_core || g_tripped.load(std::memory_order_relaxed)) return g_client;
+    SF6CoreClientDesc d{};
+    d.struct_size = sizeof d;
+    d.client_id = "report_mod";
+    d.client_version = kVersion;
+    d.priority = 100;
+    if (g_core->register_client(&d, &g_client) != SF6CORE_OK) {
+        g_client = nullptr;
+        g_tripped.store(true);
+        log_line(true, "report_mod: off (the core refused it)");
+    }
+    return g_client;
 }
 }  // namespace report_host
 
@@ -311,28 +367,11 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
             off("report_mod: off (no address in its config.json)");
             return true;
         }
-        SF6CoreClientDesc d{};
-        d.struct_size = sizeof d;
-        d.client_id = "report_mod";
-        d.client_version = kVersion;
-        d.priority = 100;
-        if (a->register_client(&d, &g_client) != SF6CORE_OK) {
-            off("report_mod: off (the core refused it)");
-            return true;
-        }
         g_core = a;
         g_on = true;
-        community::set_log([](const std::string& s) { cmn::journal("%s", s.c_str()); });
-        community::set_client_version(std::string("report_mod ") + kVersion);
-        g_steam = new community::steam::Engine(community::steam::resolve, [](const std::string& s) { cmn::journal("%s", s.c_str()); }, [] { return (uint64_t)GetTickCount64(); });
-        g_com.worker().set_tickets(g_steam);
-        g_com.configure(kConfigPath, "", kTokenPath);
         if (param->functions->on_present) param->functions->on_present(on_present);
-        if (param->functions->on_message) param->functions->on_message(on_message);
-        ui::lang::load();
         start_module();
         log_line(false, "report_mod: on");
-        report_host::flush_journal();
     } catch (...) {
         g_core = nullptr;
         g_on = false;

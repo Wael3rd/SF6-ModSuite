@@ -66,8 +66,13 @@ The server keeps **one report per Steam account per costume** (a new one on the 
 its mod's id, so a mod's update allows a new report), 100 MB per account at most, for **90 days** after its last update, and only the admin can read it. The plugin keeps no
 copy. If the picture, a log or the mods' data cannot be read, the report goes without it and says so.
 
-Cost: asleep until this screen runs, in menus, Training and fights alike: no poll, nothing per frame. A hook on the screen's own update, which the game
-calls only while the screen is up, wakes it; a few reads a frame while the screen is up; when the screen is left, it goes back to sleep. What remains asleep: one atomic load per
-frame presented and a key test per window message (REFramework has no way to take these callbacks back), one load in a hook on the option dialog's update, which runs only while an option
-dialog is up, and the text dialog's hooks, which fire only on their events and pass through at once. The press costs one frame's copy of the image, about a millisecond;
-the encoding, the reading of the files and the requests run off the game thread.
+Cost, until the screen first runs in a session: one hook, on the screen's own update, which the game calls only while the screen is up, and one atomic load per frame presented
+(REFramework has no way to take a present callback back). The core does not know the DLL yet: no client in its list. No window-message callback, no thread, no text table. The code check of the hooks runs at game load, from a cache file; the full
+scan runs once per game version.
+
+The first opening puts the other hooks in, one per frame while the screen runs (REFramework stops the game's threads for a few milliseconds each time), about half a second with no entry and no
+key. Those hooks then stay for the session: the text dialog's and its tab blocks fire only on their events and pass through after two atomic loads; the option dialog's fires on its update, only
+while an option dialog is up, and passes through after one load. The DLL's client stays in the core's list, a step of its frame loop with no frame callback, and its worker thread waits, using no time.
+
+While the screen is up: a few reads a frame. The keys are read once a frame, only then. The press costs one frame's copy of the image, about a millisecond; the encoding, the reading of the files
+and the requests run off the game thread. When the screen is left it goes back to sleep.

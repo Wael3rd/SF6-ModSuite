@@ -256,8 +256,23 @@ REFPostHookFn timed_post(const Spec& s) {
 
 void add_survey(uintptr_t va, const char* what) { g_surveys.emplace_back(va, what); }
 
-void install(const std::vector<Spec>& specs) {
+namespace {
+// One pass: the code check of its targets in one go, then their hooks.
+struct Pass {
     std::vector<Target> ts;
+    // a body hooked once covers the targets sharing it with the same pre / post (two specs with other pre / post on one
+    // method are two hooks: REFramework chains them)
+    std::set<std::tuple<uintptr_t, uintptr_t, uintptr_t>> done;
+    std::set<cmn::Feature> lost;
+    int hooked = 0, refused = 0, missing = 0, covered = 0;
+    bool scanned = false, from_cache = false;
+    uint64_t ms = 0;
+    size_t next = 0;                                 // install_later: the next target
+    bool finished = false;
+};
+
+bool check_pass(const std::vector<Spec>& specs, Pass& p) {
+    std::vector<Target>& ts = p.ts;
     for (const Spec& s : specs) {
         if (!cmn::owns(s.layer)) continue;
         Target t;
@@ -284,7 +299,7 @@ void install(const std::vector<Spec>& specs) {
         }
         ts.push_back(t);
     }
-    if (ts.empty()) { if (g_passes == 0) g_status = "none (every layer is the Lua's)"; return; }
+    if (ts.empty()) { if (g_passes == 0) g_status = "none (every layer is the Lua's)"; return false; }
     for (const auto& [va, what] : g_surveys) {                    // the survey addresses, same pass (once)
         Target t;
         t.by_va = true;
@@ -303,7 +318,8 @@ void install(const std::vector<Spec>& specs) {
     const bool have = cache_load(fkey, fes);
     const codecache::Miss why = codecache::decide(have, fkey, fes, game_key, cache_entries(ts),
                                                   found);
-    bool scanned = false, from_cache = false;
+    bool& scanned = p.scanned;
+    bool& from_cache = p.from_cache;
     if (why == codecache::Miss::None) {
         for (size_t i = 0; i < ts.size(); ++i) {
             Target& t = ts[i];
@@ -321,7 +337,7 @@ void install(const std::vector<Spec>& specs) {
             cmn::log_info("[CRSMNative] code scan cache: %s", ok ? "written" : "NOT written (file error)");
         } else cmn::log_warn("[CRSMNative] code scan cache: scan failed, nothing written");
     }
-    const uint64_t ms = GetTickCount64() - t0;
+    p.ms = GetTickCount64() - t0;
     for (Target& t : ts) {                                        // a code address: the one method entering it, if one
         if (!t.by_va) continue;
         t.entering = t.shared;
@@ -335,82 +351,114 @@ void install(const std::vector<Spec>& specs) {
             t.other = nullptr;
         }
     }
-    int hooked = 0, refused = 0, missing = 0, covered = 0;
-    // a body hooked once covers the targets sharing it with the same pre / post (two specs with other pre / post on one
-    // method are two hooks: REFramework chains them)
-    std::set<std::tuple<uintptr_t, uintptr_t, uintptr_t>> done;
-    std::set<cmn::Feature> lost;
-    for (Target& t : ts) {
-        if (!t.spec) continue;                                    // a survey address
-        const Spec& s = *t.spec;
-        std::string name = std::string(s.type) + "." + s.sig;
-        if (t.by_va) {
-            char b[48];
-            std::snprintf(b, sizeof(b), " (code 0x%llX)", (unsigned long long)t.va);
-            name += b;
-            if (t.m) name += " = " + label(t.m);
-            if (scanned && t.entering > 1) {                      // several methods enter that code: R18
-                ++refused;
-                cmn::log_warn("[CRSMNative] hook %s: REFUSED (R18): %d methods enter that code: %s: %s", name.c_str(), t.entering,
-                              entering_list(t, 4).c_str(), s.without);
-                if (s.required) lost.insert(s.layer);
-                continue;
-            }
-        }
-        if (!t.m || !t.raw) {
-            ++missing;
-            cmn::log_warn("[CRSMNative] hook %s: not found (%s)", name.c_str(), s.without);
-            if (s.required) lost.insert(s.layer);
-            continue;
-        }
-        bool ok = scanned;
-        if (ok && t.shared > 0) {                                 // only sharing with our own targets of the same pre / post is fine
-            ok = (size_t)t.shared == t.sharers.size();
-            for (uint32_t x : t.sharers) {
-                bool ours = false;
-                for (const Target& o : ts)
-                    if (&o != &t && o.m && o.index == x && o.spec->pre == s.pre && o.spec->post == s.post) ours = true;
-                if (!ours) ok = false;
-            }
-        }
-        if (!ok) {
-            ++refused;
-            cmn::log_warn("[CRSMNative] hook %s at 0x%llX (code 0x%llX): %s: REFUSED (R18): %s", name.c_str(),
-                          (unsigned long long)t.raw, (unsigned long long)t.code,
-                          scanned ? ("shares its code with " + std::to_string(t.shared) + " other method(s), e.g. " + label(t.other)).c_str()
-                                  : "the code check failed",
-                          s.without);
-            if (s.required) lost.insert(s.layer);
-            continue;
-        }
-        const auto key = std::make_tuple(t.code, reinterpret_cast<uintptr_t>(s.pre), reinterpret_cast<uintptr_t>(s.post));
-        if (done.count(key)) {
-            ++covered;
-            if (s.installed) *s.installed = true;
-            cmn::journal("hook %s: covered by the hook on its shared code", name.c_str());
-            continue;
-        }
-        if (t.m->add_hook(timed_pre(s), timed_post(s), false)) {
-            done.insert(key);
-            ++hooked;
-            if (s.installed) *s.installed = true;
-            if (t.by_va) cmn::log_info("[CRSMNative] hook %s at 0x%llX: installed", name.c_str(), (unsigned long long)t.raw);
-            else cmn::journal("hook %s at 0x%llX: installed", name.c_str(), (unsigned long long)t.raw);
-        } else {
-            ++refused;
-            cmn::log_warn("[CRSMNative] hook %s: add_hook refused (%s)", name.c_str(), s.without);
-            if (s.required) lost.insert(s.layer);
+    return true;
+}
+
+// One target: true when add_hook was called (it stops the game's threads while it patches).
+bool hook_target(Pass& p, Target& t) {
+    bool called = false;
+    if (!t.spec) return false;                                // a survey address
+    const Spec& s = *t.spec;
+    std::string name = std::string(s.type) + "." + s.sig;
+    if (t.by_va) {
+        char b[48];
+        std::snprintf(b, sizeof(b), " (code 0x%llX)", (unsigned long long)t.va);
+        name += b;
+        if (t.m) name += " = " + label(t.m);
+        if (p.scanned && t.entering > 1) {                      // several methods enter that code: R18
+            ++p.refused;
+            cmn::log_warn("[CRSMNative] hook %s: REFUSED (R18): %d methods enter that code: %s: %s", name.c_str(), t.entering,
+                          entering_list(t, 4).c_str(), s.without);
+            if (s.required) p.lost.insert(s.layer);
+            return false;
         }
     }
+    if (!t.m || !t.raw) {
+        ++p.missing;
+        cmn::log_warn("[CRSMNative] hook %s: not found (%s)", name.c_str(), s.without);
+        if (s.required) p.lost.insert(s.layer);
+        return false;
+    }
+    bool ok = p.scanned;
+    if (ok && t.shared > 0) {                                 // only sharing with our own targets of the same pre / post is fine
+        ok = (size_t)t.shared == t.sharers.size();
+        for (uint32_t x : t.sharers) {
+            bool ours = false;
+            for (const Target& o : p.ts)
+                if (&o != &t && o.m && o.index == x && o.spec->pre == s.pre && o.spec->post == s.post) ours = true;
+            if (!ours) ok = false;
+        }
+    }
+    if (!ok) {
+        ++p.refused;
+        cmn::log_warn("[CRSMNative] hook %s at 0x%llX (code 0x%llX): %s: REFUSED (R18): %s", name.c_str(),
+                      (unsigned long long)t.raw, (unsigned long long)t.code,
+                      p.scanned ? ("shares its code with " + std::to_string(t.shared) + " other method(s), e.g. " + label(t.other)).c_str()
+                              : "the code check failed",
+                      s.without);
+        if (s.required) p.lost.insert(s.layer);
+        return false;
+    }
+    const auto key = std::make_tuple(t.code, reinterpret_cast<uintptr_t>(s.pre), reinterpret_cast<uintptr_t>(s.post));
+    if (p.done.count(key)) {
+        ++p.covered;
+        if (s.installed) *s.installed = true;
+        cmn::journal("hook %s: covered by the hook on its shared code", name.c_str());
+        return false;
+    }
+    called = true;
+    if (t.m->add_hook(timed_pre(s), timed_post(s), false)) {
+        p.done.insert(key);
+        ++p.hooked;
+        if (s.installed) *s.installed = true;
+        if (t.by_va) cmn::log_info("[CRSMNative] hook %s at 0x%llX: installed", name.c_str(), (unsigned long long)t.raw);
+        else cmn::journal("hook %s at 0x%llX: installed", name.c_str(), (unsigned long long)t.raw);
+    } else {
+        ++p.refused;
+        cmn::log_warn("[CRSMNative] hook %s: add_hook refused (%s)", name.c_str(), s.without);
+        if (s.required) p.lost.insert(s.layer);
+    }
+    return called;
+}
+
+void finish_pass(Pass& p) {
     char b[200];
-    std::snprintf(b, sizeof(b), "%d installed, %d covered, %d refused (R18 or add_hook), %d missing; code scan %s", hooked, covered,
-                  refused, missing, from_cache ? "from cache" : (std::to_string(ms) + " ms").c_str());
+    std::snprintf(b, sizeof(b), "%d installed, %d covered, %d refused (R18 or add_hook), %d missing; code scan %s", p.hooked, p.covered,
+                  p.refused, p.missing, p.from_cache ? "from cache" : (std::to_string(p.ms) + " ms").c_str());
     g_status = g_passes++ == 0 ? std::string(b) : g_status + "; " + b;
     cmn::log_info("[CRSMNative] hooks: %s", b);
-    for (cmn::Feature f : lost) {                                 // a layer without its hooks goes back to the Lua at once
+    for (cmn::Feature f : p.lost) {                               // a layer without its hooks goes back to the Lua at once
         cmn::log_warn("[CRSMNative] %s: a required hook is missing: the layer goes back to the Lua", cmn::feature_name(f));
         for (int i = 0; i < 5; ++i) cmn::fault(f, "required hook");
     }
+}
+
+std::vector<Spec> g_later_specs;
+Pass g_later;
+}  // namespace
+
+void install(const std::vector<Spec>& specs) {
+    Pass p;
+    if (!check_pass(specs, p)) return;
+    for (Target& t : p.ts) hook_target(p, t);
+    finish_pass(p);
+}
+
+void install_later(const std::vector<Spec>& specs) {
+    g_later_specs = specs;
+    if (!check_pass(g_later_specs, g_later)) { g_later.finished = true; return; }
+    if (!g_later.ts.empty()) hook_target(g_later, g_later.ts[g_later.next++]);
+}
+
+size_t hook_next() {
+    Pass& p = g_later;
+    if (p.finished) return 0;
+    while (p.next < p.ts.size())
+        if (hook_target(p, p.ts[p.next++])) break;
+    if (p.next < p.ts.size()) return p.ts.size() - p.next;
+    p.finished = true;
+    finish_pass(p);
+    return 0;
 }
 
 std::string status() { return g_status; }

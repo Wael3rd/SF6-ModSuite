@@ -202,6 +202,15 @@ std::string shown_safe(const std::string& s);
 std::string error_key(const std::string& code);
 
 // ---- asleep / awake --------------------------------------------------------------------------------------------------------------------
+// A key read once a frame, only while awake (GetAsyncKeyState; no window message is taken): a press is the key going down, or a tap between two reads. Held, an auto-repeat is no press.
+inline bool key_press(bool was_down, bool down, bool tapped) { return !was_down && (down || tapped); }
+// The rest of the hooks go in at the first wake, one per frame, and only on a frame where the screen's own update ran: never after it was left.
+class HookSteps {
+public:
+    bool due(uint32_t beats) { if (beats == seen_) return false; seen_ = beats; return true; }
+private:
+    uint32_t seen_ = 0;
+};
 // While awake, on each frame: the calls of the screen's own update, counted by its hook. Nothing here knows of Training or of the UI's claim.
 constexpr uint64_t kLeftFrames = 20;            // frames with no call: the screen's flow has left its main state (a long frame is one frame)
 class LeftWatch {
