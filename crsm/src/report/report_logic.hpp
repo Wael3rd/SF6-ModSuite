@@ -86,23 +86,23 @@ json make_command(const Report& r);
 // Wael, 07/11. Rows are real actions only; what cannot be pressed is the text under them. The first row is STATUS, a choice:
 //   no report on this costume             OK (default): nothing else shows.     BUG: Describe the problem / Change the description, Send, the summary.
 //   a report on the server, waiting       WAITING FOR FIX: its text is back, Change the description, Update, the summary, the overwrite warning.
-//                                         OK: withdraws it: its warning and one row that does it (nothing leaves before that row).
+//                                         OK: one row, MARK AS FIXED: the report stays on the server, marked by the tester, and STATUS is OK again.
 //   the admin marked it fixed             TO TEST: nothing else but a line saying what to do. OK: it is confirmed at once, the row is OK again.
 //                                         BUG: still broken: as a report waiting, WAITING FOR FIX once sent.
-//   confirmed or withdrawn                OK, as with no report; BUG: the old text, Update, the warning (the row on the server is replaced).
+//   the tester said it is fixed           OK, as with no report; BUG: the old text, Update, the warning (the row on the server is replaced).
+// Update does nothing until the text differs from what was sent (Wael, 07/11): shown dimmed, the row saying why.
 // The status comes from the server when the menu opens: STATUS says Checking... meanwhile, and if the server cannot be reached the menu says so; OK and BUG still work.
 // These rules live here only, to be easy to change.
 enum class Stage { Idle, Shooting, Open };
-enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed, Withdrawn };
+enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed };   // Confirmed: the tester said it is fixed, before or after the admin's fix
 enum class Pick { Ok, Bug, Held };              // Held: the status the server has (WAITING FOR FIX, TO TEST, Checking...)
 enum class Busy { None, Sending, Status };
-enum class Row { Status, Text, Send, Withdraw };
+enum class Row { Status, Text, Send, MarkFixed };
 
 // The server's answer to "my report on this costume": { exists, status, text }
 Server server_from(bool exists, const std::string& status);
 // The action the status request carries for a change the player made: "" = none
 inline const char* action_confirm() { return "confirm"; }
-inline const char* action_withdraw() { return "withdraw"; }
 
 // One report's life in the menu. Game thread only.
 class Session {
@@ -118,7 +118,7 @@ public:
     // The server's answer when the menu opened. text: what it holds. Nothing the player has typed meanwhile is overwritten.
     void server_answer(Server s, const std::string& text);
     void server_unreachable() { if (server_ == Server::Checking) { server_ = Server::Unknown; pick_ = Pick::Ok; } }
-    bool has_report() const { return server_ == Server::Waiting || server_ == Server::Fixed || server_ == Server::Confirmed || server_ == Server::Withdrawn; }
+    bool has_report() const { return server_ == Server::Waiting || server_ == Server::Fixed || server_ == Server::Confirmed; }
     // The STATUS row: its options, as locale keys, and which one is shown
     std::vector<std::string> options() const;
     int option_index() const;
@@ -132,9 +132,12 @@ public:
     const std::string& text() const { return text_; }
     void set_text_field_ok(bool ok) { field_ok_ = ok; }
     bool needs_text() const { return field_ok_ && text_.empty(); }
-    // The Send / Update row: true = it goes out now. Never twice at once; never with nothing to say while the field works.
+    // Update, while the text is what the server has
+    bool update_blocked() const { return has_report() && text_ == sent_text_; }
+    bool send_disabled() const { return needs_text() || update_blocked(); }
+    // The Send / Update row: true = it goes out now. Never twice at once; never with nothing to say while the field works; never the same text again.
     bool send();
-    // Withdraw's row, or confirm_due: the status request goes out now
+    // MARK AS FIXED's row, or confirm_due: the status request goes out now
     bool start_status();
     enum class Outcome { None, Sent, Failed };
     void answered(bool sent, const std::string& error);         // Send's answer: sent = WAITING FOR FIX
@@ -151,7 +154,7 @@ private:
     Server server_ = Server::Checking;
     Pick pick_ = Pick::Held;
     Busy busy_ = Busy::None;
-    std::string text_, error_;
+    std::string text_, sent_text_, error_;
     bool field_ok_ = true, window_gone_ = false, text_typed_ = false;
     Outcome outcome_ = Outcome::None;
 };
@@ -167,15 +170,28 @@ struct MenuValues {
     size_t log_loader_bytes = 0, log_plugin_bytes = 0, mods = 0;
     bool loaded = false;                        // gathered off the game thread: false a moment after the key
 };
+// A plain list of labelled values (Wael, 07/11: no sentences; the 90 days and the rest are the README's). The description comes after it, in a window of its lines
+// that moves by itself: the list stays still.
 // A row's title in the player's language
 std::string row_title(const Session& s, Row row, const Tr& tr);
-// The text under the rows, as paragraphs to wrap at the window's width, the ones to keep first. Empty: nothing shows.
-struct SummaryLine { std::string text; int max_lines = 3; };
+// The list under the rows, as paragraphs to wrap at the window's width. Empty: nothing shows.
+struct SummaryLine { std::string text; int max_lines = 1; };
 std::vector<SummaryLine> summary_lines(const Session& s, const MenuValues& v, const Tr& tr);
-// All of it wrapped, kSummaryLines at most: what the window has room for. wrap(paragraph, max lines) is the UI's measure (never squeezed: lines cut with "...").
+// All of it wrapped, kSummaryLines at most, the list then the description's lines from the top scroll_top says. wrap(paragraph, max lines) is the UI's measure (never squeezed:
+// lines cut with "..."). frames: how long this description has been up.
 constexpr int kSummaryLines = 12;
+constexpr int kDescriptionMaxLines = 60;
 using Wrap = std::function<std::vector<std::string>(const std::string&, int)>;
-std::string summary_text(const Session& s, const MenuValues& v, const Tr& tr, const Wrap& wrap);
+std::string summary_text(const Session& s, const MenuValues& v, const Tr& tr, const Wrap& wrap, uint64_t frames);
+// The first line a window of `window` lines shows of `total`, after `frames`: rest, a line at a time, rest, back to the top, and again. No key needed.
+constexpr uint64_t kScrollRestFrames = 150, kScrollStepFrames = 120;
+int scroll_top(int total, int window, uint64_t frames);
+// CJK, kana and Hangul characters
+size_t wide_chars(const std::string& s);
+// The width in text_em's terms to wrap this line at so that it holds in `em`: a wide character draws about 1.35 of what text_em counts (the game's font is condensed for Latin
+// only: what took Japanese past its room on 07/11).
+constexpr double kWideDrawn = 1.35;
+double wrap_em(const std::string& line, double em);
 // A text of a player's or a mod's for a game text: < > [ ] made ( ), one line (an unknown message tag crashes the game's render thread)
 std::string shown_safe(const std::string& s);
 // The error's text: known server codes in the player's language, anything else the general one

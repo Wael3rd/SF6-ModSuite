@@ -1151,9 +1151,9 @@ void test_report_wire() {
     check(build_request(C({{"cmd", "report_get"}, {"costume_key", "mod:ab:f1:c0"}, {"image", "x"}, {"logs", "x"}}), cfg, &get, &err) && get.method == "GET" && !get.has_body &&
           get.url == "https://w.example/api/report?costume_key=mod%3Aab%3Af1%3Ac0" && auth::needs_token("report_get"), "report_get: a GET of the key alone, nothing else leaves: " + get.url);
     Request set;
-    check(build_request(C({{"cmd", "report_status"}, {"costume_key", "mod:ab"}, {"action", "withdraw"}, {"steamid", "76561198000000001"}, {"text", "x"}}), cfg, &set, &err) && set.method == "POST" && set.url == "https://w.example/api/report/status" && auth::needs_token("report_status"), "report_status: POST");
+    check(build_request(C({{"cmd", "report_status"}, {"costume_key", "mod:ab"}, {"action", "confirm"}, {"steamid", "76561198000000001"}, {"text", "x"}}), cfg, &set, &err) && set.method == "POST" && set.url == "https://w.example/api/report/status" && auth::needs_token("report_status"), "report_status: POST");
     const json setb = json::parse(set.body, nullptr, false);
-    check(setb.is_object() && setb.size() == 2 && setb["costume_key"] == "mod:ab" && setb["action"] == "withdraw", "report_status: only its key and action");
+    check(setb.is_object() && setb.size() == 2 && setb["costume_key"] == "mod:ab" && setb["action"] == "confirm", "report_status: only its key and action");
     Request plain;
     build_request(C({{"cmd", "list"}, {"char", "Ken"}, {"sort", "recent"}, {"page", "1"}}), cfg, &plain, &err);
     check(plain.timeout_ms == 0, "the other requests keep their 15 s");

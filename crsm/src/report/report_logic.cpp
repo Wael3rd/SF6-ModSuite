@@ -360,8 +360,7 @@ json make_command(const Report& r) {
 Server server_from(bool exists, const std::string& status) {
     if (!exists) return Server::None;
     if (status == "fixed") return Server::Fixed;
-    if (status == "confirmed") return Server::Confirmed;
-    if (status == "withdrawn") return Server::Withdrawn;
+    if (status == "confirmed" || status == "tester_fixed") return Server::Confirmed;
     return Server::Waiting;
 }
 
@@ -371,6 +370,7 @@ void Session::reset() {
     pick_ = Pick::Held;
     busy_ = Busy::None;
     std::string().swap(text_);
+    std::string().swap(sent_text_);
     error_.clear();
     outcome_ = Outcome::None;
     field_ok_ = true;
@@ -388,6 +388,7 @@ bool Session::begin() {
 void Session::server_answer(Server s, const std::string& text) {
     if (server_ != Server::Checking) return;
     server_ = s;
+    sent_text_ = text;
     if (!text_typed_) text_ = text;
     pick_ = s == Server::Waiting || s == Server::Fixed ? Pick::Held : Pick::Ok;
 }
@@ -425,12 +426,12 @@ std::vector<Row> Session::rows() const {
     std::vector<Row> r{ Row::Status };
     if (stage_ != Stage::Open || server_ == Server::Checking) return r;
     if (pick_ == Pick::Bug || (pick_ == Pick::Held && server_ == Server::Waiting)) { r.push_back(Row::Text); r.push_back(Row::Send); }
-    else if (pick_ == Pick::Ok && server_ == Server::Waiting) r.push_back(Row::Withdraw);
+    else if (pick_ == Pick::Ok && server_ == Server::Waiting) r.push_back(Row::MarkFixed);
     return r;
 }
 
 bool Session::send() {
-    if (stage_ != Stage::Open || busy_ != Busy::None || needs_text()) return false;
+    if (stage_ != Stage::Open || busy_ != Busy::None || send_disabled()) return false;
     busy_ = Busy::Sending;
     outcome_ = Outcome::None;
     error_.clear();
@@ -451,7 +452,7 @@ void Session::answered(bool sent, const std::string& error) {
     if (window_gone_) { reset(); return; }               // nobody is looking any more
     outcome_ = sent ? Outcome::Sent : Outcome::Failed;
     error_ = sent ? std::string() : error;
-    if (sent) { server_ = Server::Waiting; pick_ = Pick::Held; }
+    if (sent) { server_ = Server::Waiting; pick_ = Pick::Held; sent_text_ = text_; }
 }
 
 void Session::status_answered(bool ok, Server now, const std::string& error) {
@@ -488,61 +489,100 @@ std::string row_title(const Session& s, Row row, const Tr& tr) {
     switch (row) {
         case Row::Status: return tr("report_status", {});
         case Row::Text: return tr(s.text().empty() ? "report_row_describe" : "report_row_change", {});
-        case Row::Withdraw: return tr("report_row_withdraw", {});
+        case Row::MarkFixed: return tr("report_row_mark_fixed", {});
         case Row::Send: break;
     }
     if (s.busy() == Busy::Sending) return tr("report_sending", {});
-    if (s.outcome() == Session::Outcome::Failed) return tr("report_failed", { tr(error_key(s.error()), {}) });
     if (s.needs_text()) return tr("report_row_need_text", {});
+    if (s.update_blocked()) return tr("report_row_update_same", {});
     return tr(s.has_report() ? "report_row_update" : "report_row_send", {});
 }
 
 std::vector<SummaryLine> summary_lines(const Session& s, const MenuValues& v, const Tr& tr) {
     std::vector<SummaryLine> out;
-    const auto add = [&](std::string text, int max_lines = 3) { out.push_back({ std::move(text), max_lines }); };
+    const auto add = [&](std::string text, int max_lines = 1) { out.push_back({ std::move(text), max_lines }); };
     if (s.stage() != Stage::Open) return out;
     const std::vector<Row> rows = s.rows();
-    const bool form = rows.size() > 2 && rows[1] == Row::Text;
-    if (s.server() == Server::Unknown) add(tr("report_sum_unreachable", {}));
+    if (s.server() == Server::Unknown) add(tr("report_sum_unreachable", {}), 2);
     if (s.busy() == Busy::Status) { add(tr("report_sending", {})); return out; }
-    if (s.outcome() == Session::Outcome::Failed && !form) add(tr("report_failed", { tr(error_key(s.error()), {}) }));
-    if (s.server() == Server::Fixed && s.pick() == Pick::Held) { add(tr("report_sum_to_test", {})); return out; }
-    if (s.server() == Server::Waiting && s.pick() == Pick::Ok) { add(tr("report_sum_withdraw", {})); return out; }
-    if (!form) return out;
-    if (s.outcome() == Session::Outcome::Sent) add(tr("report_sum_sent", {}));
+    if (s.outcome() == Session::Outcome::Failed) add(tr("report_failed", { tr(error_key(s.error()), {}) }), 2);
+    if (s.server() == Server::Fixed && s.pick() == Pick::Held) { add(tr("report_sum_to_test", {}), 2); return out; }
+    if (s.server() == Server::Waiting && s.pick() == Pick::Ok) { add(tr("report_sum_mark_fixed", {}), 2); return out; }
+    if (rows.size() < 3 || rows[1] != Row::Text) return out;
+    if (s.outcome() == Session::Outcome::Sent && s.update_blocked()) add(tr("report_sum_sent", {}));
     else if (s.has_report()) add(tr("report_sum_replace", {}));
-    add(tr("report_sum_keep", {}));
-    add(tr("report_sum_head", {}), 1);
-    if (!s.text().empty()) add(tr("report_sum_text", { shown_safe(s.text()) }), 2);
-    add(v.steam_id.empty() ? tr("report_sum_steam_none", {}) : tr("report_sum_steam", { v.steam_id }), 2);
-    add(tr("report_sum_outfit", { shown_safe(v.character), shown_safe(v.outfit), shown_safe(v.colour) }), 2);
+    add(tr("report_sum_steam", { v.steam_id.empty() ? tr("report_sum_unknown", {}) : v.steam_id }));
+    add(tr("report_sum_character", { shown_safe(v.character) }) + " | " + tr("report_sum_colour", { shown_safe(v.colour) }));
+    add(tr("report_sum_outfit", { shown_safe(v.outfit) }));
     std::string shot;
     if (v.shot_bytes && v.shot_w > 0) shot = tr("report_sum_shot", { std::to_string(v.shot_w), std::to_string(v.shot_h), std::to_string((v.shot_bytes + 512) / 1024) });
     else if (v.shot_failed) shot = tr("report_sum_shot_none", {});
     if (v.loaded) {
         const std::string mods = tr("report_sum_mods", { std::to_string(v.mods) });
-        add(shot.empty() ? mods : shot + " | " + mods, 2);
+        add(shot.empty() ? mods : shot + " | " + mods);
         std::string versions;
         for (const auto& [name, value] : v.versions) versions += (versions.empty() ? "" : ", ") + name + " " + shown_safe(value);
         if (!versions.empty()) add(tr("report_sum_versions", { versions }), 2);
-        add(tr("report_sum_logs", { std::to_string((v.log_loader_bytes + 512) / 1024), std::to_string((v.log_plugin_bytes + 512) / 1024) }), 3);
+        add(tr("report_sum_logs", { std::to_string((v.log_loader_bytes + 512) / 1024), std::to_string((v.log_plugin_bytes + 512) / 1024) }));
     } else if (!shot.empty()) {
-        add(shot, 1);
+        add(shot);
     }
     return out;
 }
 
-std::string summary_text(const Session& s, const MenuValues& v, const Tr& tr, const Wrap& wrap) {
-    std::string out;
-    int total = 0;
+int scroll_top(int total, int window, uint64_t frames) {
+    const int steps = total - window;
+    if (steps <= 0 || window <= 0) return 0;
+    const uint64_t period = 2 * kScrollRestFrames + (uint64_t)steps * kScrollStepFrames;
+    const uint64_t x = frames % period;
+    if (x < kScrollRestFrames) return 0;
+    const uint64_t done = 1 + (x - kScrollRestFrames) / kScrollStepFrames;
+    return done >= (uint64_t)steps ? steps : (int)done;
+}
+
+std::string summary_text(const Session& s, const MenuValues& v, const Tr& tr, const Wrap& wrap, uint64_t frames) {
+    std::vector<std::string> lines;
     for (const SummaryLine& line : summary_lines(s, v, tr))
-        for (const std::string& piece : wrap(line.text, line.max_lines)) {
-            if (total >= kSummaryLines) return out;
-            if (total) out += '\n';
-            out += piece;
-            ++total;
-        }
+        for (const std::string& piece : wrap(line.text, line.max_lines)) lines.push_back(piece);
+    if ((int)lines.size() > kSummaryLines) lines.resize((size_t)kSummaryLines);
+    const std::vector<Row> rows = s.rows();
+    if (rows.size() >= 3 && rows[1] == Row::Text && s.busy() != Busy::Status && !s.text().empty() && (int)lines.size() < kSummaryLines) {
+        std::string safe = s.text();                     // its own line breaks stay: the rest as in shown_safe
+        for (char& c : safe) c = c == '<' || c == '[' ? '(' : c == '>' || c == ']' ? ')' : c == '\r' || c == '\t' ? ' ' : c;
+        const std::vector<std::string> d = wrap(tr("report_sum_text", { safe }), kDescriptionMaxLines);
+        const int window = kSummaryLines - (int)lines.size();
+        const int top = scroll_top((int)d.size(), window, frames);
+        for (int i = top; i < (int)d.size() && i < top + window; ++i) lines.push_back(d[(size_t)i]);
+    }
+    std::string out;
+    for (const std::string& l : lines) { if (!out.empty()) out += '\n'; out += l; }
     return out;
+}
+
+size_t wide_chars(const std::string& s) {
+    size_t n = 0;
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = (unsigned char)s[i];
+        const size_t len = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        if (len == 3 && i + 2 < s.size()) {
+            const uint32_t cp = ((c & 0x0Fu) << 12) | (((unsigned char)s[i + 1] & 0x3Fu) << 6) | ((unsigned char)s[i + 2] & 0x3Fu);
+            if ((cp >= 0x2E80 && cp <= 0xD7FF) || (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFF01 && cp <= 0xFF60)) ++n;
+        } else if (len == 4) {
+            ++n;
+        }
+        i += len;
+    }
+    return n;
+}
+
+double wrap_em(const std::string& line, double em) {
+    const size_t wide = wide_chars(line);
+    size_t chars = 0;
+    for (size_t i = 0; i < line.size(); ++i) if (((unsigned char)line[i] & 0xC0) != 0x80) ++chars;
+    if (!wide || !chars) return em;
+    // a line's Latin takes about half an em a character: how much of it is wide, in text_em's terms
+    const double wide_em = (double)wide, other_em = (double)(chars - wide) * 0.5;
+    return em * (wide_em + other_em) / (wide_em * kWideDrawn + other_em);
 }
 
 std::string error_key(const std::string& code) {

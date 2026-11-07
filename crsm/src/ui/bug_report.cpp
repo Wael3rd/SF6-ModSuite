@@ -106,6 +106,15 @@ std::atomic<bool> g_req_on{false};
 std::atomic<uintptr_t> g_req_part{0};
 std::atomic<uintptr_t> g_made_parent{0};
 std::atomic<int> g_refused{0};
+// A one-argument setter by its name: the core's obj_invoke finds a full signature exactly (drill_details' set_prop). Not per frame.
+bool set_by_name(MO* o, const char* name, SF6CoreArg v) {
+    auto* td = o ? o->get_type_definition() : nullptr;
+    auto* m = td ? gm::method_n(td, name, 1) : nullptr;
+    if (!m) return false;
+    const auto params = m->get_params();
+    auto* pt = params.size() == 1 ? reinterpret_cast<reframework::API::TypeDefinition*>(params[0].t) : nullptr;
+    return pt && gx::invoke(o, (std::string(name) + "(" + pt->get_full_name() + ")").c_str(), { v });
+}
 // The bar's template (e_text_0) and its entries (e_text_0_g_*: the mods', e_text_0_d_*: the game's)
 MO* bar_template(MO* btn, std::vector<MO*>* entries) {
     MO* tmpl = nullptr;
@@ -268,7 +277,7 @@ void hint_pass(const std::string& text) {
         g_hint.written.clear();
         g_hint.cp = -1;
         g_hint.region = 0;
-        gx::invoke(copy, "set_AutoRegionFit(System.Boolean)", { gx::B(false) });   // never squeezed: its region is its text's (below)
+        set_by_name(copy, "set_AutoRegionFit", gx::I(0));   // never squeezed: its region is its text's (below)
     }
     if (cp != g_hint.cp) { gx::invoke(copy, "set_ControlPoint(via.gui.ControlPoint)", { gx::I(cp) }); g_hint.cp = cp; }
     if (text != g_hint.written) { gx::set_text(copy, text); g_hint.written = text; }
@@ -402,7 +411,7 @@ std::vector<rp::Row> g_roles;                    // what each of them is
 std::string g_built;                             // what the page was built from
 std::atomic<int> g_pressed{-1};                  // a row's Confirm (the core's callback): run on the frame
 std::atomic<int> g_chosen{-1};                   // STATUS moved (the core's callback): run on the frame
-bool g_withdraw_due = false;                     // Withdraw pressed: goes out as soon as the client is free
+bool g_mark_due = false;                         // MARK AS FIXED pressed: goes out as soon as the client is free
 // What is read off the game thread: the summary's values and the key when the menu opens, the whole command at Send
 std::mutex g_prep_mx;
 std::optional<nlohmann::json> g_prep;
@@ -421,11 +430,13 @@ uint64_t g_scan_at = 0;
 constexpr float kDockX = -430.0f;                // docked left on Fighter Settings
 struct Frame { float shadow_w, shadow_h, bg_w, bg_h, line_w, line_h, main_y, title_y, guide_y; };
 constexpr Frame kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 };   // its 8-row page
-// The text under the rows, in the frame's room under three rows: GuideMessageText grown upward, its bottom kept, its fit off: the game otherwise shrinks what does not fit.
-// Lines cut at the window's width. The rows' own descriptions stay empty: the game writes the focused row's there, and the same long text written twice is R7's crash (two rows
-// with this text, or a page rebuilt, would do that). So this one place writes it, comparing the whole text first (the core's compare reads 511 bytes).
-constexpr float kSummaryAreaH = 330.0f, kSummaryScale = 1.1f;
-constexpr double kSummaryEm = 45.0;              // ~720 px at ~16 px per em (ui/logic.hpp's measures of this text)
+// The text under the rows, strictly under the last one: GuideMessageText grown upward to just below it, its bottom kept, aligned LeftTop, its fit off: the game otherwise shrinks
+// what does not fit. Read in game on 07/11 at 1080p: the rows at y 258 + 64 a row, 48 high; this text's bottom at 857; at its font x 1.1 it drew 38 px a line and 21 px per em of
+// lg::text_em. So at x 0.9: 31 px a line, 17.3 px per em: rp::kSummaryLines (12) in the 405 px under three rows, with room for one more if the game wraps one, 44 em in its 800 px.
+// The rows' own descriptions stay empty: the game writes the focused row's there, and the same long text written twice is R7's crash (two rows with this text, or a page
+// rebuilt, would do that). So this one place writes it, comparing the whole text first (the core's compare reads 511 bytes).
+constexpr float kSummaryAreaH3 = 405.0f, kRowPitch = 64.0f, kSummaryScale = 0.9f;
+constexpr double kSummaryEm = 44.0;
 
 bool near_f(float a, float b, float eps) { return std::abs(a - b) <= eps; }
 void dock_control(MO* cm) {
@@ -451,24 +462,65 @@ void fix_frame(MO* cm) {
         if (has_y && gx::vec3_of(c, "get_Position", p) && !near_f(p[1], y, 0.5f)) gx::set_pos(c, p[0], y, p[2]);
     }
 }
-struct SummaryBox { MO* text = nullptr; bool ok = false; float pos[3] = {}; float w = 0, h = 0, fw = 0, fh = 0; int32_t cp = -1; float y_new = 0; };
+struct SummaryBox { MO* text = nullptr; bool ok = false; float pos[3] = {}; float w = 0, h = 0, fw = 0, fh = 0; int32_t cp = -1; };
 SummaryBox g_box;
-void summary_box(MO* gmt) {
+void summary_box(MO* gmt, int rows) {
     if (g_box.text != gmt) {
         g_box = SummaryBox{};
         g_box.text = gmt;
         g_box.ok = gx::vec3_of(gmt, "get_Position", g_box.pos) && gx::size_of(gmt, "get_RegionSize", &g_box.w, &g_box.h) && gx::size_of(gmt, "get_FontSize", &g_box.fw, &g_box.fh) &&
-                   gx::call_i32(gmt, "get_ControlPoint", &g_box.cp) && g_box.h > 1.0f && g_box.h < kSummaryAreaH - 1.0f && g_box.w > 100.0f && g_box.fh > 1.0f &&
-                   lg::keep_bottom_y(g_box.cp, g_box.pos[1], g_box.h, kSummaryAreaH, &g_box.y_new);
-        gx::invoke(gmt, "set_AutoRegionFit(System.Boolean)", { gx::B(false) });     // never squeezed: the lines are cut to the width, rp::kSummaryLines of them
-        cmn::journal("bug report: the text under the rows: %s", g_box.ok ? "grown" : "left as the game made it");
+                   gx::call_i32(gmt, "get_ControlPoint", &g_box.cp) && g_box.h > 1.0f && g_box.h < kSummaryAreaH3 - 1.0f && g_box.w > 100.0f && g_box.fh > 1.0f;
+        set_by_name(gmt, "set_AutoRegionFit", gx::I(0));   // never squeezed: the lines are cut to the width, rp::kSummaryLines of them
+        set_by_name(gmt, "set_PageAlignment", gx::I(0));   // LeftTop, under the rows whatever its length (the game's: at the bottom)
+        cmn::journal("bug report: the text under the rows: %s (font %.1f, region %.0f x %.0f, at %.0f, point %d)", g_box.ok ? "placed" : "left as the game made it", g_box.fh, g_box.w, g_box.h, g_box.pos[1], g_box.cp);
     }
     if (!g_box.ok) return;
+    const float area = kSummaryAreaH3 + (float)(3 - std::clamp(rows, 1, 3)) * kRowPitch;
+    float y_new = 0;
+    if (!lg::keep_bottom_y(g_box.cp, g_box.pos[1], g_box.h, area, &y_new)) return;
     const float fw = g_box.fw * kSummaryScale, fh = g_box.fh * kSummaryScale;
     float w = 0, h = 0, p[3] = {};
     if (!gx::size_of(gmt, "get_FontSize", &w, &h) || !near_f(w, fw, 0.05f) || !near_f(h, fh, 0.05f)) gx::set_font(gmt, fw, fh);
-    if (!gx::size_of(gmt, "get_RegionSize", &w, &h) || !near_f(w, g_box.w, 0.5f) || !near_f(h, kSummaryAreaH, 0.5f)) gx::set_region(gmt, g_box.w, kSummaryAreaH);
-    if (!gx::vec3_of(gmt, "get_Position", p) || !near_f(p[0], g_box.pos[0], 0.5f) || !near_f(p[1], g_box.y_new, 0.5f)) gx::set_pos(gmt, g_box.pos[0], g_box.y_new, g_box.pos[2]);
+    if (!gx::size_of(gmt, "get_RegionSize", &w, &h) || !near_f(w, g_box.w, 0.5f) || !near_f(h, area, 0.5f)) gx::set_region(gmt, g_box.w, area);
+    if (!gx::vec3_of(gmt, "get_Position", p) || !near_f(p[0], g_box.pos[0], 0.5f) || !near_f(p[1], y_new, 0.5f)) gx::set_pos(gmt, g_box.pos[0], y_new, g_box.pos[2]);
+}
+// What the window's see-through background would show: the screen's rows. The Color Mod's Edit Drive Colors does nothing about them: its eight rows cover them. Hidden with the
+// game's lock while the window is up, found again by name each time (R35), put back when it closes.
+bool g_rows_hidden = false;
+void rows_behind(bool hide) {
+    const SF6CoreAPI* a = api();
+    if (!a) return;
+    void* buf[2] = {};
+    const uint32_t n = perf::counted(a)->ui_agents(kAgent, buf, 2);
+    for (uint32_t i = 0; i < n && i < 2; ++i) {
+        MO* cm = gx::call_obj(static_cast<MO*>(buf[i]), "get_ControlMain");
+        MO* spin = cm ? static_cast<MO*>(perf::counted(a)->ui_find_cached(cm, "p_Spin_costume")) : nullptr;
+        MO* group = spin ? gx::parent(spin) : nullptr;
+        if (!group || group == cm) {
+            if (hide && !g_rows_hidden) cmn::journal("bug report: the rows have no group of their own: left as they are");
+            continue;
+        }
+        bool now = false;
+        if (gx::call_bool(group, "get_ForceInvisible", &now) && now == hide) continue;
+        gx::set_force_invisible(group, hide);
+        if (hide != g_rows_hidden) cmn::journal("bug report: the screen's rows %s (%s)", hide ? "hidden" : "back", gx::name(group).c_str());
+    }
+    g_rows_hidden = hide;
+}
+// The row Send is on (the third), dimmed while it does nothing: its text says why. The dialog's own row: put back before the window is forgotten, the pool may keep it.
+constexpr const char* kSendUnit = "p_OptionUnit_2_switch_show";
+void send_row_look(MO* cm, bool dim) {
+    const SF6CoreAPI* a = api();
+    MO* unit = a && cm ? static_cast<MO*>(perf::counted(a)->ui_find_cached(cm, kSendUnit)) : nullptr;
+    if (!unit) return;
+    const float want = dim ? 0.5f : 1.0f;
+    float v[3] = {};
+    if (gx::vec3_of(unit, "get_ColorScale", v) && near_f(v[0], want, 0.01f)) return;
+    float f[4] = { want, want, want, want };
+    SF6CoreArg arg{};
+    arg.type = SF6CORE_ARG_PTR;
+    arg.v.p = f;                                 // a value type goes by address
+    gx::invoke(unit, "set_ColorScale(via.Float4)", { arg });
 }
 std::string g_summary;                           // what the text under the rows should say
 std::string g_wrote, g_read_back;                // the last text written, and how the engine reads it back
@@ -489,8 +541,13 @@ void dock_all() {
     const uint32_t n = perf::counted(a)->ui_agents("OptionDialog", agents, 8);
     for (uint32_t i = 0; i < n && i < 8; ++i)
         if (MO* cm = gx::call_obj(static_cast<MO*>(agents[i]), "get_ControlMain")) { dock_control(cm); fix_frame(cm); }
-    if (void* param = perf::counted(a)->opt_current_param())
-        if (MO* gmt = gx::ref(static_cast<MO*>(param), "GuideMessageText")) { summary_box(gmt); write_summary(gmt); }
+    if (void* param = perf::counted(a)->opt_current_param()) {
+        if (MO* gmt = gx::ref(static_cast<MO*>(param), "GuideMessageText")) { summary_box(gmt, (int)g_roles.size()); write_summary(gmt); }
+        MO* agent = gx::ref(static_cast<MO*>(param), "<Agent>k__BackingField");
+        const bool send_shown = std::find(g_roles.begin(), g_roles.end(), rp::Row::Send) != g_roles.end();
+        if (MO* cm = agent ? gx::call_obj(agent, "get_ControlMain") : nullptr) send_row_look(cm, send_shown && g_session.send_disabled() && g_session.busy() == rp::Busy::None);
+    }
+    rows_behind(true);
 }
 
 void SF6CORE_CALL cb_button(void*, int64_t entry, SF6CoreOptButtonResult* out) {
@@ -540,8 +597,11 @@ bool ensure_client() {
 
 std::string tr(const std::string& k, const std::vector<std::string>& args) { return ui::T(k, args); }
 // The text under the rows, ready for the game
+std::string g_scroll_text;
+uint64_t g_scroll_since = 0;
 std::string summary_now() {
-    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return lg::desc_lines(line, kSummaryEm, max_lines); });
+    if (g_scroll_text != g_session.text()) { g_scroll_text = g_session.text(); g_scroll_since = tick(); }
+    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return lg::desc_lines(line, rp::wrap_em(line, kSummaryEm), max_lines); }, tick() - g_scroll_since);
 }
 void forget();
 // The group made again with the same key (the Color Mod's pattern for per-page texts)
@@ -557,7 +617,7 @@ bool build_group() {
     if (g_group < 0) { cmn::journal("bug report: opt_group failed"); return false; }
     for (const rp::Row role : g_session.rows()) {
         const std::string name = lg::cut_em(rp::row_title(g_session, role, tr), lg::kComRowEm);
-        const char* key = role == rp::Row::Status ? "report_status" : role == rp::Row::Text ? "report_text" : role == rp::Row::Send ? "report_send" : "report_withdraw";
+        const char* key = role == rp::Row::Status ? "report_status" : role == rp::Row::Text ? "report_text" : role == rp::Row::Send ? "report_send" : "report_mark_fixed";
         SF6CoreOptEntryDesc d{};
         d.struct_size = sizeof d;
         d.key = key;
@@ -635,8 +695,9 @@ void forget() {
     g_wrote.clear();
     g_read_back.clear();
     g_read_back_due = false;
+    g_scroll_text.clear();
     g_asked = false;
-    g_withdraw_due = false;
+    g_mark_due = false;
     g_step = SendStep::None;
     g_box = SummaryBox{};
     const SF6CoreAPI* a = api();
@@ -652,6 +713,11 @@ void forget() {
 void closed_now(const char* why) {
     input_block(false);
     g_naming = false;
+    rows_behind(false);
+    const SF6CoreAPI* a = api();
+    void* dialogs[8] = {};
+    const uint32_t n = a ? perf::counted(a)->ui_agents("OptionDialog", dialogs, 8) : 0;
+    for (uint32_t i = 0; i < n && i < 8; ++i) send_row_look(gx::call_obj(static_cast<MO*>(dialogs[i]), "get_ControlMain"), false);
     if (g_session.closed()) {
         ++g_backed;
         forget();
@@ -684,7 +750,7 @@ void start_preview() {
                     add("Recording Manager", "recording_manager");
                     add("Core", "native_core");
                     add("Color Mod", "color_mod");
-                    add("Loader", "slots_loader_pak");
+                    add("Loader pak", "slots_loader_pak");   // (the pak's id: no version of the loader is written anywhere at run time)
                 }
                 const auto log_size = [&](const char* key) { return r.logs.contains(key) && r.logs[key].is_string() ? r.logs[key].get<std::string>().size() : (size_t)0; };
                 pv.v.log_loader_bytes = log_size("loader");
@@ -858,9 +924,9 @@ void press_row(rp::Row row) {
         g_step = SendStep::WaitPicture;
         g_dirty = true;
         cmn::journal("bug report: Send");
-    } else if (row == rp::Row::Withdraw) {
-        g_withdraw_due = true;
-        cmn::journal("bug report: Withdraw");
+    } else if (row == rp::Row::MarkFixed) {
+        g_mark_due = true;
+        cmn::journal("bug report: Mark as fixed");
     }
 }
 // What came in since the last frame: the picture, the files' values
@@ -931,12 +997,13 @@ void session_tick() {
     if (chosen >= 0) {
         if (g_session.choose(chosen)) g_dirty = true;
         else if (chosen != g_session.option_index()) { g_built.clear(); g_dirty = true; }     // refused (a request is on its way): the row goes back to the truth
-        if (chosen != g_session.option_index()) g_withdraw_due = false;
+        if (chosen != g_session.option_index()) g_mark_due = false;
     }
     const int pressed = g_pressed.exchange(-1);
     if (pressed >= 0 && pressed < (int)g_roles.size()) press_row(g_roles[(size_t)pressed]);
     if (g_session.confirm_due()) post_status(rp::action_confirm(), rp::Server::Confirmed);       // (as soon as the client is free)
-    if (g_withdraw_due && post_status(rp::action_withdraw(), rp::Server::Withdrawn)) g_withdraw_due = false;
+    if (g_mark_due && post_status(rp::action_confirm(), rp::Server::Confirmed)) g_mark_due = false;
+    if ((t & 15) == 0) g_summary = summary_now();       // (the description's window moves by itself)
     if (g_dirty && !g_naming) {
         g_dirty = false;
         g_summary = summary_now();
@@ -958,7 +1025,7 @@ void begin_report(MO* main) {
     g_shot_at = tick();
     g_pressed.store(-1);
     g_chosen.store(-1);
-    g_withdraw_due = false;
+    g_mark_due = false;
     g_dirty = false;
     g_step = SendStep::None;
     g_snap = rp::Snapshot{};
@@ -1020,6 +1087,7 @@ void beat_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
 
 // The frame callback gives itself back; g_awake goes last, so a call of the update just then wakes it again at its next call, never lost.
 void go_to_sleep() {
+    if (g_rows_hidden) rows_behind(false);
     try { hint_hide(); } catch (...) { g_hint.shown = false; }
     g_req_on.store(false);
     g_up = false;

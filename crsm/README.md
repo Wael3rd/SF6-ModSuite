@@ -84,12 +84,13 @@ When the menu opens it asks the server one question, with your Steam-verified to
 goes with it, no picture, no log, no text. The answer is the report's status and your own text. If the server cannot be reached the menu says so, and
 OK and BUG still work.
 
-The first row is STATUS. On OK, the default, nothing else shows. On BUG: Describe the problem, Send, and under them the real values of what would be
-sent, your Steam ID included (the menu reads it from Steam for your screen; the plugin never logs it and never sends it). After Send, or when you
+The first row is STATUS. On OK, the default, nothing else shows. On BUG: Describe the problem, Send, and under them a list of the real values that would
+be sent, your Steam ID included (the menu reads it from Steam for your screen; the plugin never logs it and never sends it), then your description, which
+moves by itself when it is too long for its place. After Send, or when you
 already have a report on this costume, STATUS shows WAITING FOR FIX, your text comes back and Send becomes Update, which replaces what was sent; the
-menu says so first. When the author marks it fixed, STATUS shows TO TEST: choose OK if it is fixed (the author sees it confirmed), or BUG if it is
-still broken. Choosing OK on WAITING FOR FIX offers one more row that withdraws the report (the author sees it withdrawn). You can never mark a
-report fixed, nor see anyone else's.
+menu says so first, and Update does nothing until your text differs from what was sent. When the author marks it fixed, STATUS shows TO TEST: choose OK
+if it is fixed, or BUG if it is still broken. Choosing OK on WAITING FOR FIX offers MARK AS FIXED: the report stays on the server, marked fixed by you,
+and the author sees it. You can never see anyone else's report.
 
 What Send sends, over HTTPS to the same Community server, with your Steam-verified token (see above):
 

@@ -173,19 +173,20 @@ int main(int argc, char** argv) {
     bad["image"] = "PGh0bWw+PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0PjwvaHRtbD4=";
     a = post(c, bad);
     check(a.done && community::auth::error_code(a.data) == "bad_image", "a picture that is no JPEG: refused: " + a.data.dump());
-    // The next opening: the text comes back, Update; withdrawing, and what the player may not do
+    // The next opening: the text comes back, Update; marking it fixed, and what the player may not do
     a = post(c, get_cmd(r.costume_key));
     check(a.done && a.ok && a.data["exists"] == true && a.data["status"] == "waiting" && a.data["text"].get<std::string>() == again.text, "the report comes back, its text whole: " + a.data.dump().substr(0, 120));
     rp::Session back;
     back.begin(); back.shot_settled();
     back.server_answer(rp::server_from(true, a.data["status"].get<std::string>()), a.data["text"].get<std::string>());
     check(back.server() == rp::Server::Waiting && back.has_report() && back.text() == again.text, "the menu: WAITING FOR FIX, Update");
-    a = post(c, status_cmd(nopic.costume_key, rp::action_withdraw()));
-    check(a.done && a.ok && a.data["ok"] == true, "withdraw: " + a.data.dump());
-    a = post(c, get_cmd(nopic.costume_key));
-    check(a.done && a.data["status"] == "withdrawn", "withdrawn, not deleted: " + a.data.dump().substr(0, 120));
+    check(back.update_blocked() && !back.send(), "the menu: Update does nothing until the text differs");
     a = post(c, status_cmd(nopic.costume_key, rp::action_confirm()));
-    check(a.done && community::auth::error_code(a.data) == "bad_transition", "confirm needs a fixed report: " + a.data.dump());
+    check(a.done && a.ok && a.data["ok"] == true && a.data["status"] == "tester_fixed", "MARK AS FIXED on a waiting report: " + a.data.dump());
+    a = post(c, get_cmd(nopic.costume_key));
+    check(a.done && a.data["status"] == "tester_fixed" && rp::server_from(true, a.data["status"].get<std::string>()) == rp::Server::Confirmed, "it stays on the server, marked by the tester: " + a.data.dump().substr(0, 120));
+    a = post(c, status_cmd(nopic.costume_key, rp::action_confirm()));
+    check(a.done && community::auth::error_code(a.data) == "bad_transition", "once: " + a.data.dump());
     a = post(c, status_cmd(nopic.costume_key, "fixed"));
     check(a.done && community::auth::error_code(a.data) == "bad_action", "the player can never set fixed: " + a.data.dump());
     c.stop();
