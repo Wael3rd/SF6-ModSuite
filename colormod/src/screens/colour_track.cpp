@@ -35,6 +35,7 @@
 #include "../engine/decide_internal.hpp"
 #include "../engine/live_internal.hpp"
 #include "../engine/luajson.hpp"
+#include "../engine/requests.hpp"
 #include "../vfx/feed.hpp"
 #include "colour_state.hpp"
 #include "dipanel_mode.hpp"
@@ -60,6 +61,7 @@ constexpr const char* kAgentP1 = "ui10505";                      // AGENT_NAME
 constexpr const char* kAgentP2 = "ui10507";                      // P2_AGENT_NAME
 constexpr const char* kAgentFs = "MatchingFighterSetting";       // FS_AGENT_NAME
 constexpr const char* kAgentTcs = "GenericCharacterDetailSetting_FG";   // TCS_AGENT_NAME
+constexpr const char* kAgentOpp = "OtherMatchingFighterSetting";  // Battle Settings > Other > Opponent Outfit Settings, a fighter's page
 constexpr uint32_t kBaseColor = 1;                               // BASE_COLOR
 constexpr const char* kStateFile = "reframework/data/SF6_ColorSpinExtra_data/state.json";
 constexpr const char* kChipFile = "reframework/data/SF6_ColorSpinExtra_data/chip_slots.json";
@@ -744,6 +746,94 @@ void tick_fighter_settings() {
         paint_rect(fsm.rect0.get(), chip->first);
         paint_rect(fsm.rect1.get(), chip->second);
     }
+}
+
+// ---- Opponent Outfit Settings (tick_opponent) -----------------------------------------------------------------------------
+// The page's colour grid lists ColorInventory.GetColorList, so our entries too, each with No = BASE_COLOR. For the game every such cell is colour 02:
+// its squares (UpdateColorGrid -> UpdateColorGridItem, from that No's FighterColorData) and the preview (OnColorGridSelectionChanged -> the capture's
+// RequestOverrideColorId). So here:
+// - The squares: a cell showing an entry's label gets that entry's pair. The game writes them back at each selection change, inside LateUpdateBehavior
+//   or after the frame is drawn, so they are looked at before that phase and after it (opponent_post): no frame is drawn with the wrong ones.
+// - The preview: what the selected cell is, asked as a preview request (scope 1 of the contract, as Replays > Settings; state.json is never changed):
+//   its entry, or "" = the game's own colours. The fighter is dressed again when it wears BASE_COLOR, since for the game nothing changed then.
+// A look for the agent every 15 frames until the page is up; everything else only while it is on screen. Nothing is kept from a frame to the next but
+// numbers and the entry's id (R35). A tick on such a cell stays what the game makes of it: colour 02 of that outfit.
+constexpr uint32_t kOppPollEvery = 15;
+constexpr int kOppCellsMax = 40;                                   // the grid's pool, its scroll bar included (24 + 1, read 07/11)
+constexpr int kOppChipsPerPass = 2;                                // squares read from an entry's file in one pass: a first visit spread over frames
+struct OppPage {
+    bool up = false, asked = false;
+    Opt f, c;
+    std::string id;                                                // what was asked for the preview ("" = the game's own colours)
+};
+OppPage g_opp;
+
+void opp_leave() {
+    if (g_opp.asked) engine::decide::clear_requests(engine::requests::kPreview);
+    g_opp = OppPage{};
+}
+// The page on screen: its main control and its param
+bool opp_page(MO*& cm, MO*& param) {
+    for (MO* agent : agents(kAgentOpp)) {
+        MO* c = call_obj(agent, "get_ControlMain");
+        const auto v = c ? call_bool(c, "get_ActualVisible") : std::nullopt;
+        if (!(v && *v)) continue;
+        MO* go = call_obj(agent, "get_GameObject");
+        const auto d = go ? call_bool(go, "get_DrawSelf") : std::nullopt;     // a hidden GUI keeps its controls' ActualVisible
+        if (!(d && *d)) continue;
+        MO* p = agent_param(agent);
+        if (!p) continue;
+        cm = c; param = p;
+        return true;
+    }
+    return false;
+}
+MO* opp_find(MO* root, const char* name) { return root ? reinterpret_cast<MO*>(api()->ui_find_cached(root, name)) : nullptr; }
+const Entry* opp_entry(MO* item, const Opt& f, const Opt& c) {     // the entry a cell shows, by its label
+    const auto msg = message(opp_find(item, "e_text"));
+    const int64_t k = msg ? label_to_k(f, c, *msg) : 0;
+    return k > 0 ? entry_k(entries_for(f, c), k) : nullptr;
+}
+void opp_paint(MO* cm, const Opt& f, const Opt& c) {
+    MO* grid = opp_find(cm, "p_ScrollGrid_0");
+    int budget = kOppChipsPerPass;
+    int guard = 0;
+    for (MO* item = grid ? call_obj(grid, "get_Child") : nullptr; item && guard < kOppCellsMax; item = call_obj(item, "get_Next"), ++guard) {
+        const auto v = call_bool(item, "get_ActualVisible");
+        if (!(v && *v)) continue;
+        const Entry* e = opp_entry(item, f, c);
+        if (!e) continue;
+        if (g_entry_chip.find(fc_key(f, c) + "|" + e->path) == g_entry_chip.end() && budget-- <= 0) continue;
+        const auto chip = entry_chip(f, c, *e);
+        if (!chip) continue;
+        MO* r0 = opp_find(item, "e_rect_color_0");
+        MO* r1 = opp_find(item, "e_rect_color_1");
+        if (r0) paint_rect(r0, chip->first);
+        if (r1) paint_rect(r1, chip->second);
+    }
+}
+void tick_opponent() {
+    if (!g_opp.up && g_F % kOppPollEvery != 0) return;
+    MO* cm = nullptr;
+    MO* param = nullptr;
+    if (!opp_page(cm, param)) { if (g_opp.up) opp_leave(); return; }
+    int32_t fid = -1;
+    const auto cos = call_i32(param, "get_SettingOtherCostumeId");
+    if (!ll::read_field_i32(param, "SettingFighterId", fid) || fid <= 0 || !cos) return;
+    const Opt f = (int64_t)fid, c = (int64_t)*cos;
+    g_opp.up = true;
+    opp_paint(cm, f, c);
+    MO* grid = opp_find(cm, "p_ScrollGrid_0");
+    MO* sel = grid ? call_obj(grid, "get_SelectedItem") : nullptr;
+    if (!sel) return;
+    const Entry* e = opp_entry(sel, f, c);
+    const std::string id = e ? e->ident : std::string();
+    if (g_opp.asked && g_opp.f == f && g_opp.c == c && g_opp.id == id) return;
+    engine::decide::request(engine::requests::kPreview, (int)fid, (int)*cos, id.c_str(), nullptr);
+    g_opp.asked = true;
+    g_opp.f = f; g_opp.c = c; g_opp.id = id;
+    for (MO* ctrl : dd::scene_ctrls())
+        if (engine::live::side_from_parents(ctrl) == 3 && color_num(ctrl) == kBaseColor) set_color(ctrl, kBaseColor, "opponent outfit", true);
 }
 
 // ---- training pause > Character Settings (tick_training_settings) ------------------------------------------------------
@@ -1483,12 +1573,22 @@ void chips_reload() {
 }
 
 // ---- owner "screens_colour": the DLL tracks and acts (phase 5c-2) ---------------------------------------------------------
+void opponent_post() {
+    if (!g_opp.up) return;
+    std::lock_guard lk(engine::live::mx());
+    perf::Scope t(perf::ScrOpponent);
+    MO* cm = nullptr;
+    MO* param = nullptr;
+    if (opp_page(cm, param)) opp_paint(cm, g_opp.f, g_opp.c);
+}
+
 void frame(uint64_t lua_frame) {
     std::lock_guard lk(engine::live::mx());
     if (!boot()) return;
     g_F = lua_frame;
     { const int64_t t = perf::begin(); decide_pull(); perf::end(perf::ScreensDecidePull, t); }
     { const int64_t t = perf::begin(); tick(); perf::end(perf::ScreensTick, t); }
+    { perf::Scope t(perf::ScrOpponent); tick_opponent(); }
     { const int64_t t = perf::begin(); refresh_fn(); perf::end(perf::ScreensRefreshFn, t); }
     { const int64_t t = perf::begin(); fs_refresh_step(); perf::end(perf::ScreensFsRefresh, t); }
     { const int64_t t = perf::begin(); editor_tick(); perf::end(perf::ScreensEditorTick, t); }

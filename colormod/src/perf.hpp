@@ -98,7 +98,7 @@ enum Id : int {
     // SetupDecide's parts: who wears what (should_inject), the colour data written (inject), the journal line
     SetupResolve, SetupInject, SetupJournal,
     // ScreensTick's parts (every 3 frames), the tracker's paints, editor_tick's guide reads, the Slots Loader claim calls
-    ScrGuideFlags, ScrResolve, ScrDipanel, ScrRows, ScrFsTick, ScrTcsTick, ScrMenus, ScrGuideList,
+    ScrGuideFlags, ScrResolve, ScrDipanel, ScrRows, ScrFsTick, ScrTcsTick, ScrOpponent, ScrMenus, ScrGuideList,
     TrkMenus, TrkCamera, TrkDots, SlotsClaim,
     ScrSelChange, ScrSaveState,
     // VirtualQuery calls (memguard, any thread), the colour files' stat / read (live::file_tree), the wait for the

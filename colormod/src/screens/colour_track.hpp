@@ -24,6 +24,7 @@ void chips_reload();                                                        // "
 
 // ---- owner "screens_colour" (phase 5c-2): the DLL tracks and acts; the Lua only relays the option orders (until 5d) ----
 bool install();                                                             // the two Esc hooks (InputCancel, training menu close)
+void opponent_post();                                                       // after LateUpdateBehavior: Opponent Outfit Settings' squares, before the frame is drawn
 void frame(uint64_t lua_frame);                                             // pull, tick, late steps, triggers, editor loop, push
 bool acting();
 // the editor's orders that the relay used to apply on the screens, done here while the DLL acts

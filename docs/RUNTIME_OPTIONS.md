@@ -1202,6 +1202,11 @@ The tab stores a Color Mod entry as `"color": 1, "colormod": "<entry file path>"
 replay's `setupDesc` every forced fighter is asked for (its entry, or the game colours), replacing the previous replay's
 requests.
 
+**Opponent Outfit Settings** lists the same entries in the game's own colour grid, each as colour 02 for the game. The Color
+Mod gives each RW / MC cell its own squares and dresses the preview with the selected cell through the same scope 1 request
+(`colour_track.cpp` `tick_opponent`), only while that page is up. A tick on such a cell is still the game's: it saves colour 02
+of that outfit (`ValidColorIdList` holds colour numbers), and an opponent then wears plain colour 02.
+
 ## Costume options for Replays > Settings (`plugin/src/replay_tab.cpp`, `rto_menu.cpp`, `replay_options.hpp`)
 
 On the Replays > Settings character page, when the fighter is On and its outfit has options: the guide bar shows

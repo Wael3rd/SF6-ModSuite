@@ -43,7 +43,7 @@ const char* const kNames[kCount] = {
     "VfxRelayReload", "VfxPageRefresh", "ScanCommit",
     "ProvScan", "ProvTick", "ProvSnap", "ProvBuild",
     "SetupResolve", "SetupInject", "SetupJournal",
-    "ScrGuideFlags", "ScrResolve", "ScrDipanel", "ScrRows", "ScrFsTick", "ScrTcsTick", "ScrMenus", "ScrGuideList",
+    "ScrGuideFlags", "ScrResolve", "ScrDipanel", "ScrRows", "ScrFsTick", "ScrTcsTick", "ScrOpponent", "ScrMenus", "ScrGuideList",
     "TrkMenus", "TrkCamera", "TrkDots", "SlotsClaim",
     "ScrSelChange", "ScrSaveState",
     "PageQuery", "SetupFiles", "SetupLockWait",
