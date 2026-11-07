@@ -1719,18 +1719,18 @@ bool hint_find_bar(HintBar& b) {
     }
     return false;
 }
-bool hint_bar_live() {
+bool hint_bar_live(bool on_screen = true) {
     if (!g_hbar.agent) return false;
     void* buf[4] = {};
     const uint32_t n = slots::ui::core()->ui_agents("InputGuide", buf, 4);
     for (uint32_t i = 0; i < n && i < 4; ++i)
-        if (buf[i] == g_hbar.agent) return agent_visible(g_hbar.agent) && alive(g_hbar.parent) && alive(g_hbar.btn);
+        if (buf[i] == g_hbar.agent) return (!on_screen || agent_visible(g_hbar.agent)) && alive(g_hbar.parent) && alive(g_hbar.btn);
     return false;
 }
 void* hint_copy() { return g_hbar.parent ? slots::ui::core()->ui_find_child(g_hbar.parent, kHintName, 0) : nullptr; }
 void hint_hide(const char* why) {
     if (!g_hint.shown) return;
-    if (hint_bar_live())
+    if (hint_bar_live(false))                                // its agent hidden too: the copy would come back with it on every screen
         if (void* c = hint_copy()) slots::ui::core()->ui_set_visible(slots::ui::client(), c, 0);
     g_hint.shown = false;
     logf("stages: guide bar hint hidden (%s)", why);
