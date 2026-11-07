@@ -1,11 +1,61 @@
 # Changelog
 
-## Unreleased
+## 1.25.0 (2026-11-07) — SF6 Mod Suite
 
-- **report_mod.dll**: Report a bug is a small plugin of its own on the Native Core, in the Slots Loader's package and the all-in-one, so it no longer needs the Recording Manager. Same
-  menu, same texts, its own locale file. It sends no API key: the server must be updated first. Beside a Recording Manager 2.2.8 it stays off and says so in the log.
-- **Recording Manager 2.2.9**: no report; R and T stand back under any option window; `identity.json` is shared safely with the new DLL (whole writes, read again on a 401, one login at a time).
-- **Packaging**: every DLL is checked against its sources before a zip is written; the Worker's address is in no tracked file (`crsm/package/config.example.json` holds a placeholder).
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.21.0 | now holds Report a bug (`report_mod.dll`) |
+| SF6 Recording Manager | 2.2.9 | Report a bug moved out |
+| SF6 Color Mod | 0.24.3 | unchanged |
+| SF6 Native Core | 0.9.7 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.20.1 and SF6 Recording Manager 2.2.8, then install Slots Loader
+1.21.0 and Recording Manager 2.2.9 together. Color Mod 0.24.3, Native Core 0.9.7 and Profile Mod 1.0.0 are the same files as in
+1.24.0: keep them. With the all-in-one package, replace 1.24.0 with 1.25.0. The costume pak is not rebuilt at the first launch
+("Up to date").
+
+### SF6 Slots Loader 1.21.0
+- New: **Report a bug** no longer needs the Recording Manager. It is a small plugin of its own, `report_mod.dll`, in this package; it
+  needs the Native Core and does nothing without it. Same menu, same texts, same rules: no report leaves until you choose Send, and
+  what goes with it is said when the cursor is on Send (a picture of the game, your text, the character, outfit and colour, the
+  outfit's record, the mods' versions and list, the Slots Loader's and its plugin's logs, cleaned of your Windows user name, user
+  folder paths and platform IDs, and your Steam ID, which the server takes from your Steam verification). Kept 90 days.
+- It sleeps more: until you press R (pad X) on that screen, it holds one hook on that screen and one variable read per displayed
+  frame. The first press of a session opens the menu about half a second later; the next ones open at once. It sends no API key.
+- Beside a Recording Manager 2.2.8 it stays off, and that version's own report keeps working: REFramework's log says so.
+
+### SF6 Recording Manager 2.2.9
+- Report a bug moved to the Slots Loader's package: this version has none of its own. With a Slots Loader older than 1.21.0 there is no
+  report at all, so install both.
+- R and T stand back on that screen and under any option window.
+- Your Community login is shared safely with the new plugin. You do not have to link again.
+
+### Known issues
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet.
+- Manager mode has not been checked in an online match. Its owned-outfit opt-out was checked by automated tests only.
+- A very long first rebuild can leave the game with no window. In one test a 26-minute rebuild, on a PC busy with other
+  work, left the game stuck at start-up; closing it and launching again worked, and the pak was complete. The cause is not
+  known. Rebuilds of a few minutes were fine.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+- All languages except French are machine translations, not yet reviewed by native speakers.
+- An outfit whose mod gives no usable name still shows the loader's "Outfit I", in English in every language.
+- Two outfits of one fighter with the same mod name look the same on the Costume row. Their numbers differ, so choices
+  do not mix.
+- Opponent Outfit Settings: ticking an RW or MC colour also ticks colour 02 and the other RW / MC cells of that outfit, and an
+  opponent then wears colour 02, not the one ticked. The colours shown are right; the real choice comes in a later release.
+- An outfit named after its archive keeps the file's extension in its name (".rar").
+- Report a bug is on Battle Settings > Character only.
+- Slotsloader Manager: report_mod.dll has not been checked in a package installed by ZZtaii's Manager.
+- The Record and Replay pages' fix was checked in game with the keyboard, not with a pad.
+- Arabic: a long line of Replays > Settings' summary slides as a whole, and scrolling names have not been checked in game.
+- Real outfit names have not been checked in a real online match. They are local text: outfits still travel as numbers.
+- With the full profile, the limited one shows briefly first.
+- Profile Mod has not been checked in an online match.
 
 ## 1.24.0 (2026-11-07) — SF6 Mod Suite
 
