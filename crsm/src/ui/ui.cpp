@@ -85,6 +85,7 @@ void run_dialogs_hand_back() {                   // a text dialog up when the UI
     try { dlg::hand_back(); } catch (...) {}
     try { com::hand_back(); } catch (...) {}
     try { details::hand_back(); } catch (...) {}
+    try { bug_report::hand_back(); } catch (...) {}
 }
 
 void run_hand_back() {
@@ -161,6 +162,7 @@ void frame_fn(uint64_t fr) {
         { PERF_SUB(p3, "UI:ticker"); ticker::frame(); }
         { PERF_SUB(p4, "UI:community_dialog"); com::frame(); }
         { PERF_SUB(p9, "UI:drill_details"); details::frame(st.training, paused); }
+        { PERF_SUB(p10, "UI:bug_report"); bug_report::frame(st.training); }
         { PERF_SUB(p5, "UI:windows"); windows::frame(st.training, paused); }
         { PERF_SUB(p6, "UI:reversal_ui"); reversal_ui::frame(paused); }
         { PERF_SUB(p7, "UI:hud"); hud::frame(); }
@@ -204,6 +206,7 @@ std::string status() {
         s += "; dialogs: " + dlg::status();
         s += "; community: " + com::status();
         s += "; drill details: " + details::status();
+        s += "; bug report: " + bug_report::status();
         s += "; ticker: " + ticker::status();
         s += "; " + ui::lang::status();
     }
@@ -252,6 +255,7 @@ void init() {
 void start() {
     if (!cmn::owns(F::Ui)) return;
     ui::lang::load();                            // locale.json, read once here (never from a hook)
+    try { bug_report::start(); } catch (...) {}
     try { dump::tab_methods(); } catch (...) {}  // the game's tab methods (off by default: tab_dump_on.txt)
     std::string note;
     g_sa_mode = standalone::parse_mode(cmn::setting_standalone(), &note);

@@ -80,6 +80,10 @@ bool build_request(const json& cmd, const Config& cfg, Request* out, std::string
         put(body, cmd, "value"); put_cfn(body, cmd);
     } else if (name == "delete") {
         out->method = "DELETE"; out->url = base + "/api/delete/" + url_encode(field_text(cmd, "id"));   // the author is the token's
+    } else if (name == "report") {
+        out->method = "POST"; out->url = base + "/api/report"; out->has_body = true; out->timeout_ms = kReportTimeoutMs;
+        for (const char* k : { "costume_key", "text", "character", "fighter_id", "outfit", "outfit_row", "costume_no", "colour", "versions", "logs", "record", "mods", "notes", "image" })
+            put(body, cmd, k);
     } else if (name == "ticket") {
         const std::string t = field_text(cmd, "ticket");
         if (t.empty()) { *error = "no ticket"; return false; }

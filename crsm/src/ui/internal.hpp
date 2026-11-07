@@ -110,6 +110,14 @@ void hand_back();                              // the UI stopped: the dialog clo
 std::string status();
 }  // namespace details
 
+// ---- "Report a bug" (bug_report.cpp) ----------------------------------------------------------------------------------------------------
+namespace bug_report {
+void start();                                  // the present callback (one atomic load per Present)
+void frame(bool training);                     // the screen, the guide entry, the key, the menu
+void hand_back();                              // the UI stopped: the window closed, nothing kept
+std::string status();
+}  // namespace bug_report
+
 // ---- REC HUD (hud.cpp) ----------------------------------------------------------------------------------------------------
 namespace hud {
 void specs(std::vector<mech::hooks::Spec>& out);

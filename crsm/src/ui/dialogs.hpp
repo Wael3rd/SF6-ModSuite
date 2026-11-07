@@ -3,7 +3,8 @@
 // the Manager page (phase P5) calls.
 //
 // Behaviour of the Lua it replaces (RecordingManagerTab.lua RMT, NativeTicker.lua TK):
-//  * text_input: app.UITextInputDialog.OpenTextInputDialog(no delegate, RequestType 16 "ReciperMemo", VisualType 1 FG,
+//  * text_input (one line: a line break is typed as /n, details_logic.hpp; tried with 1000 characters, Ctrl+V works):
+//    app.UITextInputDialog.OpenTextInputDialog(no delegate, RequestType 16 "ReciperMemo", VisualType 1 FG,
 //    initial, max_bytes) (RMT:1426-1438); the game's "Maximum 15 characters" line reads T("press_enter"); the pause menu's
 //    input and its tab moves are blocked while it is up. `done(ok, text)`: ok = something to apply (a decide, even with the
 //    initial text; or a close without a decide after the text changed); ok = false for a cancel, a close with nothing
@@ -41,4 +42,6 @@ void confirm(const std::string& text, const std::string& title, std::function<vo
 // confirm_box then return end`, RMT:1459, 1464; T / G / R ignored, RMT:1762) for the keys of the Manager page (T =
 // rename, Confirm on the Drill row = the details).
 bool busy();
+// A text dialog can open: its hooks are in place
+bool text_available();
 }

@@ -63,7 +63,7 @@ bool token_ok(const std::string& t) {
     return true;
 }
 
-bool needs_token(const std::string& cmd) { return cmd == "share" || cmd == "vote" || cmd == "delete"; }
+bool needs_token(const std::string& cmd) { return cmd == "share" || cmd == "vote" || cmd == "delete" || cmd == "report"; }
 
 json token_json(const Token& t) {
     json j = json::object();

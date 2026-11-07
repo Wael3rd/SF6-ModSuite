@@ -94,6 +94,7 @@ MO* tm() { return gx::singleton("app.training.TrainingManager"); }
 void menu_input_blocked(bool on) {              // RMT:1418-1424 (B3 would count these; the Lua's direct calls kept)
     if (g_input_off == on) return;
     g_input_off = on;
+    if (!ui::training()) return;                 // a text dialog outside Training (Report a bug): no pause menu to hold
     gx::set_block_input(gx::pause_agent(), on);
     gx::invoke(tm(), "SetAllMenuInput(System.Boolean)", { gx::B(!on) });
     cmn::journal("ui: menu input %s", on ? "blocked" : "released");
@@ -622,6 +623,8 @@ void confirm(const std::string& text, const std::string& title, std::function<vo
 void community_open() { ui::com_api::open(); }
 void community_share() { ui::com_api::share(); }
 void ticker(const std::string& text) { ui::ticker::push(text); }
+
+bool text_available() { return dlg::ok_result && dlg::ok_cancel && dlg::ok_hide; }
 
 bool busy() {                                    // lock-free but for the request queue's own small mutex
     if (dlg::g_naming.load() || dlg::g_job_up.load() || dlg::g_box_up.load() || ui::com::open() || ui::details::is_open()) return true;
