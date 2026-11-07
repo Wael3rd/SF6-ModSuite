@@ -77,8 +77,8 @@ static int second_half(const std::string& base, const std::string& key, const fs
     rp::Session m;
     m.begin(); m.shot_settled();
     m.server_answer(rp::server_from(true, a.data["status"].get<std::string>()), a.data["text"].get<std::string>());
-    check(m.server() == rp::Server::Fixed && m.option_index() == 0 && m.options()[0] == "report_st_to_test", "the menu: TO TEST");
-    check(m.choose(1) && m.confirm_due() && m.start_status(), "OK: confirm goes");
+    check(m.server() == rp::Server::Fixed && m.option_index() == 0 && m.options()[0] == "report_st_to_test" && m.options()[1] == "report_st_mark_fixed", "the menu: TO TEST, MARK AS FIXED");
+    check(m.choose(1) && m.confirm_due() && m.start_status(), "MARK AS FIXED: confirm goes");
     a = post(c, status_cmd(costume, rp::action_confirm()));
     check(a.done && a.ok && a.data["ok"] == true, "confirmed: " + a.data.dump());
     m.status_answered(true, rp::Server::Confirmed, "");
@@ -182,11 +182,9 @@ int main(int argc, char** argv) {
     check(back.server() == rp::Server::Waiting && back.has_report() && back.text() == again.text, "the menu: WAITING FOR FIX, Update");
     check(back.update_blocked() && !back.send(), "the menu: Update does nothing until the text differs");
     a = post(c, status_cmd(nopic.costume_key, rp::action_confirm()));
-    check(a.done && a.ok && a.data["ok"] == true && a.data["status"] == "tester_fixed", "MARK AS FIXED on a waiting report: " + a.data.dump());
+    check(a.done && community::auth::error_code(a.data) == "bad_transition", "WAITING FOR FIX: the player cannot move it: " + a.data.dump());
     a = post(c, get_cmd(nopic.costume_key));
-    check(a.done && a.data["status"] == "tester_fixed" && rp::server_from(true, a.data["status"].get<std::string>()) == rp::Server::Confirmed, "it stays on the server, marked by the tester: " + a.data.dump().substr(0, 120));
-    a = post(c, status_cmd(nopic.costume_key, rp::action_confirm()));
-    check(a.done && community::auth::error_code(a.data) == "bad_transition", "once: " + a.data.dump());
+    check(a.done && a.data["status"] == "waiting", "it still waits: " + a.data.dump().substr(0, 120));
     a = post(c, status_cmd(nopic.costume_key, "fixed"));
     check(a.done && community::auth::error_code(a.data) == "bad_action", "the player can never set fixed: " + a.data.dump());
     c.stop();

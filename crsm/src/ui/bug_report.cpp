@@ -1,9 +1,9 @@
 // ui/bug_report — "Report a bug" on Battle Settings > Character (Fighter Settings), its Character tab: R / pad X (the game's input 341).
 // The key takes a picture of the game (report/capture.hpp) and opens a page of the core's option window, docked on the side as the Color Mod's Edit Drive Colors, the fighter
-// in sight. Its rows are real actions: STATUS, then what the status allows; what cannot be pressed is the text under them, with the real values (report_logic.hpp has the rules).
-// The status is asked of the server when the menu opens (the costume's key alone leaves). Send gathers it all off the game thread (report/gather.hpp) and posts it through the
-// Community client: the Steam-verified token identifies the player, the server attaches his Steam ID; the menu shows that ID read from the Steam client, which is never logged
-// nor sent. Back sends nothing and keeps nothing: the picture lives in memory only, and goes with the window.
+// in sight. Its rows are real actions: STATUS, then what the status allows. Under them: Character, Outfit, Description; the messages are on the guide's line (report_logic.hpp has
+// the rules). The status is asked of the server when the menu opens (the costume's key alone leaves). Send gathers it all off the game thread (report/gather.hpp) and posts it
+// through the Community client: the Steam-verified token identifies the player, the server attaches his Steam ID. Back sends nothing and keeps nothing: the picture lives in memory
+// only, and goes with the window.
 //
 // Rules (docs: crsm/README.md "Report a bug"):
 //   - On this screen only: its agent drawn, its tab 0, its costume row shown: the agent and its main control stay drawn and ActualVisible
@@ -39,7 +39,7 @@
 #include "community/auth.hpp"
 #include "community/client.hpp"
 #include "community/community.hpp"
-#include "community/steam_ticket.hpp"
+#include "../../../plugin/src/scroll_logic.hpp"
 #include "details_logic.hpp"
 #include "dialogs.hpp"
 #include "game/gm.hpp"
@@ -399,7 +399,7 @@ SF6CoreClient* g_opt_client = nullptr;           // our own core client for the 
 bool g_cb_set = false;
 rp::Session g_session;
 rp::Snapshot g_snap;
-rp::MenuValues g_values;                         // what the text under the rows shows; the Steam ID lives here and nowhere else: never logged, never sent
+rp::MenuValues g_values;                         // what the text under the rows names
 std::string g_key;                               // the costume key, once the files were read
 uint64_t g_gen = 0;                              // this report: an answer of an earlier one is dropped
 uint64_t g_shot_at = 0, g_window_deadline = 0, g_settle_until = 0, g_send_at = 0, g_busy_until = 0;
@@ -411,12 +411,11 @@ std::vector<rp::Row> g_roles;                    // what each of them is
 std::string g_built;                             // what the page was built from
 std::atomic<int> g_pressed{-1};                  // a row's Confirm (the core's callback): run on the frame
 std::atomic<int> g_chosen{-1};                   // STATUS moved (the core's callback): run on the frame
-bool g_mark_due = false;                         // MARK AS FIXED pressed: goes out as soon as the client is free
 // What is read off the game thread: the summary's values and the key when the menu opens, the whole command at Send
 std::mutex g_prep_mx;
 std::optional<nlohmann::json> g_prep;
 bool g_prep_failed = false;
-struct Preview { bool ready = false, failed = false; uint64_t gen = 0; std::string key; rp::MenuValues v; };
+struct Preview { bool ready = false, failed = false; uint64_t gen = 0; std::string key, outfit; };
 Preview g_preview;
 enum class SendStep { None, WaitPicture, Preparing, WaitClient, Posted } g_step = SendStep::None;
 uint64_t g_reports = 0, g_sent = 0, g_failed = 0, g_backed = 0;
@@ -462,7 +461,7 @@ void fix_frame(MO* cm) {
         if (has_y && gx::vec3_of(c, "get_Position", p) && !near_f(p[1], y, 0.5f)) gx::set_pos(c, p[0], y, p[2]);
     }
 }
-struct SummaryBox { MO* text = nullptr; bool ok = false; float pos[3] = {}; float w = 0, h = 0, fw = 0, fh = 0; int32_t cp = -1; };
+struct SummaryBox { MO* text = nullptr; bool ok = false; float pos[3] = {}; float w = 0, h = 0, fw = 0, fh = 0, top = 0; int32_t cp = -1; };
 SummaryBox g_box;
 void summary_box(MO* gmt, int rows) {
     if (g_box.text != gmt) {
@@ -478,6 +477,7 @@ void summary_box(MO* gmt, int rows) {
     const float area = kSummaryAreaH3 + (float)(3 - std::clamp(rows, 1, 3)) * kRowPitch;
     float y_new = 0;
     if (!lg::keep_bottom_y(g_box.cp, g_box.pos[1], g_box.h, area, &y_new)) return;
+    g_box.top = y_new - (float)(g_box.cp / 4) * 0.5f * area;
     const float fw = g_box.fw * kSummaryScale, fh = g_box.fh * kSummaryScale;
     float w = 0, h = 0, p[3] = {};
     if (!gx::size_of(gmt, "get_FontSize", &w, &h) || !near_f(w, fw, 0.05f) || !near_f(h, fh, 0.05f)) gx::set_font(gmt, fw, fh);
@@ -510,6 +510,215 @@ void write_summary(MO* gmt) {
     g_wrote = g_summary;
     g_read_back_due = true;
 }
+// ---- the message and the description's bar: copies in the dialog's guide row ----------------------------------------------------------------------------------------------
+// The message: a copy of the game's last guide entry (its style) on the guide's line, its right end at the window's right edge, never over the entries: past its room it slides as
+// a long outfit name does (Position and a local ScissorRect, the same timing: plugin/src/scroll_logic.hpp). Measured by the game once its region is wide.
+// The bar: two copies of a via.gui.Rect of the dialog, as the drill details' (the game's own via.gui.ScrollBar could not be looked at without the game), following scroll_top.
+// R19: a copy is made only in the option dialog's own update (Community's post-hook calls dialog_update). R35: found again by name each time, hidden until placed.
+constexpr const char* kMsgName = "e_text_crsm_report_msg";
+constexpr const char* kTrackName = "e_rect_crsm_report_track";
+constexpr const char* kThumbName = "e_rect_crsm_report_thumb";
+constexpr float kMsgBeyond = 70.0f;              // the window's inner right edge: that far past the rows' right end (read in game: 930 and 1022 of its frame)
+constexpr float kMeasureW = 4000.0f, kBarGap = 14.0f, kBarWidth = 8.0f;
+constexpr float kSummaryLinePx = 31.0f;          // a line of the text under the rows, at its font
+constexpr uint32_t kTrackColor = 0xCC463C3Cu, kThumbColor = 0xFFCC24CEu;   // the drill details' (0xAABBGGRR)
+constexpr int kMaxCopies = 8, kCopyPriority = 10;
+constexpr uint64_t kRowSettle = 12, kLayoutFrames = 3;
+std::atomic<bool> g_copies_due{false}, g_want_bar{false};
+std::atomic<void*> g_copy_param{nullptr};
+int g_copy_tries = 0;
+void* g_copy_for = nullptr;
+struct GuideItem { MO* t = nullptr; float x = 0, y = 0, z = 0, w = 0, fw = 0; };
+GuideItem last_item(MO* row) {                   // the game's entries now (e_text_0_d_*): the last one, left to right
+    GuideItem best;
+    int n = 0;
+    for (MO* e = row ? gx::first_child(row) : nullptr; e && n < 64; e = gx::next(e), ++n) {
+        if (gx::name(e).rfind("e_text_0_d_", 0) != 0 || !gx::is_type(e, "via.gui.Text") || !gx::visible(e) || gx::force_invisible(e)) continue;
+        float p[3] = {}, rw = 0, rh = 0, f = 0, fh = 0;
+        if (!gx::vec3_of(e, "get_Position", p) || !gx::size_of(e, "get_RegionSize", &rw, &rh) || !gx::size_of(e, "get_FontSize", &f, &fh)) continue;
+        if (!best.t || p[0] > best.x) best = GuideItem{ e, p[0], p[1], p[2], rw, f };
+    }
+    return best;
+}
+MO* first_rect(MO* e, int depth) {
+    int n = 0;
+    for (MO* k = gx::first_child(e); k && n < 64; k = gx::next(k), ++n) {
+        if (gx::is_type(k, "via.gui.Rect")) return k;
+        if (depth < 6) if (MO* r = first_rect(k, depth + 1)) return r;
+    }
+    return nullptr;
+}
+MO* copy_in(MO* row, const char* name) {
+    const SF6CoreAPI* a = api();
+    return a && row ? static_cast<MO*>(perf::counted(a)->ui_find_child(row, name, 0)) : nullptr;
+}
+void ask_copies(void* param) {
+    if (param != g_copy_for) { g_copy_for = param; g_copy_tries = 0; }
+    if (g_copy_tries >= kMaxCopies) return;
+    g_copy_param.store(param);
+    g_copies_due.store(true);
+}
+void make_copies() {
+    const SF6CoreAPI* a = api();
+    void* pv = g_copy_param.load();
+    g_copies_due.store(false);
+    if (!a || !SF6CORE_HAS(a, ui_clone_control) || !pv || !gm::is_managed(pv)) return;
+    MO* param = static_cast<MO*>(pv);
+    MO* gmt = gx::ref(param, "GuideMessageText");
+    MO* row = gmt ? gx::parent(gmt) : nullptr;
+    if (!row) return;
+    const auto clone = [&](MO* tmpl, const char* name) {
+        ++g_copy_tries;                          // (a row being made again has no template yet: that is no try)
+        void* made = nullptr;
+        const SF6CoreStatus st = perf::counted(a)->ui_clone_control(gx::cl(), tmpl, row, name, &made);
+        if (st == SF6CORE_OK && made) perf::counted(a)->ui_set_visible(gx::cl(), made, 0);
+        cmn::journal("bug report: copy %s of %s: %s (%d)", name, gx::name(tmpl).c_str(), st == SF6CORE_OK && made ? "made" : "refused", (int)st);
+    };
+    if (!copy_in(row, kMsgName)) {
+        const GuideItem last = last_item(row);
+        if (last.t) clone(last.t, kMsgName);
+    }
+    if (g_want_bar.load() && (!copy_in(row, kTrackName) || !copy_in(row, kThumbName))) {
+        MO* agent = gx::ref(param, "<Agent>k__BackingField");
+        MO* cm = agent ? gx::call_obj(agent, "get_ControlMain") : nullptr;
+        MO* rect = cm ? first_rect(cm, 0) : nullptr;
+        if (!rect) { cmn::journal("bug report: no Rect in the dialog: no bar"); g_copy_tries = kMaxCopies; return; }
+        if (!copy_in(row, kTrackName)) clone(rect, kTrackName);
+        if (!copy_in(row, kThumbName)) clone(rect, kThumbName);
+    }
+}
+void set_clip(MO* t, float l, float top, float r, float b) {
+    float rect[4] = { l, top, r, b };
+    SF6CoreArg arg{};
+    arg.type = SF6CORE_ARG_PTR;
+    arg.v.p = rect;                              // a value type goes by address
+    gx::invoke(t, "set_ScissorRect(via.Rect)", { arg });
+}
+struct MsgLine {
+    uintptr_t copy = 0;
+    std::string text;
+    bool measuring = false, shown = false, have_row = false;
+    uint64_t asked_at = 0, seen_at = 0;
+    ULONGLONG t0 = 0;
+    float natural = 0, y = 0, z = 0, h = 0, entries_end = 0, seen_end = -1, last_left = 0;
+    int last_off = -1;
+};
+MsgLine g_msg;
+std::string g_message;                           // what the guide's line should say
+void message_frame(MO* gmt, void* param) {
+    namespace sc = slots::scroll;
+    MO* row = gx::parent(gmt);
+    MO* t = copy_in(row, kMsgName);
+    if (g_message.empty()) {
+        if (t && g_msg.shown) gx::set_visible(t, false);
+        g_msg.shown = false;
+        g_msg.text.clear();
+        g_msg.measuring = false;
+        return;
+    }
+    if (!t) { ask_copies(param); return; }
+    if (reinterpret_cast<uintptr_t>(t) != g_msg.copy) {
+        g_msg = MsgLine{};
+        g_msg.copy = reinterpret_cast<uintptr_t>(t);
+        set_by_name(t, "set_AutoRegionFit", gx::I(0));
+        set_by_name(t, "set_AutoWrap", gx::B(false));
+        set_by_name(t, "set_PageAlignment", gx::I(4));   // LeftCenter: placed by its left point, as a sliding name
+    }
+    const uint64_t now = tick();
+    const GuideItem last = last_item(row);
+    if (last.t) {                                // the row is made again at each cursor move: its end counts once it holds still
+        float fw = 0;
+        g_msg.y = last.y;
+        g_msg.z = last.z;
+        if (gx::size_of(last.t, "get_FontSize", &fw, &g_msg.h)) g_msg.have_row = true;
+        const float end = last.x + last.w + last.fw;
+        if (!near_f(end, g_msg.seen_end, 1.0f)) { g_msg.seen_end = end; g_msg.seen_at = now; }
+        else if (now - g_msg.seen_at >= kRowSettle) g_msg.entries_end = end;
+    }
+    if (!g_box.ok || !g_msg.have_row || g_msg.entries_end <= 0) return;   // (hidden until the row is laid out)
+    const float right = sc::left_of(g_box.pos[0], g_box.cp, g_box.w) + g_box.w + kMsgBeyond;
+    if (g_message != g_msg.text) {
+        g_msg.text = g_message;
+        g_msg.natural = 0;
+        g_msg.last_off = -1;
+        g_msg.asked_at = now;
+        g_msg.measuring = true;
+        set_clip(t, 0, sc::kClipTop, 1, sc::kClipBottom);   // nothing shows while it is measured
+        gx::set_pos(t, right, g_msg.y, g_msg.z);
+        gx::set_text(t, g_message);
+        gx::set_region(t, kMeasureW, g_msg.h * 1.5f);
+        gx::set_force_invisible(t, false);       // the template's lock, copied with it
+        gx::set_visible(t, true);
+        g_msg.shown = true;
+    }
+    if (g_msg.measuring) {
+        if (now - g_msg.asked_at < kLayoutFrames) return;
+        float w = 0, h = 0;
+        const bool got = gx::size_of(t, "get_DisplaySize", &w, &h) && std::isfinite(w) && w > 0;
+        g_msg.natural = got ? w : (float)lg::guide_text_w(g_message, last.t ? last.fw : 28.0f) * 1.15f;
+        gx::set_region(t, g_msg.natural + 4.0f, g_msg.h * 1.5f);
+        g_msg.measuring = false;
+        g_msg.t0 = GetTickCount64();
+        cmn::journal("bug report: message %s: %.0f wide in %.0f", got ? "measured" : "estimated", g_msg.natural, right - g_msg.entries_end);
+    }
+    const float place = (std::max)(sc::kSpanMinWidth, right - g_msg.entries_end);
+    const float width = (std::min)(g_msg.natural + 2.0f, place);
+    const float left = right - width;
+    const float overflow = g_msg.natural + 2.0f - width;
+    const int off = sc::offset_at(overflow, (double)(GetTickCount64() - g_msg.t0) / 1000.0, sc::text_is_rtl(g_message));
+    if (off == g_msg.last_off && near_f(left, g_msg.last_left, 0.5f)) return;   // only when the whole offset changes
+    g_msg.last_off = off;
+    g_msg.last_left = left;
+    const sc::Window w = sc::window_at(left, width, off);
+    set_clip(t, w.clip_left, w.clip_top, w.clip_right, w.clip_bottom);
+    gx::set_pos(t, w.x, g_msg.y, g_msg.z);
+}
+rp::SummaryScroll g_scroll;                      // the description's window now
+struct BarState { uintptr_t track = 0, thumb = 0; bool shown = false; float x = 0, y = 0, h = 0, th_y = 0, th_h = 0; };
+BarState g_bar_state;
+void bar_frame(MO* gmt, void* param) {
+    MO* row = gx::parent(gmt);
+    const bool want = g_box.ok && g_scroll.window > 0 && g_scroll.total > g_scroll.window;
+    g_want_bar.store(want);
+    MO* track = copy_in(row, kTrackName);
+    MO* th = copy_in(row, kThumbName);
+    if (!want) {
+        if (g_bar_state.shown) { if (track) gx::set_visible(track, false); if (th) gx::set_visible(th, false); }
+        g_bar_state.shown = false;
+        return;
+    }
+    if (!track || !th) { ask_copies(param); return; }
+    const SF6CoreAPI* a = api();
+    if (!a) return;
+    if (reinterpret_cast<uintptr_t>(track) != g_bar_state.track || reinterpret_cast<uintptr_t>(th) != g_bar_state.thumb) {
+        g_bar_state = BarState{};
+        g_bar_state.track = reinterpret_cast<uintptr_t>(track);
+        g_bar_state.thumb = reinterpret_cast<uintptr_t>(th);
+        int priority = kCopyPriority;            // above the backgrounds: a copy into another parent is drawn under them otherwise (row_look.cpp)
+        for (MO* r : { track, th }) {
+            set_by_name(r, "set_ControlPoint", gx::I(0));   // LeftTop
+            perf::counted(a)->ui_set_scale(gx::cl(), r, 1.0f, 1.0f, 1.0f);
+            gx::invoke(r, "set_Priority(System.UInt16)", { gx::I(priority++) });
+            gx::set_force_invisible(r, false);
+        }
+        perf::counted(a)->ui_set_color(gx::cl(), track, kTrackColor);
+        perf::counted(a)->ui_set_color(gx::cl(), th, kThumbColor);
+    }
+    const float x = slots::scroll::left_of(g_box.pos[0], g_box.cp, g_box.w) + g_box.w + kBarGap;
+    const float y = g_box.top + (float)g_scroll.first_line * kSummaryLinePx;
+    const float h = (float)g_scroll.window * kSummaryLinePx;
+    const ui::details::Thumb tb = ui::details::thumb(h, g_scroll.total, g_scroll.window, g_scroll.top);
+    if (!near_f(x, g_bar_state.x, 0.25f) || !near_f(y, g_bar_state.y, 0.25f) || !near_f(h, g_bar_state.h, 0.25f)) {
+        gx::set_size(track, kBarWidth, h);
+        gx::set_pos(track, x, y, g_box.pos[2]);
+    }
+    if (!near_f(x, g_bar_state.x, 0.25f) || !near_f(y + tb.y, g_bar_state.th_y, 0.25f) || !near_f(tb.h, g_bar_state.th_h, 0.25f)) {
+        gx::set_size(th, kBarWidth, tb.h);
+        gx::set_pos(th, x, y + tb.y, g_box.pos[2]);
+    }
+    g_bar_state.x = x; g_bar_state.y = y; g_bar_state.h = h; g_bar_state.th_y = y + tb.y; g_bar_state.th_h = tb.h;
+    if (!g_bar_state.shown) { gx::set_visible(track, true); gx::set_visible(th, true); g_bar_state.shown = true; }
+}
 // Every option dialog up (a page rebuilt: the old one may still be there, and the game cascades stacked dialogs): docked, its frame the big one
 void dock_all() {
     const SF6CoreAPI* a = api();
@@ -519,7 +728,12 @@ void dock_all() {
     for (uint32_t i = 0; i < n && i < 8; ++i)
         if (MO* cm = gx::call_obj(static_cast<MO*>(agents[i]), "get_ControlMain")) { dock_control(cm); fix_frame(cm); }
     if (void* param = perf::counted(a)->opt_current_param()) {
-        if (MO* gmt = gx::ref(static_cast<MO*>(param), "GuideMessageText")) { summary_box(gmt, (int)g_roles.size()); write_summary(gmt); }
+        if (MO* gmt = gx::ref(static_cast<MO*>(param), "GuideMessageText")) {
+            summary_box(gmt, (int)g_roles.size());
+            write_summary(gmt);
+            message_frame(gmt, param);
+            bar_frame(gmt, param);
+        }
         MO* agent = gx::ref(static_cast<MO*>(param), "<Agent>k__BackingField");
         const bool send_shown = std::find(g_roles.begin(), g_roles.end(), rp::Row::Send) != g_roles.end();
         if (MO* cm = agent ? gx::call_obj(agent, "get_ControlMain") : nullptr) send_row_look(cm, send_shown && g_session.send_disabled() && g_session.busy() == rp::Busy::None);
@@ -577,7 +791,7 @@ std::string g_scroll_text;
 uint64_t g_scroll_since = 0;
 std::string summary_now() {
     if (g_scroll_text != g_session.text()) { g_scroll_text = g_session.text(); g_scroll_since = tick(); }
-    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return lg::desc_lines(line, rp::wrap_em(line, kSummaryEm), max_lines); }, tick() - g_scroll_since);
+    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return lg::desc_lines(line, rp::wrap_em(line, kSummaryEm), max_lines); }, tick() - g_scroll_since, &g_scroll);
 }
 void forget();
 // The group made again with the same key (the Color Mod's pattern for per-page texts)
@@ -593,7 +807,7 @@ bool build_group() {
     if (g_group < 0) { cmn::journal("bug report: opt_group failed"); return false; }
     for (const rp::Row role : g_session.rows()) {
         const std::string name = lg::cut_em(rp::row_title(g_session, role, tr), lg::kComRowEm);
-        const char* key = role == rp::Row::Status ? "report_status" : role == rp::Row::Text ? "report_text" : role == rp::Row::Send ? "report_send" : "report_mark_fixed";
+        const char* key = role == rp::Row::Status ? "report_status" : role == rp::Row::Text ? "report_text" : "report_send";
         SF6CoreOptEntryDesc d{};
         d.struct_size = sizeof d;
         d.key = key;
@@ -672,8 +886,16 @@ void forget() {
     g_read_back.clear();
     g_read_back_due = false;
     g_scroll_text.clear();
+    g_scroll = rp::SummaryScroll{};
+    g_message.clear();
+    g_msg = MsgLine{};
+    g_bar_state = BarState{};
+    g_copies_due.store(false);
+    g_want_bar.store(false);
+    g_copy_param.store(nullptr);
+    g_copy_for = nullptr;
+    g_copy_tries = 0;
     g_asked = false;
-    g_mark_due = false;
     g_step = SendStep::None;
     g_box = SummaryBox{};
     const SF6CoreAPI* a = api();
@@ -692,7 +914,12 @@ void closed_now(const char* why) {
     const SF6CoreAPI* a = api();
     void* dialogs[8] = {};
     const uint32_t n = a ? perf::counted(a)->ui_agents("OptionDialog", dialogs, 8) : 0;
-    for (uint32_t i = 0; i < n && i < 8; ++i) send_row_look(gx::call_obj(static_cast<MO*>(dialogs[i]), "get_ControlMain"), false);
+    for (uint32_t i = 0; i < n && i < 8; ++i) {
+        MO* cm = gx::call_obj(static_cast<MO*>(dialogs[i]), "get_ControlMain");
+        send_row_look(cm, false);
+        for (const char* name : { kMsgName, kTrackName, kThumbName })
+            if (MO* e = cm ? static_cast<MO*>(perf::counted(a)->ui_find_child(cm, name, 8)) : nullptr) gx::set_visible(e, false);
+    }
     if (g_session.closed()) {
         ++g_backed;
         forget();
@@ -718,19 +945,7 @@ void start_preview() {
                 const rp::Report r = rp::gather(snap, root, rp::scrub_here(root));
                 pv.failed = !rp::costume_key_ok(r.costume_key);
                 pv.key = r.costume_key;
-                pv.v.loaded = true;
-                pv.v.outfit = r.outfit;
-                if (r.versions.is_object()) {
-                    const auto add = [&](const char* name, const char* key) { if (r.versions.contains(key) && r.versions[key].is_string()) pv.v.versions.emplace_back(name, r.versions[key].get<std::string>()); };
-                    add("Recording Manager", "recording_manager");
-                    add("Core", "native_core");
-                    add("Color Mod", "color_mod");
-                    add("Loader pak", "slots_loader_pak");   // (the pak's id: no version of the loader is written anywhere at run time)
-                }
-                const auto log_size = [&](const char* key) { return r.logs.contains(key) && r.logs[key].is_string() ? r.logs[key].get<std::string>().size() : (size_t)0; };
-                pv.v.log_loader_bytes = log_size("loader");
-                pv.v.log_plugin_bytes = log_size("plugin");
-                pv.v.mods = r.mods.is_array() ? r.mods.size() : 0;
+                pv.outfit = r.outfit;
             } catch (...) { pv.failed = true; }
             std::lock_guard lk(g_prep_mx);
             g_preview = std::move(pv);
@@ -827,12 +1042,6 @@ bool post_status(const char* action, rp::Server after) {
 void take_picture() {
     if (!g_snap.jpeg.empty() || cap::state() != cap::State::Ready) return;
     g_snap.jpeg = cap::take();
-    int w = 0, h = 0;
-    rp::jpeg_size(g_snap.jpeg, &w, &h);
-    g_values.shot_w = w;
-    g_values.shot_h = h;
-    g_values.shot_bytes = g_snap.jpeg.size();
-    g_dirty = true;
 }
 void send_tick() {
     const uint64_t t = tick();
@@ -899,18 +1108,11 @@ void press_row(rp::Row row) {
         g_step = SendStep::WaitPicture;
         g_dirty = true;
         cmn::journal("bug report: Send");
-    } else if (row == rp::Row::MarkFixed) {
-        g_mark_due = true;
-        cmn::journal("bug report: Mark as fixed");
     }
 }
 // What came in since the last frame: the picture, the files' values
 void take_results() {
     take_picture();
-    if (!g_values.shot_failed && g_snap.jpeg.empty() && (cap::state() == cap::State::Failed || cap::state() == cap::State::None)) {
-        g_values.shot_failed = true;
-        g_dirty = true;
-    }
     Preview pv;
     {
         std::lock_guard lk(g_prep_mx);
@@ -922,12 +1124,7 @@ void take_results() {
         g_session.server_unreachable();
     } else {
         g_key = pv.key;
-        g_values.loaded = true;
-        if (!pv.v.outfit.empty()) g_values.outfit = pv.v.outfit;
-        g_values.versions = std::move(pv.v.versions);
-        g_values.log_loader_bytes = pv.v.log_loader_bytes;
-        g_values.log_plugin_bytes = pv.v.log_plugin_bytes;
-        g_values.mods = pv.v.mods;
+        if (!pv.outfit.empty()) g_values.outfit = pv.outfit;
     }
     g_dirty = true;
 }
@@ -958,6 +1155,12 @@ void session_tick() {
         else if (t > g_window_deadline) closed_now("the window never opened");
         return;
     }
+    if ((t & 3) == 0 || g_message.empty()) {     // the message follows the cursor
+        rp::Row focus = rp::Row::Status;
+        const int64_t e = perf::counted(a)->opt_focused_entry();
+        for (size_t i = 0; i < g_entries.size() && i < g_roles.size(); ++i) if (g_entries[i] >= 0 && g_entries[i] == e) focus = g_roles[i];
+        g_message = rp::message_text(g_session, focus, tr);
+    }
     dock_all();
     take_results();
     ask_status();
@@ -972,12 +1175,10 @@ void session_tick() {
     if (chosen >= 0) {
         if (g_session.choose(chosen)) g_dirty = true;
         else if (chosen != g_session.option_index()) { g_built.clear(); g_dirty = true; }     // refused (a request is on its way): the row goes back to the truth
-        if (chosen != g_session.option_index()) g_mark_due = false;
     }
     const int pressed = g_pressed.exchange(-1);
     if (pressed >= 0 && pressed < (int)g_roles.size()) press_row(g_roles[(size_t)pressed]);
     if (g_session.confirm_due()) post_status(rp::action_confirm(), rp::Server::Confirmed);       // (as soon as the client is free)
-    if (g_mark_due && post_status(rp::action_confirm(), rp::Server::Confirmed)) g_mark_due = false;
     if ((t & 15) == 0) g_summary = summary_now();       // (the description's window moves by itself)
     if (g_dirty && !g_naming) {
         g_dirty = false;
@@ -1000,7 +1201,6 @@ void begin_report(MO* main) {
     g_shot_at = tick();
     g_pressed.store(-1);
     g_chosen.store(-1);
-    g_mark_due = false;
     g_dirty = false;
     g_step = SendStep::None;
     g_snap = rp::Snapshot{};
@@ -1017,8 +1217,6 @@ void begin_report(MO* main) {
     g_snap.core_version = a && a->get_version ? a->get_version() : "";
     g_values.character = g_snap.fighter > 0 ? ui::lang::fighter(g_snap.character) : std::string();
     g_values.outfit = rp::row_name(g_snap.outfit_row);
-    g_values.colour = rp::row_name(g_snap.colour_row);
-    g_values.steam_id = rp::steam_id_text(community::steam::local_steam_id());   // for his own screen: never logged, never in what is sent
     start_preview();
     cmn::journal("bug report: key pressed (fighter %d, outfit %d)", g_snap.fighter, g_snap.costume_no);
 }
@@ -1045,6 +1243,14 @@ uint32_t g_wake_beats = 0;
 void SF6CORE_CALL on_core_frame(uint64_t, void*);
 
 // The game's thread for the screen's update: only atomics and the core's pointer. g_awake goes first: a second thread cannot wake twice.
+void make_copies_seh() {
+    __try {
+        make_copies();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_copy_tries = kMaxCopies;
+        cmn::journal("bug report: a copy faulted: no more");
+    }
+}
 void wake_up() {
     const SF6CoreAPI* a = cmn::core();
     if (!a || !g_opt_client || cmn::closing() || !cmn::owns(F::Ui) || !community::on()) { g_awake.store(false); return; }
@@ -1132,6 +1338,10 @@ void SF6CORE_CALL on_core_frame(uint64_t, void*) {
 
 }  // namespace
 
+void dialog_update() {
+    if (!g_copies_due.load(std::memory_order_relaxed) || cmn::closing()) return;
+    make_copies_seh();
+}
 bool awake() { return g_awake.load(std::memory_order_relaxed); }
 
 void specs(std::vector<mech::hooks::Spec>& out) {

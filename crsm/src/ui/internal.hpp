@@ -120,6 +120,7 @@ void specs(std::vector<mech::hooks::Spec>& out);   // the hook on the screen's o
 void start();                                  // its core client (no frame callback until the screen runs)
 bool awake();                                  // the screen's update ran just now (Fighter Settings up, or a report under way): any thread
 void hand_back();                              // the UI stopped: the window closed, nothing kept
+void dialog_update();                          // inside the option dialog's own update (R19): the copies its window wants
 std::string status();
 }  // namespace bug_report
 

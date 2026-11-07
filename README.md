@@ -43,7 +43,7 @@ with no Lua script.
   in the background (nothing to click). The server keeps your Steam account id for moderation; lists only show your
   CFN name, with `[V]` for a verified share. Version 2.0.x can browse and download, not share or like.
 - **Report a bug** (since 2.2.8): on Battle Settings > Character, R / pad X sends the author a picture of the game, your text, the outfit, the mods'
-  versions and two cleaned logs, only once you confirm on a menu that shows it all, your Steam ID included; the menu then follows your report: waiting
+  versions and two cleaned logs, only once you confirm on a menu that tells you so, your Steam ID included; the menu then follows your report: waiting
   for a fix, to test. Kept 90 days, one per account per costume. [crsm/README.md](crsm/README.md#report-a-bug) has the full list.
 - The zip's `README.txt` has the details (settings, logs, the emergency stop). The source is in `crsm/`;
   [crsm/README.md](crsm/README.md) also says what the plugin sends to the Community server.

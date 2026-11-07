@@ -84,13 +84,11 @@ When the menu opens it asks the server one question, with your Steam-verified to
 goes with it, no picture, no log, no text. The answer is the report's status and your own text. If the server cannot be reached the menu says so, and
 OK and BUG still work.
 
-The first row is STATUS. On OK, the default, nothing else shows. On BUG: Describe the problem, Send, and under them a list of the real values that would
-be sent, your Steam ID included (the menu reads it from Steam for your screen; the plugin never logs it and never sends it), then your description, which
-moves by itself when it is too long for its place. After Send, or when you
-already have a report on this costume, STATUS shows WAITING FOR FIX, your text comes back and Send becomes Update, which replaces what was sent; the
-menu says so first, and Update does nothing until your text differs from what was sent. When the author marks it fixed, STATUS shows TO TEST: choose OK
-if it is fixed, or BUG if it is still broken. Choosing OK on WAITING FOR FIX offers MARK AS FIXED: the report stays on the server, marked fixed by you,
-and the author sees it. You can never see anyone else's report.
+The first row is STATUS. On OK, the default, nothing else shows. On BUG: Describe the problem and Send, and under them the character, the outfit and your
+description, which moves by itself when it is too long for its place, with a bar beside it. A message on the guide's line says what you should know: with the focus
+on Send, that your Steam ID, your logs and your mod list go too. After Send, or when you already have a report on this costume, STATUS shows WAITING FOR FIX, which only
+the author's action can change; your text comes back and Send becomes Update, which replaces what was sent and does nothing until your text differs from it. When the
+author marks it fixed, STATUS shows TO TEST: choose MARK AS FIXED if it is fixed, or BUG if it is still broken. You can never see anyone else's report.
 
 What Send sends, over HTTPS to the same Community server, with your Steam-verified token (see above):
 

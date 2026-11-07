@@ -83,21 +83,21 @@ struct Report {
 json make_command(const Report& r);
 
 // ---- the menu ---------------------------------------------------------------------------------------------------------------------
-// Wael, 07/11. Rows are real actions only; what cannot be pressed is the text under them. The first row is STATUS, a choice:
-//   no report on this costume             OK (default): nothing else shows.     BUG: Describe the problem / Change the description, Send, the summary.
-//   a report on the server, waiting       WAITING FOR FIX: its text is back, Change the description, Update, the summary, the overwrite warning.
-//                                         OK: one row, MARK AS FIXED: the report stays on the server, marked by the tester, and STATUS is OK again.
-//   the admin marked it fixed             TO TEST: nothing else but a line saying what to do. OK: it is confirmed at once, the row is OK again.
-//                                         BUG: still broken: as a report waiting, WAITING FOR FIX once sent.
-//   the tester said it is fixed           OK, as with no report; BUG: the old text, Update, the warning (the row on the server is replaced).
-// Update does nothing until the text differs from what was sent (Wael, 07/11): shown dimmed, the row saying why.
-// The status comes from the server when the menu opens: STATUS says Checking... meanwhile, and if the server cannot be reached the menu says so; OK and BUG still work.
+// Wael, 07/11. Rows are real actions only. The first row is STATUS:
+//   no report on this costume             OK (default): nothing else shows.     BUG: Describe the problem / Change the description, Send.
+//   a report on the server, waiting       WAITING FOR FIX, no choice: the player cannot change it, only the admin's action moves it on. Change the description, Update.
+//   the admin marked it fixed             TO TEST: its choices are MARK AS FIXED (it goes at once: the admin sees the tester says it is fixed; STATUS is OK again) and BUG
+//                                         (still broken: as a report waiting, WAITING FOR FIX once sent).
+//   the tester said it is fixed           OK, as with no report; BUG: the old text, Update (the row on the server is replaced).
+// Update does nothing until the text differs from what was sent: dimmed. Under the rows: Character, Outfit, Description only; all the rest still goes, it is just not listed.
+// The messages (sent, not sent, what is missing, what Update replaces, what goes with a report) are on the guide's line, message_text.
+// The status comes from the server when the menu opens: STATUS says Checking... meanwhile, and if the server cannot be reached the message says so; OK and BUG still work.
 // These rules live here only, to be easy to change.
 enum class Stage { Idle, Shooting, Open };
-enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed };   // Confirmed: the tester said it is fixed, before or after the admin's fix
+enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed };
 enum class Pick { Ok, Bug, Held };              // Held: the status the server has (WAITING FOR FIX, TO TEST, Checking...)
 enum class Busy { None, Sending, Status };
-enum class Row { Status, Text, Send, MarkFixed };
+enum class Row { Status, Text, Send };
 
 // The server's answer to "my report on this costume": { exists, status, text }
 Server server_from(bool exists, const std::string& status);
@@ -137,7 +137,7 @@ public:
     bool send_disabled() const { return needs_text() || update_blocked(); }
     // The Send / Update row: true = it goes out now. Never twice at once; never with nothing to say while the field works; never the same text again.
     bool send();
-    // MARK AS FIXED's row, or confirm_due: the status request goes out now
+    // confirm_due: the status request goes out now
     bool start_status();
     enum class Outcome { None, Sent, Failed };
     void answered(bool sent, const std::string& error);         // Send's answer: sent = WAITING FOR FIX
@@ -160,29 +160,20 @@ private:
 };
 
 using Tr = std::function<std::string(const std::string& key, const std::vector<std::string>& args)>;
-// The real values the summary shows. steam_id: read from the Steam client for this screen only: never logged, never sent (the server takes it from the token).
-struct MenuValues {
-    std::string steam_id, character, outfit, colour;
-    int shot_w = 0, shot_h = 0;
-    size_t shot_bytes = 0;
-    bool shot_failed = false;
-    std::vector<std::pair<std::string, std::string>> versions;    // name, value
-    size_t log_loader_bytes = 0, log_plugin_bytes = 0, mods = 0;
-    bool loaded = false;                        // gathered off the game thread: false a moment after the key
-};
-// A plain list of labelled values (Wael, 07/11: no sentences; the 90 days and the rest are the README's). The description comes after it, in a window of its lines
-// that moves by itself: the list stays still.
+// What the text under the rows names
+struct MenuValues { std::string character, outfit; };
 // A row's title in the player's language
 std::string row_title(const Session& s, Row row, const Tr& tr);
-// The list under the rows, as paragraphs to wrap at the window's width. Empty: nothing shows.
+// The list under the rows, as lines to wrap at the window's width: Character, Outfit, the label of the description. Empty: nothing shows.
 struct SummaryLine { std::string text; int max_lines = 1; };
 std::vector<SummaryLine> summary_lines(const Session& s, const MenuValues& v, const Tr& tr);
-// All of it wrapped, kSummaryLines at most, the list then the description's lines from the top scroll_top says. wrap(paragraph, max lines) is the UI's measure (never squeezed:
-// lines cut with "..."). frames: how long this description has been up.
+// All of it wrapped, kSummaryLines at most: the list, which stays still, then the description's lines from the top scroll_top says. wrap(paragraph, max lines) is the UI's measure
+// (never squeezed: lines cut with "..."). frames: how long this description has been up. scroll, when given: what the bar beside the description follows.
 constexpr int kSummaryLines = 12;
 constexpr int kDescriptionMaxLines = 60;
+struct SummaryScroll { int first_line = 0, total = 0, window = 0, top = 0; };
 using Wrap = std::function<std::vector<std::string>(const std::string&, int)>;
-std::string summary_text(const Session& s, const MenuValues& v, const Tr& tr, const Wrap& wrap, uint64_t frames);
+std::string summary_text(const Session& s, const MenuValues& v, const Tr& tr, const Wrap& wrap, uint64_t frames, SummaryScroll* scroll = nullptr);
 // The first line a window of `window` lines shows of `total`, after `frames`: rest, a line at a time, rest, back to the top, and again. No key needed.
 constexpr uint64_t kScrollRestFrames = 150, kScrollStepFrames = 120;
 int scroll_top(int total, int window, uint64_t frames);
@@ -192,14 +183,12 @@ size_t wide_chars(const std::string& s);
 // only: what took Japanese past its room on 07/11).
 constexpr double kWideDrawn = 1.35;
 double wrap_em(const std::string& line, double em);
+// The message on the guide's line: "" = none. focus: the row with the cursor. One message at a time, the most urgent.
+std::string message_text(const Session& s, Row focus, const Tr& tr);
 // A text of a player's or a mod's for a game text: < > [ ] made ( ), one line (an unknown message tag crashes the game's render thread)
 std::string shown_safe(const std::string& s);
 // The error's text: known server codes in the player's language, anything else the general one
 std::string error_key(const std::string& code);
-// A SteamID64 as shown, "" when it is none
-std::string steam_id_text(uint64_t id);
-// A JPEG's size from its frame header; false when it has none
-bool jpeg_size(const std::vector<uint8_t>& j, int* w, int* h);
 
 // ---- asleep / awake --------------------------------------------------------------------------------------------------------------------
 // While awake, on each frame: the calls of the screen's own update, counted by its hook. Nothing here knows of Training or of the UI's claim.
