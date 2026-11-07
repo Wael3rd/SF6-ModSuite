@@ -19,7 +19,7 @@ struct Snapshot {
     std::string character;                     // the English name (model::chars)
     std::string outfit_row, colour_row;        // what the screen's rows show
     std::string text;
-    std::string crsm_version, core_version;
+    std::string reporter_version, core_version;   // report_mod's, the core's
     std::vector<uint8_t> jpeg;
     std::string jpeg_note;                     // why there is none
 };

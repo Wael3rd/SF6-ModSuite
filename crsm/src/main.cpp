@@ -11,7 +11,7 @@
 // Phase P6 (standalone.hpp, ui/ui.cpp): with every owner native, settings.json "standalone": "auto" and no CRSM Lua script
 // installed, the DLL makes that hand-over itself, 2 s into the first training session (the Native package ships no Lua).
 //
-// ui/bug_report.cpp, report/: "Report a bug" on Fighter Settings (R / pad X): a picture, a text, what the player sees before it goes.
+// "Report a bug" left for report_mod.dll in 2.2.9 (report_mod/): it shares community/ and the text dialog with this DLL, from these sources.
 //
 // Build: crsm\build.bat (MSVC, /std:c++20 /EHa). Output: build\crsm\SF6_CRSMNative.dll (never copied into the game).
 // Kill switch: reframework/data/_crsm_native_off.txt makes the DLL inert at the next start.

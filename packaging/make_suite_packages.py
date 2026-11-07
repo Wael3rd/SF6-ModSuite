@@ -1,7 +1,8 @@
 """Build the four Fluffy packages of a release (build.bat first):
 
   SF6_NativeCore_<core version>.zip    reframework/plugins/sf6core_native.dll
-  SF6_SlotsLoader_<version>.zip        make_fluffy_package.py, unchanged (works with or without the core)
+  SF6_SlotsLoader_<version>.zip        make_fluffy_package.py (works with or without the core), with report_mod.dll, Report a bug,
+                                       which does nothing without the core: its texts and a config.json with the Worker's address alone
   SF6_ColorMod_<color mod version>.zip reframework/plugins/SF6_ColorModNative.dll + its locale table (needs the core)
   SF6_CRSM_<recording manager version>.zip  the SF6 Recording Manager: reframework/plugins/SF6_CRSMNative.dll, its locale
                                        table, settings.json (every owner native, standalone auto) and the Community
@@ -15,11 +16,17 @@ is read from crsm/package/config.json, a local file git ignores (copy crsm/packa
 Checked, the build stops on the first broken rule: the config present, untracked, ignored, not the template, an https
 api_base; the key in no packaged file but that config.json (the DLL included); no identity.json (a player's Community
 token), no reframework/autorun/ (no Lua), no SF6_CommunityBridge.dll, no SF6_NativeLocale_data/ path; the DLL newer
-than every crsm/src file and holding its version string. --without-crsm builds the three others (a clone without the
-config).
+than every crsm/src file and holding its version string. --without-crsm skips that package, --without-report takes
+report_mod.dll out of the Slots Loader's (a clone without the config needs both).
+
+The Worker's address holds a private name: it is in no tracked file. report_mod's config.json gets it from the same local
+crsm/package/config.json. Checked on every zip: the key only in the Recording Manager's config.json, the address only there
+and in report_mod's, which holds the address and nothing else; no identity.json.
+
+No DLL older than one of its sources goes into a package: each one is checked before the first zip is written.
 
 Usage: python make_suite_packages.py --version <Slots Loader version> [--game "<game folder>"] [--out "<folder>"]
-                                     [--without-crsm]
+                                     [--without-crsm] [--without-report]
 """
 import argparse, hashlib, json, os, re, subprocess, sys, zipfile
 
@@ -34,12 +41,76 @@ PROFILE_MIN_CORE = "0.8.2"   # ui_clone_control / ui_agents / ui_find_cached, as
 CRSM_OWNERS = ("community", "files", "replay", "reversal", "record", "ui")
 CRSM_CONFIG_REL = "crsm/package/config.json"
 G_CRSM_CONFIG = "reframework/data/SF6_Community_data/config.json"
+G_REPORT_CONFIG = "reframework/data/SF6_ReportMod_data/config.json"
 CRSM_FORBIDDEN = [
     (lambda p: p.lower().endswith("sf6_communitybridge.dll"), "SF6_CommunityBridge.dll (the v1.x bridge, replaced by the DLL's WinHTTP)"),
     (lambda p: p.lower().startswith("reframework/data/sf6_nativelocale_data/"), "the Color Mod's locale path (SF6_NativeLocale_data)"),
     (lambda p: p.lower().startswith("reframework/autorun/"), "a Lua script (the package ships the DLL alone)"),
     (lambda p: p.lower().endswith("identity.json"), "identity.json (a player's Community token: never in a package)"),
 ]
+
+CODE = (".cpp", ".hpp", ".h", ".c", ".cc", ".inc")
+HEADERS = (".hpp", ".h", ".inc")
+
+def check_fresh(label, rel_dll, sources, version=None):
+    """A DLL older than one of its sources never goes into a zip (the stale DLL of 1.23.0). sources: (a folder or a file, relative to the repo; the extensions looked at in a folder)."""
+    dll = os.path.join(REPO, *rel_dll.split("/"))
+    if not os.path.exists(dll):
+        sys.exit("%s: missing %s: run build.bat first" % (label, rel_dll))
+    t = os.path.getmtime(dll)
+    for rel, exts in sources:
+        top = os.path.join(REPO, *rel.split("/"))
+        if os.path.isfile(top):
+            walk = [(os.path.dirname(top), [], [os.path.basename(top)])]
+        elif os.path.isdir(top):
+            walk = os.walk(top)
+        else:
+            sys.exit("%s: the source %s is gone: update this list" % (label, rel))
+        for root, _, names in walk:
+            for n in names:
+                p = os.path.join(root, n)
+                if (os.path.isfile(top) or n.lower().endswith(exts)) and os.path.getmtime(p) > t:
+                    sys.exit("%s: %s is older than %s: run build.bat first" % (label, rel_dll, os.path.relpath(p, REPO)))
+    if version and version.encode("ascii") not in open(dll, "rb").read():
+        sys.exit("%s: %s does not hold the version string %s: run build.bat first" % (label, rel_dll, version))
+
+def local_config():
+    """(key, Worker's host) of the local config, as bytes; (None, None) without it (the release checks then have nothing to look for)."""
+    path = os.path.join(REPO, *CRSM_CONFIG_REL.split("/"))
+    if not os.path.exists(path):
+        return None, None
+    cfg = json.loads(open(path, "rb").read().decode("utf-8-sig"))
+    base = cfg.get("api_base") or ""
+    host = base.split("://", 1)[-1].split("/", 1)[0]
+    return (cfg.get("api_key") or "").encode("utf-8") or None, host.encode("utf-8") or None
+
+def check_private(zips, with_report):
+    """Every zip: the key only in the Recording Manager's config.json; the Worker's address only there and in report_mod's; report_mod's holds that and nothing else. Nothing of it is printed."""
+    key, host = local_config()
+    for zp in zips:
+        name = os.path.basename(zp)
+        with zipfile.ZipFile(zp) as z:
+            for n in z.namelist():
+                if n.endswith("/"):
+                    continue
+                if n.lower().endswith("identity.json"):
+                    sys.exit("%s: %s: a player's token, never in a package" % (name, n))
+                data = z.read(n)
+                if key and key in data and not (n == G_CRSM_CONFIG and name.startswith("SF6_CRSM_")):
+                    sys.exit("%s: %s holds the API key" % (name, n))
+                if host and host in data and n not in (G_CRSM_CONFIG, G_REPORT_CONFIG):
+                    sys.exit("%s: %s holds the Worker's address" % (name, n))
+            has = G_REPORT_CONFIG in z.namelist()
+            if has and not name.startswith("SF6_SlotsLoader_"):
+                sys.exit("%s: report_mod's config.json belongs to the Slots Loader's package" % name)
+            if name.startswith("SF6_SlotsLoader_"):
+                dll = "reframework/plugins/report_mod.dll" in z.namelist()
+                if dll != with_report or has != with_report:
+                    sys.exit("%s: report_mod.dll and its config.json: expected %s" % (name, "both" if with_report else "neither"))
+                if has:
+                    cfg = json.loads(z.read(G_REPORT_CONFIG).decode("utf-8"))
+                    if list(cfg) != ["api_base"] or not (host and host in cfg["api_base"].encode("utf-8")):
+                        sys.exit("%s: report_mod's config.json must hold the Worker's address and nothing else" % name)
 
 def sha(p):
     h = hashlib.sha256()
@@ -235,12 +306,25 @@ def main():
     ap.add_argument("--game", default=None, help="game folder (for the genuine AMD library), passed to make_fluffy_package.py")
     ap.add_argument("--out", default=os.path.join(REPO, "build", "release"))
     ap.add_argument("--without-crsm", action="store_true", help="skip the Recording Manager (no local crsm/package/config.json)")
+    ap.add_argument("--without-report", action="store_true", help="no report_mod.dll in the Slots Loader's package (no local crsm/package/config.json)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
     core_v = version_in(os.path.join(REPO, "core", "src", "sf6core.cpp"), r'CORE_VERSION\s*=\s*"([^"]+)"')
     cm_v = version_in(os.path.join(REPO, "colormod", "src", "common.cpp"), r'kVersion\s*=\s*"([^"]+)"')
     pm_v = version_in(os.path.join(REPO, "profile_mod", "profile_mod.cpp"), r'kVersion\s*=\s*"([^"]+)"')
+
+    # what build.bat compiles for each DLL: nothing stale goes into a zip
+    common = ("common", CODE)
+    core_api = ("core/include", HEADERS)
+    check_fresh("Native Core", "build/core/sf6core_native.dll", [("core/src", CODE), core_api], core_v)
+    check_fresh("Slots Loader (proxy)", "build/amd_ags_x64.dll", [("costumes/loader", CODE), ("stages/loader", CODE), ("proxy", CODE), common])
+    check_fresh("Slots Loader (plugin)", "build/SF6_CostumeSlotsNative.dll", [("plugin/src", CODE), ("plugin/include", HEADERS), core_api])
+    check_fresh("Color Mod", "build/colormod/SF6_ColorModNative.dll", [("colormod/src", CODE), common, core_api, ("costumes/loader", HEADERS)], cm_v)
+    check_fresh("Profile Mod", "build/profile_mod/profile_mod.dll", [("profile_mod", CODE), core_api])
+    if not a.without_report:
+        rm_v = version_in(os.path.join(REPO, "report_mod", "src", "host.cpp"), r'kVersion\s*=\s*"([^"]+)"')
+        check_fresh("Report a bug", "build/report_mod/report_mod.dll", [("report_mod/src", CODE), ("crsm/src", CODE), ("plugin/src/scroll_logic.hpp", CODE), core_api], rm_v)
 
     print("== SF6 Native Core %s" % core_v)
     core_zip = os.path.join(a.out, "SF6_NativeCore_%s.zip" % core_v)
@@ -271,11 +355,14 @@ def main():
     sl_zip = os.path.join(a.out, "SF6_SlotsLoader_v%s.zip" % a.version)
     cmd = [sys.executable, os.path.join(HERE, "make_fluffy_package.py"), "--version", a.version, "--out", sl_zip]
     if a.game: cmd += ["--game", a.game]
+    if a.without_report: cmd += ["--without-report"]
     if subprocess.call(cmd) != 0: sys.exit("make_fluffy_package.py failed")
 
     zips = {"core": core_zip, "colormod": cm_zip, "profile": pm_zip, "slots": sl_zip}
     if not a.without_crsm:
         zips["crsm"] = crsm_package(a.out)
+    check_private(zips.values(), not a.without_report)
+    print("key and address: only in their config.json files; no identity.json")
     paths = {k: game_paths(v) for k, v in zips.items()}
     names = list(paths)
     for i in range(len(names)):
@@ -283,6 +370,8 @@ def main():
             both = paths[names[i]] & paths[names[j]]
             if both: sys.exit("path shared by %s and %s: %s" % (names[i], names[j], sorted(both)))
     print("no game path shared by two packages")
+    if not a.without_report:
+        print("Report a bug: report_mod.dll in the Slots Loader's package, no key, the address only in its config.json")
 
 if __name__ == "__main__":
     main()

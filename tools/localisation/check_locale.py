@@ -77,6 +77,21 @@ def keys_used_checks():
             check("rsm." + key in t, "Recording Manager: %s uses %s: not in the table" % (os.path.basename(p), key))
 
 
+def report_keys_checks():
+    # report_mod.dll: its own table holds what its sources ask, and what the shared text dialog asks (T("key") is L("rsm." .. key))
+    t = read_table(MODULES[3][1])["en"]
+    src = source("report_mod/src/**/*.cpp", "report_mod/src/**/*.hpp")
+    src.update(source("crsm/src/ui/dialogs.cpp"))
+    rx = r'\b(?:T|tr|T_|tr_or)\(\s*"([a-z0-9_]+)"'
+    used = set()
+    for p, text in src.items():
+        for key in set(re.findall(rx, text)):
+            used.add(key)
+            check("rsm." + key in t, "Report a bug: %s uses %s: not in the table" % (os.path.basename(p), key))
+    rm = read_table(MODULES[2][1])["en"]
+    check(not [k for k in rm if k.startswith("rsm.report_")], "Recording Manager: rsm.report_* belongs to report_mod's table now")
+
+
 def plugin_checks():
     cur = ""
     if os.path.exists(OUT):
@@ -128,6 +143,7 @@ def main():
         table = read_table(path)
         table_checks(module, table)
     keys_used_checks()
+    report_keys_checks()
     plugin_checks()
     if "--game" in sys.argv:
         at = sys.argv.index("--game") + 1

@@ -35,6 +35,7 @@ namespace community {
 
 constexpr int kMaxTimeMs = 15000;           // --max-time 15
 constexpr int kTicketWaitMs = 8000;         // a Steam ticket: 5 s for its callback + the game thread's frames
+constexpr int kTokenLockMs = kTicketWaitMs + kMaxTimeMs + 1000;   // the other DLL's whole login, at most (auth::TokenLock)
 
 // x-client-version of every request and the ticket's client_version ("2.1.0": cmn::version(), set at init)
 void set_client_version(const std::string& v);
@@ -54,6 +55,7 @@ public:
         json cmd;                      // a bridge command; "file_path" (share) names a pack file the worker reads
         std::string config_path;       // SF6_Community_data/config.json, read at every job (api_base and api_key may change)
         std::string response_path;     // when not empty, the answer is also written there as { "ok": b, "data": ... }
+        std::string token_path;        // identity.json, when it is not beside config_path (report_mod's config is its own, the token the Community's)
     };
     struct Done {
         uint64_t id = 0;
@@ -85,7 +87,7 @@ private:
     Done run_job(const Job& j);
     HttpResult perform(const Request& rq, const Config& cfg, const std::string& bearer);
     // A token from a Steam ticket: "" + *code (auth::refusal_code / kUnavailable) when none could be had
-    std::string acquire(const Config& cfg, const std::string& token_path, const json& cmd, std::string* code);
+    std::string acquire(const Config& cfg, const std::string& tpath, const json& cmd, std::string* code, const std::string* refused = nullptr);
 
     std::mutex mx_;
     std::condition_variable cv_;

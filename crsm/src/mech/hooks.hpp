@@ -39,6 +39,11 @@ void add_survey(uintptr_t va, const char* what);
 
 // Called once from mech::start(), game load time: specs of layers the DLL does not own are skipped.
 void install(const std::vector<Spec>& specs);
+// For a DLL that stays out of the game until its screen runs (report_mod.dll). The code check of every target now, in one pass (game load time; the scan itself runs once per game
+// version), and only the first spec's hook. hook_next(): the next hook, at most one add_hook a call, for the game thread's frame: REFramework stops the game's threads while it patches.
+// It returns how many targets remain; 0: all in.
+void install_later(const std::vector<Spec>& specs);
+size_t hook_next();
 std::string status();
 
 }  // namespace mech::hooks

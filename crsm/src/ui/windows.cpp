@@ -878,11 +878,25 @@ uint32_t pad_mask() {
 
 bool key_down(int vk) { return cmn::key_down(vk); }   // reframework:is_key_down: the game window's keys only
 
+// Fighter Settings, over this menu from the Multi Menu, is another screen with R as Report a bug and T as the game's, before any option window is up. The screen's own update says it is
+// there (R18: through the code check; the game calls it only while the screen runs, a store and nothing else). Gone after as many frames as report_mod takes to go back to sleep.
+std::atomic<uint64_t> g_fighter_beat{0};
+constexpr uint64_t kFighterLeftFrames = 20;
+bool ok_fighter = false;
+int fighter_pre(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    g_fighter_beat.store(cmn::frame(), std::memory_order_relaxed);
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+bool fighter_settings_up() {
+    const uint64_t b = g_fighter_beat.load(std::memory_order_relaxed);
+    return b && cmn::frame() - b < kFighterLeftFrames;
+}
+
 // RMT:1755-1770: the one reader of the name keys (T / pad Y, G / R / pad X) for the slot rows (P4) and the Manager page (P5)
 void name_key_tick() {
-    // the Community dialog has its own T (like); Fighter Settings, over this menu from the Multi Menu, is another screen with R as Report a bug and T as the
-    // game's: never a slot name of the page underneath
-    if (com::open() || bug_report::awake()) { g_t.reset(); g_del.reset(); return; }
+    // the Community dialog has its own T (like); Fighter Settings, and any option window up over this menu (report_mod's, the Color Mod's), have the keys: never a slot name of the page underneath
+    const SF6CoreAPI* core = cmn::core();
+    if (com::open() || fighter_settings_up() || (core && SF6CORE_HAS(core, opt_window_open) && perf::counted(core)->opt_window_open())) { g_t.reset(); g_del.reset(); return; }
     const uint32_t mask = pad_mask();
     const bool pressed = g_t.press(key_down(kKeyT) || (mask & g_pad_y) != 0);
     const bool dpressed = g_del.press(key_down(kKeyG) || key_down(kKeyR) || (mask & g_pad_x) != 0);
@@ -1319,6 +1333,7 @@ PadHeld pad_held(bool stick) {
 }
 
 void specs(std::vector<mech::hooks::Spec>& out) {
+    ui::spec(out, "app.UIFlowMatchingFighterSetting.Main", "OnUpdate", fighter_pre, nullptr, "R and T on Fighter Settings over the Multi Menu also reach the slot row underneath", &ok_fighter);
     const char* P = "app.training.UIFlowTrainingMenu.Param";
     ui::spec(out, P, "UpdateSecondaryList", sec_pre, sec_post, "the slot windows do not slide (no row list address)", &ok_seclist);
     ui::spec(out, P, "UpdateRecordSlotItem(app.UIPartsGroup, System.Int32)", rec_item_pre, rec_item_post,

@@ -1442,7 +1442,170 @@ void test_steam_engine() {
 
 }  // namespace
 
+// Through the real worker: no key, a token file that is not beside the config, a 401 that finds a newer token in the file, two DLLs asking at once
+static void test_shared_token_wire(const fs::path& work) {
+    section("shared token: the wire");
+    const fs::path dir = work / "shared_wire";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const fs::path cfg_a = dir / "a" / "config.json", cfg_b = dir / "b" / "config.json";
+    const std::string token_file = (dir / "community" / "identity.json").generic_string();
+    const std::string kNew(43, 'N'), kStale(43, 'S'), kLogin(43, 'L');
+    Stub stub;
+    std::mutex sm;
+    std::set<std::string> valid{ kNew };
+    std::string on_refusal;                      // written to the file when a stale token is refused: what the other DLL did meanwhile
+    std::atomic<int> tickets_seen{0};
+    int ticket_ms = 0;
+    bool old_server = false;                     // a server that still wants the key on every route
+    stub.handler = [&](const StubReq& r) {
+        StubResp s;
+        std::lock_guard<std::mutex> lk(sm);
+        if (old_server) { s.status = 401; s.body = R"({"error":"Unauthorized"})"; return s; }
+        const auto a = r.h.find("authorization");
+        const std::string bearer = (a == r.h.end() || a->second.size() < 7) ? std::string() : a->second.substr(7);
+        if (r.target == "/auth/steam/ticket") {
+            tickets_seen.fetch_add(1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(ticket_ms));
+            valid.insert(kLogin);
+            s.body = C({{"ok", true}, {"status", "linked"}, {"token", kLogin}, {"verified", true}, {"method", "ticket"}}).dump();
+            return s;
+        }
+        if (!valid.count(bearer)) {
+            if (!on_refusal.empty()) { auth::Token t; t.api_base = stub.base(); t.token = on_refusal; t.method = "ticket"; std::string e; auth::save_token(token_file, t, &e); on_refusal.clear(); }
+            s.status = 401; s.body = R"({"error":"invalid_token","message":"no"})";
+            return s;
+        }
+        s.body = R"({"ok":true,"id":"x","replaced":false,"status":"waiting"})";
+        return s;
+    };
+    check(stub.start(), "stub starts");
+    write_cfg(cfg_a, stub.base(), "");
+    write_cfg(cfg_b, stub.base(), "");
+    const json report_cmd = C({{"cmd", "report"}, {"costume_key", "mod:ab"}, {"text", "t"}});
+    FakeTickets ta, tb;
+    ta.bytes = tb.bytes = { 0x14, 0x00, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef };
+    Client a, b;
+    a.configure(cfg_a.string(), "", token_file);
+    b.configure(cfg_b.string(), "", token_file);
+    a.worker().set_tickets(&ta);
+    b.worker().set_tickets(&tb);
+    a.start();
+    b.start();
+    auto save = [&](const std::string& v) { auth::Token t; t.api_base = stub.base(); t.token = v; t.method = "ticket"; std::string e; auth::save_token(token_file, t, &e); };
+    // 1. no key at all, and the token where it was told
+    save(kNew);
+    Answer r = ask(a, report_cmd, 1000);
+    auto lg = stub.take_log();
+    check(r.ok && lg.size() == 1 && !lg[0].h.count("x-api-key"), "no key in the config: no key on the wire");
+    check(lg.size() == 1 && lg[0].h["authorization"] == "Bearer " + kNew, "the token from the shared file, not from beside the config");
+    check(!fs::exists(cfg_a.parent_path() / "identity.json"), "nothing written beside the config");
+    // 2. a stale token refused, a newer one in the file: sent again with it, no ticket
+    save(kStale);
+    { std::lock_guard<std::mutex> lk(sm); on_refusal = kNew; }
+    const int t0 = ta.gets;
+    r = ask(a, report_cmd, 1000);
+    lg = stub.take_log();
+    check(r.ok && lg.size() == 2 && lg[0].h["authorization"] == "Bearer " + kStale && lg[1].h["authorization"] == "Bearer " + kNew, "a 401 reads the file again first");
+    check(ta.gets == t0 && tickets_seen.load() == 0, "no new ticket asked");
+    check(auth::load_token(token_file, stub.base()) == kNew, "and the newer token is not dropped");
+    // 3. refused, nothing newer: dropped, one ticket
+    save(kStale);
+    r = ask(a, report_cmd, 1000);
+    lg = stub.take_log();
+    check(r.ok && ta.gets == t0 + 1 && lg.size() == 3 && lg[1].target == "/auth/steam/ticket" && lg[2].h["authorization"] == "Bearer " + kLogin, "nothing newer: a new ticket, as before");
+    // 4. two DLLs with no token at once: one ticket between them, the second finds the first's token
+    fs::remove(token_file, ec);
+    const int ga = ta.gets, gb = tb.gets;
+    tickets_seen.store(0);
+    { std::lock_guard<std::mutex> lk(sm); ticket_ms = 300; }
+    Answer ra, rb;
+    a.send(report_cmd, [&](bool ok, const json& d) { ra.done = true; ra.ok = ok; ra.data = d; });
+    b.send(report_cmd, [&](bool ok, const json& d) { rb.done = true; rb.ok = ok; rb.data = d; });
+    for (int i = 0; i < 1500 && !(ra.done && rb.done); ++i) { a.poll(); b.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+    check(ra.ok && rb.ok, "both reports went out");
+    check((ta.gets - ga) + (tb.gets - gb) == 1 && tickets_seen.load() == 1, "one ticket between the two DLLs: " + std::to_string(tickets_seen.load()));
+    lg = stub.take_log();
+    int with_token = 0;
+    for (const auto& q : lg) if (q.target == "/api/report" && q.h.count("authorization") && q.h.at("authorization") == "Bearer " + kLogin) ++with_token;
+    check(with_token == 2, "both with that token");
+    // 5. the DLL ahead of the server (no key, the key still wanted): nothing goes out, and the token the Recording Manager uses stays
+    save(kNew);
+    { std::lock_guard<std::mutex> lk(sm); old_server = true; }
+    const int g5 = ta.gets.load();
+    r = ask(a, report_cmd, 1000);
+    check(r.done && auth::error_code(r.data) != "invalid_token", "a server that wants the key is not a refused token");
+    check(auth::load_token(token_file, stub.base()) == kNew && ta.gets.load() == g5, "the token stays, no ticket asked");
+    fs::remove(token_file, ec);
+    r = ask(a, report_cmd, 1000);
+    check(r.done && !fs::exists(token_file), "no token: the ticket is refused too, the request ends");
+    a.stop();
+    b.stop();
+    stub.stop();
+}
+
+// Two DLLs of the game share identity.json (the Recording Manager, report_mod)
+static void test_shared_token(const fs::path& work) {
+    section("shared token (two DLLs)");
+    const fs::path dir = work / "shared_token";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const std::string path = (dir / "identity.json").generic_string(), base = "https://w.example";
+    auth::Token t;
+    const std::string kFirst(43, 'F'), kKept(43, 'K');
+    t.api_base = base; t.method = "ticket"; t.token = kFirst;
+    std::string err;
+    check(auth::save_token(path, t, &err) && auth::load_token(path, base) == kFirst, "saved and read");
+    check(auth::load_token(path, "https://other.example").empty(), "another address's token is none");
+    // whole or not at all: a reader in another thread (the other DLL) never sees half a file
+    std::atomic<bool> stop{false};
+    std::atomic<int> bad{0}, reads{0};
+    std::thread reader([&] {
+        while (!stop.load()) {
+            if (auth::load_token(path, base).size() != 43) bad.fetch_add(1);
+            reads.fetch_add(1);
+        }
+    });
+    int saved = 0;
+    for (int i = 0; i < 200; ++i) {
+        t.token = std::string(43, (char)('a' + i % 26));
+        t.linked_at = std::string(4000, 'x');    // a file that takes more than one write
+        if (auth::save_token(path, t, &err)) ++saved;
+    }
+    stop.store(true);
+    reader.join();
+    check(bad.load() == 0, "a reader never saw a partial or missing token, " + std::to_string(reads.load()) + " reads");
+    check(saved == 200, "every write went through a reader: " + std::to_string(saved));
+    size_t files = 0;
+    for (const auto& e : fs::directory_iterator(dir)) { (void)e; ++files; }
+    check(files == 1, "no temporary file left");
+    // a 401: read again first
+    check(auth::token_changed("new", "old") && !auth::token_changed("old", "old") && !auth::token_changed("", "old"), "another token in the file: use it; the same or none: not");
+    t.token = kKept;
+    auth::save_token(path, t, &err);
+    check(!auth::drop_token_if(path, base, kFirst) && auth::load_token(path, base) == kKept, "a token the other DLL just wrote is not dropped");
+    check(auth::drop_token_if(path, base, kKept) && auth::load_token(path, base).empty(), "the refused one is");
+    // one at a time, across the DLLs: a named mutex, not a static of one of them
+    {
+        auth::TokenLock a(1000);
+        check(a.held(), "the first has it");
+        std::atomic<int> second{-1};
+        std::thread other([&] { auth::TokenLock b(50); second.store(b.held() ? 1 : 0); });
+        other.join();
+        check(second.load() == 0, "the second waits, and gives up after its time");
+    }
+    {
+        std::atomic<int> second{-1};
+        std::thread other([&] { auth::TokenLock b(50); second.store(b.held() ? 1 : 0); });
+        other.join();
+        check(second.load() == 1, "free again once the first is done");
+    }
+}
+
 int main(int argc, char** argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0);         // a crash keeps what was printed
     std::string work;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string a = argv[i];
@@ -1463,6 +1626,8 @@ int main(int argc, char** argv) {
     test_auth_flow();
     test_auth_session_link();
     test_report_wire();
+    test_shared_token(g_work);
+    test_shared_token_wire(g_work);
     test_auth_page();
     test_steam_engine();
 

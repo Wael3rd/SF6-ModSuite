@@ -1,6 +1,7 @@
 // report_e2e_test - a whole report through the real client code, to a server given on the command line (a local stand-in, never a live one):
 //
-//   report_e2e_test --api-base http://127.0.0.1:<port> --api-key <the stand-in's key> --work <scratch folder> [--after-fixed]
+//   report_e2e_test --api-base http://127.0.0.1:<port> [--api-key <a key, as an old client's config>] --work <scratch folder> [--after-fixed]
+//   Without --api-key: what ships, no key at all, against a server that still has one for the Recording Manager's other routes.
 // --after-fixed: the second half, once the admin has marked the mod's report fixed: the menu's TO TEST, and confirming it.
 //
 // What the game's part would do after the key: a real JPEG (WIC), gather() on a fake game folder, make_command(), then community::Client over
@@ -63,7 +64,7 @@ static json status_cmd(const std::string& key, const std::string& action) { retu
 static int second_half(const std::string& base, const std::string& key, const fs::path& work) {
     const std::string costume = "mod:402b1ac9c4dd7fb1:f30:c0";
     const fs::path cfg = work / "config.json";
-    put(cfg, json({ {"api_base", base}, {"api_key", key} }).dump());
+    put(cfg, key.empty() ? json({ {"api_base", base} }).dump() : json({ {"api_base", base}, {"api_key", key} }).dump());   // the shipped config: no key
     FakeTickets tickets;
     community::Client c;
     community::set_client_version("e2e");
@@ -131,7 +132,7 @@ int main(int argc, char** argv) {
 
     snap.fighter = 30; snap.character = "C. Viper"; snap.outfit_row = "Outfit I"; snap.colour_row = "Color 3";
     snap.text = "Le col d\xC3\xA9passe <img src=x onerror=alert(1)> \xE6\xBC\xA2\xE5\xAD\x97\nsecond line";
-    snap.crsm_version = "e2e"; snap.core_version = "0.9.6";
+    snap.reporter_version = "e2e"; snap.core_version = "0.9.6";
     rp::Scrub scrub;
     scrub.names = { "SomeOne" };
     scrub.game_root = root.string();
@@ -139,7 +140,7 @@ int main(int argc, char** argv) {
     check(r.costume_key == "mod:402b1ac9c4dd7fb1:f30:c0", "the costume key: " + r.costume_key);
 
     const fs::path cfg = work / "config.json";
-    put(cfg, json({ {"api_base", base}, {"api_key", key} }).dump());
+    put(cfg, key.empty() ? json({ {"api_base", base} }).dump() : json({ {"api_base", base}, {"api_key", key} }).dump());   // the shipped config: no key
     FakeTickets tickets;
     community::Client c;
     community::set_client_version("e2e");

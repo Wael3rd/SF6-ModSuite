@@ -24,7 +24,6 @@ uint64_t tick();                               // frames of the core's frame cal
 // The text dialog's hooks and requests for "Report a bug", which owes nothing to the UI's claim: the owner "ui" and (the claim or a report under way).
 bool claimed();                                // the UI was handed over (ui::active() less the owner's own check)
 bool dialogs_on();
-void report_needs_dialogs(bool on);
 
 // One hook spec of the UI layer (never "required": a hook refused by the R18 check or missing degrades its own feature,
 // logged; `ok` tells the feature whether its hook is in place).
@@ -113,16 +112,6 @@ void frame(bool training, bool paused);        // the request, the fill when no 
 void hand_back();                              // the UI stopped: the dialog closed, released
 std::string status();
 }  // namespace details
-
-// ---- "Report a bug" (bug_report.cpp) ----------------------------------------------------------------------------------------------------
-namespace bug_report {
-void specs(std::vector<mech::hooks::Spec>& out);   // the hook on the screen's own update: what wakes the module
-void start();                                  // its core client (no frame callback until the screen runs)
-bool awake();                                  // the screen's update ran just now (Fighter Settings up, or a report under way): any thread
-void hand_back();                              // the UI stopped: the window closed, nothing kept
-void dialog_update();                          // inside the option dialog's own update (R19): the copies its window wants
-std::string status();
-}  // namespace bug_report
 
 // ---- REC HUD (hud.cpp) ----------------------------------------------------------------------------------------------------
 namespace hud {

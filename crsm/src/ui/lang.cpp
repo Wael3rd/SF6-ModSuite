@@ -20,7 +20,6 @@ namespace {
 namespace gm = game::gm;
 using API = reframework::API;
 
-constexpr const char* kFile = "reframework/data/SF6_CRSM_data/locale.json";
 constexpr uint64_t kProbeEvery = 60;          // NativeLocale.lua:115 (here: while the menu is up)
 constexpr int32_t kDispLanguage = 611;        // app.Option.ValueType.DispLanguage (NativeLocale.lua:43)
 
@@ -102,11 +101,11 @@ bool probe_seh() {
 }  // namespace
 
 void load() {
-    const model::locale::json file = model::luajson::load_file(kFile);
+    const model::locale::json file = model::luajson::load_file(cmn::locale_file());
     std::lock_guard lk(g_mx);
     g_loc.load(file);
     g_version.fetch_add(1);
-    if (file.is_null()) cmn::journal("ui: %s missing or unreadable: the texts are the keys", kFile);
+    if (file.is_null()) cmn::journal("ui: %s missing or unreadable: the texts are the keys", cmn::locale_file());
 }
 
 void frame(uint64_t fr, bool menu_up, uint64_t events) {

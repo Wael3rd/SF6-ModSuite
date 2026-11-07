@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **report_mod.dll**: Report a bug is a small plugin of its own on the Native Core, in the Slots Loader's package and the all-in-one, so it no longer needs the Recording Manager. Same
+  menu, same texts, its own locale file. It sends no API key: the server must be updated first. Beside a Recording Manager 2.2.8 it stays off and says so in the log.
+- **Recording Manager 2.2.9**: no report; R and T stand back under any option window; `identity.json` is shared safely with the new DLL (whole writes, read again on a 401, one login at a time).
+- **Packaging**: every DLL is checked against its sources before a zip is written; the Worker's address is in no tracked file (`crsm/package/config.example.json` holds a placeholder).
+
 ## 1.24.0 (2026-11-07) — SF6 Mod Suite
 
 | Package | Version | |

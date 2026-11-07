@@ -17,7 +17,7 @@ Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
 Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"] [--costumes-only]
 La vraie AGS est prise dans l'ordre : <jeu>/amd_ags_x64_real.dll, puis reframework/_backup/amd_ags_x64_real_orig_20260922.dll.
 """
-import argparse, os, sys, zipfile, hashlib
+import argparse, hashlib, json, os, sys, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)                     # racine du depot
@@ -202,6 +202,32 @@ README_TXT = CRLF.join([
     "",
 ])
 
+REPORT_TXT = CRLF.join([
+    "REPORT A BUG (reframework/plugins/report_mod.dll; needs the SF6 Native Core, does nothing without it)",
+    "  On Battle Settings > Character, Character tab, R (pad: X) takes a picture of the game and opens a menu. Its first row is STATUS: OK shows nothing",
+    "  else. BUG shows Describe the problem and Send. A report also holds the picture, the character, outfit and colour with the outfit's record, the versions and list of",
+    "  your mods, the Slots Loader's two logs (your Windows user name, the paths of your user folder and anything that looks like a platform ID removed first), and your Steam",
+    "  ID, which the server takes from your Steam verification. When the menu opens it only asks the server the state of your report on this outfit (the outfit's key alone",
+    "  goes). No report leaves until you choose Send. Back sends nothing and keeps nothing. A report waits as WAITING FOR FIX; once the author fixes it, it shows TO TEST: choose",
+    "  OK and press MARK AS FIXED if it is fixed, BUG if not. The server keeps one report per account per outfit for 90 days; only the mod's author reads them. Details: report_mod/README.md in the source.",
+    "  Your token is reframework/data/SF6_Community_data/identity.json, the file the Recording Manager uses too: delete it to forget it on this PC.",
+    "  To turn this off, delete reframework/plugins/report_mod.dll. A Recording Manager 2.2.8 beside it keeps its own Report a bug, and this DLL stays off.",
+    "",
+    "",
+])
+
+G_REPORT_CONFIG = "reframework/data/SF6_ReportMod_data/config.json"
+
+def report_config():
+    """report_mod's config.json: the Worker's address alone, from the local git-ignored config the Recording Manager's is packaged from. No key: its routes need none."""
+    path = os.path.join(REPO, "crsm", "package", "config.json")
+    if not os.path.exists(path):
+        sys.exit("missing crsm/package/config.json (the local, git-ignored Community config: report_mod's address comes from it; never in git), or use --without-report")
+    base = json.loads(open(path, "rb").read().decode("utf-8-sig")).get("api_base")
+    if not isinstance(base, str) or not base.startswith("https://"):
+        sys.exit("crsm/package/config.json has no https api_base")
+    return json.dumps({"api_base": base}, indent=2) + "\n"
+
 def manager_contract():
     # The Slotsloader Manager contract the loader implements (MANAGER_CONTRACT in loader_core.cpp,
     # docs/MANAGER_CONTRACT.md): the Manager reads it from this modinfo.ini
@@ -217,6 +243,7 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--game", default=DEFAULT_GAME)
     ap.add_argument("--costumes-only", action="store_true", help="the costume loader alone, without stage slots")
+    ap.add_argument("--without-report", action="store_true", help="no report_mod.dll (a clone without the local crsm/package/config.json)")
     a = ap.parse_args()
     GAME = a.game                                # racine du jeu
     REF = os.path.join(GAME, "reframework")
@@ -245,6 +272,11 @@ def main():
     for n in sorted(os.listdir(os.path.join(loader_dir, "static"))):
         if n.lower().endswith((".md",)): continue
         files.append((os.path.join(loader_dir, "static", n), "reframework/data/SF6_Costumes_Data/loader/static/" + n))
+    report_cfg = None
+    if not a.without_report:
+        report_cfg = report_config()
+        files.append((os.path.join(REPO, "build", "report_mod", "report_mod.dll"), "reframework/plugins/report_mod.dll"))
+        files.append((os.path.join(REPO, "report_mod", "data", "SF6_ReportMod_data", "locale.json"), "reframework/data/SF6_ReportMod_data/locale.json"))
     for src, _ in files:
         if not os.path.exists(src): sys.exit("manquant : " + src)
     modinfo = (
@@ -255,12 +287,17 @@ def main():
         "NameAsBundle=SF6 Slots Loader\n"
         "SlotsloaderContract=%d\n" % (a.version, manager_contract()))
     readme = README_TXT % a.version
+    if report_cfg:
+        readme += REPORT_TXT
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("modinfo.ini", modinfo)
         z.writestr("README.txt", readme)
         for src, dst in files:
             z.write(src, dst)
             print("  %-70s %10d  %s" % (dst, os.path.getsize(src), sha(src)))
+        if report_cfg:
+            z.writestr(G_REPORT_CONFIG, report_cfg)
+            print("  %-70s %10d  %s" % (G_REPORT_CONFIG, len(report_cfg), "the address alone"))
         if stages:
             # the stage path index as the repository stores it (LF), whatever the checkout did to it
             idx = open(os.path.join(REPO, "stages", "data", "loader", "stage_paths.txt"), "rb").read().replace(b"\r\n", b"\n")

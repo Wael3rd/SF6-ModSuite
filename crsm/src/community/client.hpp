@@ -36,7 +36,7 @@ public:
 
     // `config_path` = SF6_Community_data/config.json. `response_path` (optional) = where the worker also writes each answer
     // as { ok, data }: the file the Lua shim reads with json.load_file (a table cannot cross the bridge).
-    void configure(std::string config_path, std::string response_path = "");
+    void configure(std::string config_path, std::string response_path = "", std::string token_path = "");
     void start();                            // starts the worker thread
     void stop();                             // tests only
 
@@ -59,7 +59,7 @@ private:
 
     mutable std::mutex mx_;
     Worker worker_;
-    std::string config_path_, response_path_;
+    std::string config_path_, response_path_, token_path_;
     bool in_flight_ = false;
     bool announced_ = false;
     std::function<void()> verifying_hook_;
