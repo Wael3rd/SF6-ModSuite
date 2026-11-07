@@ -23,6 +23,7 @@
 #include "color_mods.hpp"
 #include "live.hpp"
 #include "live_internal.hpp"
+#include "opponent_ticks.hpp"
 #include "requests.hpp"
 #include "../../include/sf6colormod_entries.h"
 
@@ -1353,6 +1354,72 @@ bool install() {
 }
 
 // ---- other mods (include/sf6colormod_entries.h) ----------------------------------------------------------------------
+// ---- Opponent Outfit Settings' ticks of entries ------------------------------------------------------------------------
+namespace {
+constexpr const char* kOppFile = "reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt";
+std::mutex g_opp_mx;
+opponent::Ticks g_opp_ticks;
+bool g_opp_loaded = false;
+void opp_load() {                                     // g_opp_mx held
+    if (g_opp_loaded) return;
+    g_opp_loaded = true;
+    std::ifstream in(kOppFile, std::ios::binary);
+    if (!in) return;
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (!g_opp_ticks.from_text(text)) cmn::journal("opponent colours: %s is of another format: left aside, nothing ticked", kOppFile);
+}
+void opp_save() {                                     // g_opp_mx held. To a temp file, then renamed: a crash leaves the former one.
+    const std::string tmp = std::string(kOppFile) + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) { cmn::journal("opponent colours: cannot write %s", tmp.c_str()); return; }
+        out << g_opp_ticks.to_text();
+    }
+    if (!MoveFileExA(tmp.c_str(), kOppFile, MOVEFILE_REPLACE_EXISTING)) cmn::journal("opponent colours: cannot replace %s", kOppFile);
+}
+}  // namespace
+
+bool opp_ticked(int fighter, int costume, const std::string& id) {
+    std::lock_guard lk(g_opp_mx);
+    opp_load();
+    return g_opp_ticks.has(fighter, costume, id);
+}
+void opp_toggle(int fighter, int costume, const std::string& id) {
+    std::lock_guard lk(g_opp_mx);
+    opp_load();
+    const bool on = g_opp_ticks.toggle(fighter, costume, id);
+    opp_save();
+    cmn::journal("opponent colours: fighter %d costume %d: %s %s", fighter, costume, id.c_str(), on ? "ticked" : "unticked");
+}
+void opp_set_entries(int fighter, int costume, bool on) {
+    std::vector<std::string> ids;
+    {
+        std::lock_guard lk(live::mx());
+        if (const auto* l = g_cat.entries(fighter, costume)) for (const Entry& e : *l) ids.push_back(e.ident);
+    }
+    std::lock_guard lk(g_opp_mx);
+    opp_load();
+    if (!on) g_opp_ticks.clear(fighter, costume);
+    else for (const std::string& id : ids) g_opp_ticks.set(fighter, costume, id, true);
+    opp_save();
+    cmn::journal("opponent colours: fighter %d costume %d: every entry %s", fighter, costume, on ? "ticked" : "unticked");
+}
+int opp_count(int fighter, int costume) {
+    std::vector<std::string> ticked;
+    {
+        std::lock_guard lk(g_opp_mx);
+        opp_load();
+        ticked = g_opp_ticks.of(fighter, costume);
+    }
+    if (ticked.empty()) return 0;
+    std::lock_guard lk(live::mx());
+    const auto* l = g_cat.entries(fighter, costume);
+    if (!l) return 0;
+    int n = 0;
+    for (const Entry& e : *l) for (const std::string& id : ticked) if (e.ident == id) ++n;
+    return n;
+}
+
 int entries_version() { return active() ? SF6CM_ENTRIES_VERSION : 0; }   // requests act only while the decisions are ours
 
 int entries_export(int fighter, int costume, SF6CMEntry* out, int cap) {

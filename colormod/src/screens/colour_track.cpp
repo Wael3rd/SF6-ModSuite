@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <cstdio>
+#include <cctype>
 #include <fstream>
 #include <filesystem>
 #include <map>
@@ -35,6 +36,7 @@
 #include "../engine/decide_internal.hpp"
 #include "../engine/live_internal.hpp"
 #include "../engine/luajson.hpp"
+#include "../engine/opponent_ticks.hpp"
 #include "../engine/requests.hpp"
 #include "../vfx/feed.hpp"
 #include "colour_state.hpp"
@@ -117,6 +119,7 @@ std::optional<reframework::InvokeRet> call(MO* o, const char* sig, const std::ve
 MO* call_obj(MO* o, const char* sig) { auto r = call(o, sig); return r ? reinterpret_cast<MO*>(r->ptr) : nullptr; }
 std::optional<bool> call_bool(MO* o, const char* sig) { auto r = call(o, sig); if (!r) return std::nullopt; return r->byte != 0; }
 std::optional<int32_t> call_i32(MO* o, const char* sig) { auto r = call(o, sig); if (!r) return std::nullopt; return (int32_t)r->dword; }
+std::optional<std::string> call_str(MO* o, const char* sig) { auto r = call(o, sig); if (!r) return std::nullopt; MO* s = reinterpret_cast<MO*>(r->ptr); return s ? ll::managed_string_to_utf8(s) : std::string(); }
 std::optional<std::string> message(MO* text) {                    // pcall(text.call, text, "get_Message") -> tostring
     if (!alive(text)) return std::nullopt;
     auto r = call(text, "get_Message");
@@ -757,7 +760,10 @@ void tick_fighter_settings() {
 // - The preview: what the selected cell is, asked as a preview request (scope 1 of the contract, as Replays > Settings; state.json is never changed):
 //   its entry, or "" = the game's own colours. The fighter is dressed again when it wears BASE_COLOR, since for the game nothing changed then.
 // A look for the agent every 15 frames until the page is up; everything else only while it is on screen. Nothing is kept from a frame to the next but
-// numbers and the entry's id (R35). A tick on such a cell stays what the game makes of it: colour 02 of that outfit.
+// numbers and the entry's id (R35).
+// - The ticks: the game toggles colour 1 for a tick on such a cell, so its list is watched while the page is up (opp_watch, engine/opponent_ticks.hpp classify).
+//   A tick on an entry is taken out of the game's list again and goes to our own (decide.cpp, opp_*): the game's save only ever holds real colours. Each cell shows
+//   what's really ticked, from its entry or from the game's list; the summary's lines count both, here for the ones the game writes.
 constexpr uint32_t kOppPollEvery = 15;
 constexpr int kOppCellsMax = 40;                                   // the grid's pool, its scroll bar included (24 + 1, read 07/11)
 constexpr int kOppChipsPerPass = 2;                                // squares read from an entry's file in one pass: a first visit spread over frames
@@ -765,6 +771,9 @@ struct OppPage {
     bool up = false, asked = false;
     Opt f, c;
     std::string id;                                                // what was asked for the preview ("" = the game's own colours)
+    bool watched = false;                                          // `list` is the game's list of (wf, wc)
+    int64_t wf = -1, wc = -1;
+    std::vector<int> list;
 };
 OppPage g_opp;
 
@@ -812,6 +821,118 @@ void opp_paint(MO* cm, const Opt& f, const Opt& c) {
         if (r1) paint_rect(r1, chip->second);
     }
 }
+// The game's list of colour ids of an outfit on this page, in its working copy
+MO* opp_list(MO* param, int64_t costume, MO** per_costume = nullptr) {
+    MO* dup = field_obj(param, "<SettingDataDuplicated>k__BackingField");
+    MO* all = dup ? field_obj(dup, "CostumeSettings") : nullptr;
+    const int n = all ? call_i32(all, "get_Count").value_or(0) : 0;
+    for (int i = 0; i < n; ++i) {
+        MO* pc = list_item(all, i);
+        int32_t id = -1;
+        if (pc && ll::read_field_i32(pc, "CostumeId", id) && id == costume) {
+            if (per_costume) *per_costume = pc;
+            return field_obj(pc, "ValidColorIdList");
+        }
+    }
+    return nullptr;
+}
+std::vector<int> opp_ids(MO* list) {
+    std::vector<int> out;
+    const int n = list ? call_i32(list, "get_Count").value_or(0) : 0;
+    for (int i = 0; i < n; ++i) {
+        auto r = call(list, "get_Item(System.Int32)", { ll::arg_i32(i) });
+        if (r) out.push_back((int32_t)r->dword);
+    }
+    return out;
+}
+// The list as it was before the game's write
+void opp_restore(MO* list, const std::vector<int>& want) {
+    call(list, "Clear");
+    for (int id : want) call(list, "Add(System.UInt32)", { ll::arg_i32(id) });
+}
+// What the player did since the last look at this outfit's list
+void opp_watch(MO* param, const Opt& f, const Opt& c, MO* selected) {
+    MO* list = opp_list(param, *c);
+    if (!list) { g_opp.watched = false; return; }
+    std::vector<int> now = opp_ids(list);
+    if (!g_opp.watched || g_opp.wf != *f || g_opp.wc != *c) {
+        g_opp.watched = true; g_opp.wf = *f; g_opp.wc = *c; g_opp.list = std::move(now);
+        return;
+    }
+    if (now == g_opp.list) return;
+    const Entry* e = selected ? opp_entry(selected, f, c) : nullptr;
+    const auto msg = selected ? message(opp_find(selected, "e_text")) : std::nullopt;
+    int cursor_color = -1;                                         // the colour under the cursor, as its label says: "01" .. "10"
+    if (!e && msg && msg->size() == 2 && std::isdigit((unsigned char)(*msg)[0]) && std::isdigit((unsigned char)(*msg)[1])) cursor_color = std::stoi(*msg) - 1;
+    const auto change = engine::opponent::classify(g_opp.list, now, e != nullptr, e ? (int)kBaseColor : cursor_color);
+    const int fi = (int)*f, ci = (int)*c;
+    switch (change) {
+    case engine::opponent::Change::kEntry:
+        opp_restore(list, g_opp.list);
+        engine::decide::opp_toggle(fi, ci, e->ident);
+        return;
+    case engine::opponent::Change::kAllOn:
+        if (engine::decide::opp_count(fi, ci) > 0) {               // entries were ticked, the game saw nothing ticked: for the player, that key turns them off
+            opp_restore(list, g_opp.list);
+            engine::decide::opp_set_entries(fi, ci, false);
+            return;
+        }
+        engine::decide::opp_set_entries(fi, ci, true);
+        break;
+    case engine::opponent::Change::kAllOff:
+        engine::decide::opp_set_entries(fi, ci, false);
+        break;
+    default:
+        break;
+    }
+    g_opp.list = std::move(now);
+}
+// Each cell of an entry shows what's really ticked; the game wrote colour 02's state there
+void opp_show_ticks(MO* cm, MO* param, const Opt& f, const Opt& c) {
+    MO* grid = opp_find(cm, "p_ScrollGrid_0");
+    int guard = 0;
+    for (MO* item = grid ? call_obj(grid, "get_Child") : nullptr; item && guard < kOppCellsMax; item = call_obj(item, "get_Next"), ++guard) {
+        const auto v = call_bool(item, "get_ActualVisible");
+        if (!(v && *v)) continue;
+        const Entry* e = opp_entry(item, f, c);
+        if (!e) continue;
+        MO* check = opp_find(item, "c_check");
+        const auto st = check ? call_str(check, "get_PlayState") : std::nullopt;
+        const bool on = engine::decide::opp_ticked((int)*f, (int)*c, e->ident);
+        if (st && *st == (on ? "ON" : "OFF")) continue;
+        call(param, "UpdateColorGridItemCheck(via.gui.SelectItem,System.Boolean)", { item, ll::arg_i32(on ? 1 : 0) });
+    }
+}
+// The summary's lines the game writes count the game's list: ours are added. Its text ends with that count, whatever the language.
+void opp_fix_counts(MO* param) {
+    MO* parts = field_obj(param, "mCosColorTextList");
+    MO* lc = parts ? field_obj(parts, "<Control>k__BackingField") : nullptr;
+    MO* dup = field_obj(param, "<SettingDataDuplicated>k__BackingField");
+    MO* all = dup ? field_obj(dup, "CostumeSettings") : nullptr;
+    int32_t fid = -1;
+    if (!lc || !all || !ll::read_field_i32(param, "SettingFighterId", fid)) return;
+    const int n = call_i32(all, "get_Count").value_or(0);
+    int i = 0;
+    for (MO* item = call_obj(lc, "get_Child"); item && i < n && i < kOppCellsMax; item = call_obj(item, "get_Next"), ++i) {
+        const auto v = call_bool(item, "get_ActualVisible");
+        if (!(v && *v)) continue;
+        MO* pc = list_item(all, i);
+        int32_t cos = -1;
+        if (!pc || !ll::read_field_i32(pc, "CostumeId", cos)) continue;
+        const int extra = engine::decide::opp_count(fid, cos);
+        MO* text = opp_find(item, "e_text_costume");
+        const auto msg = text ? message(text) : std::nullopt;
+        if (!msg) continue;
+        MO* ids = field_obj(pc, "ValidColorIdList");
+        const int base = ids ? call_i32(ids, "get_Count").value_or(0) : 0;
+        const std::string want_tail = std::to_string(base + extra), game_tail = std::to_string(base);
+        const auto ends = [&](const std::string& s) { return msg->size() >= s.size() && msg->compare(msg->size() - s.size(), s.size(), s) == 0; };
+        if (extra == 0 ? ends(game_tail) : (ends(want_tail) && msg->size() >= want_tail.size() + 1 && !std::isdigit((unsigned char)(*msg)[msg->size() - want_tail.size() - 1]))) continue;
+        if (!ends(game_tail)) continue;                            // not the game's text as we know it: left alone
+        const std::string line = msg->substr(0, msg->size() - game_tail.size()) + want_tail;
+        api()->ui_set_text(cmn::client(), text, line.c_str());
+    }
+}
 void tick_opponent() {
     if (!g_opp.up && g_F % kOppPollEvery != 0) return;
     MO* cm = nullptr;
@@ -825,6 +946,9 @@ void tick_opponent() {
     opp_paint(cm, f, c);
     MO* grid = opp_find(cm, "p_ScrollGrid_0");
     MO* sel = grid ? call_obj(grid, "get_SelectedItem") : nullptr;
+    opp_watch(param, f, c, sel);
+    opp_show_ticks(cm, param, f, c);
+    opp_fix_counts(param);
     if (!sel) return;
     const Entry* e = opp_entry(sel, f, c);
     const std::string id = e ? e->ident : std::string();
@@ -1579,7 +1703,12 @@ void opponent_post() {
     perf::Scope t(perf::ScrOpponent);
     MO* cm = nullptr;
     MO* param = nullptr;
-    if (opp_page(cm, param)) opp_paint(cm, g_opp.f, g_opp.c);
+    if (!opp_page(cm, param)) return;
+    opp_paint(cm, g_opp.f, g_opp.c);
+    MO* grid = opp_find(cm, "p_ScrollGrid_0");
+    opp_watch(param, g_opp.f, g_opp.c, grid ? call_obj(grid, "get_SelectedItem") : nullptr);
+    opp_show_ticks(cm, param, g_opp.f, g_opp.c);
+    opp_fix_counts(param);
 }
 
 void frame(uint64_t lua_frame) {

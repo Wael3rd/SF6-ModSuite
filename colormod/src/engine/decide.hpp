@@ -65,4 +65,10 @@ int entries_export(int fighter, int costume, SF6CMEntry* out, int cap);   // the
 int request(int scope, int fighter, int costume, const char* id, void* battle);  // 1 taken
 void clear_requests(int scope);
 
+// Opponent Outfit Settings' ticks of entries (opponent_ticks.hpp). Saved at each change, in reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt.
+bool opp_ticked(int fighter, int costume, const std::string& id);
+void opp_toggle(int fighter, int costume, const std::string& id);
+void opp_set_entries(int fighter, int costume, bool on);              // all the entries of an outfit, as the catalogue has them
+int opp_count(int fighter, int costume);                              // those ticked that still exist
+
 }  // namespace engine::decide
