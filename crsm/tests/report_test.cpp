@@ -178,7 +178,7 @@ static void test_sources(const fs::path& crsm) {
     check(has(ask_src, "\"report_get\"") && has(ask_src, "\"costume_key\"") && !has(ask_src, "jpeg") && !has(ask_src, "logs") && !has(ask_src, "make_command"), "a status request is not a report");
     check(has(report, "d.desc = \"\";") && has(report, "cur == g_summary") && has(report, "g_wrote == g_summary && cur == g_read_back"), "R7: the long text has one writer, the whole text compared first");
     check(has(report, "set_by_name(gmt, \"set_AutoRegionFit\", gx::I(0))") && has(report, "set_by_name(gmt, \"set_PageAlignment\", gx::I(0))"), "under the rows: the fit off, aligned from the top");
-    check(has(report, "rows_behind(true)") && has(report, "rows_behind(false)") && has(report, "if (g_rows_hidden) rows_behind(false)"), "the screen's rows hidden while the window is up, always put back");
+    check(!has(report, "set_force_invisible"), "the screen's rows are left alone (Wael: only the text's place mattered)");
     const std::string texts = slurp(crsm / "data/SF6_CRSM_data/locale.json"), readme = slurp(crsm / "README.md");
     check(!has(report, "ithdraw") && !has(logic_src, "ithdraw") && !has(texts, "report_row_withdraw") && !has(texts, "report_sum_withdraw") && !has(readme, "ithdraw"), "no withdraw left");
     check(has(report, "kDockX = -430.0f") && has(report, "kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 }"), "on the side, as the Color Mod's Edit Drive Colors");

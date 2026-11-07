@@ -484,29 +484,6 @@ void summary_box(MO* gmt, int rows) {
     if (!gx::size_of(gmt, "get_RegionSize", &w, &h) || !near_f(w, g_box.w, 0.5f) || !near_f(h, area, 0.5f)) gx::set_region(gmt, g_box.w, area);
     if (!gx::vec3_of(gmt, "get_Position", p) || !near_f(p[0], g_box.pos[0], 0.5f) || !near_f(p[1], y_new, 0.5f)) gx::set_pos(gmt, g_box.pos[0], y_new, g_box.pos[2]);
 }
-// What the window's see-through background would show: the screen's rows. The Color Mod's Edit Drive Colors does nothing about them: its eight rows cover them. Hidden with the
-// game's lock while the window is up, found again by name each time (R35), put back when it closes.
-bool g_rows_hidden = false;
-void rows_behind(bool hide) {
-    const SF6CoreAPI* a = api();
-    if (!a) return;
-    void* buf[2] = {};
-    const uint32_t n = perf::counted(a)->ui_agents(kAgent, buf, 2);
-    for (uint32_t i = 0; i < n && i < 2; ++i) {
-        MO* cm = gx::call_obj(static_cast<MO*>(buf[i]), "get_ControlMain");
-        MO* spin = cm ? static_cast<MO*>(perf::counted(a)->ui_find_cached(cm, "p_Spin_costume")) : nullptr;
-        MO* group = spin ? gx::parent(spin) : nullptr;
-        if (!group || group == cm) {
-            if (hide && !g_rows_hidden) cmn::journal("bug report: the rows have no group of their own: left as they are");
-            continue;
-        }
-        bool now = false;
-        if (gx::call_bool(group, "get_ForceInvisible", &now) && now == hide) continue;
-        gx::set_force_invisible(group, hide);
-        if (hide != g_rows_hidden) cmn::journal("bug report: the screen's rows %s (%s)", hide ? "hidden" : "back", gx::name(group).c_str());
-    }
-    g_rows_hidden = hide;
-}
 // The row Send is on (the third), dimmed while it does nothing: its text says why. The dialog's own row: put back before the window is forgotten, the pool may keep it.
 constexpr const char* kSendUnit = "p_OptionUnit_2_switch_show";
 void send_row_look(MO* cm, bool dim) {
@@ -547,7 +524,6 @@ void dock_all() {
         const bool send_shown = std::find(g_roles.begin(), g_roles.end(), rp::Row::Send) != g_roles.end();
         if (MO* cm = agent ? gx::call_obj(agent, "get_ControlMain") : nullptr) send_row_look(cm, send_shown && g_session.send_disabled() && g_session.busy() == rp::Busy::None);
     }
-    rows_behind(true);
 }
 
 void SF6CORE_CALL cb_button(void*, int64_t entry, SF6CoreOptButtonResult* out) {
@@ -713,7 +689,6 @@ void forget() {
 void closed_now(const char* why) {
     input_block(false);
     g_naming = false;
-    rows_behind(false);
     const SF6CoreAPI* a = api();
     void* dialogs[8] = {};
     const uint32_t n = a ? perf::counted(a)->ui_agents("OptionDialog", dialogs, 8) : 0;
@@ -1087,7 +1062,6 @@ void beat_post(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
 
 // The frame callback gives itself back; g_awake goes last, so a call of the update just then wakes it again at its next call, never lost.
 void go_to_sleep() {
-    if (g_rows_hidden) rows_behind(false);
     try { hint_hide(); } catch (...) { g_hint.shown = false; }
     g_req_on.store(false);
     g_up = false;
