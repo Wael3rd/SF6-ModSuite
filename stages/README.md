@@ -41,7 +41,11 @@ folder with a `natives` tree, or a `.pak`. Launch the game.
   gives the game's thumbnail back. It needs SF6 Native Core 0.8.1 or newer: without it, the list keeps the game's
   thumbnails.
 - Variants can change from one battle to the next without restarting the game.
-- UP / DOWN works on the stage select screen of Fighting Ground > Versus.
+- UP / DOWN works on the stage select screen of Fighting Ground > Versus, and only changes the look of the focused
+  entry. A tile (see below) is an entry of its own after the game's stages: an arrow in the corner beside the last cell
+  says there are more, RIGHT at that cell moves what the cells show, and the mirrored arrow beside the first cell says
+  there are more on that side. Tiles over one stage whose names start with the same word are one entry with several
+  looks, cycled with UP / DOWN.
 - To remove a mod, delete its archive or folder: the stage pak is rebuilt at the next launch. Archives are
   unpacked once into `stage_mods\.cache` (as much disk space as their unpacked size, 120 MB for the lighting
   pack); that folder can be deleted at any time.

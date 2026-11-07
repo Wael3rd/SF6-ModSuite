@@ -22,7 +22,8 @@ when it is done:
 | Battle Settings closed (`HidObject`, `OnEnd`; only after an open) | the slot becomes the intent, the save gets the carrier (what other players see) |
 | the game asks for / unloads a fighter's files (`app.battle.BattleFlowMap.requestNotManagedFighterAssetLoad` / `...Unload`, online `requestManagedFighterAssetLoad`), a reload (`SetupReloadBattleAsset`), the fighters built (`setupFighterAsset`) | the online alias (below), at once in the hook: these run on the flow map's own thread, where the game itself reads the battle description |
 | stage select shown / hidden, focus or preview changed (`app.menu.UIFlowStageSelect.Param`) | the variant's name between UP / DOWN hints, its preview, each stage's thumbnail in the list (core 0.8.1+) |
-| UP / DOWN on the stage select agent (`app.UIAgent.InputUp` / `InputDown`) | next / previous variant, `state.json` for the loader |
+| UP / DOWN on the stage select agent (`app.UIAgent.InputUp` / `InputDown`) | next / previous look of the focused entry, `state.json` for the loader; with tiles in the list the game's own UP / DOWN is skipped (it would turn the list's pages) |
+| the stage select's list built (`app.menu.UIFlowStageSelect.Param.InitStageList`, post) | the tiles' entries after the game's stages, `InitList` again with the longer count, the two arrows copied from the music selector's |
 | VS screen activated or rewritten (`app.esports.VSInfoOffline`) | the variant's name and image |
 | Opponent Outfit Settings' summary drawn (`app.UIFlowOtherMatchingFighterSetting.UIParam.UpdateCosColorTextList`, pre and post) | at once in the hook: the outfit list shortened for the draw, put back after it (below) |
 

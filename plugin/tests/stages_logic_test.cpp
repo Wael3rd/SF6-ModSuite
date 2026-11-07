@@ -277,7 +277,41 @@ static void test_codecheck() {
     check(!cache_hit(unknown, key, now, out, &why), "a result never computed (-1): no answer");
 }
 
+static void test_classic_list() {
+    std::printf("classic Stage Select's list\n");
+    const std::vector<NamedTile> tiles = {
+        { 0, "a1", "Forest (empty, fixed)" }, { 0, "a2", "Forest with people" }, { 0, "d", "Harbour at Night" },
+        { 0, "t", "Castle" }, { 70000, "a3", "Forest Temple" }, { 0, "x1", "SF Alpha" }, { 0, "x2", "SF Zero" },
+    };
+    const auto g = tile_groups(tiles);
+    check(g.size() == 6, "tiles sharing a first word on one stage are one entry");
+    check(g[0].keys == std::vector<std::string>({ "a1", "a2" }), "its looks in registry order, the first one's entry");
+    check(g[3].base == 70000 && g[3].keys.size() == 1, "the same word over another stage is another entry");
+    check(g[4].keys.size() == 1 && g[5].keys.size() == 1, "a word under 4 letters groups nothing");
+    check(first_word("  (New) Stage") == "new", "first word: punctuation before it skipped");
+
+    check(!more_arrows(0, 21, 21).left && !more_arrows(0, 21, 21).right, "no extra entry: no arrow");
+    check(!more_arrows(0, 21, 29).left && more_arrows(0, 21, 29).right, "list at its start: right arrow only");
+    check(more_arrows(3, 21, 29).left && more_arrows(3, 21, 29).right, "in the middle: both");
+    check(more_arrows(8, 21, 29).left && !more_arrows(8, 21, 29).right, "at its end: left arrow only");
+    check(more_arrows(10, 21, 29).left && more_arrows(10, 21, 29).right, "wrapped round: both");
+
+    auto tile = [](uint32_t, const std::string& k) { return k == "a1"; };
+    const Choice own = { { 0, "a1" }, { 70000, "banner" } };
+    check(classic_served(own, 0, "red", tile) == Choice({ { 0, "red" }, { 70000, "banner" } }), "the focused entry's look is served for its stage");
+    check(classic_served(own, 0, "", tile) == Choice({ { 70000, "banner" } }), "its own look: nothing served, a tile left by an older version dropped");
+
+    State st;
+    st.active[0] = "a2";
+    st.tile_pick["a1"] = "a2";
+    const std::string js = state_json(st);
+    State back;
+    check(parse_state(js, back) && back.tile_pick == st.tile_pick, "a tile's chosen look comes back from state.json");
+    check(loader_parse(js).size() == 1 && loader_parse(js)[0].second == "a2", "the loader still reads only \"selected\"");
+}
+
 int main() {
+    test_classic_list();
     test_state();
     test_grid();
     test_cycle_keys();

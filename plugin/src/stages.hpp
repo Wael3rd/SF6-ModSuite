@@ -7,7 +7,7 @@
 //   - a TILE (another stage over a vanilla one, a Suzaku Castle port over the Training Room): its own entry;
 //   - a VARIATION (lighting...): cycled on its stage's own entry.
 // Each menu keeps its own choice per vanilla stage (state.json "menus"), applied when that menu's stage loads:
-//   kClassic   the full-screen Stage Select (UP / DOWN), applied at once (as before)
+//   kClassic   the full-screen Stage Select (UP / DOWN: a stage's variations; its tiles are entries past the last cell), applied at once
 //   kBattle    Battle Settings > Other > Stage Settings: applied when an online battle is set up, on this PC only
 //   kTraining  Training's Change Stage: applied when Training sets its stage (and on the choice itself)
 //   kReplay    the replay picker: applied when a replay's battle description is set up (ReplayFlowMap.setupDesc)
