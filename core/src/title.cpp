@@ -11,10 +11,14 @@
 // missing; it dies with the title GUI.
 //
 // Off: an empty reframework/data/sf6core/title_off.txt (read when the hooks are installed).
+// Position and size: reframework/data/sf6core/title.ini, read once when the hooks are installed, so a change needs a new
+// launch. Written with the defaults when it is missing, never overwritten. A missing or unusable value keeps its default.
 // Everything is drawn through the core's own guarded display calls (client "sf6core.title").
 #include <windows.h>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include "sf6core_internal.h"
 
@@ -28,6 +32,8 @@ constexpr const char* kTemplateName  = "e_text_copyright";
 constexpr int32_t     kFontSlot      = 6;                  // the bold display font (character names, CFN tabs)
 constexpr float       kPosX = 960.0f, kPosY = 812.0f, kPosZ = 0.0f;
 constexpr float       kFontW = 76.0f, kFontH = 76.0f;
+constexpr int         kFontMin = 8, kFontMax = 150;        // at 150 the line still fits kRegionW: nothing is squeezed
+constexpr float       kSpaceW = 1920.0f, kSpaceH = 1080.0f; // the UI's own space: title.ini's positions are shares of it
 constexpr float       kRegionW = 1600.0f, kRegionH = 130.0f;
 constexpr float       kRasterW = 152.0f, kRasterH = 152.0f; // glyph raster size: the template's is its own 24 px, so a
                                                          // 76 px line drawn from it was blurry; 2x the font size
@@ -149,6 +155,10 @@ void invoke_i64(void* obj, const char* sig, int64_t v) {
     sf6core_api_ptr()->obj_invoke(g_client, obj, sig, &a, 1, nullptr);
 }
 
+// title.ini's values, the defaults until it is read
+struct TitleCfg { float x, y, font; };
+TitleCfg g_cfg{ tcfg::kPosX, tcfg::kPosY, tcfg::kFontW };
+
 // via.Size {w, h} of a Text (RasterSize / FontSize), or {-1, -1}
 void get_size(void* text, const char* getter, float* w, float* h) {
     *w = *h = -1.0f;
@@ -172,15 +182,16 @@ void configure_new(void* copy, void* tmpl) {
     const SF6CoreAPI* api = sf6core_api_ptr();
     float tw, th, cw, ch;
     get_size(tmpl, "get_RasterSize", &tw, &th);
-    const bool raster_ok = set_raster(copy, kRasterW, kRasterH);
+    const float raster = g_cfg.font * (kRasterW / kFontW);    // the same 2x as the default size, whatever the size
+    const bool raster_ok = set_raster(copy, raster, raster);
     get_size(copy, "get_RasterSize", &cw, &ch);
     core_log(SF6CORE_LOG_INFO, nullptr, "[title] raster size: template %.0fx%.0f, line %.0fx%.0f (%s)", tw, th, cw, ch, raster_ok ? "set" : "set failed");
     invoke_i64(copy, "set_FontSlot(via.gui.FontSlot)", kFontSlot);
     invoke_i64(copy, "set_Priority(System.UInt16)", kPriority);
     api->ui_set_text(g_client, copy, kText);
-    api->ui_set_region_size(g_client, copy, kRegionW, kRegionH);
-    api->ui_set_font_size(g_client, copy, kFontW, kFontH);
-    api->ui_set_position(g_client, copy, kPosX, kPosY, kPosZ);
+    api->ui_set_region_size(g_client, copy, kRegionW, g_cfg.font * (kRegionH / kFontH));
+    api->ui_set_font_size(g_client, copy, g_cfg.font, g_cfg.font);
+    api->ui_set_position(g_client, copy, g_cfg.x, g_cfg.y, kPosZ);
     g_last_rgba = -1;
     g_last_scale_q = -1;
 }
@@ -225,7 +236,7 @@ void tick_inner(void* flow) {
         }
         configure_new(copy, tmpl);
         core_log(SF6CORE_LOG_INFO, nullptr, "[title] OVERDRIVE EDITION line created (font slot %d, size %.0fx%.0f, at %.0f,%.0f)",
-                 (int)kFontSlot, kFontW, kFontH, kPosX, kPosY);
+                 (int)kFontSlot, g_cfg.font, g_cfg.font, g_cfg.x, g_cfg.y);
     }
     if (!sel) g_last_rgba = -1;                                      // FADE_OUT: written again every frame
     const int f = (int)(g_ticks.load() - g_enter_tick.load());
@@ -269,15 +280,64 @@ bool hook_one(REFrameworkTypeDefinitionHandle td, const char* name, REFPreHookFn
     return true;
 }
 
-bool off_file_present() {
-    char path[MAX_PATH];
+// <game folder>\reframework\data\sf6core\<name>
+bool data_path(const char* name, char (&path)[MAX_PATH]) {
     DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
     if (!n || n >= MAX_PATH) return false;
     char* slash = strrchr(path, '\\');
     if (!slash) return false;
     *slash = 0;
-    strncat_s(path, "\\reframework\\data\\sf6core\\title_off.txt", _TRUNCATE);
-    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+    strncat_s(path, "\\reframework\\data\\sf6core\\", _TRUNCATE);
+    strncat_s(path, name, _TRUNCATE);
+    return true;
+}
+
+bool off_file_present() {
+    char path[MAX_PATH];
+    return data_path("title_off.txt", path) && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+// One number of title.ini within [lo, hi]; anything else keeps the default and says so. A decimal comma is accepted (players
+// type 0,5). GetPrivateProfileInt is not used: it reads "abc" as 0, a valid position, and takes no decimals.
+float ini_value(const char* path, const char* key, float lo, float hi, float def) {
+    char text[32] = {};
+    GetPrivateProfileStringA("title", key, "", text, sizeof(text), path);
+    if (!text[0]) return def;
+    if (char* comma = strchr(text, ',')) *comma = '.';
+    char* end = nullptr;
+    const float v = strtof(text, &end);
+    while (end && *end == ' ') ++end;
+    if (end == text || (end && *end) || !(v >= lo && v <= hi)) {
+        core_log(SF6CORE_LOG_WARN, nullptr, "[title] title.ini: %s is not a number from %g to %g: default kept", key, lo, hi);
+        return def;
+    }
+    return v;
+}
+
+void load_ini() {
+    using namespace tcfg;
+    char path[MAX_PATH];
+    if (!data_path("title.ini", path)) return;
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) {           // made once, so that players find it; never overwritten
+        char text[512];
+        const int len = snprintf(text, sizeof(text),
+            "; The OVERDRIVE EDITION line under the logo of the title screen. Read when the game starts.\r\n"
+            "; pos_x and pos_y: a share of the screen, from 0 to 1 (0.5 is the middle). pos_x is the centre of the line.\r\n"
+            "; font_size: %d to %d, at the game's 1920 x 1080 reference. Delete this file to get the defaults back.\r\n"
+            "[title]\r\npos_x=%.4f\r\npos_y=%.4f\r\nfont_size=%d\r\n",
+            kFontMin, kFontMax, kPosX / kSpaceW, kPosY / kSpaceH, (int)kFontW);
+        HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            if (len > 0 && len < (int)sizeof(text)) WriteFile(f, text, (DWORD)len, &written, nullptr);
+            CloseHandle(f);
+        }
+        return;
+    }
+    g_cfg.x = roundf(ini_value(path, "pos_x", 0.0f, 1.0f, kPosX / kSpaceW) * kSpaceW);
+    g_cfg.y = roundf(ini_value(path, "pos_y", 0.0f, 1.0f, kPosY / kSpaceH) * kSpaceH);
+    g_cfg.font = ini_value(path, "font_size", (float)kFontMin, (float)kFontMax, kFontW);
+    core_log(SF6CORE_LOG_INFO, nullptr, "[title] title.ini: at %.0f,%.0f, size %.0f", g_cfg.x, g_cfg.y, g_cfg.font);
 }
 
 }  // namespace
@@ -294,6 +354,7 @@ void title_frame() {
             core_log(SF6CORE_LOG_INFO, nullptr, "[title] off (title_off.txt present)");
             return;
         }
+        load_ini();
         auto* tdb = s_sdk->functions->get_tdb();
         g_td_flow = s_sdk->tdb->find_type(tdb, "app.menu.UIFlowTitle");
         if (!g_td_flow) {
