@@ -24,11 +24,11 @@
 // differs (rule 15). While neither screen exists: two core registry reads every 15 frames, nothing else.
 //
 // On screen means on screen: Battle Settings keeps CFNFighterProfileSimpleTop loaded, not drawn, its controls still ActualVisible, its
-// line still holding his id: the agents alone say nothing (Wael 07/11: "(X) ID Steam" on Fighter Settings). The key, the entry and the
-// swap work only when the GameObject is drawn, no newer flow is over the profile and no Battle Settings flow exists (its Fighter Profile
-// tab is only ever his own); leaving gives the line back at once, and on any other screen the key reads nothing, sends nothing, writes
-// nothing. The entry is a copy on the resident InputGuide's bar, which every screen shows: a copy left visible comes back with that bar
-// everywhere, so hiding it never depends on the bar being on screen, and goes over every bar.
+// line still holding his id: the agents alone say nothing (Wael 07/11: "R Pseudo Steam" on its Character tab). The key, the entry and the
+// swap work only when the GameObject is drawn, no flow of Battle Settings' exists and the flow of that very profile does
+// (psn::profile_allowed, read every frame such a GUI is drawn); leaving gives the line back at once, and on any other screen the key reads
+// nothing, sends nothing, writes nothing. The entry is a copy on the resident InputGuide's bar, which every screen shows: a copy left
+// visible comes back with that bar everywhere, so hiding it never depends on the bar being on screen, and goes over every bar.
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
@@ -552,13 +552,8 @@ Obj* drawn_main(const char* name) {
     }
     return nullptr;
 }
-// What the flows say (psn::profile_blocked_by): the profile is what the player is on. Read every kHintPass frames.
-bool profile_on_top() {
-    static uint32_t at = 0;
-    static bool top = false;
-    static std::string last_other;
-    if (at && g_frame - at < kHintPass) return top;
-    at = g_frame;
+// The UIFlowManager's flows now, by their params' types
+std::vector<std::string> flows_now() {
     std::vector<std::string> flows;
     auto* fm = API::get()->get_managed_singleton("app.UIFlowManager");
     Obj* hs = fm ? get_obj(fm, "_Handles") : nullptr;
@@ -567,18 +562,21 @@ bool profile_on_top() {
         Obj* p = h ? get_obj(h, "<Param>k__BackingField") : nullptr;
         if (p) flows.push_back(p->get_type_definition()->get_full_name());
     }
-    const std::string other = psn::profile_blocked_by(flows);
-    top = other.empty();
-    if (other != last_other) {                // a type's name: nothing of a player
-        last_other = other;
-        if (!other.empty()) logi("profile_mod: not on a profile of ours: %s", other.c_str());
-    }
-    return top;
+    return flows;
 }
-// The screen's main control, drawn and on top; nullptr otherwise: nothing to do, anywhere else
+// The screen's main control: drawn, and a real profile (psn::profile_allowed, read now); nullptr otherwise: nothing to do, anywhere else
 Obj* screen_up() {
-    for (const char* name : kScreens)
-        if (Obj* main = drawn_main(name)) return profile_on_top() ? main : nullptr;
+    for (const char* name : kScreens) {
+        Obj* main = drawn_main(name);
+        if (!main) continue;
+        const bool allowed = psn::profile_allowed(flows_now(), strcmp(name, kAgentTop) == 0);
+        static bool last_allowed = true;
+        if (allowed != last_allowed) {
+            last_allowed = allowed;
+            if (!allowed) logi("profile_mod: %s is drawn, not as a profile opened: nothing from us", name);
+        }
+        return allowed ? main : nullptr;
+    }
     return nullptr;
 }
 Obj* find_line(Obj* main) {

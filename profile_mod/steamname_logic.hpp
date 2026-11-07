@@ -9,29 +9,26 @@
 
 namespace psn {
 
-// Is the profile what the player is on? The agents alone don't say: Battle Settings keeps CFNFighterProfileSimpleTop loaded while its
-// other tabs show (read: GameObject DrawSelf false, View visible, and the controls' ActualVisible stays true). So: its GameObject drawn
-// and its main control visible,
+// Is a real profile what the player is on? The GUIs alone don't say: Battle Settings keeps CFNFighterProfileSimpleTop loaded, and draws
+// it on its own tabs, its lines holding his id. So, read every frame:
+//   - its GameObject drawn and its main control visible;
 inline bool profile_drawn(bool go_draw_self, bool main_actual_visible) { return go_draw_self && main_actual_visible; }
-// and nothing over it: UIFlowManager._Handles holds the newest flows first (read on Battle Settings), so the first one that is not a
-// background widget must be one of the profile's. Empty: nothing says it is there.
-inline bool flow_is_background(const std::string& type) { return type.rfind("app.UIWidget.", 0) == 0 || type.rfind("app.commentator.", 0) == 0; }
-inline bool flow_is_profile(const std::string& type) { return type.find("FightersProfile") != std::string::npos; }
-// Battle Settings and its sub-screens (their flows: UIFlowMatchingSetting, UIFlowMatchingFighterSetting, UIMatchingSettingFightersProfile
-// SimpleTop...): only ever his own profile there, its child tabs among the newest flows. Nothing at all while one exists (Wael 07/11).
+//   - no flow of Battle Settings' at all (Wael 07/11): UIMatchingSettingFightersProfile* flows, its own tab's, are no profile either;
+//   - the flow of that very screen: the full profile's param for CFNFighterProfileTop, the limited one's for CFNFighterProfileSimpleTop.
+constexpr const char* kFlowFullProfile = "app.UICFNFightersProfileTop.FlowParam";
+constexpr const char* kFlowLimitedProfile = "app.UICFNFightersProfileSimpleTop.FlowParam";
 inline bool flow_is_battle_settings(const std::string& type) {
-    return type.find("MatchingSetting") != std::string::npos || type.find("MatchingFighterSetting") != std::string::npos;
+    return type.rfind("app.UIFlowMatchingSetting.", 0) == 0 || type.rfind("app.UIFlowMatchingFighterSetting.", 0) == 0;
 }
-// All of it, on the flows newest first: "" when the profile is what the player is on, else the type that says no
-inline std::string profile_blocked_by(const std::vector<std::string>& newest_first) {
-    for (const std::string& t : newest_first) if (flow_is_battle_settings(t)) return t;
-    for (const std::string& t : newest_first) {
-        if (flow_is_background(t)) continue;
-        return flow_is_profile(t) ? std::string() : t;
+inline bool profile_allowed(const std::vector<std::string>& flows, bool full_profile_screen) {
+    const char* own = full_profile_screen ? kFlowFullProfile : kFlowLimitedProfile;
+    bool found = false;
+    for (const std::string& t : flows) {
+        if (flow_is_battle_settings(t)) return false;
+        if (t == own) found = true;
     }
-    return "(no flow)";
+    return found;
 }
-
 
 constexpr size_t kIdLen = 17;
 constexpr size_t kNameMaxBytes = 96;        // far above Steam's 32 characters
