@@ -433,12 +433,15 @@ struct Frame { float shadow_w, shadow_h, bg_w, bg_h, line_w, line_h, main_y, tit
 constexpr Frame kFrame = { 1058, 892, 1000, 834, 990, 824, -282, -352, 262 };   // its 8-row page
 // The text under the rows, strictly under the last one: GuideMessageText grown upward to just below it, its bottom kept, aligned LeftTop, its fit off: the game otherwise shrinks
 // what does not fit. Read in game on 07/11 at 1080p: the rows at y 258 + 64 a row, 48 high; this text's bottom at 857; at its font x 1.1 it drew 38 px a line and 21 px per em of
-// lg::text_em. So at x 0.9: 31 px a line: rp::kSummaryLines (12) in the 405 px under three rows, with room for one more if the game wraps one. As wide as the rows, 800 px, the
-// description's bar at their right edge: its text never reaches the bar: kTextPx, wrapped here by rp::wrap_px, and by the game (its force wrap) if a character ever draws wider.
+// lg::text_em. So at x 0.9: 31 px a line: rp::kSummaryLines (12) in the 405 px under three rows. As wide as the rows, 800 px, the description's bar at their right edge: its text
+// stops at kTextPx. The game never wraps this text (Wael's 78.png, 07/11: a line a little too wide for it broke again at a '.', each line cost two, and the text ran over the guide):
+// its auto wrap is off, so the lines are exactly the ones made here, 12 at most, and it cannot grow past its place whatever the widths. The estimate (rp::wrap_px, a few % off either
+// way depending on the text) starts with a margin; the game's own measure of what it shows then tightens it (measure_summary), and a clip stops what would still reach the bar.
 // The rows' own descriptions stay empty: the game writes the focused row's there, and the same long text written twice is R7's crash (two rows with this text, or a page
 // rebuilt, would do that). So this one place writes it, comparing the whole text first (the core's compare reads 511 bytes).
 constexpr float kSummaryAreaH3 = 405.0f, kRowPitch = 64.0f, kSummaryScale = 0.9f;
-constexpr float kTextPx = 784.0f;
+constexpr float kTextPx = 784.0f, kSummaryRegionW = 4000.0f;   // (a region wider than any line: no wrap, and its real width can be read)
+constexpr float kWrapMargin = 0.97f, kWrapScaleMin = 0.75f;
 
 bool near_f(float a, float b, float eps) { return std::abs(a - b) <= eps; }
 void dock_control(MO* cm) {
@@ -464,6 +467,7 @@ void fix_frame(MO* cm) {
         if (has_y && gx::vec3_of(c, "get_Position", p) && !near_f(p[1], y, 0.5f)) gx::set_pos(c, p[0], y, p[2]);
     }
 }
+void set_clip(MO* t, float l, float top, float r, float b);
 struct SummaryBox { MO* text = nullptr; bool ok = false; float pos[3] = {}; float w = 0, h = 0, fw = 0, fh = 0, top = 0; int32_t cp = -1; };
 SummaryBox g_box;
 void summary_box(MO* gmt, int rows) {
@@ -474,9 +478,12 @@ void summary_box(MO* gmt, int rows) {
                    gx::call_i32(gmt, "get_ControlPoint", &g_box.cp) && g_box.h > 1.0f && g_box.h < kSummaryAreaH3 - 1.0f && g_box.w > 100.0f && g_box.fh > 1.0f;
         set_by_name(gmt, "set_AutoRegionFit", gx::I(0));   // never squeezed: the lines are cut to the width, rp::kSummaryLines of them
         set_by_name(gmt, "set_PageAlignment", gx::I(0));   // LeftTop, under the rows whatever its length (the game's: at the bottom)
-        set_by_name(gmt, "set_AutoWrap", gx::B(true));
-        set_by_name(gmt, "set_ForceAutoWrap", gx::B(true));   // inside a word too: nothing passes kTextPx, "AAAA..." included
-        cmn::journal("bug report: the text under the rows: %s (font %.1f, region %.0f x %.0f, at %.0f, point %d)", g_box.ok ? "placed" : "left as the game made it", g_box.fh, g_box.w, g_box.h, g_box.pos[1], g_box.cp);
+        set_by_name(gmt, "set_ForceAutoWrap", gx::B(false));
+        set_by_name(gmt, "set_AutoWrap", gx::B(false));    // the lines are the ones made here: the game breaking one again is what ran over the guide
+        if (g_box.cp % 4 == 0) set_clip(gmt, 0, -2000.0f, kTextPx, 4000.0f);   // (its left point: x 0. Width only: the lines cannot pass its place)
+        bool wrap = true;
+        const bool read = gx::call_bool(gmt, "get_AutoWrap", &wrap);
+        cmn::journal("bug report: the text under the rows: %s (font %.1f, region %.0f x %.0f, at %.0f, point %d, auto wrap %s)", g_box.ok ? "placed" : "left as the game made it", g_box.fh, g_box.w, g_box.h, g_box.pos[1], g_box.cp, read ? (wrap ? "ON" : "off") : "not read");
     }
     if (!g_box.ok) return;
     const float area = kSummaryAreaH3 + (float)(3 - std::clamp(rows, 1, 3)) * kRowPitch;
@@ -486,8 +493,8 @@ void summary_box(MO* gmt, int rows) {
     const float fw = g_box.fw * kSummaryScale, fh = g_box.fh * kSummaryScale;
     float w = 0, h = 0, p[3] = {};
     if (!gx::size_of(gmt, "get_FontSize", &w, &h) || !near_f(w, fw, 0.05f) || !near_f(h, fh, 0.05f)) gx::set_font(gmt, fw, fh);
-    if (!gx::size_of(gmt, "get_RegionSize", &w, &h) || !near_f(w, kTextPx, 0.5f) || !near_f(h, area, 0.5f)) gx::set_region(gmt, kTextPx, area);
-    const float x_new = slots::scroll::left_of(g_box.pos[0], g_box.cp, g_box.w) + (float)(g_box.cp % 4) * 0.5f * kTextPx;   // its left edge kept, under the rows'
+    if (!gx::size_of(gmt, "get_RegionSize", &w, &h) || !near_f(w, kSummaryRegionW, 0.5f) || !near_f(h, area, 0.5f)) gx::set_region(gmt, kSummaryRegionW, area);
+    const float x_new = slots::scroll::left_of(g_box.pos[0], g_box.cp, g_box.w) + (float)(g_box.cp % 4) * 0.5f * kSummaryRegionW;   // its left edge kept, under the rows'
     if (!gx::vec3_of(gmt, "get_Position", p) || !near_f(p[0], x_new, 0.5f) || !near_f(p[1], y_new, 0.5f)) gx::set_pos(gmt, x_new, y_new, g_box.pos[2]);
 }
 // The row Send is on (the third), dimmed while it does nothing: its text says why. The dialog's own row: put back before the window is forgotten, the pool may keep it.
@@ -508,6 +515,8 @@ void send_row_look(MO* cm, bool dim) {
 std::string g_summary;                           // what the text under the rows should say
 std::string g_wrote, g_read_back;                // the last text written, and how the engine reads it back
 bool g_read_back_due = false;
+float g_wrap_scale = kWrapMargin;                // of kTextPx: what the lines are wrapped at; the game's measure tightens it
+uint64_t g_measure_at = 0;
 void write_summary(MO* gmt) {
     const std::string cur = gx::msg(gmt);
     if (g_read_back_due) { g_read_back_due = false; if (!cur.empty()) g_read_back = cur; }
@@ -515,6 +524,7 @@ void write_summary(MO* gmt) {
     gx::set_text(gmt, g_summary);
     g_wrote = g_summary;
     g_read_back_due = true;
+    g_measure_at = tick() + 3;                   // its layout, a few frames later
 }
 // ---- the message and the description's bar: copies in the dialog's guide row ----------------------------------------------------------------------------------------------
 // The message: a copy of the game's last guide entry (its style) on the guide's line, its right end at the window's right edge, never over the entries: past its room it slides as
@@ -725,6 +735,20 @@ void bar_frame(MO* gmt, void* param) {
     g_bar_state.x = x; g_bar_state.y = y; g_bar_state.h = h; g_bar_state.th_y = y + tb.y; g_bar_state.th_h = tb.h;
     if (!g_bar_state.shown) { gx::set_visible(track, true); gx::set_visible(th, true); g_bar_state.shown = true; }
 }
+// What the game says it draws: wider than kTextPx, or more lines than made (the game's wrap still on: a way this could fail): the lines made again tighter, and it looks again.
+void measure_summary(MO* gmt) {
+    if (!g_measure_at || tick() < g_measure_at) return;
+    g_measure_at = 0;
+    float w = 0, h = 0;
+    if (g_wrote.empty() || !gx::size_of(gmt, "get_DisplaySize", &w, &h) || !std::isfinite(w) || !std::isfinite(h) || w <= 0) return;
+    const float lines = (float)std::count(g_wrote.begin(), g_wrote.end(), '\n') + 1.0f;
+    const bool wide = w > kTextPx, tall = h > (lines + 0.6f) * kSummaryLinePx * 1.15f;
+    if ((!wide && !tall) || g_wrap_scale <= kWrapScaleMin) return;
+    const float was = g_wrap_scale;
+    g_wrap_scale = (std::max)(kWrapScaleMin, wide ? g_wrap_scale * kTextPx / w * 0.98f : g_wrap_scale * 0.95f);
+    g_dirty = true;
+    cmn::journal("bug report: the game draws %.0f x %.0f for %.0f lines: wrapped at %.3f, was %.3f", w, h, lines, g_wrap_scale, was);
+}
 // Every option dialog up (a page rebuilt: the old one may still be there, and the game cascades stacked dialogs): docked, its frame the big one
 void dock_all() {
     const SF6CoreAPI* a = api();
@@ -737,6 +761,7 @@ void dock_all() {
         if (MO* gmt = gx::ref(static_cast<MO*>(param), "GuideMessageText")) {
             summary_box(gmt, (int)g_roles.size());
             write_summary(gmt);
+            measure_summary(gmt);
             message_frame(gmt, param);
             bar_frame(gmt, param);
         }
@@ -796,8 +821,8 @@ std::string tr(const std::string& k, const std::vector<std::string>& args) { ret
 std::string g_scroll_text;
 uint64_t g_scroll_since = 0;
 std::string summary_now() {
-    if (g_scroll_text != g_session.text()) { g_scroll_text = g_session.text(); g_scroll_since = tick(); }
-    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return rp::wrap_px(line, kTextPx, max_lines, [](const std::string& ch) { return lg::text_em(ch); }); }, tick() - g_scroll_since, &g_scroll);
+    if (g_scroll_text != g_session.text()) { g_scroll_text = g_session.text(); g_scroll_since = tick(); g_wrap_scale = kWrapMargin; }
+    return rp::summary_text(g_session, g_values, tr, [](const std::string& line, int max_lines) { return rp::wrap_px(line, kTextPx * g_wrap_scale, max_lines, [](const std::string& ch) { return lg::text_em(ch); }); }, tick() - g_scroll_since, &g_scroll);
 }
 void forget();
 // The group made again with the same key (the Color Mod's pattern for per-page texts)
@@ -892,6 +917,8 @@ void forget() {
     g_read_back.clear();
     g_read_back_due = false;
     g_scroll_text.clear();
+    g_wrap_scale = kWrapMargin;
+    g_measure_at = 0;
     g_scroll = rp::SummaryScroll{};
     g_message.clear();
     g_msg = MsgLine{};

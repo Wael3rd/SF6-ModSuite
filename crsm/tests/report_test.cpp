@@ -179,6 +179,8 @@ static void test_sources(const fs::path& crsm) {
     check(!has(report, "ithdraw") && !has(logic_src, "ithdraw") && !has(texts, "report_row_withdraw") && !has(texts, "report_sum_withdraw") && !has(readme, "ithdraw"), "no withdraw left");
     check(has(report, "ui_clone_control") && has(slurp(crsm / "src/ui/community_dialog.cpp"), "bug_report::dialog_update()"), "copies only inside the dialog's own update (R19)");
     check(has(report, "kMsgName") && has(report, "slots::scroll") && has(report, "set_ScissorRect(via.Rect)"), "the message slides as a long name does");
+    check(has(report, "set_by_name(gmt, \"set_AutoWrap\", gx::B(false))") && has(report, "set_by_name(gmt, \"set_ForceAutoWrap\", gx::B(false))") && !has(report, "set_by_name(gmt, \"set_AutoWrap\", gx::B(true))"), "the game never wraps the text under the rows: it cannot grow past its place");
+    check(has(report, "get_DisplaySize") && has(report, "void measure_summary(MO* gmt)") && has(report, "kTextPx * g_wrap_scale"), "the game's own measure tightens the lines");
     {
         const size_t body = report.find("void paste_body() {"), send = report.find("SendInput(n, in", body), check_at = report.find("stop = paste_stop_now();                 // before every batch", body);
         const size_t tick_at = report.find("void paste_tick() {");
@@ -424,6 +426,33 @@ static void test_summary() {
     for (int i = 0; i < 1000; ++i) cjk += "æ¼¢";
     check(widest(cjk) <= kPx, "CJK");
     check(widest("WWWWWWWWWW MMMMMMMMMMMMMMMM wide words and a very_long_word_" + std::string(300, 'W')) <= kPx, "spaces and a word wider than a line");
+    // Wael's 78.png: this text, four times: lines the game broke again at a '.', each one costing two
+    std::string apk;
+    for (int i = 0; i < 4; ++i) apk += "com.duolingo_6.104.4-2493_4arch_7dpi_6e579410292124ae7c5c0ff38ca7275e_apkmirror.com";
+    const double wrapped_at = kPx * 0.97;        // bug_report.cpp's kWrapMargin
+    const std::vector<std::string> apk_lines = rp::wrap_px(apk, wrapped_at, rp::kDescriptionMaxLines, em);
+    size_t apk_chars = 0;
+    for (const std::string& l : apk_lines) { check(rp::drawn_px(l, em) <= wrapped_at, "that text: a line within the width: " + l); apk_chars += l.size(); }
+    check(apk_chars == apk.size() && apk_lines.size() >= 4 && apk_lines.size() <= 6, "and nothing lost: " + std::to_string(apk_lines.size()) + " lines");
+    // read in game on that screen: what the estimate is against, a few % either way: the margin holds it
+    check(rp::drawn_px("com.duolingo_6.104.4-2493_4arch_7dpi_6e579410292124ae7c5c0ff38ca7275e_apkmirro", em) * 0.97 <= 783.0 && 783.0 <= rp::drawn_px("com.duolingo_6.104.4-2493_4arch_7dpi_6e579410292124ae7c5c0ff38ca7275e_apkmirro", em) * 1.03, "the estimate within 3 % of the game on that line");
+    rp::Session apk_menu = opened(V::Waiting, apk);
+    const rp::Wrap apk_wrap = [&](const std::string& line, int max_lines) { return rp::wrap_px(line, wrapped_at, max_lines, em); };
+    rp::SummaryScroll apk_sc;
+    const std::string apk_text = rp::summary_text(apk_menu, v, plain, apk_wrap, 0, &apk_sc);
+    check(std::count(apk_text.begin(), apk_text.end(), '\n') + 1 <= rp::kSummaryLines, "that text in the menu: never past the room");
+    check(apk_sc.first_line + apk_sc.total <= rp::kSummaryLines ? apk_sc.top == 0 : apk_sc.total > apk_sc.window, "it moves exactly when it does not fit");
+    // tighter, as the game's measure asks: more lines, and it then moves, still within the room
+    const rp::Wrap tight = [&](const std::string& line, int max_lines) { return rp::wrap_px(line, 250.0, max_lines, em); };
+    rp::SummaryScroll tight_sc;
+    const std::string tight_text = rp::summary_text(apk_menu, v, plain, tight, 0, &tight_sc);
+    check(tight_sc.total > tight_sc.window && std::count(tight_text.begin(), tight_text.end(), '\n') + 1 == rp::kSummaryLines, "more lines: it scrolls, within the room");
+    std::string mixed;
+    for (int i = 0; i < 40; ++i) mixed += "\xE6\xBC\xA2\xE5\xAD\x97" "2493_6e57\xE3\x81\x8B\xE3\x81\xAA.";
+    const std::vector<std::string> mixed_lines = rp::wrap_px(mixed, wrapped_at, rp::kDescriptionMaxLines, em);
+    size_t mixed_chars = 0;
+    for (const std::string& l : mixed_lines) { check(rp::drawn_px(l, em) <= wrapped_at, "CJK and digits: a line within the width"); mixed_chars += l.size(); }
+    check(mixed_chars == mixed.size(), "CJK and digits: nothing lost, no character cut");
     const std::vector<std::string> cut = rp::wrap_px(std::string(1000, 'A'), kPx, 1, em);
     check(cut.size() == 1 && cut[0].size() > 3 && cut[0].substr(cut[0].size() - 3) == "..." && rp::drawn_px(cut[0], em) <= kPx, "one line at most: cut with ...");
     check(rp::wrap_px("one two\nthree", 2000, 9, em) == std::vector<std::string>({ "one two", "three" }), "its own line breaks stay");
