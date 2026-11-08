@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | ABI version | 1 |
-| Core version | 0.8.2 |
+| Core version | 0.9.9 |
 | Header | `include/sf6core/sf6core_api.h` |
 
 ## Versioning and the append-only rule
@@ -339,6 +339,22 @@ Probe with `SF6CORE_HAS(api, opt_group_place)`. Details: `OPTIONS.md`, "Rows in 
 | # | Function pointer | Signature | Threading | Notes |
 |---|---|---|---|---|
 | 92 | `opt_group_place` | `SF6CoreStatus (client, int64_t group, int32_t tab, int32_t section)` | As the other `opt_*` | The group's entries become rows of a section of the game's Options screen (`tab` = `app.Option.TabType`, `section` = `app.Option.GroupType`, e.g. 1 / 290 = Interface > Other Settings); `-1, -1` = back to the core's window. Applied at the next build. Never loaded, reset or saved by the game. `ERR_NOT_FOUND`: not the client's group; `ERR_INVALID_ARG`: one of the two negative |
+
+## Function list (increment 12 -- a client sets an entry's value, appended, core 0.9.8)
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 93 | `opt_set_value` | `SF6CoreStatus (client, int64_t entry, int64_t value)` | Game thread | The entry's value as its client sets it (choice 1-based, slider raw): stored and written to the game's unit with a refresh; `on_value` is not called for it. `ERR_NOT_FOUND`: not the client's entry; `ERR_INVALID_ARG`: a button or a value out of range |
+
+## Function list (increment 13 -- a client's section in the left list of a game Options tab, appended, core 0.9.9)
+
+Probe with `SF6CORE_HAS(api, opt_section_place)`. Details: `OPTIONS.md`, "A section of a game tab's left list".
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 94 | `opt_section_place` | `SF6CoreStatus (client, int64_t group, int32_t tab, int32_t before_section)` | Game thread | The group (`opt_group`: its title = the left list's line, its description = the screen's description line) becomes one more section of the left list of `tab` (`app.Option.TabType`), just above the section whose `app.Option.GroupType` is `before_section` (290 = Other Settings; -1 = at the end). Shows from the next time the game fills that tab (entering it). No rows, never loaded, reset or saved by the game. `-1, -1` = removed. `ERR_NOT_FOUND`: not the client's group; `ERR_INVALID_ARG`: `tab` -1 with a section, or a group placed with `opt_group_place`; `ERR_DISABLED`: the option service could not be installed |
+| 95 | `opt_section_state` | `SF6CoreStatus (client, int64_t group, SF6CoreOptSectionState* out)` | Game thread | This frame's state (read once per core frame, before the clients' frames): `shown`, `focused`, `held`, `decides` (a count), `menu_state` / `list_state` / `tab` (-1 when the screen is not up), `agent`, `control_main`, `right_panel` (c_bg_right), `item` (the left list's control showing the section, only while shown), `area` (c_bg_right/e_bg: x, y, w, h). `out->struct_size` set by the caller (the core writes only what it covers). `ERR_NOT_FOUND`: not the client's section |
+| 96 | `opt_section_hold` | `SF6CoreStatus (client, int64_t group, int32_t hold)` | Game thread | 1: the screen's agent is blocked (`ui_set_block_input`, the core's client) and the left list's Back swallowed while held (H2); only while the section is shown (`ERR_NOT_READY` otherwise). 0: given back; call it once every key the page read is up. Given back by the core when the screen goes, the section goes, the client is no longer active, or the option hooks are off |
 
 ## Lua bridge API
 

@@ -236,6 +236,28 @@ void set_group_place(int64_t group_id, int32_t tab, int32_t section) {
     if (on) g_any_placed = true;
 }
 
+// Increment 13. The game side reads the sections (sections()) at each of its syncs; nothing is built here.
+bool set_group_section(int64_t group_id, int32_t tab, int32_t before) {
+    std::lock_guard lk(mx);
+    Group* g = find_group(group_id);
+    if (!g) return false;
+    const bool on = tab >= 0;
+    g->section_tab = on ? tab : -1; g->section_before = on ? (before >= 0 ? before : -1) : -1;
+    return true;
+}
+std::vector<SectionDef> sections() {
+    std::lock_guard lk(mx);
+    std::vector<SectionDef> out;
+    for (auto& g : g_groups) {
+        if (g->section_tab < 0) continue;
+        SectionDef d;
+        d.gid = g->id; d.tab = g->section_tab; d.before = g->section_before;
+        d.key = id_key_of(*g); d.title = g->title; d.desc = g->desc;
+        out.push_back(std::move(d));
+    }
+    return out;
+}
+
 void set_group_def(int64_t group_id, const std::string& title, const std::string& desc) {
     std::lock_guard lk(mx);
     if (Group* g = find_group(group_id)) { g->title = title; g->desc = desc; }

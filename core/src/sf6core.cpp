@@ -39,7 +39,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.7";
+static constexpr const char* CORE_VERSION = "0.9.9";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2033,6 +2033,11 @@ SF6CoreStatus SF6CORE_CALL api_ui_get_texture_state(SF6CoreClient*, void*, SF6Co
 SF6CoreStatus SF6CORE_CALL api_ui_clone_control(SF6CoreClient*, void*, void*, const char*, void**);
 // Increment 11: option rows in a game Options section (ADR-0021, options/options_service.cpp)
 SF6CoreStatus SF6CORE_CALL api_opt_group_place(SF6CoreClient*, int64_t, int32_t, int32_t);
+SF6CoreStatus SF6CORE_CALL api_opt_set_value(SF6CoreClient*, int64_t, int64_t);
+// Increment 13: a client's section in the left list of a game Options tab (options/options_service.cpp)
+SF6CoreStatus SF6CORE_CALL api_opt_section_place(SF6CoreClient*, int64_t, int32_t, int32_t);
+SF6CoreStatus SF6CORE_CALL api_opt_section_state(SF6CoreClient*, int64_t, SF6CoreOptSectionState*);
+SF6CoreStatus SF6CORE_CALL api_opt_section_hold(SF6CoreClient*, int64_t, int32_t);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2670,7 +2675,13 @@ static const SF6CoreAPI s_api = {
     api_ui_get_texture_state,
     api_ui_clone_control,
     // Increment 11
-    api_opt_group_place
+    api_opt_group_place,
+    // increment 12 (core 0.9.8)
+    api_opt_set_value,
+    // increment 13 (core 0.9.9)
+    api_opt_section_place,
+    api_opt_section_state,
+    api_opt_section_hold
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)

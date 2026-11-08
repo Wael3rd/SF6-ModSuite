@@ -173,6 +173,14 @@ namespace costumes {
     void set_display_nsfw(bool on);   // the row changed: settings.json written, applied on the next tick
     bool online_drivetech();          // settings.json "online_outfit": "DriveTech" (else Outfit 1) is the carrier
     void set_online_drivetech(bool on);   // the row changed: settings.json written, applied on the next tick
+    std::string title_pack();         // settings.json "title_pack": "" (the game's own), a pack key or "random"
+    bool skip_intro();                // settings.json "skip_intro"
+    void set_title_pack(const std::string& key);   // the title rows changed: settings.json written (read by the loader at the next launch)
+    void set_skip_intro(bool on);
+    // settings.json "title_random_pool": the backgrounds Random draws from ("game" the game's own, packs' keys). False: never set
+    // (Random draws from every pack).
+    bool random_pool(std::vector<std::string>& keys);
+    void set_random_pool(const std::vector<std::string>& keys);
     // The slot the online alias dressed the player's fighter in: that FighterDesc's, else the last one dressed for `fid` still
     // alive (any thread); false: none
     bool dressed_slot(Obj* fd, int fid, int& slot, int& color);
@@ -188,10 +196,34 @@ namespace nsfwopt {
     void tick();                      // the row follows settings.json and the game's language
     bool retext_pending();            // the rows are written in another language than the game's (tick has work)
     bool on_value(int64_t entry, int64_t value);   // the core's on_value: true when the entry is the row's
+    // The "Title screen" row, for its preview (title_preview.cpp). False: no such row (no pack, no core).
+    struct TitleRow {
+        std::string title;                     // the row's name, as the game shows it
+        std::vector<std::string> labels;       // its values, as the game shows them
+        std::vector<std::string> pictures;     // per value: the picture's resource ("": none)
+        std::vector<std::string> keys;         // per value: the background's key for its title line ("game", a pack's; "" Random)
+        std::vector<std::string> thumbs;       // per value: its thumbnail's resource ("": none; Random's live mosaic, its list's banner)
+        std::vector<std::string> bands;        // per value: its 4:1 band at the list's cell size ("": none)
+        std::string check_off, check_on;       // the Random list's check boxes ("": none)
+        int value = 1;                         // 1-based, what the row holds
+    };
+    bool title_row(TitleRow& out);
+    // The row's value set from the preview (LB / RB): settings.json, and the row on screen (core 0.9.8's opt_set_value)
+    bool set_title_value(int value);
+    // Random's selection changed (title_preview.cpp's list): settings.json, and the loader at once (SF6TitleSlots_Pool)
+    void set_random_pool(const std::vector<std::string>& keys);
+    // The "Title Screen Selection" section of Options > Interface (core 0.9.9's opt_section_place): its group id, -1 when there is
+    // none (no pack, an older core)
+    int64_t title_section();
+}
+// title_preview.cpp: the "Title screen" row of Options > Interface: its value slides when long, and Confirm shows the pack's picture
+namespace titleprev {
+    void frame();                     // every LateUpdateBehavior: its own gate (a look every 15 frames while the Options screen is not up)
 }
 // fs_name.cpp: the outfit's name on Fighter Settings, at the right end of the bottom input guide bar
 namespace fsname {
     void run_in_guide_update(void (*job)());   // once, inside the next guide list's update (R19: where a copy can be made). The hook is there once Battle Settings opened.
+    void need_guide_hook();           // the guide list's hook now, without waiting for Battle Settings (the title preview's copies)
     void install_hooks();             // first frame (needs the core's ui_clone_control)
     bool busy();
     void tick(uint32_t events);

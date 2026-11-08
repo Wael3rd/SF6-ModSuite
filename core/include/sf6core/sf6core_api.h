@@ -292,6 +292,28 @@ typedef struct SF6CoreOptCallbacks {
 #define SF6CORE_OPT_NAV_PUSH    4
 #define SF6CORE_OPT_NAV_POP     8
 
+/* A client's section in the left list of a game Options tab (opt_section_state, increment 13). struct_size: set by
+ * the caller; a later core fills only the fields the caller's size covers. Read once per core frame, before the
+ * clients' frame callbacks: the values are this frame's. */
+typedef struct SF6CoreOptSectionState {
+    uint32_t struct_size;
+    int32_t  shown;           /* the Options screen is up on the section's tab and its left list holds the section */
+    int32_t  focused;         /* shown, the screen's MAIN state on its left list, and its cursor on the section */
+    int32_t  held;            /* the client's hold is on (opt_section_hold) */
+    uint32_t decides;         /* Confirm presses the game made on the section since it was placed (a count: compare
+                                 it with the last one seen); stays 0 when the decide hook is not installed */
+    int32_t  menu_state;      /* app.UIOptionSettingMenu.eMenuState (0 MAIN, 1 SUB...), -1 when the screen is not up */
+    int32_t  list_state;      /* app.UIOptionSettingMenu.eListState (0 MainList, 1 SubList...), -1 when not up */
+    int32_t  tab;             /* app.Option.TabType shown, -1 when not up */
+    void*    agent;           /* the screen's app.UIAgent (GameObject "OptionSettingMenu"), NULL when not up */
+    void*    control_main;    /* its ControlMain (c_main), NULL when not up */
+    void*    right_panel;     /* the right side's panel (OptionMenuParam.mCtrlBGRight, c_bg_right), NULL when not up */
+    void*    item;            /* the left list's control that shows the section (its p_OptionUnit_N_switch_show), NULL
+                                 unless shown */
+    float    area[4];         /* the right side (c_bg_right/e_bg): x, y (its top left), w, h in screen units; 0 when
+                                 not up */
+} SF6CoreOptSectionState;
+
 /* ---- Training pause-menu types (increment 8, ADR-0016) ---------------- */
 
 /* The game's training pause menu (app.training.UIFlowTrainingMenu) filled
@@ -789,6 +811,38 @@ typedef struct SF6CoreAPI {
      * 1-based, slider raw); buttons of a placed group are not shown. The game never loads, resets or saves these
      * rows: the client stores the value itself. ERR_NOT_FOUND: not one of the client's groups. */
     SF6CoreStatus (SF6CORE_CALL *opt_group_place)(SF6CoreClient* client, int64_t group, int32_t tab, int32_t section);
+
+    /* -- Increment 12: a client sets one of its entries' values (append-only) --
+     *
+     * Probe with SF6CORE_HAS(api, opt_set_value) (core >= 0.9.8). */
+
+    /* The entry's value as its client sets it (choice 1-based, slider raw): stored, and written to the game's unit with a
+     * refresh, so that a row on screen shows it at once. on_value is not called for it. ERR_NOT_FOUND: not one of the
+     * client's entries; ERR_INVALID_ARG: a button, or a value out of its range. Game thread. */
+    SF6CoreStatus (SF6CORE_CALL *opt_set_value)(SF6CoreClient* client, int64_t entry, int64_t value);
+
+    /* -- Increment 13: a client's section in the left list of a game Options tab, its right side the client's page --
+     *
+     * Probe with SF6CORE_HAS(api, opt_section_place) (core >= 0.9.9). The section is a group of the client
+     * (opt_group: its title is the left list's line, its description the screen's description line; opt_group_def
+     * changes both in place). It has no rows: the game shows nothing on the right for it, the client draws its page
+     * there. Game thread. */
+
+    /* The group becomes a section of the left list of tab `tab` (app.Option.TabType, 1 = Interface), just above the
+     * section whose app.Option.GroupType is before_section (290 = Other Settings; -1 = at the end of the tab). It shows
+     * from the next time the game fills that tab's left list (entering the tab). Never loaded, reset or saved by the
+     * game. -1, -1 = no section any more. ERR_NOT_FOUND: not one of the client's groups; ERR_INVALID_ARG: tab -1 with
+     * a section, or a group placed with opt_group_place; ERR_DISABLED: the option service could not be installed. */
+    SF6CoreStatus (SF6CORE_CALL *opt_section_place)(SF6CoreClient* client, int64_t group, int32_t tab, int32_t before_section);
+    /* This frame's state of the section (SF6CoreOptSectionState, out->struct_size set by the caller).
+     * ERR_NOT_FOUND: not one of the client's sections. Before the game side knows it: SF6CORE_OK, all 0. */
+    SF6CoreStatus (SF6CORE_CALL *opt_section_state)(SF6CoreClient* client, int64_t group, SF6CoreOptSectionState* out);
+    /* hold 1: the client's page takes the screen's input (the screen's agent is blocked; while a section is held the
+     * left list's Back is swallowed as well, should the block leak). Only while the section is shown
+     * (ERR_NOT_READY otherwise). hold 0: given back; call it once every key the page read is up, or the game gets
+     * that key too. The core gives it back by itself when the screen goes, when the section is removed, or when
+     * its option hooks are switched off. */
+    SF6CoreStatus (SF6CORE_CALL *opt_section_hold)(SF6CoreClient* client, int64_t group, int32_t hold);
 
 } SF6CoreAPI;
 

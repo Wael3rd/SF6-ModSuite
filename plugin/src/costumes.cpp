@@ -1606,6 +1606,34 @@ void set_display_nsfw(bool on) {
 }
 
 bool online_drivetech() { return g_online_dt; }
+namespace {
+// "title_pack" and "skip_intro" (the title-screen packs, read by the loader at the next launch): read from settings.json
+// when its stamp changes, kept apart from the NSFW reading above because nothing here applies to the running game.
+std::string g_title_pack;         // "" = the game's own, a pack key, or "random"
+bool g_skip_intro = false;
+uint64_t g_title_stamp = 0;
+void read_title_settings() {
+    const uint64_t st = settings_stamp();
+    if (st == g_title_stamp) return;
+    g_title_stamp = st;
+    g_title_pack.clear();
+    g_skip_intro = false;
+    if (!st) return;
+    std::string text = read_file(kSettings);
+    if (text.compare(0, 3, "ï»¿") == 0) text.erase(0, 3);
+    Json j;
+    if (!json_parse(text, j)) return;
+    if (const Json* t = j.get("title_pack"); t && t->kind == Json::String) g_title_pack = t->s;
+    if (const Json* k = j.get("skip_intro"); k && k->kind == Json::Bool) g_skip_intro = k->b;
+}
+void write_title_setting(const char* key, const Json& v) {
+    CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
+    const bool ok = write_file(kSettings, settings_with(key, v));
+    if (ok) g_settings_stamp = settings_stamp();
+    g_title_stamp = 0;            // read again on the next call
+    logf("costumes: %s changed (option row)%s", key, ok ? "" : ": settings.json NOT written");
+}
+} // namespace
 
 // The row "Outfit Others See" was changed in the game (core callback, game thread): written to settings.json, applied on
 // the next tick outside Battle Settings (carriers decided again, the saves that hold a slot's carrier moved)
@@ -1620,6 +1648,43 @@ void set_online_drivetech(bool on) {
     if (on == g_online_dt) return;
     g_online_dt = on;
     g_carrier_apply = true;
+}
+
+bool random_pool(std::vector<std::string>& keys) {
+    keys.clear();
+    std::string text = read_file(kSettings);
+    if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);
+    Json j;
+    if (text.empty() || !json_parse(text, j)) return false;
+    const Json* a = j.get("title_random_pool");
+    if (!a || a->kind != Json::Array) return false;
+    for (const Json& k : a->arr) if (k.kind == Json::String && !k.s.empty()) keys.push_back(k.s);
+    return true;
+}
+void set_random_pool(const std::vector<std::string>& keys) {
+    Json v;
+    v.kind = Json::Array;
+    for (const std::string& k : keys) {
+        Json e;
+        e.kind = Json::String;
+        e.s = k;
+        v.arr.push_back(e);
+    }
+    write_title_setting("title_random_pool", v);
+}
+std::string title_pack() { read_title_settings(); return g_title_pack; }
+bool skip_intro() { read_title_settings(); return g_skip_intro; }
+void set_title_pack(const std::string& key) {
+    Json v;
+    v.kind = Json::String;
+    v.s = key;
+    write_title_setting("title_pack", v);
+}
+void set_skip_intro(bool on) {
+    Json v;
+    v.kind = Json::Bool;
+    v.b = on;
+    write_title_setting("skip_intro", v);
 }
 
 // ---------------------------------------------------------------------------------------------

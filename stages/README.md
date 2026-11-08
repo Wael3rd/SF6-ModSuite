@@ -92,6 +92,33 @@ stage select screen (Fighting Ground > Versus) keeps its UP / DOWN, unchanged.
   name=Suzaku Castle
   ```
 
+## Title screen packs
+
+Title screen mods (Fluffy-style packs: a `modinfo.ini` and a `natives` tree with the title screen's movies, often
+with files that skip the boot logos and the health warning) go **as downloaded** in `reframework/title_mods/`: the
+`.zip`, `.7z` or `.rar` file itself, or a folder. Archives are unpacked once into `title_mods\.cache` (a `.pak` is not
+read yet). Each pack gets a key (`t` + 12 hex digits) from its archive or folder name, so a choice survives a new
+download of the same file; names and authors come from `modinfo.ini`.
+
+- Three settings, in `reframework/data/SF6_CostumeSlots_data/settings.json`: `"title_pack"` (`""` or missing: the
+  game's own title; a pack's key; `"random"`: a draw among the backgrounds in `"title_random_pool"`), `"skip_intro"`
+  (`true` / `false`, missing: `false`) and `"title_random_pool"` (the backgrounds Random draws from; at least one
+  stays ticked). A key that names no pack gives the game's own title (logged). They are set in Options > Interface >
+  Title Screen Selection (needs Native Core 0.9.9) and Interface > Other Settings (`skip_intro`).
+- The chosen pack's title movies (`natives/stm/streaming/product/gui/gm/ui10000/part/title_*`) are written into the
+  stage pak at their real paths. With `skip_intro`, the pack's other files are written too (boot logos, health
+  warning); with the game's own title, or a pack that has none, those of the first pack that has some.
+- The movies of every pack are in the stage pak, which is rebuilt at the first launch of a release with new title
+  files, and when the packs change. The choice applies at the **next return to the title screen**, no relaunch.
+- Random is drawn **without repeats**: a shuffled list, every background shows once before any comes again, never
+  the same twice in a row. The list is kept across launches in `reframework/data/SF6_TitleSlots_Data/shuffle.json`.
+  A new draw is made at the launch, at each return to the title screen, and while you stay on the title screen (each
+  loop cycle: the start, the loop and the transition after a key always come from the same pack).
+- The pictures of the title page and editor (preview, thumb and band textures, and the check box textures) are in the
+  stage pak too. A pack's picture is its modinfo screenshot.
+- `reframework/data/SF6_TitleSlots_Data/registry.json` lists the packs (key, name, author, source, by name) and what
+  this launch applied, for the plugin. Without a `title_mods` folder nothing is done.
+
 ## Limits
 
 - **The choice is local, and it applies to every load of that stage**: training, arcade, replays, and online
@@ -150,7 +177,8 @@ The game imports `amd_ags_x64.dll` from its own folder, before any engine code r
    between events.
 
 Outputs, in `reframework/data/SF6_StageSlots_Data`: `registry.json` (variants per stage, for the script),
-`loader/variants.tsv` (the same with every redirection), `state.json` (selection). Log:
+`loader/variants.tsv` (the same with every redirection), `state.json` (selection); title packs:
+`reframework/data/SF6_TitleSlots_Data/registry.json`. Log:
 `SF6_StageSlots.log` in the game folder.
 
 ## Building

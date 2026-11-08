@@ -78,10 +78,58 @@ if (SF6CORE_HAS(api, opt_group_place)) api->opt_group_place(client, g, 1, 290); 
 api->opt_rebuild(client); api->opt_ensure_built(client);
 ```
 
+## A section of a game tab's left list (increment 13, core 0.9.9)
+
+`opt_section_place(client, group, tab, before_section)` adds the group as one more section of the left list of a game
+Options tab, just above the game's section `before_section` (e.g. 1 / 290: Interface, above Other Settings; -1 = at the end
+of the tab). Its right side is the client's page: the core shows no row there, it reports the screen's state and blocks
+the screen's input on demand; the client draws (copies made from the screen's own update, R19) and reads its keys. Probe
+with `SF6CORE_HAS(api, opt_section_place)`.
+
+- **Texts**: the group's title is the left list's line, its description the screen's description line while the section
+  is focused. Both are GUID texts owned by the sections (`guid_text::alloc_owned`: the engine's purge never blanks them);
+  `opt_group_def` changes them in place (next frame), no build needed. The group's entries are ignored (no row).
+- **The unit** (`options.cpp`, made once per section and held): an `app.Option.OptionGroupUnit` whose setting is DataType
+  Group, InputType Button_Type1, EventType and ExtraEventType Invalid, empty ValueMessageList / ChildUnitList, TypeId from
+  the core's range (= its GroupType), SupportModeType / SupportPlatform / IsOnlineSetting copied from `before_section`
+  (else the tab's first group). No child: nothing for the game to load, reset or save; Confirm on it opens nothing.
+- **Where**: `OptionManager.UnitLists[tab]`, just before the unit whose `get_GroupType()` is `before_section`. Checked at
+  each build and every 60 frames: re-inserted after a rebuild of the game's lists, stale copies (a moved or removed
+  section) dropped by TypeId. `OptionMenuParam.CurrentMainUnitLists` (the screen's copy, to which its left list's parts are
+  aligned) is never touched: the section shows from the next time the game fills the tab (entering it, opening Options).
+- **State** (`opt_section_state`, read once per core frame, before the clients' frames, while a section exists; every 15
+  frames while the screen is not up): the screen = the agent "OptionSettingMenu" drawn, its `<InputDelegates>.<Flow>
+  .get_MenuParam()` an `OptionMenuParam` with `IsShowed`. `shown` = the screen is up on the section's tab and
+  `CurrentMainUnitLists` holds the section; `focused` = shown, `MenuState` MAIN (0), `ListState` MainList (0) and
+  `GetMainListFocusUnit()` is the section; `item` = the left list's part whose UnitData is the section, its control
+  (`p_OptionUnit_N_switch_show`), only while shown; `right_panel` = `mCtrlBGRight` (c_bg_right); `area` = c_bg_right/e_bg's
+  global place (top left) and size, read every 30 frames (912, 145, 910 x 833 read 08/11, also the fallback); every
+  pointer is this frame's only. For a group whose EventType is not OpenSubMenu the game hides its own sub list and radio
+  group itself (ForceInvisible, read 08/11): the client must not write those flags.
+- **Hold** (`opt_section_hold`): 1 = the screen's agent is blocked (`ui_set_block_input`, the core's `sf6core.options`
+  client) and H2 swallows the left list's Back meanwhile; only while shown. 0 = given back: the client calls it once every
+  key its page read is up (or the game gets that key: a Back would leave the Options screen). The core gives a hold back
+  by itself when the screen goes (or another one comes), when the section leaves the left list, when the section or its
+  client goes, and when the sections are switched off. The client must not block the agent itself as well.
+- **Hooks**, each one only after the code check (R18) found no other method entering its code (as the pause-menu engine's
+  check: every method's entry and jump target compared, on a thread of its own, started on the first frame with a
+  section; result kept in `reframework/data/sf6core/opt_codecheck.txt` per game executable; one `add_hook` per frame):
+  - H2 `app.UIOptionSettingMenu.Flow_MainList.InputDelegates.EventCancel()`, pre: skipped while a section is held.
+    Refused or missing: a hold is the input block alone (logged once).
+  - H1 `app.UIOptionSettingMenu.OptionMenuParam.InputEvent_DecideList()`, post: with the left list's cursor on a section,
+    `decides` + 1 and the result Invalid (the unit's own EventType already). Refused or missing: `decides` stays 0, the
+    client reads Confirm itself while `focused`.
+- **Faults**: 5 faults in the sections' code, or the option hooks switched off: every section is withdrawn from its tab's
+  list and every hold given back. `opt_status` adds `sections=.. live=.. hooks=check:..,H2:..,H1:.. held=.. cancels=..
+  faults=..` once a section was placed.
+- A group is either placed (`opt_group_place`, rows in a game section) or a section, never both (`ERR_INVALID_ARG`).
+- Not done here: a section with rows of its own on the right (the game's sub list); the mouse on the right side.
+
 ## Frame model
 
 - LateUpdateBehavior: `options_frame()` runs after the flow callbacks and before the clients' frame callbacks
-  (install on demand, then the driver's tick: events, open / build / rebuild, button queue, value pass).
+  (install on demand, then the driver's tick: events, open / build / rebuild, button queue, value pass; then the
+  sections, increment 13).
 - BeginRendering: `options_pump()` (the hooks' events since the tick).
 - The engine's display calls are made for the core's own client `sf6core.options`.
 

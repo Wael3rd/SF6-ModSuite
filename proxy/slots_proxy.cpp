@@ -46,6 +46,32 @@ extern "C" __declspec(dllexport) int SF6StageSlots_Apply(const char* state_json)
     __try { return stage_slots_apply(state_json); }
     __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
+
+// The title screen's background chosen in the game, served at the next return to the title (stage_redirect.hpp)
+extern "C" __declspec(dllexport) void SF6TitleSlots_Select(const char* choice) {
+    __try { title_slots_select(choice); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+// On "random": the next visit's background (the plugin, once the title screen has been left)
+extern "C" __declspec(dllexport) int SF6TitleSlots_Next() {
+    __try { return title_slots_next(); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+// On "random": another background for the next cycle of the visit on screen (the core's playlist)
+extern "C" __declspec(dllexport) int SF6TitleSlots_Draw(const char* not_key, char* buf, int cap) {
+    __try { return title_slots_draw(not_key, buf, cap); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
+// Random's selection, changed in the game (comma-separated keys)
+extern "C" __declspec(dllexport) void SF6TitleSlots_Pool(const char* keys) {
+    __try { title_slots_pool(keys); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+// The background the title shows: "game" or a pack's key (the core's OVERDRIVE EDITION line follows it)
+extern "C" __declspec(dllexport) int SF6TitleSlots_Shown(char* buf, int cap) {
+    __try { return title_slots_shown(buf, cap); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+}
 #endif
 
 // Appends one line to the loader log (same file as loader_core), so a chained module is visible
@@ -101,6 +127,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         // ---- Stage slots: stage pak first (it sits below the costume pak) ----
         slog_open(g_dll_dir);
         run_stage_loader();
+        title_slots_set(stage_loader_titles());
 #endif
 
         // ---- Costume loader: synchronous, SEH-wrapped. Never crash the game. ----

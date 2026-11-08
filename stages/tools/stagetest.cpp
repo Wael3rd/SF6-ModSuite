@@ -1,15 +1,18 @@
 // stagetest: runs the stage loader pass on a folder laid out like the game's
 // (reframework\stage_mods, reframework\data\SF6_StageSlots_Data\loader\stage_paths.txt),
 // without the game. Usage: stagetest <fake game dir>
-//        stagetest --selftest   unit tests of the tile / variation guess, stage_slots.ini and the menu picture conversion
+//        stagetest --selftest   unit tests of the tile / variation guess, stage_slots.ini, the menu picture conversion
+//                               and the title packs' choice (title_slots.hpp)
 #include <windows.h>
 #include <stdio.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include "../loader/preview_tex.hpp"
 #include "../loader/stage_classify.hpp"
 #include "../loader/stage_loader.hpp"
 #include "../loader/stage_log.hpp"
+#include "../loader/title_slots.hpp"
 
 namespace {
 
@@ -137,6 +140,129 @@ void test_pictures() {
     check(!make_stage_tex_from_game_tex(std::vector<uint8_t>(10, 0), false, out, err), "garbage is refused");
 }
 
+// Title packs: the split of a pack's files, settings.json, the keys, the order and the choice.
+void test_titles() {
+    printf("title packs\n");
+    using namespace title_slots;
+    const char* part = "natives/stm/streaming/product/gui/gm/ui10000/part/";
+    check(is_title_file(std::string(part) + "title_start.mov.1") && is_title_file(std::string(part) + "title_loop.mov.1"),
+          "title_start / title_loop movies: title files");
+    check(is_title_file("NATIVES/STM/Streaming/Product/GUI/GM/UI10000/Part/Title_End.mov.1"), "any case: still a title file");
+    check(!is_title_file("natives/stm/product/gui/gm/ui10000/ui10001.gui.530035") &&
+          !is_title_file("natives/stm/product/gui/gm/ui10000/part/re logo animation.mov.1.x64") &&
+          !is_title_file("natives/stm/product/gui/gm/ui10000/part/tex_title_logo.tex.241101895") &&
+          !is_title_file("natives/stm/product/sound/wwise/re_logo.sbnk.1.x64"),
+          "boot screens, logo textures (even tex_title_*), re_logo.sbnk: startup files");
+
+    Settings st = parse_settings("\xEF\xBB\xBF{\n    \"display_nsfw\": false,\n    \"online_outfit\": \"Outfit 1\",\n"
+                                 "    \"nested\": { \"title_pack\": \"no\", \"a\": [1, {\"b\": \"}\"}] },\n"
+                                 "    \"esc\": \"a \\\"quoted\\\" }, value\",\n    \"title_pack\": \"t0123456789ab\",\n"
+                                 "    \"skip_intro\": true,\n    \"n\": -1.5e3\n}\n");
+    check(st.pack == "t0123456789ab" && st.skip_intro, "settings.json: both keys read past other keys, nested values, escapes");
+    st = parse_settings("{\"select_options_key\": \"C\"}");
+    check(st.pack.empty() && !st.skip_intro, "keys missing: the game's own title, intro kept");
+    st = parse_settings("");
+    check(st.pack.empty() && !st.skip_intro, "empty file: the defaults");
+    st = parse_settings("not json {\"title_pack\": \"random\"}");
+    check(st.pack.empty(), "not an object: the defaults");
+    st = parse_settings("{\"title_pack\": 3, \"skip_intro\": \"yes\"}");
+    check(st.pack.empty() && !st.skip_intro, "keys of another type: their defaults");
+    st = parse_settings("{\"title_pack\": \"random\", \"skip_intro\": tr");
+    check(st.pack == "random" && !st.skip_intro, "a text cut short keeps what came before");
+    st = parse_settings("{\"skip_intro\":true,\"title_pack\":\"\\u0074abc\"}");
+    check(st.pack == "tabc" && st.skip_intro, "no spaces, \\u escape");
+
+    check(pack_key("a") == "taf63dc4c8601", "key: \"t\" + 12 hex digits of FNV-1a 64 (test vector of \"a\")");
+    check(pack_key("Ryu Title.zip") == pack_key("RYU TITLE.ZIP") && pack_key("Ryu Title.zip") != pack_key("Ken Title.zip"),
+          "key: case-insensitive, one per source");
+    check(pack_key("Pack.zip/Option A") != pack_key("Pack.zip/Option B"), "key: one per option of a bundle");
+
+    auto mk = [](const char* name, size_t title, size_t startup) {
+        Pack p;
+        p.name = name;
+        p.source = std::string(name) + ".zip";
+        p.key = pack_key(p.source);
+        p.title_files = title;
+        p.startup_files = startup;
+        return p;
+    };
+    std::vector<Pack> packs = { mk("beta", 3, 0), mk("Alpha", 3, 6), mk("alpha 2", 2, 0), mk("Logos only", 0, 6) };
+    std::stable_sort(packs.begin(), packs.end(), pack_before);
+    check(packs[0].name == "Alpha" && packs[1].name == "alpha 2" && packs[2].name == "beta" && packs[3].name == "Logos only",
+          "registry order: by name, case-insensitive");
+    Settings s;
+    Choice c = resolve_choice(packs, s, 0);
+    check(c.title < 0 && c.startup < 0 && !c.random && !c.unknown, "nothing set: the game's own title, nothing written");
+    s.skip_intro = true;
+    c = resolve_choice(packs, s, 0);
+    check(c.title < 0 && c.startup == 0, "own title + skip_intro: the first pack's startup files");
+    s.pack = packs[2].key;
+    c = resolve_choice(packs, s, 0);
+    check(c.title == 2 && c.startup == 0, "a pack without startup files + skip_intro: the first pack's that has some");
+    s.pack = packs[1].key;
+    s.skip_intro = false;
+    c = resolve_choice(packs, s, 0);
+    check(c.title == 1 && c.startup < 0, "a pack's key: its title files only");
+    s.pack = " " + std::string("T") + packs[0].key.substr(1) + " ";
+    s.skip_intro = true;
+    c = resolve_choice(packs, s, 0);
+    check(c.title == 0 && c.startup == 0, "a key in upper case, with spaces: found; skip_intro: its own startup files");
+    s.pack = "t000000000000";
+    c = resolve_choice(packs, s, 0);
+    check(c.title < 0 && c.unknown && c.startup == 0, "an unknown key: the game's own title (reported)");
+    s.pack = "Random";
+    s.skip_intro = false;
+    bool drawn[4] = {};
+    for (uint64_t r = 0; r < 12; ++r) {
+        c = resolve_choice(packs, s, r);
+        if (c.title >= 0) drawn[c.title] = true;
+        if (!c.random || c.title < 0) drawn[3] = true;
+    }
+    check(drawn[0] && drawn[1] && drawn[2] && !drawn[3], "random: every pack with title files can be drawn, never one without");
+    c = resolve_choice({}, s, 7);
+    check(c.random && c.title < 0 && c.startup < 0, "random without packs: the game's own title");
+
+    // Random's mosaic: the layout with the largest 16:9 places, then the fewest empty ones, then the most columns
+    auto lay_is = [](int n, int cols, int rows) { const MosaicLayout l = title_mosaic_layout(n); return l.cols == cols && l.rows == rows; };
+    check(lay_is(1, 1, 1) && title_mosaic_layout(1).place_w == 1920, "mosaic: 1 picture, the whole screen");
+    check(lay_is(2, 2, 1) && lay_is(3, 2, 2) && lay_is(4, 2, 2), "mosaic: 2 side by side, 3 and 4 on 2 x 2");
+    check(lay_is(5, 3, 2) && lay_is(6, 3, 2), "mosaic: 5 and 6 on 3 columns x 2 rows");
+    check(lay_is(7, 3, 3) && lay_is(8, 3, 3) && lay_is(9, 3, 3) && lay_is(10, 4, 3), "mosaic: 7 to 9 on 3 x 3, 10 on 4 x 3");
+    bool fits = true;
+    for (int n = 1; n <= 40; ++n) {
+        const MosaicLayout l = title_mosaic_layout(n);
+        fits = fits && l.cols * l.rows >= n && l.cols * l.place_w <= 1920 && l.rows * l.place_h <= 1080 && l.place_h * 16 == l.place_w * 9 &&
+               l.cell_w == l.place_w - 2 * TITLE_MOSAIC_GAP;
+    }
+    check(fits, "mosaic: 1 to 40 pictures, every place 16:9, all of them on the screen");
+
+    // Random's bag: every key once per round, never twice in a row across rounds, dropped keys gone, kept through its text
+    const std::vector<std::string> keys = { "ta", "tb", "tc", "td", "te" };
+    Bag bag;
+    uint32_t seed = 12345;
+    auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+    bool rounds_ok = true, no_repeat = true;
+    std::string prev;
+    for (int round = 0; round < 6; ++round) {
+        std::vector<std::string> seen;
+        for (size_t i = 0; i < keys.size(); ++i) {
+            const std::string k = bag_next(bag, keys, rnd);
+            no_repeat = no_repeat && k != prev;
+            prev = k;
+            seen.push_back(k);
+            if (round == 3 && i == 1) bag = parse_bag(bag_text(bag));   // a new launch in the middle of a round
+        }
+        std::sort(seen.begin(), seen.end());
+        rounds_ok = rounds_ok && seen == keys;
+    }
+    check(rounds_ok && no_repeat, "random bag: each round shows every pack once, never the same twice in a row, through a relaunch");
+    Bag b2;
+    b2.left = { "ta", "tz", "tb" };
+    const std::vector<std::string> pool2 = { "ta", "tb" };
+    const std::string k1 = bag_next(b2, pool2, rnd), k2 = bag_next(b2, pool2, rnd);
+    check(k1 == "ta" && k2 == "tb" && b2.left.empty(), "random bag: a pack removed from title_mods leaves the bag");
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -144,6 +270,7 @@ int wmain(int argc, wchar_t** argv) {
         test_classify();
         test_overrides();
         test_pictures();
+        test_titles();
         printf(g_fails ? "%d FAILED\n" : "all ok\n", g_fails);
         return g_fails ? 1 : 0;
     }

@@ -61,6 +61,15 @@ struct Group {
     Obj unit = nullptr;                 // a placed group has none: its entries are rows of the game's section
     int32_t place_tab = -1;             // increment 11: app.Option.TabType, -1 = the core's own window
     int32_t place_section = -1;         // increment 11: app.Option.GroupType of the section
+    int32_t section_tab = -1;           // increment 13: the group is a section of the left list of this tab (-1: not)
+    int32_t section_before = -1;        // increment 13: app.Option.GroupType it is placed before (-1: at the end)
+};
+
+// Increment 13: what the game side needs of a section (a copy, taken under the engine's lock).
+struct SectionDef {
+    int64_t gid = -1;
+    int32_t tab = -1, before = -1;
+    std::string key, title, desc;       // key: id_key_of(group)
 };
 
 // The game operations. `false` from a bool-returning call = the call failed (the Lua's pcall returned false).
@@ -88,6 +97,11 @@ int64_t add_entry(int64_t group_id, Kind kind, const std::string& key);
 // Increment 11: the group's entries become rows of a section of the game's Options screen (tab = app.Option.TabType,
 // section = app.Option.GroupType) at the next build, instead of a page of the core's window; -1, -1 = back to the window.
 void set_group_place(int64_t group_id, int32_t tab, int32_t section);
+// Increment 13: the group becomes a section of the left list of a game Options tab (tab = app.Option.TabType), before
+// the section whose app.Option.GroupType is `before` (-1: at the end); tab -1 = no section any more. A section group
+// has no page and no rows: the game side (options.cpp) keeps its unit in the tab's list. False: no such group.
+bool set_group_section(int64_t group_id, int32_t tab, int32_t before);
+std::vector<SectionDef> sections();                            // every section group, in registry order
 // What build() reads from the Lua tables, pushed by the wrapper before each build (titles and option lists may be
 // functions there): :291 group title, :302 entry title, :227 descriptions, :309-315 options, :326 range and value.
 void set_group_def(int64_t group_id, const std::string& title, const std::string& desc);

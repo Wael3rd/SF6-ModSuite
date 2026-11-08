@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
+#include <memory>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -20,6 +22,7 @@
 #include "stage_classify.hpp"
 #include "stage_loader.hpp"
 #include "stage_log.hpp"
+#include "title_slots.hpp"
 
 namespace {
 
@@ -274,7 +277,8 @@ bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std
 // Mods: sources (what sits in stage_mods) and options (what the game would install)
 // ---------------------------------------------------------------------------------------------
 
-struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; std::string path; };   // path: natives trees only
+// path: natives trees only; file: where it is on disk (natives trees only), to read it later when listed without its data
+struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; std::string path; std::wstring file; };
 struct Option {
     std::string name, author, bundle, rel;     // bundle: Fluffy's nameAsBundle
     std::wstring screenshot;
@@ -315,17 +319,19 @@ void read_modinfo(const std::wstring& dir, std::string& name, std::string& autho
     }
 }
 
-void add_natives(const std::wstring& dir, const std::string& rel, Option& opt) {
+// read: false lists the files without reading them (dsize is the size on disk; title packs: only the chosen one is read)
+void add_natives(const std::wstring& dir, const std::string& rel, Option& opt, bool read = true) {
     for (auto& e : list_dir(dir)) {
         std::wstring full = dir + L"\\" + e.name;
         std::string r = rel + "/" + lower_a(narrow(e.name));
-        if (e.dir) { add_natives(full, r, opt); continue; }
+        if (e.dir) { add_natives(full, r, opt, read); continue; }
         OptFile f;
-        if (!read_file(full, f.data)) { slog("  cannot read %s", narrow(full).c_str()); continue; }
+        if (read && !read_file(full, f.data)) { slog("  cannot read %s", narrow(full).c_str()); continue; }
         f.hash = pak_path_hash(std::string_view(r));
         f.attrib = 0;
-        f.dsize = (int64_t)f.data.size();
+        f.dsize = read ? (int64_t)f.data.size() : (int64_t)e.size;
         f.path = r;
+        f.file = full;
         opt.files.push_back(std::move(f));
     }
 }
@@ -352,12 +358,14 @@ void add_pak(const std::wstring& path, Option& opt) {
 
 // A folder holding a .pak or a natives tree is one option, as Fluffy Mod Manager installs it;
 // otherwise its sub-folders are looked at (bundles: one option per sub-folder).
+// read: false (title packs) lists the natives files without reading them and leaves .pak files out: a title pack's
+// files are told apart by their paths, which a pak's entries do not have.
 void collect_options(const std::wstring& dir, const std::string& rel, const std::string& default_name,
-                     bool is_root, int depth, std::vector<Option>& out) {
+                     bool is_root, int depth, std::vector<Option>& out, bool read = true) {
     auto entries = list_dir(dir);
     bool has_pak = false, has_natives = false;
     for (auto& e : entries) {
-        if (!e.dir && ends_with(e.name, L".pak")) has_pak = true;
+        if (read && !e.dir && ends_with(e.name, L".pak")) has_pak = true;
         if (e.dir && _wcsicmp(e.name.c_str(), L"natives") == 0) has_natives = true;
     }
     if (has_pak || has_natives) {
@@ -368,8 +376,8 @@ void collect_options(const std::wstring& dir, const std::string& rel, const std:
         if (!opt.screenshot.empty() && !file_exists(opt.screenshot)) opt.screenshot.clear();
         for (auto& e : entries) {
             if (opt.screenshot.empty() && !e.dir && is_image(e.name)) opt.screenshot = dir + L"\\" + e.name;
-            if (!e.dir && ends_with(e.name, L".pak")) add_pak(dir + L"\\" + e.name, opt);
-            if (e.dir && _wcsicmp(e.name.c_str(), L"natives") == 0) add_natives(dir + L"\\" + e.name, "natives", opt);
+            if (read && !e.dir && ends_with(e.name, L".pak")) add_pak(dir + L"\\" + e.name, opt);
+            if (e.dir && _wcsicmp(e.name.c_str(), L"natives") == 0) add_natives(dir + L"\\" + e.name, "natives", opt, read);
         }
         out.push_back(std::move(opt));
         return;
@@ -377,7 +385,7 @@ void collect_options(const std::wstring& dir, const std::string& rel, const std:
     if (depth >= 6) return;
     for (auto& e : entries) {
         if (!e.dir || e.name[0] == L'.') continue;
-        collect_options(dir + L"\\" + e.name, rel + "/" + narrow(e.name), default_name, false, depth + 1, out);
+        collect_options(dir + L"\\" + e.name, rel + "/" + narrow(e.name), default_name, false, depth + 1, out, read);
     }
 }
 
@@ -393,6 +401,8 @@ void check_textures(Option& opt) {
     for (size_t i = 0; i < opt.files.size();) {
         OptFile& f = opt.files[i];
         const int comp = int(f.attrib & 0xFF);
+        // A stored file that is not a texture is not copied (a title pack's movies are tens of MB)
+        if (!comp && (f.data.size() < 4 || memcmp(f.data.data(), "TEX\0", 4) != 0)) { ++i; continue; }
         std::vector<uint8_t> plain = comp ? pak_decompress(f.data, comp, f.dsize) : f.data;
         if (plain.size() < 4 || memcmp(plain.data(), "TEX\0", 4) != 0) { ++i; continue; }
         int fixed = 0;
@@ -439,7 +449,8 @@ void fingerprint_dir(const std::wstring& dir, const std::string& rel, std::strin
     }
 }
 
-std::string compute_fingerprint(const std::vector<Source>& sources, const std::wstring& index_path) {
+// title: the title packs' part (scan_titles), "" without title_mods: the fingerprint is then the one it always was
+std::string compute_fingerprint(const std::vector<Source>& sources, const std::wstring& index_path, const std::string& title) {
     std::string acc = FORMAT_VERSION;
     acc += "\n";
     WIN32_FILE_ATTRIBUTE_DATA fa;
@@ -450,6 +461,7 @@ std::string compute_fingerprint(const std::vector<Source>& sources, const std::w
         if (s.dir) fingerprint_dir(s.path, n, acc);
         else acc += n + "|" + std::to_string(s.size) + "|" + std::to_string(s.mtime) + "\n";
     }
+    acc += title;
     return hex16(fnv64(acc));
 }
 
@@ -619,6 +631,407 @@ bool retire_pak(const std::wstring& game_dir, const PatchPak& p, int max_mod, bo
 }
 
 // ---------------------------------------------------------------------------------------------
+// Title screen packs (title_slots.hpp): listed at every start; the chosen one's files go into the stage pak at their
+// real paths (no redirection: the title screen and the boot screens are loaded once, before any menu). Every pack's
+// picture (its modinfo screenshot) goes in too, for the plugin's preview on the Options screen.
+// ---------------------------------------------------------------------------------------------
+
+// Part of the title packs' fingerprint: bump it when what is written of a pack changes.
+const char* TITLE_FORMAT_VERSION = "titleslots-10";      // 2: the packs' pictures; 3: at 1920x1080, and the game's own; 4: Random's mosaic;
+                                                        // 5: every background's title files at private paths (the live switch);
+                                                        // 6: streamed copies under natives/stm/streaming/_titleslots (the core's playlist);
+                                                        // 7: their resource files beside them
+
+struct TitlePack { title_slots::Pack info; Option opt; };   // opt: its natives files, listed, not read
+
+struct TitleScan {
+    bool present = false;              // reframework\title_mods exists: nothing is done without it
+    std::vector<TitlePack> packs;      // registry order
+    title_slots::Settings settings;
+    title_slots::Choice choice;
+    std::string fingerprint;           // added to the stage pak's ("" without title_mods)
+    std::wstring game_picture;         // SF6_TitleSlots_Data\game_title.*: the game's own title's picture ("": none)
+    std::wstring bag_path;             // SF6_TitleSlots_Data\shuffle.json: Random's bag
+    bool game_preview = false;         // that picture is in the pak
+    bool random_preview = false;       // Random's picture (the mosaic of the packs' pictures) is in the pak
+};
+
+const std::string& title_key(const TitleScan& t, int i) {
+    static const std::string none;
+    return i >= 0 ? t.packs[size_t(i)].info.key : none;
+}
+
+const char* title_name(const TitleScan& t, int i) {
+    return i >= 0 ? t.packs[size_t(i)].info.name.c_str() : "";
+}
+
+// The packs of title_mods (archives unpacked once into title_mods\.cache, like stage mods), the settings and the choice.
+TitleScan scan_titles(const std::wstring& game_dir) {
+    TitleScan t;
+    const std::wstring dir = game_dir + L"\\reframework\\title_mods";
+    if (!dir_exists(dir)) return t;
+    t.present = true;
+    const auto sources = list_sources(dir);
+    std::vector<Option> options;
+    for (auto& s : sources) {
+        const std::string n = narrow(s.name);
+        if (s.dir) {
+            collect_options(s.path, n, n, true, 0, options, false);
+        } else if (s.archive != ArchiveKind::None) {
+            std::wstring out;
+            if (unpack_archive(s, dir + L"\\.cache", out)) collect_options(out, n, narrow(stem(s.name)), true, 0, options, false);
+        } else {
+            slog("  title_mods: %s: a .pak is not read as a title pack, ignored", n.c_str());
+        }
+    }
+    for (auto& o : options) {
+        if (o.files.empty()) {
+            slog("  title_mods: %s: no file in a natives tree (a .pak inside is not read), ignored", o.rel.c_str());
+            continue;
+        }
+        TitlePack p;
+        p.info.key = title_slots::pack_key(o.rel);
+        p.info.name = o.name;
+        p.info.author = o.author;
+        p.info.source = o.rel;
+        p.info.preview = !o.screenshot.empty() && image_header_ok(lp(o.screenshot));   // the build may still find it unreadable
+        for (auto& f : o.files) ++(title_slots::is_title_file(f.path) ? p.info.title_files : p.info.startup_files);
+        p.opt = std::move(o);
+        t.packs.push_back(std::move(p));
+    }
+    std::stable_sort(t.packs.begin(), t.packs.end(),
+                     [](const TitlePack& a, const TitlePack& b) { return title_slots::pack_before(a.info, b.info); });
+    // Random's mosaic is made from the packs' pictures: there is one when a pack has a picture (the build says so again, and a pak
+    // up to date was built with the same answer: the registry written then and now agree)
+    t.random_preview = std::any_of(t.packs.begin(), t.packs.end(), [](const TitlePack& p) { return p.info.preview; });
+
+    std::vector<uint8_t> data;
+    const bool have_settings = read_file(game_dir + L"\\reframework\\data\\SF6_CostumeSlots_data\\settings.json", data);
+    if (have_settings) t.settings = title_slots::parse_settings(std::string(data.begin(), data.end()));
+    std::vector<title_slots::Pack> infos;
+    for (auto& p : t.packs) infos.push_back(p.info);
+    std::mt19937_64 rng(uint64_t(std::chrono::system_clock::now().time_since_epoch().count()) ^ (uint64_t(GetCurrentProcessId()) << 32));
+    t.choice = title_slots::resolve_choice(infos, t.settings, rng());
+    // Random: the launch's background from the bag (no pack again before every one has shown), the bag kept for the session
+    t.bag_path = game_dir + L"\\reframework\\data\\SF6_TitleSlots_Data\\shuffle.json";
+    if (t.choice.random) {
+        std::vector<std::string> all = { title_slots::kGamePictureKey };
+        for (auto& p : t.packs) if (p.info.title_files) all.push_back(p.info.key);
+        std::vector<std::string> pool = title_slots::random_selection(all, t.settings.has_pool, t.settings.pool);
+        if (pool.empty()) pool = title_slots::random_selection(all, false, {});   // a selection naming no background left: every pack
+        std::vector<uint8_t> raw;
+        title_slots::Bag bag = read_file(t.bag_path, raw) ? title_slots::parse_bag(std::string(raw.begin(), raw.end())) : title_slots::Bag{};
+        const std::string key = title_slots::bag_next(bag, pool, [&] { return rng(); });
+        if (!key.empty()) {
+            title_slots::Settings one = t.settings;
+            one.pack = key == title_slots::kGamePictureKey ? std::string() : key;   // the game's own: no pack's title files
+            t.choice = title_slots::resolve_choice(infos, one, 0);
+            t.choice.random = true;
+            CreateDirectoryW((game_dir + L"\\reframework\\data\\SF6_TitleSlots_Data").c_str(), nullptr);
+            write_text(t.bag_path, title_slots::bag_text(bag));
+            slog("  random: \"%s\" from the bag, %zu left this round", key.c_str(), bag.left.size());
+        }
+    }
+
+    // What the pak would hold: the resolved choice (after the draw) and the sources, by name, size and date
+    t.fingerprint = std::string(TITLE_FORMAT_VERSION) + "\npack|" + title_key(t, t.choice.title) + "\nstartup|" +
+                    title_key(t, t.choice.startup) + "\nskip|" + (t.settings.skip_intro ? "1" : "0") + "\n";
+    for (auto& s : sources) {
+        const std::string n = narrow(s.name);
+        if (s.dir) fingerprint_dir(s.path, "title_mods/" + n, t.fingerprint);
+        else t.fingerprint += "title_mods/" + n + "|" + std::to_string(s.size) + "|" + std::to_string(s.mtime) + "\n";
+    }
+    // the game's own title's picture, when there is one
+    for (const wchar_t* ext : { L".png", L".jpg", L".jpeg" }) {
+        const std::wstring gp = game_dir + L"\\reframework\\data\\SF6_TitleSlots_Data\\game_title" + ext;
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        if (!GetFileAttributesExW(lp(gp).c_str(), GetFileExInfoStandard, &fa) || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        t.game_picture = gp;
+        t.game_preview = image_header_ok(lp(gp));
+        const uint64_t size = (uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow;
+        const uint64_t mtime = (uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime;
+        t.fingerprint += "game_title|" + narrow(ext) + "|" + std::to_string(size) + "|" + std::to_string(mtime) + "\n";
+        slog("  the game's own title's picture: %s%s", narrow(leaf(gp)).c_str(), t.game_preview ? "" : " (not a readable PNG or JPEG: none)");
+        break;
+    }
+
+    std::string names;
+    for (auto& p : t.packs) names += (names.empty() ? "" : ", ") + ("\"" + p.info.name + "\"");
+    slog("title_mods: %zu pack(s)%s%s", t.packs.size(), names.empty() ? "" : ": ", names.c_str());
+    slog("  title_pack \"%s\", skip_intro %s%s", t.settings.pack.c_str(), t.settings.skip_intro ? "on" : "off",
+         have_settings ? "" : " (no settings.json: the defaults)");
+    if (t.choice.unknown) slog("  title_pack \"%s\" names no pack: the game's own title", t.settings.pack.c_str());
+    if (t.choice.random)
+        slog("  random: %s; the stage pak is rebuilt whenever the draw differs from the last launch's",
+             t.choice.title >= 0 ? ("drew \"" + t.packs[size_t(t.choice.title)].info.name + "\" (" + title_key(t, t.choice.title) + ")").c_str()
+                                 : "no pack with title files, the game's own title");
+    slog("  title screen: %s; startup files (skip_intro): %s",
+         t.choice.title >= 0 ? ("\"" + std::string(title_name(t, t.choice.title)) + "\" (" + title_key(t, t.choice.title) + ")").c_str()
+                             : "the game's own",
+         t.choice.startup >= 0 ? ("\"" + std::string(title_name(t, t.choice.startup)) + "\"").c_str() : "none");
+    return t;
+}
+
+// Every pack's title files at their private paths (title_slots::private_title_path: the switch on a return to the title),
+// the chosen pack's at their real paths too (this launch's title, served before any hook: the same data, stored once), and,
+// with skip_intro, the chosen startup pack's startup files at their real paths. Read now, one pack at a time; their textures
+// checked like a stage mod's. Then the game's own title files (re_chunk_000.pak and its sub paks) at the private paths of
+// "game", to switch back to it. n_private: the copies added.
+void add_title_files(TitleScan& t, PakWriter& writer, const std::wstring& game_dir, size_t& n_title, size_t& n_startup, size_t& n_private) {
+    n_title = n_startup = n_private = 0;
+    auto read_sel = [&](TitlePack& p, bool title_files, Option& sel) {
+        sel.rel = "title_mods/" + p.opt.rel;
+        for (auto& f : p.opt.files) {
+            if (title_slots::is_title_file(f.path) != title_files) continue;
+            OptFile g = f;   // listed: no data yet
+            if (!read_file(g.file, g.data)) { slog("  cannot read %s", narrow(g.file).c_str()); continue; }
+            g.dsize = (int64_t)g.data.size();
+            sel.files.push_back(std::move(g));
+        }
+        check_textures(sel);
+    };
+    std::map<std::string, uint64_t> title_paths;          // every title file a pack has: the game's own copy of each
+    for (size_t i = 0; i < t.packs.size(); ++i) {
+        TitlePack& p = t.packs[i];
+        Option sel;
+        read_sel(p, true, sel);
+        const bool chosen = (int)i == t.choice.title;
+        for (auto& f : sel.files) {
+            title_paths[f.path] = f.hash;
+            const std::string src = "title:" + p.info.key + ":" + f.path;
+            writer.add_raw(pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, f.path))), std::move(f.data), f.attrib, f.dsize);
+            writer.note_source(src);
+            ++n_private;
+            if (!chosen) continue;
+            if (writer.add_same_source(f.hash, src)) { ++n_title; continue; }
+            std::vector<uint8_t> again;                    // not shared after all: read again for the real path
+            if (read_file(f.file, again)) { writer.add_raw(f.hash, std::move(again), f.attrib, f.dsize); ++n_title; }
+        }
+    }
+    if (t.choice.startup >= 0) {
+        Option sel;
+        read_sel(t.packs[size_t(t.choice.startup)], false, sel);
+        for (auto& f : sel.files) {
+            writer.add_raw(f.hash, std::move(f.data), f.attrib, f.dsize);
+            ++n_startup;
+        }
+    }
+    if (title_paths.empty()) return;
+    PakReader base;
+    std::vector<std::unique_ptr<PakReader>> subs;
+    if (!base.open(ascii_path(game_dir, L"re_chunk_000.pak").c_str())) {
+        slog("  the game's own title files: re_chunk_000.pak not readable, no switch back to it on a return to the title");
+        return;
+    }
+    for (int k = 0; k < 16; ++k) {                         // the DLC paks under it
+        wchar_t name[64];
+        swprintf_s(name, L"re_chunk_000.pak.sub_%03d.pak", k);
+        if (!file_exists(game_dir + L"\\" + name)) continue;
+        auto r = std::make_unique<PakReader>();
+        if (r->open(ascii_path(game_dir, name).c_str())) { base.add_overlay(r.get()); subs.push_back(std::move(r)); }
+    }
+    // Every background's resource file of each streamed title file (the game's own, from its pak: the same small file for all),
+    // beside the private data: the core's playlist gives the movies those resources
+    std::vector<std::string> keys;
+    for (auto& p : t.packs) keys.push_back(p.info.key);
+    keys.push_back(title_slots::kGamePictureKey);
+    size_t stubs = 0;
+    for (auto& [path, hash] : title_paths) {
+        const std::string res = title_slots::resource_file_of(path);
+        const PakEntry* e = res.empty() ? nullptr : base.find(pak_path_hash(std::string_view(res)));
+        if (!e) continue;
+        const std::vector<uint8_t> raw = base.read(*e);
+        if (raw.empty()) continue;
+        for (auto& k : keys) {
+            writer.add_uncompressed(pak_path_hash(std::string_view(title_slots::private_title_path(k, res))), raw);
+            ++stubs;
+            ++n_private;
+        }
+    }
+    slog("  the title movies' resource files: %zu copied beside the private copies", stubs);
+    size_t found = 0;
+    for (auto& [path, hash] : title_paths) {
+        const PakEntry* e = base.find(hash);
+        if (!e) continue;
+        std::vector<uint8_t> raw = base.read_raw(*e);
+        if (raw.empty()) continue;
+        writer.add_raw(pak_path_hash(std::string_view(title_slots::private_title_path(title_slots::kGamePictureKey, path))), std::move(raw),
+                       e->attributes, e->decompressed_size);
+        ++found;
+        ++n_private;
+    }
+    slog("  the game's own title files: %zu of %zu copied for the switch back to it", found, title_paths.size());
+}
+
+// The title tables for the redirect: every background's real -> private hashes, kept only where the stage pak holds the
+// copy (an up-to-date pak was built by this same code from the same packs; a copy that could not be made is left out)
+TitleTables g_titles;
+void make_title_tables(const TitleScan& t, const std::wstring& pak_path) {
+    g_titles = TitleTables{};
+    if (!t.present || t.packs.empty()) return;
+    std::unordered_map<uint64_t, bool> held;
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, lp(pak_path).c_str(), L"rb") == 0 && f) {
+        std::vector<KpkaEntry> idx;
+        if (kpka_index(f, idx)) for (auto& k : idx) held[k.hash] = true;
+        fclose(f);
+    }
+    std::map<std::string, uint64_t> title_paths;
+    size_t entries = 0;
+    for (auto& p : t.packs) {
+        std::vector<std::pair<uint64_t, uint64_t>> r;
+        for (auto& file : p.opt.files) {
+            if (!title_slots::is_title_file(file.path)) continue;
+            title_paths[file.path] = file.hash;
+            const uint64_t h = pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, file.path)));
+            if (held.count(h)) r.push_back({ file.hash, h });
+            if (file.path.find("/title_start.") != std::string::npos &&
+                std::find(g_titles.start_hashes.begin(), g_titles.start_hashes.end(), file.hash) == g_titles.start_hashes.end())
+                g_titles.start_hashes.push_back(file.hash);
+        }
+        if (r.empty()) continue;
+        entries += r.size();
+        g_titles.random_pool.push_back(p.info.key);
+        bool playable = true;                         // the core's playlist: every streamed title file whole (data + resource file)
+        for (auto& file : p.opt.files) {
+            if (!title_slots::is_title_file(file.path)) continue;
+            const std::string res = title_slots::resource_file_of(file.path);
+            if (res.empty()) continue;
+            playable = playable && held.count(pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, file.path)))) &&
+                       held.count(pak_path_hash(std::string_view(title_slots::private_title_path(p.info.key, res))));
+        }
+        if (playable) g_titles.playlist_pool.push_back(p.info.key);
+        g_titles.backgrounds.push_back({ p.info.key, std::move(r) });
+    }
+    std::vector<std::pair<uint64_t, uint64_t>> game;
+    for (auto& [path, hash] : title_paths) {
+        const uint64_t h = pak_path_hash(std::string_view(title_slots::private_title_path(title_slots::kGamePictureKey, path)));
+        if (held.count(h)) game.push_back({ hash, h });
+    }
+    entries += game.size();
+    if (!game.empty()) {
+        bool playable = true;                         // the game's own copies for the playlist: data + resource file
+        for (auto& [path, hash] : title_paths) {
+            const std::string res = title_slots::resource_file_of(path);
+            if (res.empty()) continue;
+            playable = playable && held.count(pak_path_hash(std::string_view(title_slots::private_title_path(title_slots::kGamePictureKey, path)))) &&
+                       held.count(pak_path_hash(std::string_view(title_slots::private_title_path(title_slots::kGamePictureKey, res))));
+        }
+        g_titles.random_pool.insert(g_titles.random_pool.begin(), title_slots::kGamePictureKey);
+        if (playable) g_titles.playlist_pool.insert(g_titles.playlist_pool.begin(), title_slots::kGamePictureKey);
+        g_titles.backgrounds.push_back({ title_slots::kGamePictureKey, std::move(game) });
+    }
+    g_titles.has_selection = t.settings.has_pool;
+    g_titles.selection = t.settings.pool;
+    g_titles.launch = t.choice.title >= 0 ? t.packs[size_t(t.choice.title)].info.key : std::string(title_slots::kGamePictureKey);
+    g_titles.bag_path = t.bag_path;
+    g_titles.choice = t.settings.pack;
+    slog("title switch on a return to the title: %zu background(s), %zu file(s); this launch: %s; the playlist: %zu background(s)",
+         g_titles.backgrounds.size(), entries, g_titles.launch.c_str(), g_titles.playlist_pool.size());
+}
+
+// Every pack's picture, at natives/stm/<preview_resource>.<tex version>: 1280x720 from its screenshot. One that cannot
+// be made is left out, and the registry says so (preview ""). Returns how many were added.
+size_t add_title_previews(TitleScan& t, PakWriter& writer) {
+    size_t n = 0;
+    int listed = 0;
+    for (auto& p : t.packs) listed += p.info.preview ? 1 : 0;
+    const MosaicLayout lay = title_mosaic_layout(listed);
+    std::vector<std::vector<uint8_t>> cells;                 // Random's mosaic: each picture made, in the packs' order
+    for (auto& p : t.packs) {
+        if (!p.info.preview) continue;
+        std::vector<uint8_t> tex, cell, thumb, band;
+        std::string err;
+        if (!make_title_preview_tex(lp(p.opt.screenshot), tex, err, &cell, lay.cell_w, lay.cell_h, &thumb, &band)) {
+            p.info.preview = false;
+            slog("  title_mods: %s: no picture (%s)", p.opt.rel.c_str(), err.c_str());
+            continue;
+        }
+        writer.add_uncompressed(pak_path_hash(std::string_view("natives/stm/_titleslots/" + p.info.key + "/preview" + TEX_SUFFIX)), std::move(tex));
+        if (!thumb.empty())
+            writer.add_uncompressed(pak_path_hash(std::string_view("natives/stm/_titleslots/" + p.info.key + "/thumb" + TEX_SUFFIX)), std::move(thumb));
+        if (!band.empty())
+            writer.add_uncompressed(pak_path_hash(std::string_view("natives/stm/_titleslots/" + p.info.key + "/band" + TEX_SUFFIX)), std::move(band));
+        cells.push_back(std::move(cell));
+        ++n;
+    }
+    for (bool on : { false, true }) {                       // the Random list's check boxes (only with packs: no pak for them alone)
+        if (t.packs.empty()) break;
+        std::vector<uint8_t> tex;
+        if (make_check_box_tex(on, tex)) {
+            writer.add_uncompressed(pak_path_hash(std::string_view("natives/stm/" + std::string(on ? "_titleslots/ui/check_on" : "_titleslots/ui/check_off") + TEX_SUFFIX)), std::move(tex));
+            ++n;
+        }
+    }
+    t.random_preview = false;
+    if (!cells.empty()) {
+        std::vector<uint8_t> tex;
+        std::string err;
+        if (make_title_mosaic_tex(cells, lay, tex, err)) {
+            writer.add_uncompressed(pak_path_hash(std::string_view(std::string("natives/stm/_titleslots/") + title_slots::kRandomPictureKey + "/preview" + TEX_SUFFIX)),
+                                    std::move(tex));
+            t.random_preview = true;
+            slog("  Random's picture: %zu picture(s), %d x %d places of %dx%d", cells.size(), lay.cols, lay.rows, lay.place_w, lay.place_h);
+        } else {
+            slog("  Random's picture: none (%s)", err.c_str());
+        }
+    }
+    if (t.game_preview) {
+        std::vector<uint8_t> tex, thumb, band;
+        std::string err;
+        if (make_title_preview_tex(lp(t.game_picture), tex, err, nullptr, 0, 0, &thumb, &band)) {
+            writer.add_uncompressed(pak_path_hash(std::string_view(std::string("natives/stm/_titleslots/") + title_slots::kGamePictureKey + "/preview" + TEX_SUFFIX)),
+                                    std::move(tex));
+            if (!thumb.empty())
+                writer.add_uncompressed(pak_path_hash(std::string_view(std::string("natives/stm/_titleslots/") + title_slots::kGamePictureKey + "/thumb" + TEX_SUFFIX)),
+                                        std::move(thumb));
+            if (!band.empty())
+                writer.add_uncompressed(pak_path_hash(std::string_view(std::string("natives/stm/_titleslots/") + title_slots::kGamePictureKey + "/band" + TEX_SUFFIX)),
+                                        std::move(band));
+            ++n;
+        } else {
+            t.game_preview = false;
+            slog("  the game's own title's picture: none (%s)", err.c_str());
+        }
+    }
+    return n;
+}
+
+// reframework\data\SF6_TitleSlots_Data\registry.json: the packs, for the plugin, and what this launch applied. Written
+// only when its text changes, and only when title_mods exists; title_mods gone, the file goes too (the plugin offers no pack).
+bool save_title_registry(const std::wstring& game_dir, const TitleScan& t) {
+    const std::wstring dir = game_dir + L"\\reframework\\data\\SF6_TitleSlots_Data";
+    const std::wstring path = dir + L"\\registry.json";
+    if (!t.present) {
+        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES && DeleteFileW(path.c_str()))
+            slog("title_mods is gone: the title packs' registry removed");
+        return true;
+    }
+    std::string js = "{\n  \"version\": 1,\n  \"packs\": [";
+    for (size_t i = 0; i < t.packs.size(); ++i) {
+        const auto& p = t.packs[i].info;
+        js += i ? ",\n" : "\n";
+        js += "    { \"key\": \"" + p.key + "\", \"name\": \"" + json_escape(p.name) + "\", \"author\": \"" + json_escape(p.author) +
+              "\", \"source\": \"" + json_escape(p.source) + "\", \"preview\": \"" +
+              (p.preview ? title_slots::preview_resource(p.key) : std::string()) + "\", \"thumb\": \"" +
+              (p.preview ? title_slots::thumb_resource(p.key) : std::string()) + "\", \"band\": \"" +
+              (p.preview ? title_slots::band_resource(p.key) : std::string()) + "\" }";
+    }
+    js += t.packs.empty() ? "],\n" : "\n  ],\n";
+    js += "  \"game_picture\": \"" + (t.game_preview ? title_slots::preview_resource(title_slots::kGamePictureKey) : std::string()) + "\",\n";
+    js += "  \"random_picture\": \"" + (t.random_preview ? title_slots::preview_resource(title_slots::kRandomPictureKey) : std::string()) + "\",\n";
+    js += "  \"game_thumb\": \"" + (t.game_preview ? title_slots::thumb_resource(title_slots::kGamePictureKey) : std::string()) + "\",\n";
+    js += "  \"game_band\": \"" + (t.game_preview ? title_slots::band_resource(title_slots::kGamePictureKey) : std::string()) + "\",\n";
+    js += "  \"check_off\": \"" + title_slots::check_resource(false) + "\", \"check_on\": \"" + title_slots::check_resource(true) + "\",\n";
+    js += "  \"applied\": { \"pack\": \"" + title_key(t, t.choice.title) + "\", \"skip_intro\": " +
+          (t.settings.skip_intro ? "true" : "false") + ", \"random\": " + (t.choice.random ? "true" : "false") + " }\n}\n";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::vector<uint8_t> old;
+    if (read_file(path, old) && std::string(old.begin(), old.end()) == js) return true;
+    return write_text(path, js);
+}
+
+// ---------------------------------------------------------------------------------------------
 // The pass
 // ---------------------------------------------------------------------------------------------
 
@@ -637,7 +1050,8 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     CreateDirectoryW((data_dir + L"\\loader").c_str(), nullptr);
 
     auto sources = list_sources(mods_dir);
-    const std::string fp = compute_fingerprint(sources, index_path);
+    TitleScan title = scan_titles(game_dir);
+    const std::string fp = compute_fingerprint(sources, index_path, title.fingerprint);
 
     auto paks = classify_patch_paks(game_dir);
     int max_mod = 0;
@@ -657,27 +1071,32 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
 
     // Nothing changed: the saved table is the answer. The pak must be the one the table was saved
     // with (its entry count): a pak rewritten since for other mods, under a table put back, held
-    // none of the variants' files and the stage never finished loading (03/10).
+    // none of the variants' files and the stage never finished loading (03/10). A pak was written when
+    // the table counts its entries: variants, or title files alone.
     {
         std::string saved_fp;
         size_t saved_entries = 0;
         std::vector<StageVariant> saved;
         if (load_table(table_path, saved_fp, saved_entries, saved) && saved_fp == fp) {
-            bool pak_ok = saved.empty() ? stage_paks.empty()
-                                        : (stage_paks.size() == 1 && stage_paks[0].num == target
-                                           && stage_paks[0].entries == saved_entries);
+            const bool had_pak = !saved.empty() || saved_entries > 0;
+            bool pak_ok = !had_pak ? stage_paks.empty()
+                                   : (stage_paks.size() == 1 && stage_paks[0].num == target
+                                      && stage_paks[0].entries == saved_entries);
             if (pak_ok) {
                 out = std::move(saved);
                 apply_overrides(mods_dir, out);
                 if (!save_registry(data_dir, fp, out)) slog("ERROR: cannot write the registry");
+                if (!save_title_registry(game_dir, title)) slog("ERROR: cannot write the title packs' registry");
+                make_title_tables(title, target_path);
                 slog("up to date: %zu variant(s), %.1f ms", out.size(), ms());
                 return;
             }
         }
     }
 
+    // The stage index is needed for stage mods only (title packs alone build without it)
     std::unordered_map<uint64_t, std::string> index, gui_index, index_paths;
-    if (!load_stage_index(index_path, index, gui_index, index_paths)) {
+    if (!load_stage_index(index_path, index, gui_index, index_paths) && !sources.empty()) {
         slog("ERROR: %s missing or empty: stage mods cannot be recognised", narrow(index_path).c_str());
         return;
     }
@@ -708,6 +1127,8 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     // preview on the menus are the plugin's. Known by their path (natives trees) or, for a pak's
     // entries, by the stage index.
     PakWriter writer;
+    // the title packs' movies are hundreds of MB: big data waits in a scratch file instead of memory (deleted with the writer)
+    writer.spill_to(ascii_path(data_dir + L"\\loader", L"stage_spill.tmp").c_str(), 1 << 20, 64ull << 20);
     std::vector<StageVariant> vars;
     for (auto& opt : options) {
         check_textures(opt);
@@ -834,6 +1255,16 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
         return _stricmp(a.name.c_str(), b.name.c_str()) < 0;
     });
 
+    // The title packs' files: every pack's at its private paths, the chosen one's at the real paths too
+    size_t title_files = 0, startup_files = 0, title_private = 0;
+    add_title_files(title, writer, game_dir, title_files, startup_files, title_private);
+    const size_t title_pictures = add_title_previews(title, writer);
+    if (title_pictures) slog("  title pack pictures: %zu of %zu pack(s)", title_pictures, title.packs.size());
+    if (title.choice.title >= 0 || title.choice.startup >= 0)
+        slog("  title pack files: %zu title file(s)%s, %zu startup file(s)%s", title_files,
+             title.choice.title >= 0 ? (" of \"" + std::string(title_name(title, title.choice.title)) + "\"").c_str() : "",
+             startup_files, title.choice.startup >= 0 ? (" of \"" + std::string(title_name(title, title.choice.startup)) + "\"").c_str() : "");
+
     // Our old pak goes; the costume loader's pak moves up when it sits where ours goes (it is
     // rebuilt right after us anyway, its mod list having changed).
     for (auto& p : stage_paks) {
@@ -846,7 +1277,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
              narrow(leaf(p.path)).c_str());
     }
     size_t pak_entries = 0;
-    if (!vars.empty()) {
+    if (!vars.empty() || title_files + startup_files + title_pictures + title_private > 0) {
         if (file_exists(target_path)) {
             std::wstring up = patch_path(game_dir, target + 1);
             if (file_exists(up) || !MoveFileW(target_path.c_str(), up.c_str())) {
@@ -870,11 +1301,16 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     if (!save_table(data_dir, fp, pak_entries, vars)) slog("ERROR: cannot write the table");
     apply_overrides(mods_dir, vars);
     if (!save_registry(data_dir, fp, vars)) slog("ERROR: cannot write the registry");
+    if (!save_title_registry(game_dir, title)) slog("ERROR: cannot write the title packs' registry");
+    make_title_tables(title, target_path);
     out = std::move(vars);
-    slog("built: %zu variant(s) from %zu option(s), %.1f ms", out.size(), options.size(), ms());
+    slog("built: %zu variant(s) from %zu option(s), %zu title pack file(s), %.1f ms", out.size(), options.size(),
+         title_files + startup_files, ms());
 }
 
 } // namespace
+
+const TitleTables& stage_loader_titles() { return g_titles; }
 
 std::string stage_thumb_resource(const std::string& key) {
     return "_stageslots/" + key + "/thumb.tex";

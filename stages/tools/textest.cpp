@@ -41,10 +41,12 @@ std::wstring widen(const char* s) {
     return w;
 }
 
-int do_encode(const char* in_path, const char* out_path, bool thumb) {
+int do_encode(const char* in_path, const char* out_path, bool thumb, bool title = false) {
     std::vector<uint8_t> tex;
     std::string err;
-    if (!(thumb ? make_stage_thumb_tex(widen(in_path), tex, err) : make_stage_preview_tex(widen(in_path), tex, err))) {
+    const bool made = title ? make_title_preview_tex(widen(in_path), tex, err)
+                            : thumb ? make_stage_thumb_tex(widen(in_path), tex, err) : make_stage_preview_tex(widen(in_path), tex, err);
+    if (!made) {
         fprintf(stderr, "encode failed: %s\n", err.c_str());
         return 1;
     }
@@ -154,6 +156,26 @@ int main(int argc, char** argv) {
     }
     if (argc == 4 && strcmp(argv[1], "--cmphdr") == 0) {
         return do_cmphdr(argv[2], argv[3]);
+    }
+    if (argc == 4 && strcmp(argv[1], "--title") == 0) return do_encode(argv[2], argv[3], false, true);
+    if (argc >= 4 && strcmp(argv[1], "--mosaic") == 0) {          // textest --mosaic <out.tex> <in>...: Random's picture
+        const MosaicLayout lay = title_mosaic_layout(argc - 3);
+        std::vector<std::vector<uint8_t>> cells;
+        for (int i = 3; i < argc; ++i) {
+            std::vector<uint8_t> tex, cell;
+            std::string err;
+            if (!make_title_preview_tex(widen(argv[i]), tex, err, &cell, lay.cell_w, lay.cell_h)) { fprintf(stderr, "%s: %s\n", argv[i], err.c_str()); continue; }
+            cells.push_back(std::move(cell));
+        }
+        std::vector<uint8_t> tex;
+        std::string err;
+        if (!make_title_mosaic_tex(cells, lay, tex, err)) { fprintf(stderr, "mosaic failed: %s\n", err.c_str()); return 1; }
+        FILE* f = fopen(argv[2], "wb");
+        if (!f) return 1;
+        fwrite(tex.data(), 1, tex.size(), f);
+        fclose(f);
+        printf("OK: %s (%zu picture(s), %d x %d places of %dx%d)\n", argv[2], cells.size(), lay.cols, lay.rows, lay.place_w, lay.place_h);
+        return 0;
     }
     if (argc == 4 && strcmp(argv[1], "--thumb") == 0) {
         return do_encode(argv[2], argv[3], true);

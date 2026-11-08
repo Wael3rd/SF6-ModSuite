@@ -18,6 +18,9 @@ void post_frame();
 // place's width, 0 its region's. `poll`: frames between looks while it isn't moving (1 for a text the game writes itself).
 // `allowed` false, or the text hidden: put back as it was found. From LateUpdateBehavior only, as all of this.
 void drive(void* text, float width = 0, uint32_t poll = 1, bool allowed = true);
+// The same for the value of a spin row (an Options row: the arrows p_MouseDecideOperable_L / _R under `row`): its place runs between
+// its arrows, as on a Costume row
+void drive_row(void* text, void* row, bool allowed = true);
 // Back as it was found, and measured again next time (before moving it or changing its text by other means)
 void release(void* text);
 // The same, unless it already holds this text
