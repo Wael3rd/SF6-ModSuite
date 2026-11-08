@@ -1637,6 +1637,82 @@ struct SlotInfo {
     bool nsfw = false;         // from costume_mods_nsfw, or NSFW by keywords (outfit_is_nsfw)
 };
 
+// The Color Mod keeps an outfit's colours by its costume number, not by its mod: the editor's MC colours in
+// reframework\color_mods\<Character>\MANUALCOLORS_NN\esfFFF_CCC_cmd_KKK.user.2 (CCC = the number + 1), its edited colours
+// in data\SF6_ColorSpinExtra_data\overrides\F_N_*.user.2 and the game colours it captured in pristine\F_N_game_*.user.2.
+// A number given to another mod than the one that held it at the last launch (a removed mod's number reused) showed the
+// former outfit's colours on the new one (Ryu's Tekken 8 Jin got October's MC colours of another outfit, report 08/11).
+// They are set aside, never deleted: into a ".former_outfits\<date>" folder beside them, which the Color Mod does not read.
+// Nothing at the first install (no registry yet) nor for a number that keeps its mod.
+static bool name_is(const std::string& name, const char* prefix) {
+    return _strnicmp(name.c_str(), prefix, strlen(prefix)) == 0;
+}
+static bool move_aside(const std::string& src, const std::string& dir, const std::string& name) {
+    std::string d;
+    for (size_t i = 0; i <= dir.size(); ++i)                       // every level of dir
+        if (i == dir.size() || dir[i] == '\\') { d = dir.substr(0, i); if (d.size() > 3) CreateDirectoryA(d.c_str(), nullptr); }
+    return MoveFileExA(src.c_str(), (dir + "\\" + name).c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+template <class F> static void each_entry(const std::string& dir, bool want_dirs, F f) {
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const std::string n = fd.cFileName;
+        if (n == "." || n == ".." || n[0] == '.') continue;            // dot folders: the Color Mod's own skip, ours too
+        const bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        if (is_dir == want_dirs) f(n);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+static void set_aside_former_colours(const std::string& game_dir, const std::vector<SlotInfo>& slots,
+                                     const std::vector<RegSlot>& former) {
+    if (former.empty()) return;
+    std::set<std::pair<int, int>> fresh;                           // (fighter, costume number) whose mod changed
+    for (auto& sl : slots) {
+        bool kept = false;
+        for (auto& rs : former)
+            if (rs.fighter == sl.fighter && rs.new_costume_no == sl.new_costume_no && rs.mod_id == sl.mod_id) { kept = true; break; }
+        if (!kept) fresh.insert({ sl.fighter, sl.new_costume_no });
+    }
+    if (fresh.empty()) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    char stamp[32]; snprintf(stamp, sizeof stamp, "%04d%02d%02d_%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    const std::string aside = std::string(".former_outfits\\") + stamp;
+    size_t moved = 0;
+    auto take = [&](const std::string& src, const std::string& dir, const std::string& name, int f, int n) {
+        if (move_aside(src, dir, name)) {
+            ++moved;
+            logf("  colours of the former outfit %d of fighter %d set aside: %s -> %s\\n", n, f, src.c_str(), dir.c_str());
+        }
+    };
+    // the editor's MC colours, per character folder
+    const std::string cm = game_dir + "\\reframework\\color_mods";
+    each_entry(cm, true, [&](const std::string& ch) {
+        each_entry(cm + "\\" + ch, true, [&](const std::string& sub) {
+            if (!name_is(sub, "MANUALCOLORS")) return;
+            const std::string dir = cm + "\\" + ch + "\\" + sub;
+            each_entry(dir, false, [&](const std::string& file) {
+                int f = 0, folder = 0, k = 0; char tail[16] = {};
+                if (sscanf(file.c_str(), "esf%3d_%3d_cmd_%3d%15s", &f, &folder, &k, tail) != 4 || _stricmp(tail, ".user.2") != 0) return;
+                if (folder >= 1 && fresh.count({ f, folder - 1 }))
+                    take(dir + "\\" + file, cm + "\\" + ch + "\\" + aside + "\\" + sub, file, f, folder - 1);
+            });
+        });
+    });
+    // the edited colours and the captured game colours of that number
+    const std::string spin = game_dir + "\\reframework\\data\\SF6_ColorSpinExtra_data";
+    for (const char* sub : { "overrides", "pristine" }) {
+        const std::string dir = spin + "\\" + sub;
+        each_entry(dir, false, [&](const std::string& file) {
+            int f = 0, n = 0; char rest[8] = {};
+            if (sscanf(file.c_str(), "%d_%d_%7s", &f, &n, rest) != 3 || !str_ends_with(str_lower(file), ".user.2")) return;
+            if (fresh.count({ f, n })) take(dir + "\\" + file, dir + "\\" + aside, file, f, n);
+        });
+    }
+    if (moved) logf("  %zu colour file(s) of former outfits set aside (their numbers went to other mods)\\n", moved);
+}
+
 // Mod names by mod_id, for the log (the modinfo name, else the mod's folder or archive)
 static std::unordered_map<std::string, std::string> g_mod_names;
 static std::string mod_label(const std::string& id) {
@@ -6375,6 +6451,30 @@ static FluffyState g_fluffy;
 static const std::set<std::string>& fluffy_claimed(const VanillaIndex& inv);
 static const std::map<std::string, std::string>& manager_claimed(const VanillaIndex& inv);
 
+// A mod's .user.2 saved before a game update that changed one of its types' layout (a chain, ccvd or shape user file of
+// May 2024: the backup "RYU C3 original files" installed as an outfit, report 08/11): the game cannot read it and the outfit
+// never finishes loading (an invisible fighter, "preview stuck"). The colour files' upgrade (read_data) has run first; a
+// type whose signature still differs from the game's file at the same path: the mod's file is dropped, the slot keeps the
+// game's. Files the game does not have at that path, or with no type in common, are kept as they are.
+static void drop_stale_user_files(std::unordered_map<std::string, ModFileRef>& files) {
+    for (auto it = files.begin(); it != files.end();) {
+        const std::string low = str_lower(it->first);
+        if (!str_ends_with(low, ".user.2")) { ++it; continue; }
+        std::unordered_map<uint32_t, uint32_t> game, mod;
+        try {
+            const std::vector<uint8_t> g = swap_official(low);
+            if (g.empty() || !user_type_crcs(g, game) || !user_type_crcs(it->second.read_data(), mod)) { ++it; continue; }
+        } catch (const std::exception&) { ++it; continue; }
+        uint32_t type = 0;
+        for (auto& [ty, crc] : mod)
+            if (auto f = game.find(ty); f != game.end() && f->second != crc) { type = ty; break; }
+        if (!type) { ++it; continue; }
+        printf("    %s: made before a game update (type %08X: %08X, the game's %08X): the game's file is used\n",
+               it->first.c_str(), type, mod[type], game[type]);
+        it = files.erase(it);
+    }
+}
+
 static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
     const VanillaIndex& inv = o.inv;
     UnitFiles uf;
@@ -6440,6 +6540,7 @@ static bool load_unit(const ModUnit& u, int source, ScanOutputs& o) {
         uf.mod_id = identify_folder_mod(uf.files);
         uf.info_path = u.dir;
     }
+    drop_stale_user_files(uf.files);
     printf("    mod_id: %s\n", uf.mod_id.c_str());
     g_mod_names[uf.mod_id] = uf.name.empty() ? rel_tail(u.rel) : uf.name;
     if (!uf.name.empty()) {
@@ -11847,6 +11948,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     registry.fingerprint = new_fp + loose_probes_digest(g_loose_probes) + meta_tag;
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
+    set_aside_former_colours(game_dir, slots, former_slots);
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);
     write_variants_json(variants_path, slots);
     if (g_rto_layout != RtoLayout::Off) {
