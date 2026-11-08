@@ -138,7 +138,7 @@ static const int   N_OLD_TEX = 1;
 // (apply_outfit_labels), "Outfit VII" when it has none. Id of the static table's first name message ("Outfit I"),
 // static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_PAK_ID = "2026-11-07-outfit-labels";
+static const char* LOADER_PAK_ID = "2026-11-08-stale-user-files";
 static const char* LOADER_META_ID = "2026-10-20-fastpak";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
