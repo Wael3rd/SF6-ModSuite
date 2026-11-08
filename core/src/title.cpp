@@ -13,6 +13,13 @@
 // Off: an empty reframework/data/sf6core/title_off.txt (read when the hooks are installed).
 // Position and size: reframework/data/sf6core/title.ini, read once when the hooks are installed, so a change needs a new
 // launch. Written with the defaults when it is missing, never overwritten. A missing or unusable value keeps its default.
+// Per background (Wael 08/11), when the Slots Loader's title packs are there (reframework/data/SF6_TitleSlots_Data/
+// registry.json, written by its loader at each launch): the background shown this session is the registry's "applied" pack
+// ("" = the game's own title, key "game"), and its line is the one of overdrive.json, next to it, written by the Slots
+// Loader's title preview (Options > Interface > Title Screen, Confirm): "show", "x" and "y" (the line's middle, in % of the
+// screen), "size" (its font height, in % of the screen's height). A background without an entry has no line. Both files are
+// read each time the logo completes (a return to the title reads them again); the line is placed by its middle
+// (ControlPoint and PageAlignment CenterCenter, as in the preview). Without the registry: title.ini, as before.
 // Everything is drawn through the core's own guarded display calls (client "sf6core.title").
 #include <windows.h>
 #include <atomic>
@@ -20,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include "sf6core_internal.h"
 
 void title_frame();
@@ -39,6 +47,7 @@ constexpr float       kRasterW = 152.0f, kRasterH = 152.0f; // glyph raster size
                                                          // 76 px line drawn from it was blurry; 2x the font size
                                                          // stays sharp under the 1.25 flash scale and at 4K
 constexpr int32_t     kPriority      = 10;                 // the movie texture and the others have 0
+constexpr int64_t     kCenterCenter  = 5;                  // via.gui.ControlPoint / PageAlignment CenterCenter
 constexpr uint32_t    kLineRgba      = 0xFFEBEBECu;        // the STREET FIGHTER logo's white, read on a screenshot: R 236 G 235 B 235
 constexpr uint32_t    kWhiteRgba     = 0xFFFFFFFFu;
 constexpr const char* kShownState    = "DEFAULT2";         // c_main's play state once the logo is complete
@@ -158,6 +167,10 @@ void invoke_i64(void* obj, const char* sig, int64_t v) {
 // title.ini's values, the defaults until it is read
 struct TitleCfg { float x, y, font; };
 TitleCfg g_cfg{ tcfg::kPosX, tcfg::kPosY, tcfg::kFontW };
+TitleCfg g_ini{ tcfg::kPosX, tcfg::kPosY, tcfg::kFontW };   // title.ini's own (g_cfg is what the line uses now)
+bool g_line_on = true;                                      // this visit of the title shows the line
+bool g_per_bg = false;                                      // the line follows the background's entry (placed by its middle)
+bool g_reapply = false;                                     // the line's place and size to write again (a new visit)
 
 // via.Size {w, h} of a Text (RasterSize / FontSize), or {-1, -1}
 void get_size(void* text, const char* getter, float* w, float* h) {
@@ -177,24 +190,312 @@ bool set_raster(void* text, float w, float h) {
     return invoke_c(s_sdk, mh, text, args, 1, &r) && !r.exception_thrown;
 }
 
+// The line's size and place, from g_cfg (a new line, or a new visit with another background's entry)
+void apply_geometry(void* copy) {
+    using namespace tcfg;
+    const SF6CoreAPI* api = sf6core_api_ptr();
+    const float raster = g_cfg.font * (kRasterW / kFontW);    // the same 2x as the default size, whatever the size
+    set_raster(copy, raster, raster);
+    if (g_per_bg) {                                            // placed by its middle, as the Slots Loader's preview draws it
+        invoke_i64(copy, "set_ControlPoint(via.gui.ControlPoint)", kCenterCenter);
+        invoke_i64(copy, "set_PageAlignment(via.gui.PageAlignment)", kCenterCenter);
+    }
+    api->ui_set_region_size(g_client, copy, kRegionW, g_cfg.font * (kRegionH / kFontH));
+    api->ui_set_font_size(g_client, copy, g_cfg.font, g_cfg.font);
+    api->ui_set_position(g_client, copy, g_cfg.x, g_cfg.y, kPosZ);
+}
+
 void configure_new(void* copy, void* tmpl) {
     using namespace tcfg;
     const SF6CoreAPI* api = sf6core_api_ptr();
     float tw, th, cw, ch;
     get_size(tmpl, "get_RasterSize", &tw, &th);
-    const float raster = g_cfg.font * (kRasterW / kFontW);    // the same 2x as the default size, whatever the size
-    const bool raster_ok = set_raster(copy, raster, raster);
-    get_size(copy, "get_RasterSize", &cw, &ch);
-    core_log(SF6CORE_LOG_INFO, nullptr, "[title] raster size: template %.0fx%.0f, line %.0fx%.0f (%s)", tw, th, cw, ch, raster_ok ? "set" : "set failed");
     invoke_i64(copy, "set_FontSlot(via.gui.FontSlot)", kFontSlot);
     invoke_i64(copy, "set_Priority(System.UInt16)", kPriority);
     api->ui_set_text(g_client, copy, kText);
-    api->ui_set_region_size(g_client, copy, kRegionW, g_cfg.font * (kRegionH / kFontH));
-    api->ui_set_font_size(g_client, copy, g_cfg.font, g_cfg.font);
-    api->ui_set_position(g_client, copy, g_cfg.x, g_cfg.y, kPosZ);
+    apply_geometry(copy);
+    get_size(copy, "get_RasterSize", &cw, &ch);
+    core_log(SF6CORE_LOG_INFO, nullptr, "[title] raster size: template %.0fx%.0f, line %.0fx%.0f", tw, th, cw, ch);
     g_last_rgba = -1;
     g_last_scale_q = -1;
 }
+
+// <game folder>\reframework\data\<rel>
+bool game_data_path(const char* rel, char (&path)[MAX_PATH]) {
+    DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    if (!n || n >= MAX_PATH) return false;
+    char* slash = strrchr(path, '\\');
+    if (!slash) return false;
+    *slash = 0;
+    strncat_s(path, "\\reframework\\data\\", _TRUNCATE);
+    strncat_s(path, rel, _TRUNCATE);
+    return true;
+}
+// A small text file whole ("" when missing or over 1 MB)
+std::string read_small(const char* rel) {
+    char path[MAX_PATH];
+    if (!game_data_path(rel, path)) return {};
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return {};
+    std::string out;
+    LARGE_INTEGER sz{};
+    if (GetFileSizeEx(f, &sz) && sz.QuadPart > 0 && sz.QuadPart < (1 << 20)) {
+        out.resize((size_t)sz.QuadPart);
+        DWORD got = 0;
+        if (!ReadFile(f, out.data(), (DWORD)out.size(), &got, nullptr)) got = 0;
+        out.resize(got);
+    }
+    CloseHandle(f);
+    return out;
+}
+// The string after "name": in text, from `from` ("" when absent). Both files are written by our own tools, flat.
+std::string json_string_after(const std::string& t, const char* name, size_t from = 0) {
+    const std::string key = std::string("\"") + name + "\"";
+    size_t i = t.find(key, from);
+    if (i == std::string::npos) return {};
+    i = t.find(':', i + key.size());
+    if (i == std::string::npos) return {};
+    i = t.find('"', i + 1);
+    if (i == std::string::npos) return {};
+    const size_t e = t.find('"', i + 1);
+    return e == std::string::npos ? std::string() : t.substr(i + 1, e - i - 1);
+}
+// The number or boolean after "name": inside [from, to); false when absent
+bool json_number_in(const std::string& t, const char* name, size_t from, size_t to, float* out) {
+    const std::string key = std::string("\"") + name + "\"";
+    size_t i = t.find(key, from);
+    if (i == std::string::npos || i >= to) return false;
+    i = t.find(':', i + key.size());
+    if (i == std::string::npos || i >= to) return false;
+    ++i;
+    while (i < to && (t[i] == ' ' || t[i] == '\t')) ++i;
+    if (t.compare(i, 4, "true") == 0) { *out = 1.0f; return true; }
+    if (t.compare(i, 5, "false") == 0) { *out = 0.0f; return true; }
+    char* end = nullptr;
+    const float v = strtof(t.c_str() + i, &end);
+    if (end == t.c_str() + i) return false;
+    *out = v;
+    return true;
+}
+
+std::string cyc_playlist_key();   // the playlist's background in this visit ("": none), below
+
+// At each new visit of the title (the logo complete): the line of this session's background, or title.ini's
+// The game's own title's line when overdrive.json has no entry for it: shown (the plugin's editor, title_preview.cpp, the same)
+constexpr float kGameDefX = 50.00f, kGameDefY = 62.49f, kGameDefSize = 11.44f;
+void read_background_cfg() {
+    using namespace tcfg;
+    g_per_bg = false;
+    g_line_on = true;
+    g_cfg = g_ini;
+    const std::string reg = read_small("SF6_TitleSlots_Data\\registry.json");
+    if (reg.empty()) return;                                           // no title packs: title.ini, as before
+    g_per_bg = true;
+    g_line_on = false;
+    // the background shown now: the loader's (a change in the Options shows at a return to the title, Random draws at each
+    // visit), else the registry's, applied at launch
+    std::string key;
+    using ShownFn = int (*)(char*, int);
+    static ShownFn shown = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        if (HMODULE h = GetModuleHandleW(L"amd_ags_x64.dll")) shown = reinterpret_cast<ShownFn>(GetProcAddress(h, "SF6TitleSlots_Shown"));
+    }
+    char buf[64] = {};
+    const std::string pk = cyc_playlist_key();                     // the playlist switched this visit
+    if (!pk.empty()) key = pk;
+    else if (shown && shown(buf, sizeof buf) > 0) key = buf;
+    if (key.empty()) {
+        const size_t applied = reg.find("\"applied\"");
+        key = applied == std::string::npos ? std::string() : json_string_after(reg, "pack", applied);
+    }
+    if (key.empty()) key = "game";
+    const std::string od = read_small("SF6_TitleSlots_Data\\overdrive.json");
+    const std::string k = "\"" + key + "\"";
+    const size_t at = od.find(k);
+    const size_t open = at == std::string::npos ? std::string::npos : od.find('{', at + k.size());
+    const size_t close = open == std::string::npos ? std::string::npos : od.find('}', open);
+    float show = 0, x = 0, y = 0, size = 0;
+    bool found = close != std::string::npos && json_number_in(od, "show", open, close, &show) &&
+                 json_number_in(od, "x", open, close, &x) && json_number_in(od, "y", open, close, &y) && json_number_in(od, "size", open, close, &size);
+    if (!found && key == "game") {           // the game's own title never set (a first install): the line shown, Wael's place (08/11)
+        found = true;
+        show = 1; x = kGameDefX; y = kGameDefY; size = kGameDefSize;
+    }
+    if (found && show > 0.5f) {
+        g_line_on = true;
+        g_cfg.x = roundf(fminf(fmaxf(x, 0.0f), 100.0f) * kSpaceW) / 100.0f;
+        g_cfg.y = roundf(fminf(fmaxf(y, 0.0f), 100.0f) * kSpaceH) / 100.0f;
+        g_cfg.font = fminf(fmaxf(size * kSpaceH / 100.0f, (float)kFontMin), (float)kFontMax);
+    }
+    core_log(SF6CORE_LOG_INFO, nullptr, "[title] background \"%s\": %s", key.c_str(),
+             g_line_on ? ("line at " + std::to_string((int)g_cfg.x) + "," + std::to_string((int)g_cfg.y) + ", size " + std::to_string((int)g_cfg.font)).c_str()
+                       : "no line (no entry, or hidden, in overdrive.json)");
+}
+
+
+// ======================= Random: a playlist while the title stays on screen =======================
+// The flow's three movies (UIFlowTitle.mArrMovie: via.movie.Movie IN / LOOP / OUT, read 08/11). Left alone, each cycle plays IN,
+// then LOOP for 20 s; then the game stops both and prepares them again, waits about 25 s with nothing playing, and plays IN again.
+// The same paths prepared again keep what the first opening learnt of their files: another file served under them (the loader's
+// redirect) made Media Foundation fail to open it, a crash twice (08/11). So the files are not changed under the game's paths: in
+// the wait, with every movie ready and nothing playing, the three movies are given new resources, the next background's own copies
+// (the loader's private paths: _titleslots/<key>/product/gui/gm/ui10000/part/title_*.mov, streamed, their resource files beside),
+// ONE AT A TIME, the next once the last one is ready (LOOP, IN, OUT): reset, set_ResourceHandle, prepare. Tried in game (Lua,
+// 08/11): any one alone works; two or three prepared in the same frame froze the game; without reset a movie already given a
+// resource keeps playing the one before until the game prepares it again. Start, loop and the transition after a key then always
+// come from the same background (seen by Wael, Alex -> Chun-Li, a key: Chun-Li's transition). The loader draws the key
+// (SF6TitleSlots_Draw, "random" only) without changing what it serves: a new visit (new flow, new movies) keeps its own way.
+// A key pressed (SELECT, FADE_OUT) ends it for the visit. Off: reframework/data/sf6core/title_cycle_off.txt.
+namespace cyc {
+enum State { Preparing = 0, Ready = 1, Playing = 2, Paused = 3, Finished = 4 };   // via.movie.Movie.CosmeticState
+const char* const kNames[3] = { "title_start", "title_loop", "title_end" };       // EPlayType IN, LOOP, OUT
+bool g_off = false;
+void* g_flow = nullptr;          // the visit (a new flow object: a new visit; compared, never used)
+bool g_loop_seen = false;        // LOOP played in this cycle: the next wait is a switch point
+uint64_t g_ready_at = 0;         // the tick every movie was first seen ready with nothing playing
+int g_phase = 0;                 // 0 watching, 1 giving the new resources, one movie at a time
+uint64_t g_set_at = 0;
+const int kOrder[3] = { 1, 0, 2 };   // LOOP, IN, OUT
+int g_step = 0;                  // the next movie of kOrder to give its resource (phase 1)
+int g_pending = -1;              // the movie given its resource, waited for (-1: none)
+uint64_t g_pending_at = 0;
+void* g_holders[3] = {};         // the new resources (one reference kept each)
+std::string g_next;              // the key being given
+std::string g_key;               // the background the visit shows since a switch ("": the one it started with)
+bool g_logged_missing = false;
+
+void* movie_at(void* arr, int i) {
+    auto mh = find_method_on(s_sdk, arr, "GetValue");
+    if (!mh) mh = find_method_on(s_sdk, arr, "Get");
+    if (!mh) return nullptr;
+    void* args[] = { (void*)(uintptr_t)(uint32_t)i };
+    RawInvokeRet r;
+    return invoke_c(s_sdk, mh, arr, args, 1, &r) && !r.exception_thrown ? r.ptr : nullptr;
+}
+int state_of(void* m) {
+    auto mh = m ? find_method_on(s_sdk, m, "get_State") : nullptr;
+    RawInvokeRet r;
+    return mh && invoke_c(s_sdk, mh, m, nullptr, 0, &r) && !r.exception_thrown ? (int)(int32_t)r.dword : -1;
+}
+bool call_bool0(void* o, const char* name, bool* out) {
+    auto mh = o ? find_method_on(s_sdk, o, name) : nullptr;
+    RawInvokeRet r;
+    if (!mh || !invoke_c(s_sdk, mh, o, nullptr, 0, &r) || r.exception_thrown) return false;
+    *out = r.bytes[0] != 0;
+    return true;
+}
+bool call_void(void* o, const char* name, void* arg = nullptr) {
+    auto mh = o ? find_method_on(s_sdk, o, name) : nullptr;
+    void* args[] = { arg };
+    RawInvokeRet r;
+    return mh && invoke_c(s_sdk, mh, o, arg ? args : nullptr, arg ? 1 : 0, &r) && !r.exception_thrown;
+}
+// A movie resource holder for a path (one reference kept: the movie holds it as long as it plays it)
+void* movie_holder(const std::string& path) {
+    void* holder = nullptr;
+    __try {
+        auto* rm = s_sdk->functions->get_resource_manager();
+        auto* res = rm ? s_sdk->resource_manager->create_resource(rm, "via.movie.MovieResource", path.c_str()) : nullptr;
+        if (!res) return nullptr;
+        s_sdk->resource->add_ref((REFrameworkResourceHandle)res);
+        auto h = s_sdk->resource->create_holder((REFrameworkResourceHandle)res, "via.movie.MovieResourceHolder");
+        s_sdk->resource->release((REFrameworkResourceHandle)res);
+        if (!h) return nullptr;
+        s_sdk->managed_object->add_ref((REFrameworkManagedObjectHandle)h);
+        holder = (void*)h;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+    return holder;
+}
+int loader_draw(const std::string& not_key, char* buf, int cap) {
+    using DrawFn = int (*)(const char*, char*, int);
+    static DrawFn draw = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        if (HMODULE h = GetModuleHandleW(L"amd_ags_x64.dll")) draw = reinterpret_cast<DrawFn>(GetProcAddress(h, "SF6TitleSlots_Draw"));
+    }
+    return draw ? draw(not_key.c_str(), buf, cap) : 0;
+}
+std::string shown_now() {
+    if (!g_key.empty()) return g_key;
+    using ShownFn = int (*)(char*, int);
+    static ShownFn shown = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        if (HMODULE h = GetModuleHandleW(L"amd_ags_x64.dll")) shown = reinterpret_cast<ShownFn>(GetProcAddress(h, "SF6TitleSlots_Shown"));
+    }
+    char b[64] = {};
+    return shown && shown(b, sizeof b) > 0 ? std::string(b) : std::string();
+}
+
+void tick(void* flow, const char* st) {
+    if (g_off) return;
+    if (flow != g_flow) { g_flow = flow; g_loop_seen = false; g_ready_at = 0; g_phase = 0; g_key.clear(); }   // a new visit
+    if (strcmp(st, "SELECT") == 0 || strcmp(st, "FADE_OUT") == 0) {
+        if (g_phase == 1) core_log(SF6CORE_LOG_WARN, nullptr, "[title] playlist: a key pressed while \"%s\" was given: stopped there", g_next.c_str());
+        g_phase = 0; g_loop_seen = false; g_ready_at = 0;
+        return;
+    }
+    void* arr = read_field_ref(s_sdk, flow, "mArrMovie");
+    void* mv[3] = { arr ? movie_at(arr, 0) : nullptr, arr ? movie_at(arr, 1) : nullptr, arr ? movie_at(arr, 2) : nullptr };
+    const int si = state_of(mv[0]), sl = state_of(mv[1]), so = state_of(mv[2]);
+    if (si < 0 || sl < 0 || so < 0) {
+        if (!g_logged_missing) { g_logged_missing = true; core_log(SF6CORE_LOG_WARN, nullptr, "[title] playlist: the three movies not read: off"); }
+        return;
+    }
+    const int states[3] = { si, sl, so };
+    const uint64_t now = g_ticks.load();
+    if (g_phase == 1) {                                   // one movie at a time
+        if (g_pending >= 0) {
+            if (states[g_pending] == Ready && now - g_pending_at >= 10) g_pending = -1;
+            else if (now - g_pending_at > 600) {
+                g_phase = 0;
+                core_log(SF6CORE_LOG_WARN, nullptr, "[title] playlist: %s of \"%s\" not ready after 10 s (state %d): stopped there",
+                         kNames[g_pending], g_next.c_str(), states[g_pending]);
+            }
+            return;
+        }
+        if (g_step >= 3) {
+            g_phase = 0;
+            g_key = g_next;
+            core_log(SF6CORE_LOG_INFO, nullptr, "[title] playlist: \"%s\" ready for the next cycle", g_key.c_str());
+            return;
+        }
+        const int i = kOrder[g_step++];
+        const bool ok = call_void(mv[i], "reset") && call_void(mv[i], "set_ResourceHandle", g_holders[i]) && call_void(mv[i], "prepare");
+        g_pending = i;
+        g_pending_at = now;
+        if (!ok) core_log(SF6CORE_LOG_WARN, nullptr, "[title] playlist: %s of \"%s\": a call failed", kNames[i], g_next.c_str());
+        return;
+    }
+    if (sl == Playing) { g_loop_seen = true; g_ready_at = 0; return; }
+    bool playing = true;
+    const bool idle = si == Ready && sl == Ready && so == Ready && call_bool0(flow, "IsPlay", &playing) && !playing;
+    if (!idle || !g_loop_seen) { g_ready_at = 0; return; }
+    if (!g_ready_at) { g_ready_at = now; return; }
+    if (now - g_ready_at < 60) return;                   // a second into the wait: the game's own preparation is over
+    g_loop_seen = false;
+    char key[64] = {};
+    const std::string cur = shown_now();
+    if (loader_draw(cur, key, sizeof key) <= 0) return;  // not on "random"
+    void* holders[3] = {};
+    for (int i = 0; i < 3; ++i) {
+        holders[i] = movie_holder(std::string("_titleslots/") + key + "/product/gui/gm/ui10000/part/" + kNames[i] + ".mov");
+        if (!holders[i]) { core_log(SF6CORE_LOG_WARN, nullptr, "[title] playlist: no resource for \"%s\" %s: nothing changed", key, kNames[i]); return; }
+    }
+    for (int i = 0; i < 3; ++i) g_holders[i] = holders[i];
+    g_next = key;
+    g_phase = 1;
+    g_step = 0;
+    g_pending = -1;
+    g_set_at = now;
+    core_log(SF6CORE_LOG_INFO, nullptr, "[title] playlist: \"%s\" given to the three movies, one at a time", key);
+}
+}  // namespace cyc
+std::string cyc_playlist_key() { return cyc::g_key; }
 
 void tick_inner(void* flow) {
     using namespace tcfg;
@@ -207,11 +508,16 @@ void tick_inner(void* flow) {
     if (ps) managed_str_to_utf8(ps, st, sizeof st);
     const bool sel = strcmp(st, kShownState) == 0;
     if (!g_first_logged) { g_first_logged = true; core_log(SF6CORE_LOG_INFO, nullptr, "[title] title seen (c_main state \"%s\")", st); }
-    if (sel && !g_prev_sel) { g_enter_tick.store(g_ticks.load()); g_last_rgba = -1; g_last_scale_q = -1; g_create_tries = 0; }
+    cyc::tick(flow, st);
+    if (sel && !g_prev_sel) {
+        g_enter_tick.store(g_ticks.load()); g_last_rgba = -1; g_last_scale_q = -1; g_create_tries = 0;
+        read_background_cfg();
+        g_reapply = true;
+    }
     g_prev_sel = sel;
     bool after_press = false;
     for (const char* k : kKeepStates) after_press = after_press || strcmp(st, k) == 0;
-    const bool keep = sel || (g_shown && after_press);
+    const bool keep = g_line_on && (sel || (g_shown && after_press));
     if (!keep && !g_shown) return;                                   // nothing to hide, nothing to show
     void* copy = api->ui_find_child(view, kCopyName, 0);
 
@@ -235,9 +541,11 @@ void tick_inner(void* flow) {
             return;
         }
         configure_new(copy, tmpl);
+        g_reapply = false;
         core_log(SF6CORE_LOG_INFO, nullptr, "[title] OVERDRIVE EDITION line created (font slot %d, size %.0fx%.0f, at %.0f,%.0f)",
                  (int)kFontSlot, g_cfg.font, g_cfg.font, g_cfg.x, g_cfg.y);
     }
+    if (g_reapply) { apply_geometry(copy); g_reapply = false; }
     if (!sel) g_last_rgba = -1;                                      // FADE_OUT: written again every frame
     const int f = (int)(g_ticks.load() - g_enter_tick.load());
     uint32_t rgba;
@@ -296,6 +604,11 @@ bool off_file_present() {
     char path[MAX_PATH];
     return data_path("title_off.txt", path) && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 }
+bool cycle_off_file_present() {
+    char path[MAX_PATH];
+    return data_path("title_cycle_off.txt", path) && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
 
 // One number of title.ini within [lo, hi]; anything else keeps the default and says so. A decimal comma is accepted (players
 // type 0,5). GetPrivateProfileInt is not used: it reads "abc" as 0, a valid position, and takes no decimals.
@@ -337,6 +650,7 @@ void load_ini() {
     g_cfg.x = roundf(ini_value(path, "pos_x", 0.0f, 1.0f, kPosX / kSpaceW) * kSpaceW);
     g_cfg.y = roundf(ini_value(path, "pos_y", 0.0f, 1.0f, kPosY / kSpaceH) * kSpaceH);
     g_cfg.font = ini_value(path, "font_size", (float)kFontMin, (float)kFontMax, kFontW);
+    g_ini = g_cfg;
     core_log(SF6CORE_LOG_INFO, nullptr, "[title] title.ini: at %.0f,%.0f, size %.0f", g_cfg.x, g_cfg.y, g_cfg.font);
 }
 
@@ -355,6 +669,8 @@ void title_frame() {
             return;
         }
         load_ini();
+        cyc::g_off = cycle_off_file_present();
+        if (cyc::g_off) core_log(SF6CORE_LOG_INFO, nullptr, "[title] playlist: off (title_cycle_off.txt present)");
         auto* tdb = s_sdk->functions->get_tdb();
         g_td_flow = s_sdk->tdb->find_type(tdb, "app.menu.UIFlowTitle");
         if (!g_td_flow) {

@@ -357,6 +357,64 @@ bool build_tex(const std::wstring& image_path, bool thumb, std::vector<uint8_t>&
     }
 }
 
+// A title pack's picture (title_slots.hpp): the whole screenshot at 16:9 -- its centre when its aspect differs, cut on the
+// longer side -- resized to TITLE_W x TITLE_H (the screen: it is shown full screen), BC1, one mip, the same header as a stage
+// preview.
+constexpr int TITLE_W = 1920, TITLE_H = 1080;
+
+// RGBA (w x h, multiples of 4) -> the .tex (BC1, one mip)
+bool rgba_tex(const std::vector<uint8_t>& rgba, int w, int h, std::vector<uint8_t>& out_tex, std::string& err) {
+    std::vector<uint8_t> bc1;
+    encode_bc1(rgba.data(), w, h, bc1);
+    const uint32_t pitch = (uint32_t)(w / 4) * 8;
+    const uint32_t data_size = pitch * (uint32_t)(h / 4);
+    if (bc1.size() != data_size) { err = "internal size mismatch"; return false; }
+    write_tex_header(out_tex, w, h, pitch, data_size);
+    out_tex.insert(out_tex.end(), bc1.begin(), bc1.end());
+    return true;
+}
+// The screen's RGBA -> the .tex (BC1, one mip)
+bool title_tex_of_screen(const std::vector<uint8_t>& screen, std::vector<uint8_t>& out_tex, std::string& err) {
+    return rgba_tex(screen, TITLE_W, TITLE_H, out_tex, err);
+}
+
+// `cell` (not null): the picture also at cell_w x cell_h, for the mosaic
+bool build_title_from_rgba(const uint8_t* pixels, int img_w, int img_h, std::vector<uint8_t>& out_tex, std::string& err,
+                           std::vector<uint8_t>* cell = nullptr, int cell_w = 0, int cell_h = 0, std::vector<uint8_t>* thumb_tex = nullptr,
+                           std::vector<uint8_t>* band_tex = nullptr) {
+    out_tex.clear();
+    if (!pixels || img_w <= 0 || img_h <= 0) { err = "image has no pixels"; return false; }
+    int src_w = img_w, src_h = img_h, x0 = 0, y0 = 0;
+    if ((long long)img_w * TITLE_H > (long long)img_h * TITLE_W) {          // wider than 16:9: its centre, full height
+        src_w = std::max(1, (int)((long long)img_h * TITLE_W / TITLE_H));
+        x0 = (img_w - src_w) / 2;
+    } else if ((long long)img_w * TITLE_H < (long long)img_h * TITLE_W) {   // taller: its centre, full width
+        src_h = std::max(1, (int)((long long)img_w * TITLE_H / TITLE_W));
+        y0 = (img_h - src_h) / 2;
+    }
+    std::vector<uint8_t> crop((size_t)src_w * src_h * 4);
+    for (int y = 0; y < src_h; y++)
+        memcpy(crop.data() + (size_t)y * src_w * 4, pixels + ((size_t)(y0 + y) * img_w + x0) * 4, (size_t)src_w * 4);
+    std::vector<uint8_t> resized((size_t)TITLE_W * TITLE_H * 4);
+    resize_rgba(crop.data(), src_w, src_h, resized.data(), TITLE_W, TITLE_H);
+    if (cell && cell_w > 0 && cell_h > 0) {
+        cell->assign((size_t)cell_w * cell_h * 4, 0);
+        resize_rgba(resized.data(), TITLE_W, TITLE_H, cell->data(), cell_w, cell_h);
+    }
+    if (thumb_tex) {
+        std::vector<uint8_t> thumb_px((size_t)TITLE_THUMB_W * TITLE_THUMB_H * 4, 0);
+        resize_rgba(resized.data(), TITLE_W, TITLE_H, thumb_px.data(), TITLE_THUMB_W, TITLE_THUMB_H);
+        if (!rgba_tex(thumb_px, TITLE_THUMB_W, TITLE_THUMB_H, *thumb_tex, err)) thumb_tex->clear();
+    }
+    if (band_tex) {                                       // the middle band, 4:1 (rows 300 - 779 of 1080)
+        const int band_h = TITLE_W / 4, band_y = (TITLE_H - band_h) / 2;
+        std::vector<uint8_t> band_px((size_t)TITLE_BAND_W * TITLE_BAND_H * 4, 0);
+        resize_rgba(resized.data() + (size_t)band_y * TITLE_W * 4, TITLE_W, band_h, band_px.data(), TITLE_BAND_W, TITLE_BAND_H);
+        if (!rgba_tex(band_px, TITLE_BAND_W, TITLE_BAND_H, *band_tex, err)) band_tex->clear();
+    }
+    return title_tex_of_screen(resized, out_tex, err);
+}
+
 template <class T>
 T get_le(const std::vector<uint8_t>& b, size_t off) {
     T v{};
@@ -372,6 +430,119 @@ bool make_stage_preview_tex(const std::wstring& image_path, std::vector<uint8_t>
 
 bool make_stage_thumb_tex(const std::wstring& image_path, std::vector<uint8_t>& out_tex, std::string& err) {
     return build_tex(image_path, true, out_tex, err);
+}
+
+bool make_title_preview_tex(const std::wstring& image_path, std::vector<uint8_t>& out_tex, std::string& err,
+                            std::vector<uint8_t>* cell, int cell_w, int cell_h, std::vector<uint8_t>* thumb_tex,
+                            std::vector<uint8_t>* band_tex) {
+    out_tex.clear();
+    try {
+        std::vector<uint8_t> file_data;
+        if (!read_whole_file(image_path, file_data) || file_data.empty()) { err = "cannot read image file"; return false; }
+        if (file_data.size() > (size_t)INT_MAX) { err = "image file too large"; return false; }
+        int img_w = 0, img_h = 0, img_n = 0;
+        uint8_t* pixels = stbi_load_from_memory(file_data.data(), (int)file_data.size(), &img_w, &img_h, &img_n, 4);
+        if (!pixels) {
+            const char* reason = stbi_failure_reason();
+            err = std::string("decode failed: ") + (reason ? reason : "unknown");
+            return false;
+        }
+        const bool ok = build_title_from_rgba(pixels, img_w, img_h, out_tex, err, cell, cell_w, cell_h, thumb_tex, band_tex);
+        stbi_image_free(pixels);
+        return ok;
+    } catch (...) {
+        err = "unexpected error building texture";
+        out_tex.clear();
+        return false;
+    }
+}
+
+bool make_check_box_tex(bool on, std::vector<uint8_t>& out_tex) {
+    constexpr int N = 64;
+    std::vector<uint8_t> px((size_t)N * N * 4);
+    auto set = [&](int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+        if (x < 0 || y < 0 || x >= N || y >= N) return;
+        uint8_t* p = px.data() + ((size_t)y * N + x) * 4;
+        p[0] = r; p[1] = g; p[2] = b; p[3] = 255;
+    };
+    for (int y = 0; y < N; ++y)
+        for (int x = 0; x < N; ++x) {
+            const bool edge = x < 6 || y < 6 || x >= N - 6 || y >= N - 6;
+            if (edge) set(x, y, 0xD8, 0xDE, 0xEA);              // the light edge
+            else set(x, y, 0x0E, 0x16, 0x2A);                    // the dark inside
+        }
+    if (on) {
+        // the tick: two strokes, (14,33) -> (27,47) and (27,47) -> (52,15), 9 px thick, the game's yellow
+        auto dist2 = [](float px_, float py_, float ax, float ay, float bx, float by) {
+            const float dx = bx - ax, dy = by - ay;
+            float t = ((px_ - ax) * dx + (py_ - ay) * dy) / (dx * dx + dy * dy);
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            const float qx = ax + t * dx - px_, qy = ay + t * dy - py_;
+            return qx * qx + qy * qy;
+        };
+        for (int y = 0; y < N; ++y)
+            for (int x = 0; x < N; ++x) {
+                const float fx = x + 0.5f, fy = y + 0.5f;
+                const float d = std::min(dist2(fx, fy, 14, 33, 27, 47), dist2(fx, fy, 27, 47, 52, 15));
+                if (d <= 4.5f * 4.5f) set(x, y, 0xF6, 0xE2, 0x3C);
+            }
+    }
+    std::string err;
+    return rgba_tex(px, N, N, out_tex, err);
+}
+
+MosaicLayout title_mosaic_layout(int count) {
+    MosaicLayout best;
+    if (count <= 0) return best;
+    for (int cols = 1; cols <= count; ++cols) {
+        const int rows = (count + cols - 1) / cols;
+        if (cols > 1 && (cols - 1) * rows >= count) continue;   // a column fewer holds them all: that one is tried instead
+        // the largest 16:9 place that fits cols x rows times on the screen (its width a multiple of 16: the height exact)
+        int w = std::min(TITLE_W / cols, TITLE_H / rows * 16 / 9);
+        w -= w % 16;
+        if (w < 32) continue;
+        const int empty = cols * rows - count;
+        const bool better = w > best.place_w || (w == best.place_w && (empty < best.cols * best.rows - count ||
+                                                                     (empty == best.cols * best.rows - count && cols > best.cols)));
+        if (!best.cols || better) { best.cols = cols; best.rows = rows; best.place_w = w; best.place_h = w * 9 / 16; }
+    }
+    best.cell_w = std::max(4, best.place_w - 2 * TITLE_MOSAIC_GAP);
+    best.cell_h = std::max(4, best.place_h - 2 * TITLE_MOSAIC_GAP);
+    return best;
+}
+
+bool make_title_mosaic_tex(const std::vector<std::vector<uint8_t>>& cells, const MosaicLayout& lay, std::vector<uint8_t>& out_tex, std::string& err) {
+    out_tex.clear();
+    if (cells.empty() || lay.cols <= 0 || lay.rows <= 0) { err = "no picture"; return false; }
+    std::vector<uint8_t> screen((size_t)TITLE_W * TITLE_H * 4, 0);
+    for (size_t i = 0; i < screen.size(); i += 4) screen[i + 3] = 255;   // opaque black
+    const int n = (int)std::min(cells.size(), (size_t)(lay.cols * lay.rows));
+    const int rows = (n + lay.cols - 1) / lay.cols;                       // the rows used (a picture that could not be made leaves none)
+    const int top = (TITLE_H - rows * lay.place_h) / 2;
+    for (int i = 0; i < n; ++i) {
+        const std::vector<uint8_t>& cell = cells[(size_t)i];
+        if (cell.size() != (size_t)lay.cell_w * lay.cell_h * 4) continue;
+        const int row = i / lay.cols, col = i % lay.cols;
+        const int in_row = std::min(lay.cols, n - row * lay.cols);       // the last row may hold fewer: centred
+        const int left = (TITLE_W - in_row * lay.place_w) / 2;
+        const int x0 = left + col * lay.place_w + TITLE_MOSAIC_GAP, y0 = top + row * lay.place_h + TITLE_MOSAIC_GAP;
+        if (x0 < 0 || y0 < 0) continue;
+        for (int y = 0; y < lay.cell_h && y0 + y < TITLE_H; ++y) {
+            const int w = std::min(lay.cell_w, TITLE_W - x0);
+            if (w > 0) memcpy(screen.data() + ((size_t)(y0 + y) * TITLE_W + x0) * 4, cell.data() + (size_t)y * lay.cell_w * 4, (size_t)w * 4);
+        }
+    }
+    return title_tex_of_screen(screen, out_tex, err);
+}
+
+bool image_header_ok(const std::wstring& image_path) {
+    FILE* f = _wfopen(image_path.c_str(), L"rb");
+    if (!f) return false;
+    std::vector<uint8_t> head(256 * 1024);                 // a JPEG's size can come after large EXIF segments
+    const size_t got = fread(head.data(), 1, head.size(), f);
+    fclose(f);
+    int w = 0, h = 0, n = 0;
+    return got > 0 && stbi_info_from_memory(head.data(), (int)got, &w, &h, &n) && w >= 16 && h >= 16;
 }
 
 bool decode_game_tex_rgba(const std::vector<uint8_t>& tex, std::vector<uint8_t>& rgba, int& w, int& h, std::string& err) {

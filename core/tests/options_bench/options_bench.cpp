@@ -2,7 +2,8 @@
 // as it ships) with a scripted backend: no game, no REFramework. Run: core\tests\options_bench\run.bat
 //
 // Covers increment 11 (ADR-0021, a group placed in a section of the game's Options screen) and checks that a tree
-// without a placed group behaves as before (no placement call, its pages recorded as before).
+// without a placed group behaves as before (no placement call, its pages recorded as before). Increment 13 (a group as a
+// section of a game tab's left list): the registry side (the units, the screen and the holds are options.cpp's).
 #include "../../src/options/options_core.hpp"
 
 #include <cstdio>
@@ -25,11 +26,12 @@ int g_next_obj = 1;
 int g_sync_calls = 0, g_sync_keep = 0, g_sync_drop = 0;
 oc::Obj new_obj() { return reinterpret_cast<oc::Obj>(static_cast<uintptr_t>(0x1000 * g_next_obj++)); }
 
-// What be_build_units does with the registry, without the game: a unit per group (none for a placed one) and per
-// entry (buttons of a placed group skipped), type ids by key.
+// What be_build_units does with the registry, without the game: a unit per group (none for a placed one, nothing for a
+// section) and per entry (buttons of a placed group skipped), type ids by key.
 bool be_build() {
     oc::build_set_root(new_obj());
     for (auto& gp : oc::groups()) {
+        if (gp->section_tab >= 0) { oc::build_set_group(*gp, nullptr); continue; }
         const bool placed = gp->place_tab >= 0;
         oc::build_set_group(*gp, placed ? nullptr : new_obj());
         for (auto& e : gp->entries) {
@@ -164,6 +166,37 @@ int main() {
     oc::build();
     run_ticks(tick, oc::kPlaceCheck * 2);
     check(g_sync_calls == 0, "8 after reset, no placement call without a placed group");
+
+    // ---- 9. increment 13: a group as a section of a game tab's left list (the registry) ----
+    oc::reset();
+    g_sync_calls = 0;
+    const int64_t s9 = oc::add_group("slots.title_section");
+    const int64_t e9 = oc::add_entry(s9, oc::Kind::Choice, "ignored");
+    oc::set_group_def(s9, "Title Screen Selection", "Choose the title screen.");
+    check(oc::sections().empty(), "9 no section before the placement");
+    check(oc::set_group_section(s9, 1, 290), "9 placed");
+    check(!oc::set_group_section(9999, 1, 290), "9 unknown group refused");
+    auto secs = oc::sections();
+    check(secs.size() == 1 && secs[0].gid == s9 && secs[0].tab == 1 && secs[0].before == 290 && secs[0].key == "slots.title_section" &&
+          secs[0].title == "Title Screen Selection" && secs[0].desc == "Choose the title screen.", "9 its definition");
+    auto x9 = oc::entry_by_id(e9);
+    check(x9 && !x9->placed, "9 its entries are no placed rows");
+    check(oc::build() && oc::groups()[0]->unit == nullptr, "9 a section has no page unit");
+    oc::set_group_section(s9, 1, -7);
+    secs = oc::sections();
+    check(secs.size() == 1 && secs[0].before == -1, "9 a negative before = at the end");
+    oc::set_group_def(s9, "Selection de l'ecran titre", "");
+    check(oc::sections()[0].title == "Selection de l'ecran titre", "9 retitled");
+    run_ticks(tick, oc::kPlaceCheck * 2);
+    check(g_sync_calls == 0, "9 a section is no placed group (no row sync)");
+    oc::set_group_section(s9, -1, -1);
+    check(oc::sections().empty(), "9 no section any more");
+    oc::set_group_section(s9, 1, 290);
+    oc::remove_group(s9);
+    check(oc::sections().empty(), "9 removed with its group");
+    oc::set_group_section(oc::add_group("other"), 1, 290);
+    oc::reset();
+    check(oc::sections().empty(), "9 reset forgets the sections");
 
     std::printf("options_bench: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

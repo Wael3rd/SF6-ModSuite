@@ -499,6 +499,8 @@ void hook_now() {
 
 void run_in_guide_update(void (*job)()) { g_guide_job.store(job, std::memory_order_release); }
 
+void need_guide_hook() { if (g_ready) hook_now(); }
+
 void install_hooks() {
     const SF6CoreAPI* a = A();
     if (!a || !C() || !SF6CORE_HAS(a, ui_clone_control) || !SF6CORE_HAS(a, ui_agents) || !SF6CORE_HAS(a, opt_window_open)) {

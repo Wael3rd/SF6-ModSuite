@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include <sf6core/sf6core_api.h>
+
 namespace dialogs::options {
 
 bool install();              // Backend + hooks; false on a hard failure
@@ -30,6 +32,15 @@ int64_t focused_entry();                                    // id of the entry u
 uint64_t row_control(int64_t entry_id, uint64_t param_addr); // via.gui.Control of the row; param 0 = the current page (:1058-1073)
 uint64_t row_part(int64_t entry_id);                        // UIPartsOptionUnit of the row on the current page (:1040-1055)
 bool set_option_text(int64_t entry_id, int index, const std::string& text);   // retext one option in place (:1102-1111)
+
+// ---- increment 13: a client's section in the left list of a game Options tab (OPTIONS.md) ------------------------
+// Game thread. sections_frame: every core frame once the service is installed (the sync of the sections' units in the
+// tabs' lists, the screen read, the holds, the code check and the hooks); sections_dirty: a section was placed, moved,
+// removed or retitled (synced on the next frame). The state is the one read this frame (shown 0 when not up).
+void sections_frame();
+void sections_dirty();
+bool section_state(int64_t group_id, SF6CoreOptSectionState& out);   // false: not a section the game side knows yet
+SF6CoreStatus section_hold(int64_t group_id, bool hold);
 
 std::string status();
 

@@ -17,6 +17,7 @@
 
 #include "stage_log.hpp"
 #include "stage_redirect.hpp"
+#include "title_slots.hpp"
 
 namespace {
 
@@ -94,6 +95,50 @@ struct alignas(64) Hot {
 Hot g_hot;
 
 std::vector<std::unique_ptr<Active>> g_all_active;  // under g_mx
+
+// The title screen's backgrounds (title_slots_set), all under g_mx
+TitleTables g_tt;
+std::string g_title_choice;                         // "" the game's own, a key, "random"
+std::string g_title_target;                         // the background served now ("game" or a key)
+std::string g_last_state_json;                      // the stage selection last published, whole (published again with the title)
+uint32_t g_title_seed = 0;
+title_slots::Bag g_bag;                             // Random's bag (shuffle.json), read at title_slots_set
+std::vector<std::string> g_visit_pool, g_cycle_pool;   // what Random draws from now: the selection kept of random_pool / playlist_pool
+
+void apply_selection(bool has, const std::vector<std::string>& sel) {
+    g_visit_pool = title_slots::random_selection(g_tt.random_pool, has, sel);
+    g_cycle_pool = title_slots::random_selection(g_tt.playlist_pool, has, sel);
+    if (g_visit_pool.empty()) g_visit_pool = title_slots::random_selection(g_tt.random_pool, false, {});
+    if (g_cycle_pool.empty()) g_cycle_pool = title_slots::random_selection(g_tt.playlist_pool, false, {});
+}
+
+uint32_t title_rand() {
+    if (!g_title_seed) g_title_seed = static_cast<uint32_t>(GetTickCount64()) ^ GetCurrentProcessId() ^ 0x9E3779B9u;
+    g_title_seed = g_title_seed * 1664525u + 1013904223u;
+    return g_title_seed >> 8;
+}
+// The next key of the bag (under g_mx), the bag written back
+std::string bag_take(const std::vector<std::string>& pool) {
+    const std::string k = title_slots::bag_next(g_bag, pool, title_rand);
+    if (!k.empty() && !g_tt.bag_path.empty()) {
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, g_tt.bag_path.c_str(), L"wb") == 0 && f) {
+            const std::string text = title_slots::bag_text(g_bag);
+            fwrite(text.data(), 1, text.size(), f);
+            fclose(f);
+        }
+    }
+    return k;
+}
+
+// The title entries to serve now (none while the background is the one this launch wrote, except on "random": its visits are watched)
+const std::vector<std::pair<uint64_t, uint64_t>>* title_entries() {
+    const bool random = g_title_choice == "random";
+    if (g_title_target.empty() || (!random && g_title_target == g_tt.launch)) return nullptr;
+    for (auto& [key, r] : g_tt.backgrounds) if (key == g_title_target) return &r;
+    return nullptr;
+}
+
 
 // ---------------------------------------------------------------------------------------------
 // Optional measurements. reframework\data\SF6_StageSlots_Data\perf_on.txt present: every 5 s the
@@ -481,8 +526,13 @@ std::vector<std::wstring> read_traces() {
 }
 
 void publish(const std::string& state, const std::vector<std::wstring>& traces) {
-    const std::string sel = selection_text(state);
+    g_last_state_json = state;
+    const auto* title = title_entries();
+    const bool random = g_title_choice == "random";
+    const std::string title_sel = title ? g_title_target + (random ? "*" : "") : std::string();
+    const std::string sel = selection_text(state) + "|title=" + title_sel;
     if (g_published && sel == g_last_state && traces == g_last_traces) return;
+    const bool title_changed = !g_published || g_last_state.substr(g_last_state.find("|title=")) != "|title=" + title_sel;
     g_published = true;
     g_last_state = sel;
     g_last_traces = traces;
@@ -495,6 +545,10 @@ void publish(const std::string& state, const std::vector<std::wstring>& traces) 
         a->map.insert(a->map.end(), v->redirects.begin(), v->redirects.end());
         slog("selection: stage %u -> %s \"%s\" (%zu files)", id, key.c_str(), v->name.c_str(), v->redirects.size());
     }
+    if (title) a->map.insert(a->map.end(), title->begin(), title->end());   // after the stages': the title's win a shared hash
+    if (title_changed)
+        slog("title: %s", title ? ("the copies of \"" + g_title_target + "\" served (" + std::to_string(title->size()) + " files)" + (random ? ", drawn again after each visit" : "")).c_str()
+                                : ("the files this launch wrote (\"" + g_tt.launch + "\")").c_str());
     if (a->map.empty() && a->traces.empty()) {
         g_hot.active.store(nullptr, std::memory_order_release);
         slog("selection: vanilla everywhere");
@@ -708,6 +762,96 @@ DWORD WINAPI watcher(LPVOID) {
 }
 
 } // namespace
+
+// On "random": another background for the next visit (the plugin, once the title screen has been left a moment). Never during a
+// visit: the game asks for its movies again while they play (title_start 27 s into a visit, read 08/11), and a switch then crashed it.
+int title_slots_next() {
+    try {
+        std::lock_guard<std::mutex> lk(g_mx);
+        if (g_title_choice != "random" || g_visit_pool.empty()) return 0;
+        const std::string k = bag_take(g_visit_pool);
+        if (k.empty()) return 0;
+        g_title_target = k;
+        slog("title: Random drew \"%s\" for the next visit (%zu left this round)", g_title_target.c_str(), g_bag.left.size());
+        if (g_variants) {
+            publish(g_last_state_json, g_last_traces);
+            follow_selection();
+        }
+        return 1;
+    } catch (...) { return 0; }
+}
+
+int title_slots_draw(const char* not_key, char* buf, int cap) {
+    if (!buf || cap <= 1) return 0;
+    try {
+        std::lock_guard<std::mutex> lk(g_mx);
+        buf[0] = 0;
+        if (g_title_choice != "random" || g_cycle_pool.empty()) return 0;
+        (void)not_key;                                     // the bag never gives the last one again
+        const std::string k = bag_take(g_cycle_pool);
+        if (k.empty() || k.size() + 1 > static_cast<size_t>(cap)) return 0;
+        memcpy(buf, k.c_str(), k.size() + 1);
+        slog("title: Random drew \"%s\" for the next cycle of this visit (the core's playlist, %zu left this round)", k.c_str(), g_bag.left.size());
+        return static_cast<int>(k.size());
+    } catch (...) { return 0; }
+}
+
+void title_slots_set(const TitleTables& tables) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    g_tt = tables;
+    g_title_choice = tables.choice;
+    g_title_target = tables.launch;
+    std::string text;
+    g_bag = !tables.bag_path.empty() && read_text(tables.bag_path.c_str(), text) ? title_slots::parse_bag(text) : title_slots::Bag{};
+    apply_selection(tables.has_selection, tables.selection);
+}
+
+void title_slots_select(const char* choice) {
+    if (!choice) return;
+    try {
+        std::lock_guard<std::mutex> lk(g_mx);
+        if (g_tt.backgrounds.empty() && g_tt.launch.empty()) return;
+        const std::string ch = choice;
+        g_title_choice = ch;
+        if (ch != "random") {
+            std::string target = ch.empty() ? "game" : ch;
+            bool known = target == g_tt.launch;
+            for (auto& [key, r] : g_tt.backgrounds) known = known || key == target;
+            g_title_target = known ? target : g_tt.launch;
+            if (!known) slog("title: \"%s\" has no copies in the pak: the files this launch wrote stay", target.c_str());
+        }
+        if (g_variants) {
+            publish(g_last_state_json, g_last_traces);
+            follow_selection();
+        }
+    } catch (...) {}
+}
+
+void title_slots_pool(const char* keys) {
+    if (!keys) return;
+    try {
+        std::lock_guard<std::mutex> lk(g_mx);
+        std::vector<std::string> sel;
+        std::string k;
+        for (const char* p = keys;; ++p) {
+            if (*p == ',' || *p == 0) { if (!k.empty()) sel.push_back(k); k.clear(); if (!*p) break; }
+            else if (*p != ' ') k += static_cast<char>(tolower(static_cast<unsigned char>(*p)));
+        }
+        apply_selection(true, sel);
+        slog("title: Random's selection: %zu background(s) for the visits, %zu for the cycles", g_visit_pool.size(), g_cycle_pool.size());
+    } catch (...) {}
+}
+
+int title_slots_shown(char* buf, int cap) {
+    if (!buf || cap <= 1) return 0;
+    std::lock_guard<std::mutex> lk(g_mx);
+    const std::string& k = g_title_target.empty() ? g_tt.launch : g_title_target;
+    if (k.empty()) { buf[0] = 0; return 0; }
+    const int n = static_cast<int>(k.size() < static_cast<size_t>(cap - 1) ? k.size() : static_cast<size_t>(cap - 1));
+    memcpy(buf, k.data(), static_cast<size_t>(n));
+    buf[n] = 0;
+    return n;
+}
 
 int stage_slots_apply(const char* state_json) {
     if (!g_variants || !state_json) return 0;

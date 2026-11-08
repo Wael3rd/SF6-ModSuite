@@ -208,7 +208,7 @@ void settle(Obj* t, State& s, float natural, float width, void* row) {
     const bool fits = spanned ? scroll::fits_span(natural, f.span, column) : !scroll::overflows(natural, place);
     if (row && !s.logged) {
         s.logged = true;
-        logf("name scroll: a Costume row's place: %s, %.0f wide (region %.0f, from its point %.0f to %.0f)", spanned ? "between its arrows" : "its region (arrows not read)",
+        logf("name scroll: a spin row's place: %s, %.0f wide (region %.0f, from its point %.0f to %.0f)", spanned ? "between its arrows" : "its region (arrows not read)",
              place, f.region_w, spanned ? f.span.l : 0.0f, spanned ? f.span.r : 0.0f);
     }
     if (!fits) {
@@ -342,6 +342,8 @@ bool claimed(int side) {
 }  // namespace
 
 void drive(void* text, float width, uint32_t poll, bool allowed) { step(text, width, nullptr, poll, allowed); }
+
+void drive_row(void* text, void* row, bool allowed) { step(text, 0, row, 1, allowed); }
 
 void release(void* text) {
     if (!text || !A() || !C()) return;

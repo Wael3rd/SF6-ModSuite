@@ -18,6 +18,9 @@
 //   loader\variants.tsv  the same with every file redirection, reloaded when nothing changed
 // Input: reframework\stage_mods\stage_slots.ini, the user's corrections of the tile / variation guess and of names
 // (written as a commented template when missing), applied at every start without rebuilding the pak.
+//
+// Title screen packs (title_slots.hpp) ride in the same pak: the chosen pack of reframework\title_mods has its files
+// written at their real paths (no redirection), and reframework\data\SF6_TitleSlots_Data\registry.json lists the packs.
 
 struct StageVariant {
     std::string key;            // stable id: selection state, pak folder
@@ -40,8 +43,25 @@ struct StageVariant {
     std::string mod_name;       // the mod's own name when stage_slots.ini renamed it, else ""
 };
 
+// The title screen's backgrounds, for the switch on a return to the title (stage_redirect.hpp): per background key (a pack's,
+// "game" the game's own), the real title files' hashes -> its copies' in the stage pak (only those the pak holds).
+struct TitleTables {
+    std::vector<std::pair<std::string, std::vector<std::pair<uint64_t, uint64_t>>>> backgrounds;
+    std::string launch;                 // the background this launch wrote at the real paths ("game": none written)
+    std::string choice;                 // settings.json's title_pack at launch: "" the game's own, a key, "random"
+    std::vector<std::string> random_pool;   // every background Random could serve on a visit ("game" + packs with copies)
+    std::vector<std::string> playlist_pool; // every background the core's playlist could give the title's movies: every streamed
+                                            // title file has its private data and resource file in the pak
+    bool has_selection = false;             // settings.json's title_random_pool at launch (the plugin sends changes live)
+    std::vector<std::string> selection;
+    std::vector<uint64_t> start_hashes; // title_start.mov's real hashes: a new visit of the title (Random draws again)
+    std::wstring bag_path;              // SF6_TitleSlots_Data\shuffle.json: Random's bag (title_slots::Bag), shared with the launch's draw
+};
+
 // Scans the mods, rebuilds the stage pak when they changed, fills `out` either way.
 void stage_loader_run(const wchar_t* game_dir, std::vector<StageVariant>& out);
+// What the last stage_loader_run found for the title screen (empty without reframework\title_mods)
+const TitleTables& stage_loader_titles();
 
 // Path of the preview texture of a variant as the engine's resource API takes it.
 std::string stage_preview_resource(const std::string& key);
