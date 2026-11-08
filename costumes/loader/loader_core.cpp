@@ -138,7 +138,7 @@ static const int   N_OLD_TEX = 1;
 // (apply_outfit_labels), "Outfit VII" when it has none. Id of the static table's first name message ("Outfit I"),
 // static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_PAK_ID = "2026-11-08-stale-user-files";
+static const char* LOADER_PAK_ID = "2026-11-08-mai-main-files";
 static const char* LOADER_META_ID = "2026-10-20-fastpak";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
@@ -4214,6 +4214,15 @@ static void add_slot_files(PakWriter& writer,
             return true;
         };
         size_t stored_new = 0;
+        // Textures the mods ship in a named folder of the fighter ("esf028/cow/01/"): no slot moves them, add_restorations
+        // writes them where they are once every slot is made. An add-on's material file naming one fits here.
+        std::set<std::string> named_tex;
+        for (auto& [p, mf] : all_mod) {
+            std::string pfd, folder;
+            if (p.compare(0, fighter_root.size(), fighter_root) == 0 && p.find(".tex.") != std::string::npos
+                && !parse_model_folder(p, pfd, folder))
+                named_tex.insert(resource_name(p));
+        }
         // The file this slot's model loads at a path (empty: none): its own copy in its folder, else the game's file
         // when the outfit it is made from loads it (a separate add-on's option is checked against it)
         auto worn = [&](const std::string& path) -> std::vector<uint8_t> {
@@ -4301,6 +4310,8 @@ static void add_slot_files(PakWriter& writer,
             // A separate add-on's option (attach_addons): only where it fits what this slot wears
             if (op.addon) {
                 std::string why, which;
+                std::set<std::string> fit_tex = own_tex;
+                fit_tex.insert(named_tex.begin(), named_tex.end());
                 for (auto& p : paths) {
                     const std::string kd = rto_kind(str_lower(p));
                     if (kd != "mesh" && kd != "material" && kd != "texture" && kd != "chain") continue;
@@ -4309,7 +4320,7 @@ static void add_slot_files(PakWriter& writer,
                         d = material_data(p, &op.files.at(p));
                         if (!rebind.empty()) mdf2_rebind_textures(d, rebind);
                     } else d = op.files.at(p).read_data();
-                    why = slotcheck::addon_fit(writer, base_pak, inv.suffixes, op.files, p, d, target_of(p), worn, own_tex, &op.origin);
+                    why = slotcheck::addon_fit(writer, base_pak, inv.suffixes, op.files, p, d, target_of(p), worn, fit_tex, &op.origin);
                     if (!why.empty()) { which = p; break; }
                 }
                 if (!why.empty()) {
@@ -7798,7 +7809,8 @@ static void attach_addons(ScanOutputs& o) {
         if (a.files.size() != b.files.size()) return false;
         for (auto& [p, mf] : a.files) {
             const ModFileRef* o = slotcheck::mod_file(b.files, str_lower(p));
-            if (!o || size_of(*o) != size_of(mf)) return false;
+            // (same size is not enough: skin options are material files of one layout, other values)
+            if (!o || size_of(*o) != size_of(mf) || o->read_data() != mf.read_data()) return false;
         }
         return true;
     };
@@ -8950,7 +8962,8 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         for (auto k : in_merge)
             if (k && !vs[k].alias) pick_of[k] = synth(vs[k].unit, rel_of(vs[k]), vs[k].label, vs[k].files, vs[k].origin);
         for (auto& [k, u] : pick_of) in[1].members.push_back(u);
-        // add-ons, moved onto the base's folder; the same add-on (same files, same sizes) once
+        // add-ons, moved onto the base's folder; the same add-on (same files, same bytes) once
+        const std::string froot = std::string(BASE_PFX) + "model/esf/" + fd + "/";
         std::map<std::pair<size_t, size_t>, size_t> addon_unit;   // (index in vs, add-on unit) -> its unit here
         std::vector<size_t> made;
         for (auto k : in_merge) {
@@ -8963,7 +8976,13 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
                 for (auto& [p, mf] : g_units[a].files) {
                     const std::string low = str_lower(p), base = model_path(low);
                     std::string pfd, folder;
-                    if (!parse_model_folder(base, pfd, folder) || pfd != fd) continue;
+                    if (!parse_model_folder(base, pfd, folder)) {
+                        // a named folder of the fighter ("esf028/cow/01/": the textures its material files name), at its
+                        // path: the slot stores it as any option's file there (rto/<id>/_/)
+                        if (base.compare(0, froot.size(), froot) == 0) files[low] = mf;
+                        continue;
+                    }
+                    if (pfd != fd) continue;
                     if (folder != vmc.original_folder && folder != "000") continue;
                     const std::string np = folder == vmc.original_folder ? relocate_path(low, fd, vmc.original_folder, Fb) : low;
                     if (np != low) origin[np] = low;
@@ -8976,7 +8995,7 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
                     bool eq = true;
                     for (auto& [p, mf] : files) {
                         auto it = g_units[m].files.find(p);
-                        if (it == g_units[m].files.end() || mod_file_size(it->second) != mod_file_size(mf)) { eq = false; break; }
+                        if (it == g_units[m].files.end() || !same_bytes(it->second, mf)) { eq = false; break; }
                     }
                     if (eq) { same = m; break; }
                 }
@@ -8995,6 +9014,45 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         printf("\n  %s: one outfit %s, %s \"%s\": %s (base %s, %s)\n", rule, merged.c_str(),
                bpick_live ? "choice" : "choice with None for the base,", group.c_str(), list.c_str(), b.name.c_str(),
                game_outfit_name(b.cno).c_str());
+        // An add-on with the material file of a part whose mesh the base ships without one (mesh-only versions, the
+        // material file and its textures in another option of the archive: "Cow girl Mai C1,3", report 08/11): the
+        // outfit's main files. Without them it wore the game's material file on the mod's mesh, the add-on an option
+        // left off. Part of the base: the slot is made with them, an option that replaces them goes back to them.
+        std::vector<size_t> needed;   // their units here
+        {
+            std::map<std::string, const ModFileRef*> bare;   // "<folder>/<part>" -> the base's mesh there, without material file
+            std::set<std::string> dressed;
+            for (auto& [p, mf] : b.files) {
+                std::string pfd, folder;
+                if (p.compare(0, strlen(STREAM_PFX), STREAM_PFX) == 0 || !parse_model_folder(p, pfd, folder)) continue;
+                const std::string nn = part_number(p);
+                if (nn.empty()) continue;
+                if (p.find(".mesh.") != std::string::npos) bare[folder + "/" + nn] = &mf;
+                else if (p.find(".mdf2.") != std::string::npos) dressed.insert(folder + "/" + nn);
+            }
+            for (auto& k : dressed) bare.erase(k);
+            for (auto m : made)
+                for (auto& [p, mf] : g_units[m].files) {
+                    std::string pfd, folder;
+                    if (p.find(".mdf2.") == std::string::npos || !parse_model_folder(p, pfd, folder)) continue;
+                    auto bm = bare.find(folder + "/" + part_number(p));
+                    if (bm == bare.end()) continue;
+                    std::vector<std::string> mm, dm;   // it defines every material of the base's mesh
+                    if (!slotcheck::mesh_materials(bm->second->read_data(), mm) || !slotcheck::mdf2_materials(mf.read_data(), dm)
+                        || std::any_of(mm.begin(), mm.end(), [&](const std::string& x) { return std::find(dm.begin(), dm.end(), x) == dm.end(); }))
+                        continue;
+                    needed.push_back(m);
+                    for (auto& [q, qf] : g_units[m].files) {
+                        g_units[root].files.emplace(q, qf);   // the base's own files win
+                        std::string qfd, qfolder;   // its parts are dressed now: another add-on there stays an option
+                        if (q.find(".mdf2.") != std::string::npos && parse_model_folder(q, qfd, qfolder)) bare.erase(qfolder + "/" + part_number(q));
+                    }
+                    in[2].members.erase(std::remove(in[2].members.begin(), in[2].members.end(), m), in[2].members.end());
+                    printf("    runtime options: %s brings the material file of part %s, whose mesh %s ships alone: "
+                           "part of the outfit (main files)\n", unit_label(g_units[m]).c_str(), part_number(p).c_str(), b.name.c_str());
+                    break;
+                }
+        }
         std::unordered_map<size_t, size_t> unit_option;
         std::shared_ptr<RtoMod> rto = rto_from_groups(in, merged, {}, unit_option, g_units[b.unit].u.nsfw);
         rto->defaults_from = "loader";
@@ -9015,7 +9073,8 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
                 for (auto a : set) {
                     parts.push_back(a);
                     label += " + " + unit_label(g_units[a]);
-                    if (auto au = addon_unit.find({k, a}); au != addon_unit.end()) s.push_back(unit_option[au->second]);
+                    if (auto au = addon_unit.find({k, a}); au != addon_unit.end() && unit_option.count(au->second))
+                        s.push_back(unit_option[au->second]);   // (main files: in the base)
                 }
                 rto->variants.push_back({combined_mod_id(parts), label, s, label, src});
             }
@@ -9026,7 +9085,22 @@ static bool merge_versions(ScanOutputs& o, std::vector<Version>& vs, const char*
         for (auto& e : o.mods_out) {
             if (e.first != b.mod_id) continue;
             for (auto& mc : e.second)
-                if (mc.original_costume_no == b.cno && mc.fighter_dir == fd) { mc.rto = rto; mc.rto_selected = base_sel; }
+                if (mc.original_costume_no == b.cno && mc.fighter_dir == fd) {
+                    mc.rto = rto;
+                    mc.rto_selected = base_sel;
+                    for (auto m : needed)   // the slot is made with the main files (a named folder's: written where they are)
+                        for (auto& [p, mf] : g_units[m].files) {
+                            std::string pfd, folder;
+                            if (parse_model_folder(p, pfd, folder))   // as detect_mod_costumes sorts them
+                                (folder == "000" ? mc.files_shared : mc.files_in_folder).emplace(p, mf);
+                            else if (parse_model_folder(model_path(p), pfd, folder) && folder == "000")
+                                mc.files_shared.emplace(p, mf);
+                        }
+                }
+        }
+        for (auto m : needed) {
+            o.all_mod_out.insert(g_units[m].files.begin(), g_units[m].files.end());
+            note_mod_paths(b.mod_id, g_units[m].files);
         }
         for (size_t x = 1; x < in_merge.size(); ++x) {
             const Version& v = vs[in_merge[x]];
