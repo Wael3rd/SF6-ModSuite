@@ -13,6 +13,8 @@ Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
   reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt   (du depot, fins de ligne LF)
   reframework/costume_mods/<32 personnages>/, reframework/stage_mods/   (vides, avec leur mode d'emploi)
   reframework/costume_mods_nsfw/<32 personnages>/   (vide, avec son mode d'emploi ; le loader le cree aussi)
+  reframework/title_mods/               (vide, avec son mode d'emploi : les packs d'ecran titre ; avec stages seulement)
+  reframework/data/SF6_TitleSlots_Data/game_title.jpg   (l'image de l'ecran titre du jeu, pour sa case ; prise dans le jeu --game)
 
 Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"] [--costumes-only]
 La vraie AGS est prise dans l'ordre : <jeu>/amd_ags_x64_real.dll, puis reframework/_backup/amd_ags_x64_real_orig_20260922.dll.
@@ -153,13 +155,15 @@ README_TXT = CRLF.join([
     "                              SF6_CostumeAudit.bat there lists what is installed",
     "  reframework/costume_mods_nsfw/  NSFW costume mods: shown in game only once display_nsfw is true",
     "  reframework/stage_mods/     drop your stage mods here, as downloaded",
+    "  reframework/title_mods/     drop title screen mods here, as downloaded (Options > Interface > Title Screen Selection)",
     "",
     "INSTALL (Fluffy Mod Manager): install this zip as a mod, then install costume mods as usual.",
     "Updating from an older version: disable or remove the old one in Fluffy first.",
     "",
     "REQUIREMENTS: REFramework in dinput8.dll (official 1.5.8 or newer).",
-    "OPTIONAL: SF6 Native Core 0.8.2 or newer (SF6_NativeCore zip). Without it everything else works; the Replays",
-    "Settings tab is not added and the stage menus have no Stage Variation hint in the guide bar.",
+    "OPTIONAL: SF6 Native Core 0.9.9 or newer (SF6_NativeCore zip). Without it everything else works; the Replays",
+    "Settings tab is not added, the stage menus have no Stage Variation hint in the guide bar, and Options > Interface",
+    "has no Title Screen Selection (with a core 0.8.2 - 0.9.8: no title screen page either).",
     "",
     "CONFLICTS: this DLL loads nothing else. If another tool wants the same entry point",
     "(HARD READ, MatchScout, any amd_ags_x64.dll proxy), rename THAT one to amd_ags_x64_chain.dll",
@@ -237,6 +241,22 @@ def manager_contract():
     if not m: sys.exit("MANAGER_CONTRACT introuvable dans loader_core.cpp")
     return int(m.group(1))
 
+TITLE_MODS_TXT = CRLF.join([
+    "Title screen mods go here, as downloaded: the .zip, .7z or .rar file itself, or a folder.",
+    "(Fluffy-style packs: a modinfo.ini and a natives folder with the title screen's movies, e.g. the",
+    "\"Quick Startup\" packs.)",
+    "",
+    "Then, in game: Options > Interface > Title Screen Selection. Confirm on it, then:",
+    "  A        choose the background (the game's own, a pack, or Random)",
+    "  Y        Random Intro Settings: tick the backgrounds Random draws from",
+    "  X        edit the OVERDRIVE EDITION line of that background (place, size, shown or not)",
+    "  B        back",
+    "The choice shows at the next return to the title screen. Archives are unpacked once into .cache here.",
+    "Needs SF6 Native Core 0.9.9 or newer for the Title Screen Selection page.",
+    "",
+]) + CRLF
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="1.0")
@@ -305,6 +325,14 @@ def main():
             print("  %-70s %10d  %s" % ("reframework/data/SF6_StageSlots_Data/loader/stage_paths.txt", len(idx), hashlib.sha256(idx).hexdigest()[:16]))
             z.writestr("reframework/stage_mods/README.txt", STAGE_MODS_TXT)
             print("  %-70s %10s  %s" % ("reframework/stage_mods/", "-", "structure"))
+            # title screen packs: the folder (its presence turns the title packs on: the game's own title then shows the
+            # OVERDRIVE EDITION line at its default place) and the game's own title's picture for its cell
+            z.writestr("reframework/title_mods/README.txt", TITLE_MODS_TXT)
+            print("  %-70s %10s  %s" % ("reframework/title_mods/", "-", "structure"))
+            gt = os.path.join(REF, "data", "SF6_TitleSlots_Data", "game_title.jpg")
+            if not os.path.exists(gt): sys.exit("manquant : " + gt)
+            z.write(gt, "reframework/data/SF6_TitleSlots_Data/game_title.jpg")
+            print("  %-70s %10d  %s" % ("reframework/data/SF6_TitleSlots_Data/game_title.jpg", os.path.getsize(gt), sha(gt)))
         # structure vide livree telle quelle : un dossier par personnage + son mode d'emploi
         z.writestr("reframework/costume_mods/LISEZMOI.txt", COSTUME_MODS_TXT)
         for name in CHARACTERS:

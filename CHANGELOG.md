@@ -1,5 +1,86 @@
 # Changelog
 
+## 1.27.0 (2026-11-08) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.23.0 | title screen packs: a Title Screen Selection page in Options > Interface, Random without repeats, a title editor |
+| SF6 Color Mod | 0.24.5 | unchanged |
+| SF6 Native Core | 0.9.9 | a client's own section in an Options tab; the OVERDRIVE EDITION line follows the background shown |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.22.1 and SF6 Native Core 0.9.7, then install Slots Loader 1.23.0
+and Native Core 0.9.9 together. Color Mod 0.24.5, Recording Manager 2.2.9 and Profile Mod 1.0.0 are the same files as in 1.26.1: keep
+them. With the all-in-one package, replace 1.26.1 with 1.27.0. The stage pak is rebuilt at the first launch (new title files); the
+costume pak is not. The Slots Loader's title screen page needs Native Core 0.9.9; without it there is no title page and everything
+else works.
+
+### SF6 Slots Loader 1.23.0
+- Title screen mods (for example BrewedVFX's "Quick Startup" packs) go as downloaded (.zip, .7z, .rar or a folder) in
+  `reframework/title_mods/`. The folder now ships with the package, with a README. Their title movies are served from the stage pak.
+- Options > Interface has a new section, **Title Screen Selection**, just above "Other Settings" in the left list. Its page is laid
+  out like Battle Settings > Other > Stage Settings: a banner with the background's name, a 3-column grid of the backgrounds (the
+  game's own title first, each pack, then Random with the game's globe picture) and a scroll bar.
+  - Confirm on the section gives the page the input. A chooses (a yellow corner marker shows the chosen one). Y opens **Random
+    Intro Settings**: tick or untick which backgrounds Random draws from (at least one stays ticked; Y there ticks all, or unticks
+    all but the focused one). X opens the title editor of the focused background, without choosing it. B goes back.
+  - The former "Title screen" row of Interface > Other Settings is gone. "Skip intro screens" stays there.
+  - The choice changes the title at the next return to the title screen. No relaunch.
+- Random is drawn without repeats: a shuffled list, every background shows once before any comes again, and never the same twice in
+  a row. The list is kept across launches (`reframework/data/SF6_TitleSlots_Data/shuffle.json`). A new draw is made at the launch, at
+  each return to the title screen, and while you stay on the title screen (at each loop cycle; the start, the loop and the transition
+  after a key always come from the same pack).
+- Title editor (X, full screen): the background's picture with the "OVERDRIVE EDITION" line and PRESS ANY BUTTON as the title screen
+  shows them. X shows / hides the line, the directions move it, L3 / R3 centre it horizontally / vertically, LT / RT change its size,
+  LB / RB go to the previous / next background. Y applies this background's setting to every background, after the game's own
+  Yes / No box. Place and size are shown in % of the screen.
+  - Each background keeps its own setting (`reframework/data/SF6_TitleSlots_Data/overdrive.json`), and the real title screen follows
+    it. A background never set shows no line, except the game's own title, which shows the line by default (first install).
+- Pictures: each pack's screenshot (its modinfo screenshot) is the background's picture. An optional
+  `reframework/data/SF6_TitleSlots_Data/game_title.jpg` (shipped) is the game's own title. Random's editor picture is a live mosaic of
+  the ticked backgrounds.
+- New settings in `settings.json`: `"title_pack"`, `"skip_intro"` and `"title_random_pool"`.
+
+### SF6 Native Core 0.9.9
+- Option service, increment 13: `opt_section_place`, `opt_section_state` and `opt_section_hold` give a client its own section in the
+  left list of a game Options tab, with a page the client draws. A hook keeps B from closing Options while a section holds the input
+  (both hooks were code-checked, R18). Increment 12 (0.9.8, not released before): `opt_set_value`.
+- The OVERDRIVE EDITION line on the title screen follows the background shown (the per-background setting), including while Random
+  cycles on the title screen.
+- Random's playlist on the title screen: the next pack's three movies are given one at a time during the idle wait. No freeze, no
+  crash.
+
+### Known issues
+- Title screen page: the focus outline is drawn with the game's frame pieces, not the game's animated outline material.
+- A pack in `title_mods` shipped as a `.pak` is not read yet.
+- The new texts of the title page and editor are machine translated in every language except French and English.
+- Stage select: the arrows beside the list cannot be clicked with the mouse.
+- Stage select: two unrelated stage mods over one stage whose names start with the same word are taken for one stage with two looks;
+  there is no setting yet to keep them apart.
+- The Replays stage page's cells are plain rectangles, not the game's bevelled shape.
+- Default mode of Replay Outfit Settings, a tile or variation in a real online match and Random landing on a ticked cell
+  have not been checked in a real online match yet.
+- Manager mode has not been checked in an online match. Its owned-outfit opt-out was checked by automated tests only.
+- A very long first rebuild can leave the game with no window. In one test a 26-minute rebuild, on a PC busy with other
+  work, left the game stuck at start-up; closing it and launching again worked, and the pak was complete. The cause is not
+  known. Rebuilds of a few minutes were fine.
+- Training opened with the main menu's shortcut: for the first two or three minutes, heavy moves (Super Arts) can drop
+  a few frames while the game finishes preparing the fighters in the background. It happens with REFramework alone too,
+  only shorter; the character select and its loading screen avoid it.
+- All languages except French are machine translations, not yet reviewed by native speakers.
+- An outfit whose mod gives no usable name still shows the loader's "Outfit I", in English in every language.
+- Two outfits of one fighter with the same mod name look the same on the Costume row. Their numbers differ, so choices
+  do not mix.
+- An outfit named after its archive keeps the file's extension in its name (".rar").
+- Report a bug is on Battle Settings > Character only.
+- Slotsloader Manager: report_mod.dll has not been checked in a package installed by ZZtaii's Manager.
+- The Record and Replay pages' fix was checked in game with the keyboard, not with a pad.
+- Arabic: a long line of Replays > Settings' summary slides as a whole, and scrolling names have not been checked in game.
+- Real outfit names have not been checked in a real online match. They are local text: outfits still travel as numbers.
+- With the full profile, the limited one shows briefly first.
+- Profile Mod has not been checked in an online match.
+
 ## 1.26.1 (2026-11-07) — SF6 Mod Suite
 
 | Package | Version | |
