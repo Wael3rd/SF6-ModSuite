@@ -21,8 +21,10 @@ using json = nlohmann::json;
 // ---- the caps ----------------------------------------------------------------------------------------------------------------
 constexpr size_t kTextMaxUnits = 1000;          // the text field (UTF-16 units): the most the game's field was tried with (04/11)
 constexpr size_t kJpegMaxBytes = 450 * 1000;    // the picture; the Worker refuses over 500 KB (the free plan's 10 ms of CPU a request)
-constexpr size_t kLogMaxBytes = 64 * 1024;      // each log: its start (where it says what was loaded) + its end (what just happened)
+constexpr size_t kLogMaxBytes = 96 * 1024;      // each log: its start (where it says what was loaded) + its end (what just happened); 64 KB until 08/11, raised for the outfit's lines
 constexpr size_t kLogHeadBytes = 8 * 1024;
+constexpr size_t kLogRunHeaderBytes = 6 * 1024; // the loader log: the last run's first lines
+constexpr size_t kLogTailBytes = 16 * 1024;     // the loader log: at least this much of the end
 constexpr size_t kRecordMaxBytes = 16 * 1024;   // the outfit's record (the Worker refuses over 32 KB)
 constexpr size_t kModsMaxBytes = 96 * 1024;     // the list of installed mods (the Worker refuses over 128 KB)
 constexpr size_t kNoteMaxBytes = 300;
@@ -47,6 +49,17 @@ std::string clean_log(const std::string& text, const Scrub& s);
 std::string clean_paths(const std::string& text, const Scrub& s);
 // At most max_bytes: its first head_bytes + its end, on line and UTF-8 boundaries, with a line saying how much was left out
 std::string cap_log(const std::string& text, size_t max_bytes = kLogMaxBytes, size_t head_bytes = kLogHeadBytes);
+// What a report knows of the outfit, to find its lines in the loader's log (any case; keys under 4 bytes are ignored)
+struct LogKeys {
+    std::vector<std::string> blocks;            // the archive's name and stem, the mod's id: a mod's scan block holding one is kept whole
+    std::vector<std::string> names;             // the outfit's label: every line holding it is kept
+    std::string slot;                           // "esf028/012": the slot's lines (and the lines just before them, which tell how it was built)
+    bool empty() const { return blocks.empty() && names.empty() && slot.empty(); }
+};
+// As cap_log, but for the loader's log, which holds many runs: the LAST run's header (its first lines), then what that run says of the outfit (the mod's
+// scan block, the slot's lines, the lines naming the outfit), then the end of the log in what room is left, with a line saying how much was left out between
+// the pieces. Without a run mark, without a key, or when none of the keys is found: cap_log as before.
+std::string cap_log(const std::string& text, const LogKeys& keys, size_t max_bytes = kLogMaxBytes, size_t head_bytes = kLogHeadBytes);
 // At most max_bytes on a UTF-8 boundary
 std::string cut_utf8(const std::string& s, size_t max_bytes);
 

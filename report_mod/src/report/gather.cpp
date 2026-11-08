@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <set>
@@ -153,6 +154,37 @@ void list_folder(const fs::path& root, const char* rel, const char* kind, const 
     }
 }
 
+// What the loader's log says of this outfit is found by: its mod's archive (name and stem, as in "archive: Mai/Mai - Animal Print.rar"), the mod's id,
+// the label, the slot's folder ("esf028/012"). A game outfit has none of them: the log is capped as before.
+LogKeys log_keys_of(const json* outfit, const json* slot, const Scrub& scrub) {
+    LogKeys k;
+    const auto add = [](std::vector<std::string>* v, const std::string& s) { if (s.size() >= 4 && std::find(v->begin(), v->end(), s) == v->end()) v->push_back(s); };
+    if (outfit) {
+        const std::string source = clean_paths(str_of(*outfit, "source"), scrub);
+        size_t from = 0;
+        while (from <= source.size()) {                                  // each part of the source: the archive's name, its stem
+            size_t to = source.find_first_of("/\\", from);
+            if (to == std::string::npos) to = source.size();
+            const std::string part = source.substr(from, to - from);
+            const size_t dot = part.find_last_of('.');
+            const bool last = to == source.size();
+            std::string ext = dot == std::string::npos ? "" : part.substr(dot);
+            for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+            const bool archive = ext == ".zip" || ext == ".rar" || ext == ".7z";
+            if (archive || last) { add(&k.blocks, part); if (dot != std::string::npos && dot > 0) add(&k.blocks, part.substr(0, dot)); }
+            from = to + 1;
+        }
+        add(&k.names, clean_paths(str_of(*outfit, "label"), scrub));
+        add(&k.blocks, str_of(*outfit, "mod_id"));
+    }
+    if (slot) {
+        add(&k.blocks, str_of(*slot, "mod_id"));
+        const std::string dir = str_of(*slot, "fighter_dir"), folder = str_of(*slot, "new_folder");
+        if (!dir.empty() && !folder.empty()) k.slot = dir + "/" + folder;
+    }
+    return k;
+}
+
 json mods_of(const fs::path& root, const json& outfits, const Scrub& scrub, std::vector<std::string>* notes) {
     json mods = json::array();
     size_t bytes = 2, left_out = 0;
@@ -237,7 +269,7 @@ Report gather(const Snapshot& snap, const fs::path& root, const Scrub& scrub) {
 
     for (const LogFile& l : kLogs) {
         std::string text;
-        if (read_log(root / l.path, &text)) r.logs[l.key] = cap_log(clean_log(text, scrub));
+        if (read_log(root / l.path, &text)) r.logs[l.key] = std::string(l.key) == "loader" ? cap_log(clean_log(text, scrub), log_keys_of(outfit, slot, scrub)) : cap_log(clean_log(text, scrub));
         else notes.push_back(std::string("the ") + l.key + " log could not be read");
     }
     r.versions = versions_of(snap, root, have_outfits ? outfits : json(nullptr), have_variants ? variants : json(nullptr));

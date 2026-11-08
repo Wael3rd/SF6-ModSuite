@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 #include "../../../common/outfit_display.hpp"            // what the loader writes in the game's own list for a label
 
@@ -206,6 +207,161 @@ std::string cap_log(const std::string& text, size_t max_bytes, size_t head_bytes
     char mark[kMarker];
     std::snprintf(mark, sizeof mark, "\n... %zu bytes left out ...\n", tail - head);
     return text.substr(0, head) + mark + text.substr(tail);
+}
+
+// ---- the loader's log: the last run, and what it says of one outfit -----------------------------------------------------------------------------
+// Lines: "[2026-11-08 21:06:21] message"; a message may hold new lines (the next lines have no stamp). A run starts at "=== SF6 Costume Slot Loader ===".
+// A mod's scan block starts at a stampless "  archive: <name>" (or "  add-on <name>") line and ends at the empty stamped line before the next block, or at the
+// first stamped line of the next step (an indent of 2 that is no "option:").
+namespace {
+
+struct LogLine { size_t a = 0, b = 0; int indent = 0; bool stamped = false, empty = false, block_start = false, archive = false; };
+struct Piece { size_t a, b; int prio; };        // [a, b) of the text; prio 0 goes first when the room is short
+
+std::string lower_of(const std::string& s) {
+    std::string out = s;
+    for (char& c : out) c = low(c);
+    return out;
+}
+
+LogLine read_line(const std::string& t, size_t a, size_t b) {   // [a, b): the line without its new line
+    LogLine l;
+    l.a = a;
+    l.b = b;
+    size_t m = a;
+    if (b - a >= 22 && t[a] == '[' && t[a + 20] == ']' && t[a + 21] == ' ') { l.stamped = true; m = a + 22; }
+    size_t q = m;
+    while (q < b && t[q] == ' ') ++q;
+    l.indent = (int)(q - m);
+    l.empty = l.stamped && q == b;
+    if (!l.stamped) {
+        const bool arch = t.compare(q, 9, "archive: ") == 0;
+        l.block_start = l.indent == 2 && (arch || t.compare(q, 7, "add-on ") == 0);
+        l.archive = l.block_start && arch;
+    }
+    return l;
+}
+
+bool block_ends(const std::string& t, const LogLine& l) {
+    if (l.empty || l.block_start) return true;
+    if (!l.stamped || l.indent > 2) return false;
+    const size_t q = l.a + 22 + l.indent;
+    return t.compare(q, 8, "option: ") != 0 && t.compare(q, 16, "partial option: ") != 0;
+}
+
+bool holds(const std::string& low_text, size_t a, size_t b, const std::string& key) {    // the key (lower case) in [a, b)
+    return std::string_view(low_text).substr(a, b - a).find(key) != std::string_view::npos;
+}
+
+}  // namespace
+
+std::string cap_log(const std::string& text, const LogKeys& keys, size_t max_bytes, size_t head_bytes) {
+    if (text.size() <= max_bytes) return text;
+    constexpr size_t kMarker = 64;
+    size_t run = text.rfind("=== SF6 Costume Slot Loader ===");
+    if (run == std::string::npos || keys.empty()) return cap_log(text, max_bytes, head_bytes);
+    if (run > 0) { const size_t nl = text.rfind('\n', run); run = nl == std::string::npos ? 0 : nl + 1; }   // the line's start (its stamp)
+    std::vector<LogLine> lines;
+    for (size_t a = run; a < text.size();) {
+        size_t b = text.find('\n', a);
+        if (b == std::string::npos) b = text.size();
+        lines.push_back(read_line(text, a, b));
+        a = b + 1;
+    }
+    const std::string lo = lower_of(text);
+    std::vector<std::string> bk, nm;
+    for (const std::string& k : keys.blocks) if (k.size() >= 4) bk.push_back(lower_of(k));
+    for (const std::string& k : keys.names) if (k.size() >= 4) nm.push_back(lower_of(k));
+    const std::string slot = keys.slot.size() >= 4 ? lower_of(keys.slot) : std::string();
+    const auto in_line = [&](const LogLine& l, const std::vector<std::string>& ks) { for (const std::string& k : ks) if (holds(lo, l.a, l.b, k)) return true; return false; };
+
+    // the header: up to the first empty stamped line (the scan of the mods follows), kLogRunHeaderBytes at most
+    size_t h_end = run;
+    for (const LogLine& l : lines) { if (l.empty && l.a > run) break; h_end = l.b + 1; }
+    h_end = std::min(h_end, text.size());
+    if (h_end - run > kLogRunHeaderBytes) {
+        const size_t nl = text.rfind('\n', run + kLogRunHeaderBytes);
+        h_end = nl == std::string::npos || nl <= run ? run + kLogRunHeaderBytes : nl + 1;
+    }
+
+    std::vector<Piece> found;
+    for (size_t i = 0; i < lines.size(); ++i) {            // the outfit's mod: its whole scan block, when it holds the archive's name or the mod's id
+        if (!lines[i].block_start) continue;
+        size_t j = i + 1;
+        while (j < lines.size() && !block_ends(text, lines[j])) ++j;
+        const size_t a = lines[i].a, b = std::min(lines[j - 1].b + 1, text.size());
+        bool hit = false;
+        for (const std::string& k : bk) hit = hit || holds(lo, a, b, k);
+        if (hit) found.push_back({ a, b, lines[i].archive ? 1 : 0 });
+        i = j - 1;
+    }
+    for (size_t i = 0; i < lines.size(); ++i) {            // the lines
+        const LogLine& l = lines[i];
+        const size_t e = std::min(l.b + 1, text.size());
+        if (!slot.empty() && holds(lo, l.a, l.b, "slot " + slot)) {      // "slot esf028/012 (...)": the deeper lines just before it tell how it was built
+            size_t first = i;
+            while (first > 0 && i - first < 12 && lines[first - 1].stamped && lines[first - 1].indent > l.indent) --first;
+            found.push_back({ lines[first].a, e, 2 });
+        } else if ((!slot.empty() && holds(lo, l.a, l.b, slot)) || in_line(l, bk)) {
+            found.push_back({ l.a, e, 1 });
+        } else if (in_line(l, nm)) {
+            found.push_back({ l.a, e, 0 });
+        }
+    }
+    std::sort(found.begin(), found.end(), [](const Piece& x, const Piece& y) { return x.a < y.a || (x.a == y.a && x.b > y.b); });
+    std::vector<Piece> kept;                               // after the header, in order, joined where they touch
+    for (Piece p : found) {
+        p.a = std::max(p.a, h_end);
+        if (p.a >= p.b) continue;
+        if (!kept.empty() && p.a <= kept.back().b) { kept.back().b = std::max(kept.back().b, p.b); kept.back().prio = std::max(kept.back().prio, p.prio); }
+        else kept.push_back(p);
+    }
+    if (kept.empty()) return cap_log(text, max_bytes, head_bytes);
+
+    // the room: the header, a marker for each piece and for the end, kLogTailBytes of the end at least; what does not fit goes by priority, last first
+    const size_t tail_min = std::min(kLogTailBytes, text.size() - h_end);
+    const size_t fixed = (h_end - run) + tail_min + kMarker * (kept.size() + 2);
+    const size_t room = max_bytes > fixed ? max_bytes - fixed : 0;
+    size_t total = 0;
+    for (const Piece& p : kept) total += p.b - p.a;
+    for (int prio = 0; prio <= 2 && total > room; ++prio) {
+        for (size_t i = kept.size(); i-- > 0 && total > room;) {
+            Piece& p = kept[i];
+            if (p.prio != prio) continue;
+            size_t nb = p.b - std::min(p.b - p.a, total - room);
+            const size_t nl = nb > p.a ? text.rfind('\n', nb - 1) : std::string::npos;      // whole lines
+            nb = nl != std::string::npos && nl >= p.a ? nl + 1 : p.a;
+            total -= p.b - nb;
+            p.b = nb;
+        }
+    }
+    kept.erase(std::remove_if(kept.begin(), kept.end(), [](const Piece& p) { return p.a >= p.b; }), kept.end());
+
+    // the end of the log: what room is left (tail_min at least)
+    const size_t used = (h_end - run) + total + kMarker * (kept.size() + 2);
+    const size_t want = std::min(text.size() - h_end, std::max(tail_min, max_bytes > used ? max_bytes - used : 0));
+    const size_t lowest = kept.empty() ? h_end : kept.back().b;       // (never back over a piece)
+    size_t tail = std::max(text.size() - want, lowest);
+    if (tail > lowest) {
+        const size_t nl = text.find('\n', tail);
+        if (nl != std::string::npos && nl + 1 < text.size()) tail = nl + 1;
+    }
+    while (tail < text.size() && ((unsigned char)text[tail] & 0xC0) == 0x80) ++tail;
+
+    std::string out;
+    const auto gap = [&](size_t from, size_t to) {
+        if (to <= from) return;
+        char mark[kMarker];
+        std::snprintf(mark, sizeof mark, "... %zu bytes left out ...\n", to - from);
+        out += mark;
+    };
+    if (run > 0) { char mark[kMarker]; std::snprintf(mark, sizeof mark, "... %zu bytes left out (the earlier runs) ...\n", run); out += mark; }
+    out += text.substr(run, h_end - run);
+    size_t at = h_end;
+    for (const Piece& p : kept) { gap(at, p.a); out += text.substr(p.a, p.b - p.a); at = p.b; }
+    gap(at, tail);
+    out += text.substr(tail);
+    return out;
 }
 
 // ---- hashes ---------------------------------------------------------------------------------------------------------------------

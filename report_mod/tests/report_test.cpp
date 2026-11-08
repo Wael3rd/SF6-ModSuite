@@ -69,6 +69,63 @@ static void test_clean() {
     check(rp::clean_paths("Name-1591-1-0-1709931165.zip C:\\Users\\bob\\x", s) == "Name-1591-1-0-1709931165.zip <user>\\x", "clean_paths: only paths and names");
 }
 
+// The loader's log across runs: the last run's header, the outfit's scan block (mid-run) and its slot lines survive; the older run does not.
+static void test_loader_log() {
+    const auto stamp = [](int s) { char b[40]; snprintf(b, sizeof b, "[2026-11-08 21:%02d:%02d] ", (s / 60) % 60, s % 60); return std::string(b); };
+    const auto run = [&](const std::string& tag, int mods) {
+        std::string t = stamp(1) + "=== SF6 Costume Slot Loader ===\n" + stamp(1) + "Loading vanilla index... " + tag + "\n" + stamp(1) + "  176 costumes, 8630 hashes\n" + stamp(1) + "  runtime options: on\n" + stamp(2) + "\nScanning costume_mods in <game>/reframework/costume_mods...\n";
+        for (int i = 0; i < mods; ++i) {
+            const std::string n = "Other " + std::to_string(i);
+            t += stamp(3) + "\n  archive: Misc/" + n + ".zip\n" + stamp(3) + "    archive: " + n + ".zip (already extracted)\n" + stamp(3) + "  option: Misc/" + n + ".zip/x\n";
+            for (int k = 0; k < 30; ++k) t += stamp(3) + "    filler line " + std::to_string(k) + " of " + n + " in " + tag + " xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+            t += stamp(3) + "    mod_id: 00000000000" + std::to_string(1000 + i) + "\n";
+            if (i == mods / 2) {
+                t += stamp(3) + "\n  archive: Mai/Mai - Animal Print.rar\n" + stamp(3) + "    archive: Mai - Animal Print.rar (already extracted)\n" + stamp(3) + "  option: Mai/Mai - Animal Print.rar/Mai - Animal Print\n" + stamp(3) + "    BLOCKSTART mod_id: 980da1090bedac9f\n";
+                t += stamp(3) + "    runtime options: Mai - Animal Print already has 2) Sweat on (same files): not twice\n" + stamp(3) + "    runtime options: 2) glasses only does not fit this outfit (esf028_000_00.mesh.<id>: no material file for this part)\n";
+                for (int k = 0; k < 40; ++k) t += stamp(3) + "    BLOCKFILE " + std::to_string(k) + "\n";
+                t += stamp(3) + "    -> esf028 costume 5 (folder 012): 40 files BLOCKEND\n";
+            }
+        }
+        t += stamp(40) + "  75 slots checked, 0 left out\n";
+        t += stamp(41) + "      runtime options: Other mod does not fit this outfit: unrelated\n" + stamp(41) + "      runtime options: Mai - Animal Print: BUILTWITH 1 options\n" + stamp(41) + "      3 streaming textures relocated\n" + stamp(41) + "    slot esf028/012 (v15, Outfit I): 57 files, 12 patched\n";
+        t += stamp(41) + "    slot esf028/013 (v16, Outfit II): 10 files, 1 patched UNRELATEDSLOT\n";
+        for (int i = 0; i < 3000; ++i) t += stamp(50) + "  later line " + std::to_string(i) + " " + tag + " yyyyyyyyyyyyyyyyyyyyyyyyyy\n";
+        t += stamp(59) + "Done in 1.0 ms\n";
+        return t;
+    };
+    const std::string log = run("OLDRUN", 60) + run("NEWRUN", 120);
+    rp::LogKeys keys;
+    keys.blocks = { "Mai - Animal Print", "Mai - Animal Print.rar", "980da1090bedac9f" };
+    keys.names = { "Mai - Animal Print" };
+    keys.slot = "esf028/012";
+    const std::string cut = rp::cap_log(log, keys);
+    check(log.size() > 3 * rp::kLogMaxBytes, "the synthetic loader log is long: " + std::to_string(log.size()));
+    check(cut.size() <= rp::kLogMaxBytes, "the loader log within its cap: " + std::to_string(cut.size()));
+    check(has(cut, "Loading vanilla index... NEWRUN") && has(cut, "176 costumes"), "the last run's header stays");
+    check(!has(cut, "OLDRUN"), "the older run does not");
+    check(has(cut, "the earlier runs") && has(cut, "bytes left out"), "it says so");
+    check(has(cut, "BLOCKSTART") && has(cut, "BLOCKFILE 0\n") && has(cut, "BLOCKFILE 39\n") && has(cut, "BLOCKEND"), "the outfit's mod block stays whole");
+    check(has(cut, "already has 2) Sweat on (same files)") && has(cut, "does not fit this outfit (esf028_000_00.mesh"), "its options lines stay");
+    check(has(cut, "BUILTWITH") && has(cut, "3 streaming textures relocated") && has(cut, "slot esf028/012 (v15, Outfit I): 57 files, 12 patched"), "its slot lines stay, with how it was built");
+    check(!has(cut, "UNRELATEDSLOT") && !has(cut, "of Other 3 in NEWRUN"), "other mods and slots are left out");
+    check(has(cut, "Done in 1.0 ms") && has(cut, "later line 2999 NEWRUN"), "the end of the log stays");
+    check(cut.find("Loading vanilla") < cut.find("BLOCKSTART") && cut.find("BLOCKEND") < cut.find("slot esf028/012") && cut.find("slot esf028/012") < cut.find("Done in"), "in the log's order");
+    check(json::parse(json(cut).dump(), nullptr, false).is_string(), "still valid UTF-8 for JSON");
+    // the outfit is not in the log, or nothing is known of it: as before
+    rp::LogKeys none;
+    check(rp::cap_log(log, none) == rp::cap_log(log), "no key: the old cut");
+    rp::LogKeys lost;
+    lost.names = { "No Such Outfit" };
+    lost.slot = "esf099/001";
+    check(rp::cap_log(log, lost) == rp::cap_log(log), "an outfit not found: the old cut");
+    check(rp::cap_log("short", keys) == "short", "a short log is left alone");
+    // the label alone (the archive not known) still finds its lines
+    rp::LogKeys by_label;
+    by_label.names = { "Mai - Animal Print" };
+    const std::string c2 = rp::cap_log(log, by_label);
+    check(c2.size() <= rp::kLogMaxBytes && has(c2, "Loading vanilla index... NEWRUN") && has(c2, "already has 2) Sweat on") && has(c2, "BUILTWITH"), "by label: its lines stay");
+}
+
 static void test_caps() {
     std::string big;
     for (int i = 0; big.size() < 500 * 1024; ++i) big += "line " + std::to_string(i) + " \xC3\xA9\xE6\xBC\xA2 text\n";
@@ -798,6 +855,7 @@ int main(int argc, char** argv) {
     }
     test_clean();
     test_caps();
+    test_loader_log();
     test_key();
     test_wake();
     if (!repo.empty()) test_sources(repo);
