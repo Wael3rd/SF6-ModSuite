@@ -37,14 +37,16 @@ bar) takes a picture of the game and opens a menu on the side of the screen, the
 choose Send on that menu.** Back sends nothing and keeps nothing: the picture is only ever in memory, no file is written.
 
 When the menu opens it asks the server one question, with your Steam-verified token: your report on this costume, if any. Only the costume's key
-goes with it, no picture, no log, no text. The answer is the report's status and your own text. If the server cannot be reached the menu says so, and
+and the short ids (name and the start of the SHA-256) of our own installed files go with it (so the server can tell whether the fix is in your version); no path, no picture, no log, no text. The answer is the report's status and your own text. If the server cannot be reached the menu says so, and
 OK and BUG still work.
 
 The first row is STATUS. On OK, the default, nothing else shows. On BUG: Describe the problem and Send, and under them the character, the outfit and your
 description, which moves by itself when it is too long for its place, with a bar beside it. A message on the guide's line says what you should know: with the focus
 on Send, that your Steam ID, your logs and your mod list go too. After Send, or when you already have a report on this costume, STATUS shows WAITING FOR FIX, which only
 the author's action can change; your text comes back and Send becomes Update, which replaces what was sent and does nothing until your text differs from it. When the
-author marks it fixed, STATUS shows TO TEST: choose OK and press MARK AS FIXED if it is fixed, or choose BUG if it is still broken. You can never see anyone else's report.
+author marks it fixed, STATUS shows TO TEST: choose OK and press MARK AS FIXED if it is fixed, or choose BUG if it is still broken. If the fix is in a release you do not have, STATUS says so instead and names it, with no OK and no BUG:
+FIXED IN 1.27.1: SOON (not published yet) or FIXED IN 1.27.1: UPDATE (published: update the mod, then test); until then you can still change your description, as on WAITING FOR FIX.
+You can never see anyone else's report.
 
 What Send sends, over HTTPS to the same Community server, with your Steam-verified token (see above):
 

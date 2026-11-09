@@ -107,12 +107,13 @@ json make_command(const Report& r);
 // The status comes from the server when the menu opens: STATUS says Checking... meanwhile, and if the server cannot be reached the message says so; OK and BUG still work.
 // These rules live here only, to be easy to change.
 enum class Stage { Idle, Shooting, Open };
-enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed };
+enum class Server { Checking, Unknown, None, Waiting, Fixed, Confirmed, FixedSoon, FixedUpdate };   // FixedSoon / FixedUpdate: the fix is in a release (fixed_in) not published yet / published, the player's files older: as Waiting for what he may do
 enum class Pick { Ok, Bug, Held };              // Held: the status the server has (WAITING FOR FIX, TO TEST, Checking...)
 enum class Busy { None, Sending, Status };
 enum class Row { Status, Text, Send, MarkFixed };
+using Tr = std::function<std::string(const std::string& key, const std::vector<std::string>& args)>;
 
-// The server's answer to "my report on this costume": { exists, status, text }
+// The server's answer to "my report on this costume": { exists, status, text, fixed_in? }
 Server server_from(bool exists, const std::string& status);
 // The action the status request carries for a change the player made: "" = none
 inline const char* action_confirm() { return "confirm"; }
@@ -129,9 +130,14 @@ public:
     // The picture is taken, or given up: the menu may open
     void shot_settled() { if (stage_ == Stage::Shooting) stage_ = Stage::Open; }
     // The server's answer when the menu opened. text: what it holds. Nothing the player has typed meanwhile is overwritten.
-    void server_answer(Server s, const std::string& text);
+    void server_answer(Server s, const std::string& text, const std::string& fixed_in = std::string());
+    // The release that holds the fix (FixedSoon, FixedUpdate)
+    const std::string& fixed_in() const { return fixed_in_; }
+    // The STATUS row's option as shown (the release named in the new two)
+    std::string option_label(const std::string& key, const Tr& tr) const;
     void server_unreachable() { if (server_ == Server::Checking) { server_ = Server::Unknown; pick_ = Pick::Ok; } }
-    bool has_report() const { return server_ == Server::Waiting || server_ == Server::Fixed || server_ == Server::Confirmed; }
+    bool waiting_like() const { return server_ == Server::Waiting || server_ == Server::FixedSoon || server_ == Server::FixedUpdate; }
+    bool has_report() const { return waiting_like() || server_ == Server::Fixed || server_ == Server::Confirmed; }
     // The STATUS row: its options, as locale keys, and which one is shown
     std::vector<std::string> options() const;
     int option_index() const;
@@ -165,12 +171,11 @@ private:
     Server server_ = Server::Checking;
     Pick pick_ = Pick::Held;
     Busy busy_ = Busy::None;
-    std::string text_, sent_text_, error_;
+    std::string text_, sent_text_, error_, fixed_in_;
     bool field_ok_ = true, window_gone_ = false, text_typed_ = false;
     Outcome outcome_ = Outcome::None;
 };
 
-using Tr = std::function<std::string(const std::string& key, const std::vector<std::string>& args)>;
 // What the text under the rows names
 struct MenuValues { std::string character, outfit, colour; };
 // A row's title in the player's language

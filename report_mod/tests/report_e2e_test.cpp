@@ -57,7 +57,7 @@ static Answer post(community::Client& c, json cmd) {
     return a;
 }
 
-static json get_cmd(const std::string& key) { return json{ { "cmd", "report_get" }, { "costume_key", key } }; }
+static json get_cmd(const std::string& key) { return json{ { "cmd", "report_get" }, { "costume_key", key }, { "files", "" } }; }
 static json status_cmd(const std::string& key, const std::string& action) { return json{ { "cmd", "report_status" }, { "costume_key", key }, { "action", action } }; }
 
 // The admin marked the mod's report fixed (verify_standin): TO TEST, then OK confirms it, the row is OK again and the admin still sees it

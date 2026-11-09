@@ -80,16 +80,30 @@ std::string str_of(const json& o, const char* k) {
     return it != o.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
-// One file's size and the start of its SHA-256 (how a build is named here), without reading a huge one
-void file_id(const fs::path& root, const char* rel, json* into) {
+// The start of a file's SHA-256 (how a build is named here), without reading a huge one; false = the file is absent or could not be read
+bool file_sha12(const fs::path& root, const char* rel, std::string* sha, uintmax_t* bytes) {
     std::error_code ec;
     const fs::path p = root / rel;
     const uintmax_t size = fs::file_size(p, ec);
+    if (ec) return false;
+    if (bytes) *bytes = size;
+    std::string data;
+    if (size > kHashMaxBytes || !read_all(p, (size_t)kHashMaxBytes, &data)) return false;
+    *sha = sha256_hex(data.data(), data.size()).substr(0, 12);
+    return true;
+}
+
+// One file's size and the start of its SHA-256
+void file_id(const fs::path& root, const char* rel, json* into) {
+    std::string sha;
+    uintmax_t size = 0;
+    std::error_code ec;
+    (void)fs::file_size(root / rel, ec);
     if (ec) return;
+    const bool hashed = file_sha12(root, rel, &sha, &size);
     json o = json::object();
     o["bytes"] = size;
-    std::string data;
-    if (size <= kHashMaxBytes && read_all(p, (size_t)kHashMaxBytes, &data)) o["sha256"] = sha256_hex(data.data(), data.size()).substr(0, 12);
+    if (hashed) o["sha256"] = sha;
     (*into)[fs::path(rel).filename().string()] = std::move(o);
 }
 
@@ -215,6 +229,18 @@ json mods_of(const fs::path& root, const json& outfits, const Scrub& scrub, std:
 }
 
 }  // namespace
+
+std::string installed_files_param(const fs::path& root) {
+    std::string out;
+    for (const char* rel : { "reframework/plugins/report_mod.dll", "reframework/plugins/SF6_CRSMNative.dll", "reframework/plugins/sf6core_native.dll", "reframework/plugins/SF6_ColorModNative.dll",
+                             "reframework/plugins/SF6_CostumeSlotsNative.dll", "reframework/plugins/profile_mod.dll", "amd_ags_x64.dll" }) {
+        std::string sha;
+        if (!file_sha12(root, rel, &sha, nullptr)) continue;
+        if (!out.empty()) out += ',';
+        out += fs::path(rel).filename().string() + ":" + sha;
+    }
+    return out;
+}
 
 Scrub scrub_here(const fs::path& root) {
     Scrub s;

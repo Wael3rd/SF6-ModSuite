@@ -517,6 +517,8 @@ Server server_from(bool exists, const std::string& status) {
     if (!exists) return Server::None;
     if (status == "fixed") return Server::Fixed;
     if (status == "confirmed") return Server::Confirmed;
+    if (status == "fixed_soon") return Server::FixedSoon;
+    if (status == "fixed_update") return Server::FixedUpdate;
     return Server::Waiting;
 }
 
@@ -527,6 +529,7 @@ void Session::reset() {
     busy_ = Busy::None;
     std::string().swap(text_);
     std::string().swap(sent_text_);
+    fixed_in_.clear();
     error_.clear();
     outcome_ = Outcome::None;
     field_ok_ = true;
@@ -541,18 +544,26 @@ bool Session::begin() {
     return true;
 }
 
-void Session::server_answer(Server s, const std::string& text) {
+void Session::server_answer(Server s, const std::string& text, const std::string& fixed_in) {
     if (server_ != Server::Checking) return;
     server_ = s;
+    fixed_in_ = fixed_in;
     sent_text_ = text;
     if (!text_typed_) text_ = text;
-    pick_ = s == Server::Waiting || s == Server::Fixed ? Pick::Held : Pick::Ok;
+    pick_ = waiting_like() || s == Server::Fixed ? Pick::Held : Pick::Ok;
+}
+
+std::string Session::option_label(const std::string& key, const Tr& tr) const {
+    const bool named = key == "report_st_fixed_soon" || key == "report_st_fixed_update";
+    return tr(key, named ? std::vector<std::string>{ shown_safe(fixed_in_) } : std::vector<std::string>{});
 }
 
 std::vector<std::string> Session::options() const {
     switch (server_) {
         case Server::Checking: return { "report_st_checking" };
         case Server::Waiting: return { "report_st_waiting" };
+        case Server::FixedSoon: return { "report_st_fixed_soon" };
+        case Server::FixedUpdate: return { "report_st_fixed_update" };
         case Server::Fixed: return { "report_st_to_test", "report_st_ok", "report_st_bug" };
         default: return { "report_st_ok", "report_st_bug" };
     }
@@ -561,7 +572,7 @@ std::vector<std::string> Session::options() const {
 int Session::option_index() const {
     switch (server_) {
         case Server::Checking: return 0;
-        case Server::Waiting: return 0;
+        case Server::Waiting: case Server::FixedSoon: case Server::FixedUpdate: return 0;
         case Server::Fixed: return pick_ == Pick::Held ? 0 : pick_ == Pick::Ok ? 1 : 2;
         default: return pick_ == Pick::Bug ? 1 : 0;
     }
@@ -581,7 +592,7 @@ bool Session::choose(int index) {
 std::vector<Row> Session::rows() const {
     std::vector<Row> r{ Row::Status };
     if (stage_ != Stage::Open || server_ == Server::Checking) return r;
-    if (pick_ == Pick::Bug || server_ == Server::Waiting) { r.push_back(Row::Text); r.push_back(Row::Send); }
+    if (pick_ == Pick::Bug || waiting_like()) { r.push_back(Row::Text); r.push_back(Row::Send); }
     else if (pick_ == Pick::Ok && server_ == Server::Fixed) r.push_back(Row::MarkFixed);
     return r;
 }
@@ -670,6 +681,9 @@ std::string message_text(const Session& s, Row focus, const Tr& tr) {
     if (s.outcome() == Session::Outcome::Failed) return tr("report_failed", { tr(error_key(s.error()), {}) });
     if (s.outcome() == Session::Outcome::Sent && s.update_blocked()) return tr("report_msg_sent", {});
     if (s.server() == Server::Fixed && s.pick() == Pick::Held) return tr("report_msg_to_test", {});
+    const bool soon = s.server() == Server::FixedSoon, update = s.server() == Server::FixedUpdate;
+    if ((soon || update) && focus != Row::Send)      // (on Send the form's rules come first: the text, the warning on Update)
+        return tr(soon ? "report_msg_fixed_soon" : "report_msg_fixed_update", { shown_safe(s.fixed_in()) });
     const std::string unreachable = s.server() == Server::Unknown ? tr("report_msg_unreachable", {}) : "";
     if (!form_shown(s)) return unreachable;
     const std::string replace = s.has_report() ? tr("report_msg_replace", {}) : "";

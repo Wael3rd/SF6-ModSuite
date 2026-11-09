@@ -26,6 +26,8 @@ struct Snapshot {
 
 // The Windows user's name and the PC's, and the game folder, from this process
 Scrub scrub_here(const std::filesystem::path& root);
+// "name:sha12,name:sha12": the ids of our installed files that exist (the same 12 characters as the report's versions.files), for the status request; never on the game thread
+std::string installed_files_param(const std::filesystem::path& root);
 Report gather(const Snapshot& snap, const std::filesystem::path& root, const Scrub& scrub);
 
 }  // namespace report

@@ -420,6 +420,10 @@ std::atomic<int> g_chosen{-1};                   // STATUS moved (the core's cal
 bool g_mark_due = false;                         // MARK AS FIXED pressed: goes out as soon as the client is free
 // What is read off the game thread: the summary's values and the key when the menu opens, the whole command at Send
 std::mutex g_prep_mx;
+// Our installed files' ids for the status request: hashed once, off the game thread, at the mod's start (the files cannot change while the game runs)
+std::mutex g_files_mx;
+std::string g_files_param;                       // "name:sha12,..." (guarded by g_files_mx)
+std::atomic<bool> g_files_ready{ false };
 std::optional<nlohmann::json> g_prep;
 bool g_prep_failed = false;
 struct Preview { bool ready = false, failed = false; uint64_t gen = 0; std::string key, outfit; };
@@ -844,7 +848,7 @@ bool build_group() {
         std::vector<std::string> labels;
         std::vector<const char*> ptrs;
         if (role == rp::Row::Status) {
-            for (const std::string& k : g_session.options()) labels.push_back(ui::T(k));
+            for (const std::string& k : g_session.options()) labels.push_back(g_session.option_label(k, tr));
             for (const std::string& l : labels) ptrs.push_back(l.c_str());
             d.kind = SF6CORE_OPT_CHOICE;
             d.options = ptrs.data();
@@ -862,7 +866,7 @@ bool build_group() {
 std::string page_now() {
     std::string s;
     for (const rp::Row role : g_session.rows()) s += "\x1f" + rp::row_title(g_session, role, tr);
-    for (const std::string& k : g_session.options()) s += "\x1e" + k;
+    for (const std::string& k : g_session.options()) s += "\x1e" + g_session.option_label(k, tr);
     return s + "\x1d" + std::to_string(g_session.option_index());
 }
 void open_window() {
@@ -1042,14 +1046,29 @@ void on_answer(bool ok, const nlohmann::json& data) {   // Community's poll: the
     finish_if_gone(gone);
     g_dirty = true;
 }
-// The status of this costume's report, asked once, when the menu opened: the key alone leaves, no picture and no log
+void start_file_ids() {
+    try {
+        const std::filesystem::path root = std::filesystem::current_path();
+        std::thread([root] {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+            std::string p;
+            try { p = rp::installed_files_param(root); } catch (...) { p.clear(); }
+            { std::lock_guard lk(g_files_mx); g_files_param = std::move(p); }
+            g_files_ready = true;
+        }).detach();
+    } catch (...) {
+        g_files_ready = true;                    // (no ids: the server then cannot tell what is installed)
+    }
+}
+// The status of this costume's report, asked once, when the menu opened: the key and our files' ids leave, no picture and no log
 void ask_status() {
-    if (g_asked || g_key.empty() || g_session.server() != rp::Server::Checking || community::client().busy()) return;
+    if (g_asked || g_key.empty() || g_session.server() != rp::Server::Checking || community::client().busy() || !g_files_ready) return;
     g_asked = true;
     const uint64_t gen = g_gen;
     nlohmann::json cmd = nlohmann::json::object();
     cmd["cmd"] = "report_get";
     cmd["costume_key"] = g_key;
+    { std::lock_guard lk(g_files_mx); cmd["files"] = g_files_param; }
     community::client().send(std::move(cmd), [gen](bool ok, const nlohmann::json& d) {
         if (gen != g_gen) return;
         if (!answer_ok(ok, d)) {
@@ -1058,7 +1077,8 @@ void ask_status() {
         } else {
             const bool exists = d.contains("exists") && d["exists"] == true;
             const std::string status = d.contains("status") && d["status"].is_string() ? d["status"].get<std::string>() : std::string();
-            g_session.server_answer(rp::server_from(exists, status), d.contains("text") && d["text"].is_string() ? d["text"].get<std::string>() : std::string());
+            const std::string fixed_in = d.contains("fixed_in") && d["fixed_in"].is_string() ? d["fixed_in"].get<std::string>().substr(0, 24) : std::string();
+            g_session.server_answer(rp::server_from(exists, status), d.contains("text") && d["text"].is_string() ? d["text"].get<std::string>() : std::string(), fixed_in);
             cmn::journal("bug report: status read: %s", exists ? status.c_str() : "no report");
         }
         g_dirty = true;
@@ -1505,6 +1525,7 @@ void specs(std::vector<mech::hooks::Spec>& out) {
 }
 
 void start() {
+    start_file_ids();
     cap::set_log([](const std::string& s) { cmn::journal("%s", s.c_str()); });
 }
 

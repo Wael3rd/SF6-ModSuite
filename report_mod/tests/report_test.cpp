@@ -440,6 +440,24 @@ static void test_session() {
     s.answered(true, "");
     check(s.server() == V::Waiting && s.update_blocked() && !s.send(), "waiting again: what was sent is that text");
 
+    // FIXED IN x: SOON / UPDATE: as WAITING FOR FIX for what he may do (Change, Update), no OK and no BUG, the release named
+    for (const V v : { V::FixedSoon, V::FixedUpdate }) {
+        const bool soon = v == V::FixedSoon;
+        rp::Session f;
+        f.begin(); f.shot_settled();
+        f.server_answer(v, "the hair", "1.27.1");
+        check(f.server() == v && f.fixed_in() == "1.27.1" && f.has_report() && f.pick() == rp::Pick::Held && f.option_index() == 0, "fixed in a release: a report held");
+        check(opts_are(f, { soon ? "report_st_fixed_soon" : "report_st_fixed_update" }) && rows_are(f, { R::Text, R::Send }) && f.text() == "the hair" && f.update_blocked() && !f.send(), "no OK, no BUG: Change and Update, as waiting");
+        check(!f.choose(1) && !f.choose(2), "nothing else to choose");
+        const rp::Tr trv = [](const std::string& k, const std::vector<std::string>& a) { std::string s = k; for (const auto& x : a) s += "(" + x + ")"; return s; };
+        check(f.option_label(soon ? "report_st_fixed_soon" : "report_st_fixed_update", trv) == std::string(soon ? "report_st_fixed_soon(1.27.1)" : "report_st_fixed_update(1.27.1)") && f.option_label("report_st_ok", trv) == "report_st_ok", "the release in the row");
+        check(rp::message_text(f, R::Status, trv) == std::string(soon ? "report_msg_fixed_soon(1.27.1)" : "report_msg_fixed_update(1.27.1)"), "the message names the release");
+        f.set_text("the hair, again");
+        check(f.send(), "Update goes");
+        f.answered(true, "");
+        check(f.server() == V::Waiting, "and it is waiting once sent");
+    }
+
     // TO TEST: nothing but STATUS; OK shows the row that sends it, BUG is the form
     s = opened(V::Fixed, "old text");
     check(opts_are(s, { "report_st_to_test", "report_st_ok", "report_st_bug" }) && s.option_index() == 0 && rows_are(s, {}), "to test: STATUS alone");
@@ -480,6 +498,8 @@ static void test_session() {
     check(s.text() == "mine", "the answer never overwrites what he typed");
     s.server_answer(V::Fixed, "later");
     check(s.server() == V::Waiting, "one answer only");
+    check(rp::server_from(true, "fixed_soon") == V::FixedSoon && rp::server_from(true, "fixed_update") == V::FixedUpdate && rp::server_from(false, "fixed_soon") == V::None &&
+          rp::server_from(true, "fixed_later") == V::Waiting, "the new words; a word from a future server is still waiting");
     check(rp::server_from(false, "fixed") == V::None && rp::server_from(true, "waiting") == V::Waiting && rp::server_from(true, "fixed") == V::Fixed && rp::server_from(true, "confirmed") == V::Confirmed &&
           rp::server_from(true, "?") == V::Waiting, "the server's words");
 
@@ -692,6 +712,14 @@ static void test_summary_fits(const fs::path& repo) {
         for (const char* k : { "report_st_ok", "report_st_bug", "report_st_waiting", "report_st_to_test", "report_st_checking" }) {
             const std::string o = tr(k, {});
             check(!o.empty() && drawn_em(o) * px_per_em <= 264.0, lang + ": " + k + " keeps a margin to its arrows: " + o);
+        }
+        for (const char* k : { "report_st_fixed_soon", "report_st_fixed_update" }) {
+            const std::string o = tr(k, { "1.27.10" });
+            check(!o.empty() && o.find("%s") == std::string::npos && o.find("1.27.10") != std::string::npos && drawn_em(o) * px_per_em <= 264.0, lang + ": " + k + " names the release and keeps a margin to its arrows: " + o);
+        }
+        for (const char* k : { "report_msg_fixed_soon", "report_msg_fixed_update" }) {
+            const std::string o = tr(k, { "1.27.10" });
+            check(!o.empty() && o.find("%s") == std::string::npos && o.find("1.27.10") != std::string::npos, lang + ": " + k + " names the release: " + o);
         }
         for (const char* k : { "report_row_describe", "report_row_change", "report_row_send", "report_row_update", "report_row_mark_fixed" }) {
             const std::string o = tr(k, {});
