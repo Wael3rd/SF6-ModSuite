@@ -819,7 +819,8 @@ template <perf::Id ID> void post_vs(void**, REFrameworkTypeDefinitionHandle, uns
 //     answered above); during Decide that index is the one of the choice from before (DecideGuard), so a tile confirmed
 //     over its own stage is marked at once.
 //   - The variation key: the pad's X button / its keyboard key (app.InputAssign.Digital.Id 341), read by the frame while
-//     the grid's cells have the focus: one press, the next variation (wrapping). The guide bar's "<key> Stage Variation":
+//     the grid's cells have the focus: one press, the next variation (wrapping). Battle Settings: the stage keeps it at
+//     once (Wael 09/11); Training: a preview, Confirm chooses it (it loads the stage). The guide bar's "<key> Stage Variation":
 //     a copy of the bar's item template after its entries, while the focused entry has variations (and for the replay
 //     picker, replay_variation_hint).
 // Every hook is installed only after the R18 code check of its method (codecheck_rt.hpp, cache codecheck_stages.txt).
@@ -827,7 +828,7 @@ template <perf::Id ID> void post_vs(void**, REFrameworkTypeDefinitionHandle, uns
 constexpr const char* kCodecheckCache = "reframework/data/SF6_CostumeSlots_data/codecheck_stages.txt";
 
 enum Hook : size_t { kSetupList, kGetList, kConvert, kDecide, kUpdateList, kSelChanged, kBattleDesc, kTrainStage, kReplayDesc,
-                     kInitStageList, kHooks };
+                     kInitStageList, kButtonY, kHooks };
 codecheck::Batch g_check;
 bool g_check_started = false, g_hooks_done = false;
 bool g_hooked[kHooks] = {};
@@ -864,6 +865,7 @@ GridState g_grid;                                              // g_mx
 struct Decided { bool pending = false; int menu = -1; uint32_t base = 0; std::string key, before; };
 Decided g_decided;                                             // g_mx
 std::atomic<int> g_cycle_pending{0};
+std::atomic<bool> g_tick_all_pending{false};                   // Random Stage Settings' Y key pressed (grid_work)
 std::atomic<bool> g_grid_event{false};
 struct SetupFlag { uintptr_t obj = 0; int menu = -1; };
 thread_local SetupFlag tl_setup;
@@ -1013,6 +1015,12 @@ int g_watch_off = 0;
 // The variation a stage's own entry shows now (0 for a tile or its own look)
 int shown_var(Obj* grid, int entry) {
     if (entry < 0 || entry >= static_cast<int>(g_grid.slots.size()) || g_grid.slots[static_cast<size_t>(entry)].tile) return 0;
+    if (g_grid.menu == sl::kBattle) {                          // each stage shows the variation it keeps (grid_work, the key)
+        const auto& c = g_state.menu[sl::kBattle];
+        const uint32_t base = g_grid.slots[static_cast<size_t>(entry)].base;
+        auto it = c.find(base);
+        return it == c.end() ? 0 : cycle_of(base, it->second);
+    }
     int ce = -1, cv = 0;
     chosen_entry(grid, ce, cv);
     return sl::shown_variation(entry, ce, cv, g_grid.preview);
@@ -1029,6 +1037,32 @@ bool in_random_pool(Obj* grid, uint32_t base, bool* known = nullptr) {
         if (!r.exception_thrown && static_cast<int32_t>(r.dword) == static_cast<int32_t>(base)) return false;
     }
     return true;
+}
+// The game's random-off list as numbers (false: not read)
+bool read_rand_off(Obj* grid, std::vector<int32_t>& out) {
+    out.clear();
+    Obj* list = obj_field(grid, f_rand_off);
+    const Ret rc = list ? call(list, "get_Count") : Ret{};
+    if (!list || rc.exception_thrown) return false;
+    const int n = static_cast<int32_t>(rc.dword);
+    for (int i = 0; i < n; ++i) {
+        const Ret r = call(list, "get_Item", { arg_i32(i) });
+        if (r.exception_thrown) return false;
+        out.push_back(static_cast<int32_t>(r.dword));
+    }
+    return true;
+}
+// Random Stage Settings' entries for the Y key (stages_logic.hpp tick_all): the grid's, Random and Battle Hub left out, each
+// stage's entry keys; keep: the index among them of the grid's entry `focus` (-1: not one of them)
+void tick_entries(int focus, std::vector<sl::TickEntry>& entries, std::map<uint32_t, std::vector<std::string>>& keys_of, int* keep) {
+    if (keep) *keep = -1;
+    for (int i = 0; i < static_cast<int>(g_grid.slots.size()); ++i) {
+        const sl::Slot& s = g_grid.slots[static_cast<size_t>(i)];
+        if (s.base == sl::kRandomStage || s.base == sl::kBattleHubStage) continue;
+        if (keep && i == focus) *keep = static_cast<int>(entries.size());
+        entries.push_back({ s.base, s.tile ? s.key : std::string() });
+        if (!keys_of.count(s.base)) keys_of[s.base] = entry_keys(s.base);
+    }
 }
 // Random Stage Settings' Decide on an entry of a stage with tiles (pre to post, this thread, this frame)
 struct RandomGuard { uintptr_t obj = 0; int menu = -1; uint32_t base = 0; std::string key; bool want_in_pool = false; uint32_t frame = 0; bool on = false; };
@@ -1422,6 +1456,36 @@ void random_tick(Obj* item, const sl::Slot& s) {
     if (const SF6CoreAPI* a = slots::ui::core()) a->obj_invoke(slots::ui::client(), check, "set_StatePattern(System.UInt32)", &v, 1, nullptr);
 }
 
+// The guide bar's "<Y> Tick all / Untick all": what the next press does (read again every few frames)
+struct TickLabel { uintptr_t grid = 0; uint32_t at = 0; bool all = false; };
+TickLabel g_tick_label;                                        // g_mx
+
+// Random Stage Settings' Y key (Wael 09/11): every entry ticked, or every one but the entry under the cursor (stages_logic.hpp
+// tick_all). The game's list is changed as its own Decide changes it: Decide only adds or removes the id in mListRandomDisable,
+// the List the page holds (GetRandomDisable, the same object) and saves, then redraws the checks with SetupRandomCheck (probe
+// 09/11). The tiles' ticks are the plugin's, redrawn by random_tick in the cells pass that follows.
+void tick_all_now(Obj* grid, int focus) {
+    Obj* list = obj_field(grid, f_rand_off);
+    std::vector<int32_t> dis;
+    if (!list || !read_rand_off(grid, dis)) { logf("stages: grid (%s): Y key: the game's random list unread: nothing changed", sl::menu_key(g_grid.menu)); return; }
+    std::vector<sl::TickEntry> entries;
+    std::map<uint32_t, std::vector<std::string>> keys_of;
+    int keep = -1;
+    tick_entries(focus, entries, keys_of, &keep);
+    if (entries.empty()) return;
+    const sl::TickAll t = sl::tick_all(entries, keys_of, dis, g_state.off[g_grid.menu], keep);
+    if (call(list, "Clear").exception_thrown) { logf("stages: grid (%s): Y key: the game's random list not cleared: nothing changed", sl::menu_key(g_grid.menu)); return; }
+    int failed = 0;
+    for (int32_t id : t.disabled) failed += call(list, "Add", { arg_i32(id) }).exception_thrown ? 1 : 0;
+    g_state.off[g_grid.menu] = t.off;
+    save_state(-1, t.tick ? "Random Stage Settings: all ticked" : "Random Stage Settings: all unticked but one");
+    call(grid, "SetupRandomCheck");
+    if (Obj* owner = m_owner ? call_obj(m_owner, grid) : nullptr) call(owner, "TriggerSoundDecide");
+    g_tick_label = { g_grid.obj, g_frame, t.tick };
+    logf("stages: grid (%s): Y key: every entry %s; %zu id(s) out of the game's pool%s", sl::menu_key(g_grid.menu),
+         t.tick ? "ticked" : "unticked but the one under the cursor", t.disabled.size(), failed ? " (SOME NOT WRITTEN)" : "");
+}
+
 bool grid_work() {
     perf::Scope ps(perf::StgGrid);
     std::lock_guard<std::recursive_mutex> lk(g_mx);
@@ -1442,7 +1506,19 @@ bool grid_work() {
     if (step && focus >= 0 && focus < static_cast<int>(g_grid.slots.size())) {
         const sl::Slot& s = g_grid.slots[static_cast<size_t>(focus)];
         const int n = static_cast<int>(variations_of(s.base).size());
-        if (!s.tile && n > 0) {
+        if (!s.tile && n > 0 && g_grid.menu == sl::kBattle) {
+            // Battle Settings: the stage keeps it at once, whether it is the chosen stage or not (Wael 09/11: the preview
+            // left with Esc went back to the stage's own look, and the summary showed the chosen one, not the marked cell's
+            // look); Confirm chooses the stage as it shows. Served as any of the menu's choices (serve_menu).
+            auto& choice = g_state.menu[sl::kBattle];
+            const int next = sl::cycle(shown_var(grid, focus), n, 1);
+            if (next == 0) choice.erase(s.base);
+            else choice[s.base] = variations_of(s.base)[static_cast<size_t>(next - 1)]->key;
+            g_grid.preview = {};
+            save_state(-1, "variation key (Battle Settings)");
+            logf("stages: grid (%s): stage %u keeps variation %d of %d (%s)", sl::menu_key(g_grid.menu), s.base, next, n,
+                 next ? choice[s.base].c_str() : "its own look");
+        } else if (!s.tile && n > 0) {
             int ce = -1, cv = 0;
             chosen_entry(grid, ce, cv);
             g_grid.preview = sl::preview_next(focus, ce, cv, g_grid.preview, n);
@@ -1450,6 +1526,8 @@ bool grid_work() {
                  g_grid.preview.var, n);
         }
     }
+    // Random Stage Settings' Y key: tick all / untick all
+    if (g_tick_all_pending.exchange(false) && i32_field(grid, f_state, -1) == 1) tick_all_now(grid, focus);
 
     // the preview: the picture and name of the focused entry, of the chosen one while the focus is on the rows
     Obj* preview = obj_field(grid, f_preview);
@@ -1619,6 +1697,30 @@ bool game_key_now(GameKey& k) {
     return !r.exception_thrown && (r.dword & k.pad_bit) != 0;
 }
 bool variation_key_now() { return game_key_now(g_vk); }
+
+// ---- Battle Settings' Random Stage Settings, kept off the variation key ---------------------------------------------------
+// The page (app.UIPartsMatchingSettingBattle) opens Random Stage Settings in its ButtonY, which the game calls for the Y
+// button (UIMatchingSettingRandomStageSelect, 239: T on a keyboard, the key its guide bar shows) and for the X button too
+// (R on a keyboard, not in the bar: seen 09/11, R alone -> ButtonY -> the grid in Random's state). X is the variation key:
+// the press that showed the next variation also opened Random Stage Settings (Wael 09/11). While the grid's cells have the
+// focus, ButtonY is skipped when the variation key is down and the Y key is not; Y, T and the bar's entry clicked with the
+// mouse open it as before. Elsewhere on the page (Opponent Outfit, Online Music, the HUD row) ButtonY is untouched.
+GameKey g_rk{ 239, "random stage key", "RUp", "Y", 16 };
+int pre_button_y(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_closing.load(std::memory_order_relaxed)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    try {
+        bool focused = false;
+        {
+            std::lock_guard<std::recursive_mutex> lk(g_mx);
+            focused = g_grid.focused && g_grid.menu == sl::kBattle;
+        }
+        if (focused && variation_key_now() && !game_key_now(g_rk)) {
+            logf("stages: grid (battle): the variation key's press kept from opening Random Stage Settings (the game's X on ButtonY)");
+            return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
+        }
+    } catch (...) {}
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
 
 // ---- the guide bar's hint "<key> Stage Variation" -------------------------------------------------------------------------
 // A copy of the bar's item template (e_text_0 of c_guideBtn: the element the game duplicates for each entry, so its font,
@@ -1910,8 +2012,9 @@ bool grid_has_focus(Obj* grid, Obj* scroll) {
 }
 uintptr_t g_grid_seen = 0;                                   // the grid the frame last looked at (a new one: symbols again)
 bool g_key_was = false;
+bool g_y_was = false, g_rnd_was = false;                     // Random Stage Settings' Y key: down, the state, last frame
 void grid_frame() {
-    bool on = false, focus = false, tile = false;
+    bool on = false, focus = false, tile = false, rnd_state = false, all_ticked = false;
     int nvar = 0;
     {                                                        // the grid, under the lock
         std::lock_guard<std::recursive_mutex> lk(g_mx);
@@ -1924,6 +2027,18 @@ void grid_frame() {
                 const Ret rv = m_is_show ? call(m_is_show, grid) : Ret{};
                 const bool active = !m_is_show || rv.exception_thrown || rv.byte != 0;   // activated: the cursor is in it
                 focus = active && grid_has_focus(grid, scroll);
+                // Random Stage Settings: what the Y key does next (the bar's label), read every 10 frames
+                rnd_state = i32_field(grid, f_state, -1) == 1;
+                if (rnd_state && focus && (g_tick_label.grid != g_grid.obj || g_frame - g_tick_label.at >= 10)) {
+                    std::vector<int32_t> dis;
+                    std::vector<sl::TickEntry> entries;
+                    std::map<uint32_t, std::vector<std::string>> keys_of;
+                    if (read_rand_off(grid, dis)) {
+                        tick_entries(-1, entries, keys_of, nullptr);
+                        g_tick_label = { g_grid.obj, g_frame, sl::all_ticked(entries, keys_of, dis, g_state.off[g_grid.menu]) };
+                    }
+                }
+                all_ticked = g_tick_label.grid == g_grid.obj && g_tick_label.all;
                 const Ret rs = scroll ? call(m_sel_index, scroll) : Ret{};
                 const int sel = scroll && !rs.exception_thrown ? static_cast<int32_t>(rs.dword) : -1;
                 if (sel >= 0 && sel < static_cast<int>(g_grid.slots.size())) {
@@ -1980,14 +2095,32 @@ void grid_frame() {
         open_grid_window();
     }
     g_key_was = down;
-    // the hint: the grid's, else the replay picker's
+    // Random Stage Settings' Y key (T on a keyboard; the game does nothing with it there, probe 09/11): one press, tick all /
+    // untick all. Not the press that opened it from the stage list (still down when the grid's state changed): a press
+    // counts when the grid was in Random's state the frame before too.
+    const bool rnd_focus = g_grid.focused && rnd_state;
+    const bool ydown = g_grid.focused && game_key_now(g_rk);
+    if (ydown && !g_y_was && rnd_focus && g_rnd_was) {
+        g_tick_all_pending.store(true);
+        open_grid_window();
+    }
+    g_y_was = ydown;
+    g_rnd_was = rnd_focus;
+    // the hint: the grid's ("<Y> Tick all" in Random Stage Settings first, then the variation key), else the replay picker's
     const bool replay_asks = g_hint_replay_at && g_frame - g_hint_replay_at <= 1;
     const std::string sym = g_grid.focused ? symbol_of(sl::kVariationKeyId, guide_mode_now()) : std::string();
     const std::string replay_sym = replay_asks ? symbol_of(g_hint_replay_key, guide_mode_now()) : std::string();
     const bool grid_want = sl::variation_hint(g_grid.focused, tile, nvar, !sym.empty());
     const bool replay_want = replay_asks && !replay_sym.empty();
+    std::string tick_text;
+    if (rnd_focus) {
+        const std::string ys = symbol_of(g_rk.id, guide_mode_now());
+        if (!ys.empty()) tick_text = ys + " " + words::tr(all_ticked ? words::W::TitleKeyUncheckAll : words::W::TitleKeyCheckAll);
+    }
+    const std::string var_text = grid_want ? sl::variation_hint_text(sym) : std::string();
+    const std::string grid_text = tick_text.empty() ? var_text : var_text.empty() ? tick_text : tick_text + "     " + var_text;
     const char* why = !on ? "no stage grid on screen" : !g_grid.focused ? "the grid has not the focus" : tile ? "a tile" : "no variation";
-    hint_frame(grid_want || replay_want, grid_want ? sl::variation_hint_text(sym) : sl::guide_hint_text(replay_sym, g_hint_replay_label), why);
+    hint_frame(!grid_text.empty() || replay_want, !grid_text.empty() ? grid_text : sl::guide_hint_text(replay_sym, g_hint_replay_label), why);
 }
 // No stage slots here: only the entry Replays > Settings asks for
 void replay_hint_frame() {
@@ -2479,6 +2612,7 @@ void start_grid_check() {
     add(t_replay, "setupDesc", 0, "app.battle.ReplayFlowMap.setupDesc()", f_map_desc && f_desc_stage && f_stage_id);
     add(tdb->find_type("app.menu.UIFlowStageSelect.Param"), "InitStageList", 0, "app.menu.UIFlowStageSelect.Param.InitStageList()",
         !g_classic_tiles.empty() && m_list_item && m_list_insert && m_list_index);
+    add(tdb->find_type("app.UIPartsMatchingSettingBattle"), "ButtonY", 0, "app.UIPartsMatchingSettingBattle.ButtonY()", grid_ok);
     g_check.start(kCodecheckCache, "stage grids");
     g_check_started = true;
 }
@@ -2499,6 +2633,7 @@ void install_grid_hooks() {
         { kTrainStage, pre_training_stage, nullptr },
         { kReplayDesc, pre_replay_desc, post_replay_desc },
         { kInitStageList, pre_init_stage, post_init_stage },
+        { kButtonY, pre_button_y, nullptr },
     };
     // the tiles need the list, its owner (SetupList) and Decide: one refused, none of the three
     const bool core = g_check.unique(kSetupList) && g_check.unique(kGetList) && g_check.unique(kDecide);
@@ -2645,7 +2780,7 @@ void install_hooks() {
 
 bool busy() {
     if (!g_variant_count) return g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2);
-    if ((g_check_started && !g_hooks_done) || g_grid.until != 0 || g_decided.pending || g_cycle_pending.load() != 0) return true;
+    if ((g_check_started && !g_hooks_done) || g_grid.until != 0 || g_decided.pending || g_cycle_pending.load() != 0 || g_tick_all_pending.load()) return true;
     if (g_grid.on_screen || g_grid_watch || g_hint.shown || (g_hint_replay_at && g_frame - g_hint_replay_at <= 2)) return true;   // the key, the hint
     if (g_scr.active && classic_on(g_scr.param)) return true;   // the list's scroll, the arrows
     return (g_scr.active && (g_scr.need || g_scr.settle > 0 || g_strip.until != 0)) || g_vs.until != 0 || g_scr.check_until != 0;

@@ -9,6 +9,7 @@
 #include "json.hpp"
 #include "words.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <map>
@@ -401,6 +402,46 @@ inline std::string pick_ticked(const std::vector<std::string>& keys, const std::
     std::vector<std::string> on;
     for (auto& k : keys) if (is_ticked(keys, off, true, k)) on.push_back(k);
     return on.empty() ? std::string() : on[r % on.size()];
+}
+
+// Random Stage Settings' Y key (Wael 09/11, as the title screen's Random list): every entry ticked when one is not, else
+// every entry unticked but the one under the cursor (the game keeps one stage in its pool). entries: the grid's (stage id,
+// "" its own entry or a tile's key), Random and Battle Hub left out; keys_of: entry_keys of each stage; disabled: the
+// game's list of ids out of its pool (mListRandomDisable: ids the grid does not show stay as they are, in their order);
+// off: the plugin's unticked entries of stages with tiles; keep: the entry under the cursor (-1: the first).
+using TickEntry = std::pair<uint32_t, std::string>;
+inline bool entry_ticked(const TickEntry& e, const std::map<uint32_t, std::vector<std::string>>& keys_of,
+                         const std::vector<int32_t>& disabled, const Off& off) {
+    const bool in_pool = std::find(disabled.begin(), disabled.end(), static_cast<int32_t>(e.first)) == disabled.end();
+    auto k = keys_of.find(e.first);
+    if (k == keys_of.end() || k->second.size() < 2) return in_pool;
+    auto o = off.find(e.first);
+    static const std::set<std::string> none;
+    return is_ticked(k->second, o == off.end() ? none : o->second, in_pool, e.second);
+}
+inline bool all_ticked(const std::vector<TickEntry>& entries, const std::map<uint32_t, std::vector<std::string>>& keys_of,
+                       const std::vector<int32_t>& disabled, const Off& off) {
+    for (auto& e : entries) if (!entry_ticked(e, keys_of, disabled, off)) return false;
+    return true;
+}
+struct TickAll { bool tick = false; std::vector<int32_t> disabled; Off off; };
+inline TickAll tick_all(const std::vector<TickEntry>& entries, const std::map<uint32_t, std::vector<std::string>>& keys_of,
+                        const std::vector<int32_t>& disabled, const Off& off, int keep) {
+    TickAll t;
+    t.tick = !all_ticked(entries, keys_of, disabled, off);
+    t.off = off;
+    std::set<uint32_t> ids;
+    for (auto& e : entries) { ids.insert(e.first); t.off.erase(e.first); }
+    for (int32_t d : disabled) if (!ids.count(static_cast<uint32_t>(d))) t.disabled.push_back(d);
+    if (t.tick || entries.empty()) return t;
+    const TickEntry& k = entries[keep >= 0 && keep < static_cast<int>(entries.size()) ? static_cast<size_t>(keep) : 0];
+    for (auto& e : entries)
+        if (e.first != k.first && std::find(t.disabled.begin(), t.disabled.end(), static_cast<int32_t>(e.first)) == t.disabled.end())
+            t.disabled.push_back(static_cast<int32_t>(e.first));
+    auto kk = keys_of.find(k.first);
+    if (kk != keys_of.end() && kk->second.size() > 1)
+        for (auto& key : kk->second) if (key != k.second) t.off[k.first].insert(key);
+    return t;
 }
 
 }  // namespace slots::stagelogic

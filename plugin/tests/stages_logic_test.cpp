@@ -244,6 +244,30 @@ static void test_ticks() {
           back.off[kTraining].empty(), "ticks and Random per menu: round trip");
     auto served = loader_parse(js);
     check(served.size() == 1 && served[0].second == "tB", "the loader's scan still reads the served selection only");
+
+    // the Y key: tick all, or untick all but the entry under the cursor
+    std::printf("Random Stage Settings: tick all / untick all\n");
+    const std::map<uint32_t, std::vector<std::string>> kof = { { 0, keys } };   // stage 0 has tiles tA, tB; 10, 20 none
+    const std::vector<TickEntry> es = { { 0, "" }, { 0, "tA" }, { 0, "tB" }, { 10, "" }, { 20, "" } };
+    Off o0;
+    o0[0] = { "tA" };
+    o0[5] = { "x" };                                                // a stage the grid does not show: left as it is
+    auto a = tick_all(es, kof, { 20, 99 }, o0, 3);
+    check(a.tick && a.disabled == std::vector<int32_t>{ 99 } && !a.off.count(0) && a.off.count(5), "one unticked: all ticked, other ids kept");
+    check(all_ticked(es, kof, a.disabled, a.off), "then every entry shows ticked");
+    auto b = tick_all(es, kof, a.disabled, a.off, 3);
+    check(!b.tick && b.disabled == std::vector<int32_t>{ 99, 0, 20 } && !b.off.count(0), "all ticked: all out but the focused stage 10");
+    check(entry_ticked({ 10, "" }, kof, b.disabled, b.off) && !entry_ticked({ 0, "tA" }, kof, b.disabled, b.off) &&
+          !entry_ticked({ 20, "" }, kof, b.disabled, b.off), "only the focused entry stays ticked");
+    auto c = tick_all(es, kof, a.disabled, a.off, 1);
+    check(!c.tick && c.disabled == std::vector<int32_t>{ 99, 10, 20 } && c.off.at(0) == std::set<std::string>({ "", "tB" }),
+          "the focus on a tile: its stage stays in the pool, only that tile ticked");
+    check(entry_ticked({ 0, "tA" }, kof, c.disabled, c.off) && !entry_ticked({ 0, "" }, kof, c.disabled, c.off) &&
+          !entry_ticked({ 0, "tB" }, kof, c.disabled, c.off), "the tile alone ticked among its stage's entries");
+    auto d = tick_all(es, kof, a.disabled, a.off, -1);
+    check(!d.tick && d.disabled == std::vector<int32_t>{ 99, 10, 20 } && d.off.at(0) == std::set<std::string>({ "tA", "tB" }),
+          "no focus: the first entry kept");
+    check(tick_all(es, kof, c.disabled, c.off, 1).tick, "after untick all, Y ticks all again");
 }
 
 static void test_codecheck() {
