@@ -1,7 +1,9 @@
 // SF6 Slots -- long names scroll inside their place instead of being squeezed or cut (scroll_logic.hpp).
 //
-// Where: the Costume rows (Fighter Settings, the character select's panels, Training's popup, Opponent Outfit Settings) and the Opponent
-// Outfit summary's lines, from here; Replays > Settings' summary lines and its banner's name (replay_tab.cpp); the banner's name on Battle
+// Where: the Costume rows (Fighter Settings, the character select's panels, Training's popup, Opponent Outfit Settings), the Opponent
+// Outfit summary's lines and every row of the option window (the game's OptionDialog: the core's option menus - costume options, Report a
+// bug, the Interface sections - and the game's own: a value between its arrows, a title in its region; Wael 09/11, "keep the whole name,
+// let it scroll"), from here; Replays > Settings' summary lines and its banner's name (replay_tab.cpp); the banner's name on Battle
 // Settings' and Training's stage grids (stages.cpp).
 //
 // A Costume row's place runs between its two arrows, read on that row (Wael, 07/11: the text's region reaches past the arrows on the character
@@ -339,6 +341,23 @@ bool claimed(int side) {
     return side != 0 && rto::select::claim(side, 0, -1) != 0;
 }
 
+// The option window's rows (read in game, 09/11): OptionDialog > c_main/c_dialog/p_Group_main_v_kc > p_OptionUnit_* > a row panel that
+// holds the arrows p_MouseDecideOperable_L / _R, its title e_text_title and its value p_TextList_0_h/e_text (AutoRegionFit on: the game
+// squeezes a long value). Each row: f(value text or null, row, title text or null). R35: found by name each time.
+constexpr int kOptionUnits = 48;
+template <class F> void option_rows(const SF6CoreAPI* a, Obj* cm, F f) {
+    Obj* group = static_cast<Obj*>(a->ui_find_cached(cm, "p_Group_main_v_kc"));
+    int guard = 0;
+    for (Obj* unit = group ? call_obj(group, "get_Child") : nullptr; unit && guard < kOptionUnits; unit = call_obj(unit, "get_Next"), ++guard) {
+        int g2 = 0;
+        for (Obj* row = call_obj(unit, "get_Child"); row && g2 < 8; row = call_obj(row, "get_Next"), ++g2) {
+            if (!a->ui_find_child(row, "p_MouseDecideOperable_L", 2)) continue;            // not a row with arrows
+            void* list = a->ui_find_child(row, "p_TextList_0_h", 2);
+            f(list ? a->ui_find_child(list, "e_text", 2) : nullptr, static_cast<void*>(row), a->ui_find_child(row, "e_text_title", 2));
+        }
+    }
+}
+
 }  // namespace
 
 void drive(void* text, float width, uint32_t poll, bool allowed) { step(text, width, nullptr, poll, allowed); }
@@ -412,16 +431,47 @@ void frame() {
                     if (void* line = a->ui_find_child(item, "e_text_costume", 3)) step(line, 0, nullptr, 1, on);
             }
         }
+        // the option window: every row's value and title
+        void* ob[2] = {};
+        const uint32_t on_n = a->ui_agents("OptionDialog", ob, 2);
+        for (uint32_t i = 0; i < on_n && i < 2; ++i) {
+            Obj* agent = static_cast<Obj*>(ob[i]);
+            Obj* cm = call_obj(agent, "get_ControlMain");
+            if (!cm) continue;
+            const bool on = drawn(agent) && shown(cm);
+            g_any = g_any || on;
+            option_rows(a, cm, [&](void* value, void* row, void* title) {
+                // (the game's own Options page has up to ~50 rows: a still text is looked at every 5 / 15 frames, a sliding one every frame)
+                if (value) { step(value, 0, row, 5, on); if (busy(value)) g_row_sliding = true; }
+                if (title) step(title, 0, nullptr, 15, on);
+            });
+        }
     } catch (...) {
         static bool once = false;
         if (!once) { once = true; logf("name scroll: EXCEPTION in a frame"); }
     }
 }
 
+// A sliding text the row's focus animation moved this frame: back where it was slid
+void hold_place(void* text) {
+    if (!text) return;
+    auto it = g_states.find(reinterpret_cast<uintptr_t>(text));
+    if (it == g_states.end() || !it->second.sliding || it->second.last == kNotYet) return;
+    const State& s = it->second;
+    float p[3] = {};
+    if (floats_of(static_cast<Obj*>(text), "get_Position", p, 3) && std::fabs(p[0] - s.last_x) > 0.25f)
+        A()->ui_set_position(C(), text, s.last_x, s.found.y, s.found.z);
+}
+
 void post_frame() {
     if (!g_row_sliding) return;
     const SF6CoreAPI* a = A();
     if (!a || !C()) return;
+    void* ob[2] = {};
+    const uint32_t on_n = a->ui_agents("OptionDialog", ob, 2);
+    for (uint32_t i = 0; i < on_n && i < 2; ++i)
+        if (Obj* cm = call_obj(static_cast<Obj*>(ob[i]), "get_ControlMain"))
+            option_rows(a, cm, [&](void* value, void*, void*) { hold_place(value); });
     for (const Screen& sc : kScreens) {
         void* buf[2] = {};
         const uint32_t n = a->ui_agents(sc.agent, buf, 2);
