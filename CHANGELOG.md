@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.27.1 (2026-11-09) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.23.1 | live costume options without crash or stalled loading, Fluffy step archives, long option names slide, stage grid keys, Report a bug 1.2.0 |
+| SF6 Color Mod | 0.24.5 | unchanged |
+| SF6 Native Core | 0.9.9 | unchanged |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.23.0, then install Slots Loader 1.23.1. The other packages are the
+same files as in 1.27.0: keep them. With the all-in-one package, replace 1.27.0 with 1.27.1. The costume pak is rebuilt once at the
+first launch (a few minutes, no game window meanwhile): the outfits are made again with the fixes below, nothing to reinstall.
+
+### SF6 Slots Loader 1.23.1
+- **Live costume options** (the options menu of an outfit, F on the Costume row): no more crash or frozen preview when changing
+  options quickly.
+  - A texture shown on the model stays loaded while it is shown, and the outfit's own texture is put back correctly.
+  - Textures go on a part only once it is ready and wears the wanted mesh and material.
+  - A texture that the game cannot swap live (a size that is not a power of two, or a broken mip table: some mods ship one) is no
+    longer asked for at run time: asking for it froze the game's loading for the rest of the session (every next option stayed
+    unchanged). The outfit's own texture shows there instead.
+- **Archives made of numbered steps** (Fluffy add-ons: an empty main entry, "1) Main files", one "2)" to pick, "3a)" / "3b)" pairs,
+  optional "4)", "5)"): one outfit, the main files always worn, each step a choice with a default. The step options no longer show up
+  on every other outfit of the character. Example: Cow girl Mai.
+- **Mod files from before a game update**: user files saved before the game changed their layout (an invisible fighter, a preview stuck
+  loading) are dropped and the game's files used; the add-on that brings a mesh's material file is worn with it.
+- **Colours of a reused costume number**: when a number goes to another mod, the Color Mod's saved colours of the former outfit are
+  set aside (moved to `.former_outfits`, never deleted) instead of showing on the new one.
+- **Long names in option menus**: every row of an option window (costume options, Report a bug, Interface sections, the game's own)
+  keeps its whole value and title at full size; a long one slides inside its place instead of being squeezed.
+- **Stage grids**:
+  - Battle Settings: X (R on a keyboard) no longer also opens Random Stage Settings; it only changes the variation.
+  - Random Stage Settings: Y (T) ticks every stage, or unticks all but the one under the cursor; the guide bar shows it.
+  - Battle Settings: the variation key keeps the stage's variation at once (the summary follows, Esc keeps it); Confirm chooses the
+    stage. Training keeps preview then Confirm.
+- **Costumes in online matches**: a crash after a ranked match's VS screen (an outfit description freed by the game) is fixed.
+- **Report a bug 1.2.0**:
+  - A fix can name its release: the status shows "FIXED IN x.y.z: SOON" until that release is out, then "FIXED IN x.y.z: UPDATE"
+    when your files are older, and TO TEST (OK / BUG) only once you have the fix.
+  - NEED INFO: the admin can ask a question; it shows on the menu and you answer by sending your report again ("Reply").
+  - A message from the admin shows with a fix.
+  - Words in the 14 languages (12 of them machine-translated, to be reviewed).
+
 ## 1.27.0 (2026-11-08) — SF6 Mod Suite
 
 | Package | Version | |
