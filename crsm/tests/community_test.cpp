@@ -1149,10 +1149,10 @@ void test_report_wire() {
     check(auth::needs_token("report"), "report: needs the token");
     Request get;
     check(build_request(C({{"cmd", "report_get"}, {"costume_key", "mod:ab:f1:c0"}, {"files", "report_mod.dll:0123456789ab,amd_ags_x64.dll:ba9876543210"}, {"image", "x"}, {"logs", "x"}}), cfg, &get, &err) && get.method == "GET" && !get.has_body &&
-          get.url == "https://w.example/api/report?costume_key=mod%3Aab%3Af1%3Ac0&files=report_mod.dll%3A0123456789ab%2Camd_ags_x64.dll%3Aba9876543210" && auth::needs_token("report_get"),
+          get.url == "https://w.example/api/report?costume_key=mod%3Aab%3Af1%3Ac0&files=report_mod.dll%3A0123456789ab%2Camd_ags_x64.dll%3Aba9876543210&info=1" && auth::needs_token("report_get"),
           "report_get: a GET of the key and our files' ids, nothing else leaves: " + get.url);
     Request get0;
-    check(build_request(C({{"cmd", "report_get"}, {"costume_key", "mod:ab:f1:c0"}}), cfg, &get0, &err) && get0.url == "https://w.example/api/report?costume_key=mod%3Aab%3Af1%3Ac0&files=",
+    check(build_request(C({{"cmd", "report_get"}, {"costume_key", "mod:ab:f1:c0"}}), cfg, &get0, &err) && get0.url == "https://w.example/api/report?costume_key=mod%3Aab%3Af1%3Ac0&files=&info=1",
           "report_get: files is always there, even empty: " + get0.url);
     Request set;
     check(build_request(C({{"cmd", "report_status"}, {"costume_key", "mod:ab"}, {"action", "confirm"}, {"steamid", "76561198000000001"}, {"text", "x"}}), cfg, &set, &err) && set.method == "POST" && set.url == "https://w.example/api/report/status" && auth::needs_token("report_status"), "report_status: POST");

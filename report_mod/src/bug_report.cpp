@@ -1078,7 +1078,8 @@ void ask_status() {
             const bool exists = d.contains("exists") && d["exists"] == true;
             const std::string status = d.contains("status") && d["status"].is_string() ? d["status"].get<std::string>() : std::string();
             const std::string fixed_in = d.contains("fixed_in") && d["fixed_in"].is_string() ? d["fixed_in"].get<std::string>().substr(0, 24) : std::string();
-            g_session.server_answer(rp::server_from(exists, status), d.contains("text") && d["text"].is_string() ? d["text"].get<std::string>() : std::string(), fixed_in);
+            const std::string note = d.contains("note") && d["note"].is_string() ? d["note"].get<std::string>().substr(0, 1000) : std::string();
+            g_session.server_answer(rp::server_from(exists, status), d.contains("text") && d["text"].is_string() ? d["text"].get<std::string>() : std::string(), fixed_in, note);
             cmn::journal("bug report: status read: %s", exists ? status.c_str() : "no report");
         }
         g_dirty = true;

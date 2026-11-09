@@ -458,6 +458,64 @@ static void test_session() {
         check(f.server() == V::Waiting, "and it is waiting once sent");
     }
 
+    // NEED INFO: the admin's question; the player edits and sends again (Send is a Reply); no OK, no BUG
+    {
+        check(rp::server_from(true, "info") == V::NeedInfo && rp::server_from(false, "info") == V::None && rp::server_from(true, "someday") == V::Waiting, "server_from: info is NeedInfo, an unknown word is still Waiting");
+        const rp::Tr trv = [](const std::string& k, const std::vector<std::string>& a) { std::string s2 = k; for (const auto& x : a) s2 += "(" + x + ")"; return s2; };
+        rp::Session q;
+        q.begin(); q.shot_settled();
+        q.server_answer(V::NeedInfo, "the hair", "", "Which colour?\nAnd <ICON KeyF> [x]\x01");
+        check(q.server() == V::NeedInfo && q.has_report() && q.pick() == rp::Pick::Held && q.option_index() == 0 && q.note() == "Which colour?\nAnd <ICON KeyF> [x]\x01", "need info: a held report with the question");
+        check(opts_are(q, { "report_st_info" }) && rows_are(q, { R::Text, R::Send }) && q.text() == "the hair" && !q.choose(1), "STATUS alone, then Text and Send");
+        check(rp::row_title(q, R::Send, trv) == "report_row_reply" && rp::row_title(q, R::Text, trv) == "report_row_change", "Send reads Reply in this state");
+        check(rp::message_text(q, R::Status, trv) == "report_msg_question(Which colour? And (ICON KeyF) (x))" && rp::message_text(q, R::Text, trv) == rp::message_text(q, R::Status, trv), "the question on the line, plain text: no tag, no control character, no line break");
+        check(rp::message_text(q, R::Send, trv) == "report_msg_same_text", "on Send, the form's rule first: nothing new to send");
+        q.set_text("the hair, blue");
+        check(rp::message_text(q, R::Send, trv) == "report_msg_question(Which colour? And (ICON KeyF) (x))", "once there is something to send, the question stays");
+        check(q.send(), "the reply goes");
+        q.answered(true, "");
+        check(q.server() == V::Waiting && q.note().empty() && opts_are(q, { "report_st_waiting" }), "sent: waiting again, the question cleared");
+        rp::Session q2;
+        q2.begin(); q2.shot_settled();
+        q2.server_answer(V::NeedInfo, "t");
+        check(rp::message_text(q2, R::Status, trv).empty(), "no question given: nothing shown");
+        q2.closed();
+    }
+    // A note next to a fix: after the state's own message; absent = the message as before
+    {
+        const rp::Tr trv = [](const std::string& k, const std::vector<std::string>& a) { std::string s2 = k; for (const auto& x : a) s2 += "(" + x + ")"; return s2; };
+        for (const V v : { V::FixedSoon, V::FixedUpdate, V::Fixed }) {
+            rp::Session f;
+            f.begin(); f.shot_settled();
+            f.server_answer(v, "t", "1.28.0", "Try the new colour 04.");
+            const std::string base = v == V::Fixed ? "report_msg_to_test" : v == V::FixedSoon ? "report_msg_fixed_soon(1.28.0)" : "report_msg_fixed_update(1.28.0)";
+            check(rp::message_text(f, R::Status, trv) == base + " report_msg_note(Try the new colour 04.)", "a note follows the state's message");
+            rp::Session g;
+            g.begin(); g.shot_settled();
+            g.server_answer(v, "t", "1.28.0");
+            check(rp::message_text(g, R::Status, trv) == base, "no note: the message as before");
+            if (v != V::Fixed) check(rp::message_text(f, R::Send, trv) == "report_msg_same_text", "on Send the form's rules keep priority");
+        }
+        rp::Session c;
+        c.begin(); c.shot_settled();
+        c.server_answer(V::Confirmed, "t", "", "Thanks!");
+        check(rp::message_text(c, R::Status, trv) == "report_msg_note(Thanks!)", "a note left on a confirmed report");
+    }
+    // The note as a plain line
+    {
+        check(rp::note_line("a\r\nb\t c\x07\x7f d") == "a b c d", "line breaks are spaces, controls go: " + rp::note_line("a\r\nb\t c\x07\x7f d"));
+        check(rp::note_line("<COLOR ff0000>hi</COLOR> [x]") == "(COLOR ff0000)hi(/COLOR) (x)", "no tag survives");
+        check(rp::note_line("  \n  ").empty() && rp::note_line("").empty(), "blank is nothing");
+        const std::string cut = rp::note_line(std::string(1000, 'a'));
+        check(cut == std::string(rp::kNoteChars, 'a') + "...", "cut with ...");
+        const std::string wide = rp::note_line(std::string(rp::kNoteChars + 20, 'a').replace(5, 0, "\xC3\xA9"));
+        check(wide.size() == rp::kNoteChars + 1 + 3 && wide.substr(wide.size() - 3) == "...", "counted in characters, never inside one");
+        std::string cjk; for (int i = 0; i < 400; ++i) cjk += "\xE6\xBC\xA2";
+        const std::string cc = rp::note_line(cjk);
+        check(cc.size() == rp::kNoteChars * 3 + 3 && cc.substr(cc.size() - 3) == "...", "CJK cut on a character");
+        check(rp::note_line(std::string(rp::kNoteChars, 'b')) == std::string(rp::kNoteChars, 'b'), "exactly the room: untouched");
+    }
+
     // TO TEST: nothing but STATUS; OK shows the row that sends it, BUG is the form
     s = opened(V::Fixed, "old text");
     check(opts_are(s, { "report_st_to_test", "report_st_ok", "report_st_bug" }) && s.option_index() == 0 && rows_are(s, {}), "to test: STATUS alone");
@@ -717,11 +775,19 @@ static void test_summary_fits(const fs::path& repo) {
             const std::string o = tr(k, { "1.27.10" });
             check(!o.empty() && o.find("%s") == std::string::npos && o.find("1.27.10") != std::string::npos && drawn_em(o) * px_per_em <= 264.0, lang + ": " + k + " names the release and keeps a margin to its arrows: " + o);
         }
+        {
+            const std::string o = tr("report_st_info", {});
+            check(!o.empty() && drawn_em(o) * px_per_em <= 264.0, lang + ": report_st_info keeps a margin to its arrows: " + o);
+            for (const char* k : { "report_msg_question", "report_msg_note" }) {
+                const std::string q = tr(k, { "ZZ" });
+                check(!q.empty() && q.find("%s") == std::string::npos && q.find("ZZ") != std::string::npos, lang + ": " + k + " carries the text: " + q);
+            }
+        }
         for (const char* k : { "report_msg_fixed_soon", "report_msg_fixed_update" }) {
             const std::string o = tr(k, { "1.27.10" });
             check(!o.empty() && o.find("%s") == std::string::npos && o.find("1.27.10") != std::string::npos, lang + ": " + k + " names the release: " + o);
         }
-        for (const char* k : { "report_row_describe", "report_row_change", "report_row_send", "report_row_update", "report_row_mark_fixed" }) {
+        for (const char* k : { "report_row_describe", "report_row_change", "report_row_send", "report_row_update", "report_row_reply", "report_row_mark_fixed" }) {
             const std::string o = tr(k, {});
             check(!o.empty() && drawn_em(o) <= ui::logic::kComRowEm, lang + ": " + k + " fits its row: " + o);
         }

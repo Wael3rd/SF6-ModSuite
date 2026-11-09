@@ -13,7 +13,7 @@
 //   report    { cmd, costume_key, text, character, fighter_id, outfit, outfit_row, costume_no, colour, versions, logs, record, mods, notes,
 //               image }                                            POST   /api/report         the same members (report/report_logic.hpp); no identity:
 //                                                                  the Worker takes the account from the Bearer token, 60 s for its upload
-//   report_get    { cmd, costume_key, files }                     GET    /api/report?costume_key=&files=   the caller's own report: status and text. files: "name:sha12,..." (our installed files' ids; may be empty, always sent)
+//   report_get    { cmd, costume_key, files }                     GET    /api/report?costume_key=&files=&info=1   (info=1 always: the server may answer status "info" and a note)  the caller's own report: status and text. files: "name:sha12,..." (our installed files' ids; may be empty, always sent)
 //   report_status { cmd, costume_key, action }                    POST   /api/report/status  { costume_key, action: confirm }
 // (page / per_page / value may be numbers or strings; the bridge read them as strings.) The headers (x-api-key,
 // x-client-version, Authorization) are auth::request_headers'.

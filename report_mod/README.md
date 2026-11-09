@@ -46,6 +46,8 @@ on Send, that your Steam ID, your logs and your mod list go too. After Send, or 
 the author's action can change; your text comes back and Send becomes Update, which replaces what was sent and does nothing until your text differs from it. When the
 author marks it fixed, STATUS shows TO TEST: choose OK and press MARK AS FIXED if it is fixed, or choose BUG if it is still broken. If the fix is in a release you do not have, STATUS says so instead and names it, with no OK and no BUG:
 FIXED IN 1.27.1: SOON (not published yet) or FIXED IN 1.27.1: UPDATE (published: update the mod, then test); until then you can still change your description, as on WAITING FOR FIX.
+NEED INFO: the author asks you for more information. STATUS says so, the guide's line shows the question ("Question: ..."), and the Send row is called Reply: change your description and press it, the report goes again as an answer and the status goes back to WAITING FOR FIX (there is no OK or BUG while a question is open). The request carries info=1 so that the server may answer with this status and with a note.
+A note from the author (with a fix, TO TEST or a confirmed report) shows on the guide's line after the status message ("Message: ..."). Notes are plain text: line breaks become spaces, control characters and the characters < > [ ] are removed or turned into parentheses, and past 160 characters the note ends with "...". While the focus is on Send, the Send row's own messages come first.
 You can never see anyone else's report.
 
 What Send sends, over HTTPS to the same Community server, with your Steam-verified token (see above):

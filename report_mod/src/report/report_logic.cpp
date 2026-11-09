@@ -519,6 +519,7 @@ Server server_from(bool exists, const std::string& status) {
     if (status == "confirmed") return Server::Confirmed;
     if (status == "fixed_soon") return Server::FixedSoon;
     if (status == "fixed_update") return Server::FixedUpdate;
+    if (status == "info") return Server::NeedInfo;
     return Server::Waiting;
 }
 
@@ -530,6 +531,7 @@ void Session::reset() {
     std::string().swap(text_);
     std::string().swap(sent_text_);
     fixed_in_.clear();
+    note_.clear();
     error_.clear();
     outcome_ = Outcome::None;
     field_ok_ = true;
@@ -544,10 +546,11 @@ bool Session::begin() {
     return true;
 }
 
-void Session::server_answer(Server s, const std::string& text, const std::string& fixed_in) {
+void Session::server_answer(Server s, const std::string& text, const std::string& fixed_in, const std::string& note) {
     if (server_ != Server::Checking) return;
     server_ = s;
     fixed_in_ = fixed_in;
+    note_ = note;
     sent_text_ = text;
     if (!text_typed_) text_ = text;
     pick_ = waiting_like() || s == Server::Fixed ? Pick::Held : Pick::Ok;
@@ -562,6 +565,7 @@ std::vector<std::string> Session::options() const {
     switch (server_) {
         case Server::Checking: return { "report_st_checking" };
         case Server::Waiting: return { "report_st_waiting" };
+        case Server::NeedInfo: return { "report_st_info" };
         case Server::FixedSoon: return { "report_st_fixed_soon" };
         case Server::FixedUpdate: return { "report_st_fixed_update" };
         case Server::Fixed: return { "report_st_to_test", "report_st_ok", "report_st_bug" };
@@ -572,7 +576,7 @@ std::vector<std::string> Session::options() const {
 int Session::option_index() const {
     switch (server_) {
         case Server::Checking: return 0;
-        case Server::Waiting: case Server::FixedSoon: case Server::FixedUpdate: return 0;
+        case Server::Waiting: case Server::FixedSoon: case Server::FixedUpdate: case Server::NeedInfo: return 0;
         case Server::Fixed: return pick_ == Pick::Held ? 0 : pick_ == Pick::Ok ? 1 : 2;
         default: return pick_ == Pick::Bug ? 1 : 0;
     }
@@ -619,7 +623,7 @@ void Session::answered(bool sent, const std::string& error) {
     if (window_gone_) { reset(); return; }               // nobody is looking any more
     outcome_ = sent ? Outcome::Sent : Outcome::Failed;
     error_ = sent ? std::string() : error;
-    if (sent) { server_ = Server::Waiting; pick_ = Pick::Held; sent_text_ = text_; }
+    if (sent) { server_ = Server::Waiting; pick_ = Pick::Held; sent_text_ = text_; note_.clear(); fixed_in_.clear(); }   // (the server clears them too)
 }
 
 void Session::status_answered(bool ok, Server now, const std::string& error) {
@@ -650,6 +654,27 @@ std::string shown_safe(const std::string& s) {
     return out;
 }
 
+std::string note_line(const std::string& note, size_t max_chars) {
+    std::string out;
+    size_t chars = 0;
+    bool space = true;                                   // (no leading space, one between words)
+    for (size_t i = 0; i < note.size();) {
+        const unsigned char c = (unsigned char)note[i];
+        const size_t len = c < 0x80 ? 1 : c < 0xC0 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        const std::string ch = note.substr(i, len);
+        i += len;
+        if (c < 0x20 || c == 0x7F) { if (!space) { out += ' '; space = true; ++chars; } continue; }   // controls: a break or tab is a space, the rest goes
+        if (c >= 0x80 && c < 0xC0) continue;             // a stray continuation byte
+        if (c == ' ') { if (!space) { out += ' '; space = true; ++chars; } continue; }
+        if (chars >= max_chars) { while (!out.empty() && out.back() == ' ') out.pop_back(); return out + "..."; }
+        out += c == '<' || c == '[' ? "(" : c == '>' || c == ']' ? ")" : ch;
+        space = false;
+        ++chars;
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
 std::string row_title(const Session& s, Row row, const Tr& tr) {
     switch (row) {
         case Row::Status: return tr("report_status", {});
@@ -657,6 +682,7 @@ std::string row_title(const Session& s, Row row, const Tr& tr) {
         case Row::MarkFixed: return tr("report_row_mark_fixed", {});
         case Row::Send: break;
     }
+    if (s.server() == Server::NeedInfo) return tr("report_row_reply", {});
     return tr(s.has_report() ? "report_row_update" : "report_row_send", {});
 }
 
@@ -680,12 +706,24 @@ std::string message_text(const Session& s, Row focus, const Tr& tr) {
     if (s.busy() != Busy::None) return tr("report_sending", {});
     if (s.outcome() == Session::Outcome::Failed) return tr("report_failed", { tr(error_key(s.error()), {}) });
     if (s.outcome() == Session::Outcome::Sent && s.update_blocked()) return tr("report_msg_sent", {});
-    if (s.server() == Server::Fixed && s.pick() == Pick::Held) return tr("report_msg_to_test", {});
+    // The admin's note, as one plain line after the state's own message (the line slides when it is long)
+    const std::string note = note_line(s.note());
+    const auto with_note = [&](const std::string& base) {
+        if (note.empty()) return base;
+        const std::string n = tr("report_msg_note", { note });
+        return base.empty() ? n : base + " " + n;
+    };
+    if (s.server() == Server::Fixed && s.pick() == Pick::Held) return with_note(tr("report_msg_to_test", {}));
     const bool soon = s.server() == Server::FixedSoon, update = s.server() == Server::FixedUpdate;
+    if (s.server() == Server::NeedInfo) {                // the question stays up, the form's own warnings only when Send is blocked
+        if (focus == Row::Send && s.needs_text()) return tr("report_msg_need_text", {});
+        if (focus == Row::Send && s.update_blocked()) return tr("report_msg_same_text", {});
+        return note.empty() ? std::string() : tr("report_msg_question", { note });
+    }
     if ((soon || update) && focus != Row::Send)      // (on Send the form's rules come first: the text, the warning on Update)
-        return tr(soon ? "report_msg_fixed_soon" : "report_msg_fixed_update", { shown_safe(s.fixed_in()) });
+        return with_note(tr(soon ? "report_msg_fixed_soon" : "report_msg_fixed_update", { shown_safe(s.fixed_in()) }));
     const std::string unreachable = s.server() == Server::Unknown ? tr("report_msg_unreachable", {}) : "";
-    if (!form_shown(s)) return unreachable;
+    if (!form_shown(s)) return s.server() == Server::Confirmed ? with_note(unreachable) : unreachable;
     const std::string replace = s.has_report() ? tr("report_msg_replace", {}) : "";
     if (focus != Row::Send) return !unreachable.empty() ? unreachable : replace;
     if (s.needs_text()) return tr("report_msg_need_text", {});
