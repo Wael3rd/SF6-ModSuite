@@ -72,6 +72,17 @@ fork 1.9.7-custom, MIT).
   other: the **root group (main files) first**, then the others (sorted group names; nested: menu folder order). The
   files of a later group replace those of an earlier one at the same path. (Before the port, a root whose name did
   not start with `(` could be merged last, over the options.)
+- **Steps of a flat menu** (09/11, loader `2026-11-09-addon-chains`): every option hangs from the root and the names
+  carry the steps ("1) Main Files", "2) Oily skin", "2) Sweat on", "3a) Bikini Edits", "5) hide ponytail": Cow girl
+  Mai C1). A step of two options or more that ship one same file, or numbered with `!`, is a choice group of its own
+  (key `<root key>/NN`, named after the word its options share, else "Step N"); the main files' step and the other
+  options stay in the root group. Only the root group of a mod without nested menus is split.
+- **Add-ons of an option**: an option whose `AddonFor` names another option of the tree (Fluffy lists it under that
+  option and installs both: "3b) Regular - Monokini" under "3a) Monokini Edits"), or an add-on of such an add-on, is
+  that option worn with it: the option is offered through its add-ons only, each carrying the option's files (its own
+  win), in the option's place. The add-ons of the main files (always worn) are a group of their own instead. Before,
+  such add-ons were outfits of their own (mesh-only versions merged by `merge_versions`) and the rest of the mod a
+  separate add-on put on every outfit of the fighter.
 - **Option**: `id` (8 hex digits, a hash of the group key and the option's folder name: stable when the archive is
   updated or renamed; unchanged for mods without nested menus), `name` (from `modinfo.ini`), `folder`, its files,
   and a `mode`:
