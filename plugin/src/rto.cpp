@@ -32,7 +32,9 @@
 #include <climits>
 #include <cstdlib>
 #include <mutex>
+#include <map>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 
 #include <psapi.h>
@@ -99,7 +101,8 @@ struct Types {
     Obj *t_mesh = nullptr, *t_chain = nullptr, *t_pcc = nullptr;
     Method *get_comp = nullptr, *go_tr = nullptr, *go_name = nullptr, *tr_child = nullptr, *tr_next = nullptr, *tr_go = nullptr;
     Method *get_mesh = nullptr, *get_mat = nullptr, *set_mesh = nullptr, *set_mat = nullptr, *mesh_ready = nullptr,
-           *mat_ready = nullptr, *mat_num = nullptr, *tex_num = nullptr, *get_tex = nullptr, *set_tex = nullptr;
+           *mat_ready = nullptr, *mat_num = nullptr, *tex_num = nullptr, *get_tex = nullptr, *set_tex = nullptr,
+           *mats_upd = nullptr, *upd_mat = nullptr, *mats_en_n = nullptr, *parts_en_n = nullptr;
     Method *ch_get = nullptr, *ch_set = nullptr, *ch_restart = nullptr, *ch_enable = nullptr, *ch_enabled = nullptr, *ch_setuped = nullptr;
     Method *set_color = nullptr;
     Method *crf_obj = nullptr, *crf_setup = nullptr, *pb_go = nullptr, *pb_applied = nullptr;
@@ -138,6 +141,10 @@ bool types() {
     T.tex_num = method_of(T.mesh, "getMaterialTextureNum", 1);
     T.get_tex = method_of(T.mesh, "getMaterialTexture", 2);
     T.set_tex = method_of(T.mesh, "setMaterialTexture", 3);
+    T.mats_upd = method_of(T.mesh, "get_MaterialsUpdatable", 0);   // (optional: read before setMaterialTexture)
+    T.upd_mat = method_of(T.mesh, "updatableMaterial", 0);
+    T.mats_en_n = method_of(T.mesh, "getMaterialsEnableCount", 0);
+    T.parts_en_n = method_of(T.mesh, "getPartsEnableCount", 0);
     T.ch_get = method_of(T.chain, "get_ChainAsset", 0);
     T.ch_set = method_of(T.chain, "set_ChainAsset", 1);
     T.ch_restart = method_of(T.chain, "restart", 0);
@@ -207,6 +214,7 @@ struct Res {
     Obj* holder = nullptr;
     uint32_t ready_at = 0;          // frame from which it may be given to a model
     uint32_t used = 0;
+    uint32_t born = 0;              // frame its holder was made (never given back before kGcMinAge: still loading)
     int fails = 0;
     bool dead = false;
 };
@@ -312,11 +320,18 @@ int g_probe_first = 0, g_probe_again = 0;
 // resident: the model wears this file now (a way back), usable at once
 Res* res_get(const std::string& path, const std::string& kind, bool resident) {
     auto it = g_res.find(path);
-    if (it != g_res.end()) { it->second.used = g_frame; return &it->second; }
     Res r;
+    if (it != g_res.end()) {
+        it->second.used = g_frame;
+        // a file let go after a failed try (backoff): made again once its wait is over, with its count of failures
+        if (it->second.holder || it->second.dead || g_frame < it->second.ready_at) return &it->second;
+        r = it->second;
+        r.holder = nullptr;
+    }
     r.kind = kind;
     r.used = g_frame;
     r.ready_at = resident ? 0 : g_frame + load_frames(kind);
+    r.born = g_frame;
     const char* rt = kind == "mesh" ? "via.render.MeshResource" : kind == "material" ? "via.render.MeshMaterialResource"
                    : kind == "texture" ? "via.render.TextureResource" : "via.motion.ChainResource";
     const char* ht = kind == "mesh" ? "via.render.MeshResourceHolder" : kind == "material" ? "via.render.MeshMaterialResourceHolder"
@@ -355,7 +370,7 @@ bool swappable(const std::string& kind) { return kind == "mesh" || kind == "mate
 int files_left(const std::map<std::string, Want>& want, int* total) {
     int left = 0, n = 0;
     for (auto& [t, w] : want) {
-        if (w.orig || w.path.empty() || !swappable(w.kind)) continue;
+        if (w.orig || w.path.empty() || !swappable(w.kind) || w.no_live) continue;
         ++n;
         const Res* r = res_get(w.path, w.kind, false);
         if (!r->dead && !usable(r)) ++left;
@@ -380,16 +395,43 @@ void backoff(const std::string& path) {
     ++r.fails;
     r.ready_at = g_frame + (60u << std::min(r.fails, 4));
     if (r.fails >= 6) { r.dead = true; logf("rto: %s never ready, left out", short_path(path).c_str()); }
+    // Our reference let go: kept, a copy the engine had begun to unload never got ready (Cow girl Mai's "thicc - bikini",
+    // 09/11); made again from scratch when its wait is over (res_get)
+    if (r.holder) { r.holder->release(); r.holder = nullptr; }
 }
 // Holders not wanted for `age` frames (10 s; 1 s when a batch is let go: the popup or Battle Settings closed, the cursor
 // moved to other options, the fighters wear the confirmed options) are given back (a model that wears one keeps its own
 // reference). One a model asks for (res_get on each of its passes) stays.
 constexpr uint32_t kGcAge = 600, kGcQuick = 60;
+// A holder is never given back within 10 s of its making: given back while the engine still loaded it and asked for again
+// soon after, a mesh never got ready (Cow girl Mai's forms browsed quickly after other outfits, 09/11: "never ready, left
+// out"; the same file applied at once in a fresh session)
+constexpr uint32_t kGcMinAge = 600;
+// The textures this plugin set on a model's materials: (part, material, texture) -> the file. setMaterialTexture keeps no
+// reference of its own (09/11: a texture given back while a material still used it - Cow girl Mai's forms browsed - and
+// every mesh after it never got ready, then setMaterialTexture threw and the game crashed): their holders stay while set.
+std::map<std::tuple<Obj*, uint32_t, uint32_t>, std::string> g_tex_bound;
+// The game's own texture of each (part, material, texture) one of ours replaced: its holder, referenced (rto texture step)
+std::map<std::tuple<Obj*, uint32_t, uint32_t>, Obj*> g_tex_orig;
+std::set<std::string> tex_bound_now() {
+    for (auto it = g_tex_orig.begin(); it != g_tex_orig.end();) {
+        if (!alive_as(std::get<0>(it->first), T.mesh)) { if (it->second) it->second->release(); it = g_tex_orig.erase(it); continue; }
+        ++it;
+    }
+    std::set<std::string> out;
+    for (auto it = g_tex_bound.begin(); it != g_tex_bound.end();) {
+        if (!alive_as(std::get<0>(it->first), T.mesh)) { it = g_tex_bound.erase(it); continue; }   // the model is gone
+        out.insert(it->second);
+        ++it;
+    }
+    return out;
+}
 void res_gc(uint32_t age = kGcAge, const char* why = "") {
     size_t n = 0;
+    const std::set<std::string> bound = tex_bound_now();
     for (auto it = g_res.begin(); it != g_res.end();) {
         if (!g_warm.count(it->first) && !g_warm_prev.count(it->first) && !g_warm_pop.count(it->first) && !g_warm_load.count(it->first)
-            && g_frame - it->second.used > age) {
+            && g_frame - it->second.used > age && g_frame - it->second.born > kGcMinAge && !bound.count(it->first)) {
             if (it->second.holder) it->second.holder->release();
             it = g_res.erase(it); ++n;
         } else ++it;
@@ -405,7 +447,9 @@ void res_gc(uint32_t age = kGcAge, const char* why = "") {
 // ---------------------------------------------------------------------------------------------
 struct TexBind { uint32_t mi = 0, ti = 0; std::string target; };
 struct MeshComp {
-    Obj* c = nullptr; Obj* gobj = nullptr; std::string go, mat_key, exp_mesh, exp_mat; std::vector<TexBind> binds;
+    Obj* c = nullptr; Obj* gobj = nullptr; std::string go, mat_key, exp_mesh, exp_mat, tex_logged; std::vector<TexBind> binds;
+    uint32_t wait_since = 0; bool wait_logged = false;   // not ready since (step 2: swapped anyway after 3 s)
+    bool put_back = false;                               // the plugin put it back after a swap that could not be drawn
     // a search of its material's bindings spread over frames (scan_bindings): the material, the next material index,
     // what was found so far, the choices it was made with
     std::string scan_key; uint32_t scan_mi = 0; std::vector<TexBind> scan_binds; uint32_t scan_ver = 0; int scan_side = -1;
@@ -598,7 +642,9 @@ std::vector<const File*> batch_of(const Slot& s, int focus, uint64_t* bytes) {
         }
     std::set<std::string> seen;
     auto add = [&](const File& f, const std::string& id) {
-        if (out.size() >= kBatchFiles || f.path.empty() || f.path == f.target || !swappable(f.kind) || seen.count(f.path)) return;
+        // (a file the loader marked never live - not a power of two: asked for, the engine's loading stopped for the whole
+        // session, 09/11 - is never asked for)
+        if (out.size() >= kBatchFiles || f.path.empty() || f.path == f.target || !swappable(f.kind) || f.no_live || seen.count(f.path)) return;
         if (!id.empty()) { auto w = dwin.find(f.target); if (w != dwin.end() && w->second.second == id) return; }
         const uint64_t b = file_bytes(f);
         if (total + b > kBatchBytes) return;
@@ -758,6 +804,7 @@ uint32_t g_bind_frame = 0;            // the frame g_bind_used counts
 int64_t g_bind_used = 0;              // QueryPerformanceCounter ticks of bindings search in that frame
 bool g_bind_any = false;              // a material was looked at in that frame
 int64_t g_bind_budget = 0;            // kBindBudgetMs in ticks
+std::set<std::string> g_tex_refused;  // "material|mesh" of the parts whose textures the engine refused (never set again)
 uint32_t g_unsliced_until = 0;        // a held swap released: whole searches until this frame
 int64_t qpc_now() { LARGE_INTEGER c; QueryPerformanceCounter(&c); return c.QuadPart; }
 // The material `pt` of a part: which texture of which of its materials names a target of the outfit's texture options.
@@ -947,7 +994,22 @@ void pass(Model& md) {
         const bool unit = !wc.empty();
         if (unit) unit_chains.insert(cc->c);
         if (unit && !T.ch_enable) { tell_once(md, mc.go + ": its chain cannot be stopped, part left as is"); continue; }
-        if (!ret_bool(T.mesh_ready, mc.c) || !ret_bool(T.mat_ready, mc.c)) { pending = true; continue; }   // the game still loads it
+        // the game still loads it. A part put back that never got ready again (Cow girl Mai's body after a swap "not
+        // drawable at once", 09/11: invisible, every later pick skipped here without a word): after 3 s, noted once and
+        // swapped anyway (the swap's own checks put it back again if it cannot be drawn; backoff ends the tries).
+        if (!ret_bool(T.mesh_ready, mc.c) || !ret_bool(T.mat_ready, mc.c)) {
+            if (!mc.wait_since) mc.wait_since = g_frame ? g_frame : 1;
+            if (!mc.put_back || g_frame - mc.wait_since < 180) { pending = true; continue; }
+            if (!mc.wait_logged) {
+                mc.wait_logged = true;
+                logf("rto: %s %s %s: not ready for 3 s (mesh %d, material %d) on %s / %s: swapped anyway", md.name, side_name,
+                     mc.go.c_str(), ret_bool(T.mesh_ready, mc.c) ? 1 : 0, ret_bool(T.mat_ready, mc.c) ? 1 : 0, short_path(pm).c_str(),
+                     short_path(pt).c_str());
+            }
+        } else {
+            mc.wait_since = 0;
+            mc.wait_logged = false;
+        }
         Res* rm = need_m ? res_get(wm, "mesh", false) : nullptr;
         Res* rt = need_t ? res_get(wt, "material", false) : nullptr;
         Res* rc = unit ? res_get(wc, "chain", false) : nullptr;
@@ -990,12 +1052,14 @@ void pass(Model& md) {
                 if (need_m) backoff(wm);
                 if (need_t) backoff(wt);
                 wrote(md, mc.go + " part put back at once");
+                mc.put_back = true;
                 logf("rto: %s %s %s: part not drawable, put back", md.name, side_name, mc.go.c_str());
                 u->stage = 3; u->at = g_frame; pending = true;
                 colour = true;                        // a material set again lost the colours SetColor wrote
                 continue;
             }
             wrote(md, mc.go + " part swapped");
+            mc.put_back = false;
             u->stage = 2; u->at = g_frame;
             just_set.insert(mc.c);
             colour = true;
@@ -1015,6 +1079,7 @@ void pass(Model& md) {
             if (need_m) backoff(wm);
             if (need_t) backoff(wt);
             wrote(md, mc.go + " put back at once");
+            mc.put_back = true;
             logf("rto: %s %s %s: not drawable at once (still loading), put back, tried again later:%s%s%s%s", md.name, side_name,
                  mc.go.c_str(), need_m ? " mesh " : "", need_m ? short_path(wm).c_str() : "", need_t ? " material " : "",
                  need_t ? short_path(wt).c_str() : "");
@@ -1023,6 +1088,7 @@ void pass(Model& md) {
             continue;
         }
         wrote(md, mc.go + " swapped");
+        mc.put_back = false;
         if (need_m) md.verify.push_back({ mc.c, true, wm, pm });
         if (need_t) md.verify.push_back({ mc.c, false, wt, pt });
         just_set.insert(mc.c);
@@ -1039,23 +1105,94 @@ void pass(Model& md) {
     if (any_tex && md.walked) {
         for (auto& mc : md.meshes) {
             if (!alive_as(mc.c, T.mesh) || just_set.count(mc.c)) continue;
-            if (!ret_bool(T.mat_ready, mc.c)) { pending = true; continue; }
+            // Only on a part that is ready (its mesh too: 09/11, a part put back after a swap "not drawable at once" took
+            // the next option's textures while its mesh was not ready: setMaterialTexture threw, the game crashed) and that
+            // wears the mesh and material wanted (no swap pending: the textures are those of the wanted outfit)
+            if (!ret_bool(T.mat_ready, mc.c) || !ret_bool(T.mesh_ready, mc.c) || mc.put_back) { pending = true; continue; }
+            {
+                const std::string cm = holder_path(call_obj(T.get_mesh, mc.c)), ct = holder_path(call_obj(T.get_mat, mc.c));
+                const std::string wm = want_path(md, want, target_of(s, cm)), wt = want_path(md, want, target_of(s, ct));
+                if ((!wm.empty() && wm != cm) || (!wt.empty() && wt != ct)) { pending = true; continue; }
+            }
             const uint32_t nm = ret_u32(T.mat_num, mc.c);
             if (!nm) continue;
-            const std::string pt = holder_path(call_obj(T.get_mat, mc.c));
+            // The bindings belong to the material AND the mesh: another mesh under the same material file (a version pick
+            // of Cow girl Mai, 09/11) has its own material list, and indices kept from the former mesh pointed past it
+            // (setMaterialTexture threw inside the game, then the game crashed)
+            const std::string pt = holder_path(call_obj(T.get_mat, mc.c)) + "|" + holder_path(call_obj(T.get_mesh, mc.c));
             // the bindings of a material that names an option's target: not all found within this frame's share, the
             // part's textures wait for the next frames (scan_bindings)
             if (pt != mc.mat_key && !scan_bindings(md, mc, pt, nm, want, s)) { pending = true; sliced = true; continue; }
+            bool stale = false;
+            for (auto& b : mc.binds)
+                if (b.mi >= nm || b.ti >= ret_u32(T.tex_num, mc.c, { arg_i32(static_cast<int32_t>(b.mi)) })) { stale = true; break; }
+            if (stale) {                                  // never an index past the part's materials: searched again
+                mc.mat_key.clear();
+                pending = true;
+                logf("rto: %s %s %s: texture bindings out of the part's materials (%u): searched again", md.name, side_name, mc.go.c_str(), nm);
+                continue;
+            }
+            // Cow girl Mai's "no sleeves" meshes (09/11): every setMaterialTexture on them threw inside the game, then the
+            // game crashed. Only on a part whose materials the engine says it can update, and never again on a part (mesh +
+            // material) that refused once.
+            if (mc.binds.empty()) continue;
+            if (g_tex_refused.count(pt)) continue;
+            {
+                const bool u1 = !T.mats_upd || ret_bool(T.mats_upd, mc.c), u2 = !T.upd_mat || ret_bool(T.upd_mat, mc.c);
+                if (mc.tex_logged != pt) {
+                    mc.tex_logged = pt;
+                    logf("rto: %s %s %s: materials %u, updatable %d/%d, materials enable count %u, parts enable count %u (%s)",
+                         md.name, side_name, mc.go.c_str(), nm, u1 ? 1 : 0, u2 ? 1 : 0,
+                         T.mats_en_n ? ret_u32(T.mats_en_n, mc.c) : 0u, T.parts_en_n ? ret_u32(T.parts_en_n, mc.c) : 0u, short_path(pt).c_str());
+                }
+                if (!u1 || !u2) {
+                    g_tex_refused.insert(pt);
+                    tell_once(md, "textures not set: the part's materials cannot be updated");
+                    logf("rto: %s %s %s: the engine says its materials cannot be updated: its textures are left as they are",
+                         md.name, side_name, mc.go.c_str());
+                    continue;
+                }
+            }
             for (auto& b : mc.binds) {
-                const std::string cur = holder_path(call_obj(T.get_tex, mc.c, { arg_i32(static_cast<int32_t>(b.mi)), arg_i32(static_cast<int32_t>(b.ti)) }));
+                const auto key = std::make_tuple(mc.c, b.mi, b.ti);
+                Obj* cur_h = call_obj(T.get_tex, mc.c, { arg_i32(static_cast<int32_t>(b.mi)), arg_i32(static_cast<int32_t>(b.ti)) });
+                const std::string cur = holder_path(cur_h);
                 const std::string w = want_path(md, want, b.target);
                 if (w.empty() || w == cur) continue;
-                Res* r = res_get(w, "texture", false);
-                if (r->dead) { tell_once(md, "cannot load " + short_path(w)); continue; }
-                if (!usable(r)) { pending = true; continue; }
-                call(T.set_tex, mc.c, { arg_i32(static_cast<int32_t>(b.mi)), arg_i32(static_cast<int32_t>(b.ti)), arg_obj(r->holder) });
+                const bool ours_now = cur.find("/rto/") != std::string::npos;
+                // The game's own texture wanted there (no option ships one, or the option's copy cannot be set: not a power
+                // of two, or it cannot load): its VERY holder, kept the first time one of ours replaced it. One made from
+                // its path is another resource that the engine never loads (09/11, Cow girl Mai: setMaterialTexture threw
+                // with it, then the game crashed). Never the former option's copy left on either: its holder goes back
+                // to the engine once that option is no longer wanted.
+                const bool no_live = [&] { auto nl = want.find(b.target); return nl != want.end() && nl->second.no_live; }();
+                Res* r = (no_live || w.find("/rto/") == std::string::npos) ? nullptr : res_get(w, "texture", false);
+                Obj* set_h = nullptr;
+                std::string setp;                               // our copy set ("" = the game's own)
+                if (!r || r->dead) {
+                    if (no_live) tell_once(md, "texture not set live (its size crashes the game when swapped), the outfit's own there: " + short_path(w));
+                    else if (r) tell_once(md, "cannot load " + short_path(w) + ", the outfit's own there");
+                    if (!ours_now) continue;                    // the game's own is there already
+                    auto o = g_tex_orig.find(key);
+                    if (o == g_tex_orig.end()) { tell_once(md, "the outfit's own texture is not known for " + mc.go + ", left as it is"); continue; }
+                    set_h = o->second;
+                } else {
+                    if (!usable(r)) { pending = true; continue; }
+                    set_h = r->holder;
+                    setp = w;
+                }
+                if (!ours_now && cur_h && !g_tex_orig.count(key)) { cur_h->add_ref(); g_tex_orig[key] = cur_h; }   // (the game's own)
+                const Ret st = call(T.set_tex, mc.c, { arg_i32(static_cast<int32_t>(b.mi)), arg_i32(static_cast<int32_t>(b.ti)), arg_obj(set_h) });
+                if (st.exception_thrown) {                    // refused: nothing more on this part (mesh + material)
+                    g_tex_refused.insert(pt);
+                    tell_once(md, "textures not set: the game refused them");
+                    logf("rto: %s %s %s: setMaterialTexture %u/%u threw: no more textures on this part (%s)", md.name, side_name,
+                         mc.go.c_str(), b.mi, b.ti, short_path(pt).c_str());
+                    break;
+                }
+                if (setp.empty()) g_tex_bound.erase(key); else g_tex_bound[key] = setp;   // (its holder kept while set)
                 wrote(md, mc.go + " texture");
-                logf("rto: %s %s %s texture %u/%u %s", md.name, side_name, mc.go.c_str(), b.mi, b.ti, short_path(w).c_str());
+                logf("rto: %s %s %s texture %u/%u %s", md.name, side_name, mc.go.c_str(), b.mi, b.ti, setp.empty() ? "back to the game's own" : short_path(w).c_str());
             }
         }
     }
@@ -1476,7 +1613,7 @@ void warm_vs() {
         const Model& md = g_models[i];
         if (!md.slot || md.side < 0) continue;
         for (auto& [t, w] : desired(g_m, *md.slot, chosen_of(g_m, *md.slot, g_c, md.side))) {
-            if (w.orig || w.path.empty()) continue;
+            if (w.orig || w.path.empty() || w.no_live) continue;
             if (!g_res.count(w.path)) ++fresh;
             files.push_back({ w.path, w.kind });
             ++n;
@@ -1508,7 +1645,7 @@ void warm_load() {
         if (!s) continue;
         size_t mine = 0;
         for (auto& [t, w] : desired(g_m, *s, worn_by(nullptr, *s, f.side))) {
-            if (w.orig || w.path.empty() || !swappable(w.kind) || !g_warm_load.insert(w.path).second) continue;
+            if (w.orig || w.path.empty() || !swappable(w.kind) || w.no_live || !g_warm_load.insert(w.path).second) continue;
             if (!g_res.count(w.path)) ++fresh;
             files.push_back({ w.path, w.kind });
             ++mine;
@@ -1538,7 +1675,7 @@ void warm_replay() {
         if (!s) continue;
         auto it = ff.by_mod.find(s->mod);
         for (auto& [t, w] : desired(g_m, *s, forced_options(g_m, *s, it != ff.by_mod.end() ? &it->second : nullptr))) {
-            if (w.orig || w.path.empty() || !swappable(w.kind) || !g_warm_load.insert(w.path).second) continue;
+            if (w.orig || w.path.empty() || !swappable(w.kind) || w.no_live || !g_warm_load.insert(w.path).second) continue;
             if (!g_res.count(w.path)) ++fresh;
             files.push_back({ w.path, w.kind });
             ++added;
@@ -1688,7 +1825,7 @@ void choices_changed(const std::vector<std::pair<const Slot*, int>>& confirmed) 
     for (auto& [s, side] : confirmed) {
         if (!s || side < 0 || side > 1) continue;
         for (auto& [t, w] : desired(g_m, *s, chosen_of(g_m, *s, g_c, side)))
-            if (!w.orig && !w.path.empty() && swappable(w.kind) && want.size() < 64 && want.insert(w.path).second) files.push_back({ w.path, w.kind });
+            if (!w.orig && !w.path.empty() && swappable(w.kind) && !w.no_live && want.size() < 64 && want.insert(w.path).second) files.push_back({ w.path, w.kind });
     }
     size_t fresh = 0;
     for (auto& f : files) if (!g_res.count(f.first)) ++fresh;

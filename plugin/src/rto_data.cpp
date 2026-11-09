@@ -29,6 +29,7 @@ std::vector<File> files_of(const Json* j) {
         f.path = norm_path(str_of(e.get("path")));
         f.unit = norm_path(str_of(e.get("unit")));
         f.joints = int_of(e.get("joints"), -1);
+        f.no_live = e.get("no_live") && e.get("no_live")->kind == Json::Bool && e.get("no_live")->b;
         if (!f.kind.empty() && !f.target.empty() && !f.path.empty()) out.push_back(std::move(f));
     }
     return out;
@@ -461,7 +462,7 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
     const Mod* mod = m.mod_of(s);
     if (!mod) return out;
     // per target: the options of this slot that ship it (rank, id, stored path)
-    struct Ship { int rank; std::string id, path, unit; };
+    struct Ship { int rank; std::string id, path, unit; bool no_live = false; };
     std::map<std::string, std::vector<Ship>> by_target;
     std::map<std::string, std::string> kind_of;
     for (auto& [id, files] : s.files) {
@@ -469,7 +470,7 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
         if (x < 0) continue;
         for (auto& f : files) {
             if (!live_kind(f.kind)) continue;
-            by_target[f.target].push_back({ mod->options[static_cast<size_t>(x)].rank, id, f.path, f.unit });
+            by_target[f.target].push_back({ mod->options[static_cast<size_t>(x)].rank, id, f.path, f.unit, f.no_live });
             kind_of[f.target] = f.kind;
         }
     }
@@ -490,9 +491,9 @@ std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std:
         if ((wc && wd && wc->id == wd->id) || (!wc && !wd)) {
             w.orig = true;
         } else if (wc) {
-            w.orig = false; w.path = wc->path; w.unit = wc->unit;
+            w.orig = false; w.path = wc->path; w.unit = wc->unit; w.no_live = wc->no_live;
         } else if (auto b = base.find(target); b != base.end()) {
-            w.orig = false; w.path = b->second->path; w.unit = b->second->unit;
+            w.orig = false; w.path = b->second->path; w.unit = b->second->unit; w.no_live = b->second->no_live;
         } else {
             w.orig = true;                                   // no way back without the option: the slot's own file
             if (notes) notes->push_back("no base copy of " + target + ": the slot's own file stays");

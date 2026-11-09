@@ -25,6 +25,7 @@ struct File {
     std::string kind, target, path;                          // kind: mesh, material, texture, chain, colour, other
     std::string unit;                                        // a part unit (its chain's target, else its mesh's): one swap
     int joints = -1;                                         // a unit's mesh: its joint count (logs)
+    bool no_live = false;                                    // a texture never swapped on a model (loader: not a power-of-two size)
 };
 struct Option {
     std::string id, name, folder, mode, apply;               // mode: base, pick, toggle
@@ -138,6 +139,7 @@ struct Want {
     bool orig = true;        // the slot's own file at the target (what the model loads without any change)
     std::string path;        // else this stored copy
     std::string unit;        // the part unit of the file wanted (a base copy's or an option's), "" = none
+    bool no_live = false;    // the copy must not be set on a model (setMaterialTexture crashed the game with it)
 };
 // target -> what to load there, for every target an option or a base copy of the slot names
 std::map<std::string, Want> desired(const Manifest& m, const Slot& s, const std::vector<std::string>& chosen,
