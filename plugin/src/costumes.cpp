@@ -1111,7 +1111,13 @@ std::map<int, int> g_mlive;             // fighter -> slot of the last managed r
 bool g_mbatch_open = false;
 // The FighterDescs the plugin gave a slot as their override (seq: the order they were dressed in)
 struct Dressed { int fid, slot, color; uint32_t seq; };
+// Each FighterDesc here is held (add_ref in dress, release in undress): the plugin takes the override off later, at the next
+// fighters' build, and the game may have dropped that description by then (a ranked match's: its VS screen's description
+// freed before the battle's fighters were built, 09/11: ResetOverwriteDesc ran on freed memory, an access violation
+// REFramework caught). Held, its memory stays valid; whether the game still holds it is game_holds.
 std::map<Obj*, Dressed> g_dressed;
+// A dressed description the game still holds (a reference besides the plugin's own)
+bool game_holds(Obj* o) { return o && o->is_managed_object() && o->get_ref_count() > 1; }
 uint32_t g_dress_seq = 0;
 Obj* g_reload_desc = nullptr;           // the description of a reload (SetupReloadBattleAsset), until fighters are built
 Obj* g_reload_map = nullptr;            // the flow map that set that reload up
@@ -1217,7 +1223,7 @@ bool dress(const DescFighter& f, int slot) {
     auto r = call(m_fd_set_ow, f.fd, { arg_i32(slot), arg_i32(col) });
     if (wjournal::on()) wjournal::log("ALIAS_SET fd=%p F%d v%d c%d ok=%d", (void*)f.fd, f.fid, slot, col, r.exception_thrown ? 0 : 1);
     if (r.exception_thrown) { logf("[F%d] alias: the game refused the override", f.fid); return false; }
-    g_dressed[f.fd] = { f.fid, slot, col, ++g_dress_seq };
+    if (g_dressed.insert_or_assign(f.fd, Dressed{ f.fid, slot, col, ++g_dress_seq }).second) f.fd->add_ref();
     ui::set_effective(f.fid, carrier_of(f.fid), slot, col);
     logf("[F%d] alias: the player's fighter wears slot v%02d colour %d over %s", f.fid, slot, col, carrier_name(f.fid).c_str());
     return true;
@@ -1231,7 +1237,7 @@ bool dress(const DescFighter& f, int slot) {
 void declare_effective(int fid) {
     const Dressed* still = nullptr;
     for (auto& [o, d] : g_dressed)
-        if (d.fid == fid && (!still || d.seq > still->seq) && alive(o)) still = &d;
+        if (d.fid == fid && (!still || d.seq > still->seq) && game_holds(o)) still = &d;
     if (!still) { ui::set_effective(fid, carrier_of(fid), -1, -1); return; }
     ui::set_effective(fid, carrier_of(fid), still->slot, still->color);
     logf("[F%d] alias: another FighterDesc of the player's still wears slot v%02d colour %d: still declared to the core",
@@ -1245,10 +1251,11 @@ void undress(Obj* fd, const char* why, bool declare = true) {
     if (it == g_dressed.end()) return;
     const Dressed w = it->second;
     g_dressed.erase(it);
-    if (alive(fd)) {
+    if (fd->is_managed_object()) {                           // held since dress: valid memory, the game's or not
         auto r = call(m_fd_reset_ow, fd);
         if (wjournal::on()) wjournal::log("ALIAS_RESET fd=%p F%d v%d ok=%d (%s)", (void*)fd, w.fid, w.slot, r.exception_thrown ? 0 : 1, why);
     }
+    fd->release();
     logf("[F%d] alias: slot v%02d taken off the player's fighter (%s)", w.fid, w.slot, why);
     if (declare) declare_effective(w.fid);
 }
@@ -1864,7 +1871,7 @@ bool dressed_slot(Obj* fd, int fid, int& slot, int& color) {
     if (auto it = g_dressed.find(fd); it != g_dressed.end()) w = &it->second;
     else
         for (auto& [o, d] : g_dressed)
-            if (d.fid == fid && (!w || d.seq > w->seq) && alive(o)) w = &d;
+            if (d.fid == fid && (!w || d.seq > w->seq) && game_holds(o)) w = &d;
     if (!w) return false;
     slot = w->slot;
     color = w->color;
