@@ -84,6 +84,30 @@ colour it has. For tests, `reframework\data\SF6_CostumeSlots_data\alias_everywhe
 the modes that pick costumes on a select screen aliased too (the Training shortcut of Fighting Ground loads its
 fighters the way online matches do).
 
+## Random outfit
+
+The loader gives every character one more outfit, Random (`registry.json` possession `"random": true`, the last
+number of the character's range: a copy of Outfit 1's scene, so its preview is Outfit 1; named with the game's own
+word, `CommonMessage756`, in each language). It has one colour, which its Color row shows as Random too
+(`ColorInventory.GetColorList` post-hook, code-checked, R18). It is never worn: a draw takes its place
+(`src/random_logic.hpp`, unit test `tests/build_random_test.bat`).
+
+- The pool of a character: what its Costume row lists (`GetCostumeNoList`, read offline at the screens that list
+  outfits), Random left out, never an NSFW outfit while those are hidden (checked again at each draw). A draw takes
+  one the round has not given; once all were given a new round starts (never with the last one). The colour: the
+  same, among the drawn outfit's colours the player has (a game outfit's colour records that are default or in the
+  save; ours 0-9). "Display NSFW Outfits" changed: a new round.
+- Picked on a select screen (Arcade, Training, Versus...): when the game asks for the fighters' files, each
+  FighterDesc in Random gets its draw (`Costume`, `Color`), and the request in flight of Random's number asks for the
+  drawn outfit's files (its argument; its unload too). A new draw at each load whose description holds Random.
+- Battle Settings (online, rooms, Battle Hub): the intent is Random and its next draw is made at once. A game outfit
+  drawn is what the save holds outside the menu and around the fighter profile (the opponent sees it); one of ours
+  leaves the carrier there and the alias wears it. A match's first managed load of the player's fighter takes the
+  draw for the set (rematches build the fighters again without asking for files: the same outfit) and makes the
+  next; a game outfit drawn that the match does not hold (no profile sent since the draw) is worn on this PC only,
+  through the alias, as ours are.
+- `state.json` `"random"`: each character's rounds and next draw, so they go on after a restart.
+
 ## Slots of outfits the player does not own
 
 A slot made from a character's Outfit 2 (or 3, 4) is shown only if the game counts that outfit as the player's.
@@ -115,7 +139,7 @@ DLC checks makes every outfit valid: every slot is shown then.
 
 - `reframework/data/SF6_Costumes_Data/registry.json` (written by the loader): slots, record ids, colour squares.
 - `reframework/data/SF6_CostumeSlots_data/state.json`: the slot and colour chosen in Battle Settings, per character
-  (and the carrier the save was given).
+  (and the carrier the save was given); `"random"`: the Random outfit's rounds and next draws.
 - `reframework/data/SF6_StageSlots_Data/registry.json` (written by the loader) and `state.json` (the chosen variants,
   watched by the loader).
 - Log: `reframework/data/SF6_CostumeSlots_data/native_log.txt` (the previous one is kept as `native_log.old.txt`).

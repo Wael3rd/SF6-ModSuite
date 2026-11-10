@@ -161,6 +161,13 @@
    "english": "Character BGM",
    "msg": "UIOptionMenuMessage2810",
    "where": "Replays > Settings: guide bar entry when the game's own key text is not found"
+  },
+  {
+   "key": "random",
+   "guid": "fa32e0d2-996e-4f4b-a183-7074d32bc72f",
+   "english": "Random",
+   "msg": "CommonMessage756",
+   "where": "The Random outfit's one value in the Color row (Battle Settings, the character select, the Training popup); the loader names the Random outfit itself with copies of the same message"
   }
  ],
  "fighters": [

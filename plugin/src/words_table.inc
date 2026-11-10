@@ -107,6 +107,7 @@ enum class G : int {
     HintMove,   // hint.move
     HintZoom,   // hint.zoom
     CharaMusic,   // chara.music
+    Random,   // random
     Count
 };
 
@@ -1355,6 +1356,7 @@ inline constexpr GameWordRow kGameWords[] = {
     { "hint.move", "65c0a876-7468-4032-85de-61a5d1f0c597", "Move" },
     { "hint.zoom", "d2c5e768-752e-4c05-8355-ad02a8e944ab", "Zoom" },
     { "chara.music", "865e0ad2-92b5-4ce8-ae68-6eca239e46da", "Character BGM" },
+    { "random", "fa32e0d2-996e-4f4b-a183-7074d32bc72f", "Random" },
 };
 
 inline constexpr FighterRow kFighterWords[] = {
