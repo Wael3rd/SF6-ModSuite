@@ -16,6 +16,7 @@
 #include "manager_mode.hpp"
 #include "outfit_display.hpp"
 #include "swap_repairs.hpp"
+#include "colour_follow.hpp"
 #include <climits>
 
 #include <cstdio>
@@ -138,7 +139,7 @@ static const int   N_OLD_TEX = 1;
 // (apply_outfit_labels), "Outfit VII" when it has none. Id of the static table's first name message ("Outfit I"),
 // static_meta.json msg_id_base.
 static const uint32_t STATIC_MSG_ID_BASE = 5000;
-static const char* LOADER_PAK_ID = "2026-11-10-addon-archives";
+static const char* LOADER_PAK_ID = "2026-11-10-random-outfit";
 static const char* LOADER_META_ID = "2026-10-20-fastpak";
 // Slotsloader Manager contract (docs/MANAGER_CONTRACT.md): the number written in variants.json
 // ("contract") and in the package's modinfo.ini (SlotsloaderContract=). 1 = variants.json written at every
@@ -375,6 +376,7 @@ struct Possession {
     std::string fighter_dir, name;
     std::string swatches;   // JSON array, colours 1-10: [c0,c1] or null (swatch::compute)
     bool nsfw = false;      // the plugin hides it while "Display NSFW Outfits" is off
+    bool random = false;    // the character's Random outfit (costume_loader_run: "Each character's Random outfit"): never worn, the plugin draws in its place
 };
 
 struct Registry {
@@ -514,9 +516,10 @@ static void save_registry(const char* path, const Registry& reg) {
         fprintf(f, "      \"costume_no\": %d,\n", p.costume_no);
         fprintf(f, "      \"record_id\": %d,\n", p.record_id);
         fprintf(f, "      \"manage_id\": %d,\n", p.manage_id);
-        fprintf(f, "      \"name\": \"%s\"%s\n", p.name.c_str(), p.swatches.empty() && !p.nsfw ? "" : ",");
-        if (!p.swatches.empty()) fprintf(f, "      \"swatches\": %s%s\n", p.swatches.c_str(), p.nsfw ? "," : "");
-        if (p.nsfw) fprintf(f, "      \"nsfw\": true\n");
+        fprintf(f, "      \"name\": \"%s\"%s\n", p.name.c_str(), p.swatches.empty() && !p.nsfw && !p.random ? "" : ",");
+        if (!p.swatches.empty()) fprintf(f, "      \"swatches\": %s%s\n", p.swatches.c_str(), p.nsfw || p.random ? "," : "");
+        if (p.nsfw) fprintf(f, "      \"nsfw\": true%s\n", p.random ? "," : "");
+        if (p.random) fprintf(f, "      \"random\": true\n");
         fprintf(f, "    }%s\n", i+1 < reg.possession.size() ? "," : "");
     }
     fprintf(f, "  ]\n}\n");
@@ -1657,82 +1660,6 @@ struct SlotInfo {
     bool nsfw = false;         // from costume_mods_nsfw, or NSFW by keywords (outfit_is_nsfw)
 };
 
-// The Color Mod keeps an outfit's colours by its costume number, not by its mod: the editor's MC colours in
-// reframework\color_mods\<Character>\MANUALCOLORS_NN\esfFFF_CCC_cmd_KKK.user.2 (CCC = the number + 1), its edited colours
-// in data\SF6_ColorSpinExtra_data\overrides\F_N_*.user.2 and the game colours it captured in pristine\F_N_game_*.user.2.
-// A number given to another mod than the one that held it at the last launch (a removed mod's number reused) showed the
-// former outfit's colours on the new one (Ryu's Tekken 8 Jin got October's MC colours of another outfit, report 08/11).
-// They are set aside, never deleted: into a ".former_outfits\<date>" folder beside them, which the Color Mod does not read.
-// Nothing at the first install (no registry yet) nor for a number that keeps its mod.
-static bool name_is(const std::string& name, const char* prefix) {
-    return _strnicmp(name.c_str(), prefix, strlen(prefix)) == 0;
-}
-static bool move_aside(const std::string& src, const std::string& dir, const std::string& name) {
-    std::string d;
-    for (size_t i = 0; i <= dir.size(); ++i)                       // every level of dir
-        if (i == dir.size() || dir[i] == '\\') { d = dir.substr(0, i); if (d.size() > 3) CreateDirectoryA(d.c_str(), nullptr); }
-    return MoveFileExA(src.c_str(), (dir + "\\" + name).c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
-}
-template <class F> static void each_entry(const std::string& dir, bool want_dirs, F f) {
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    do {
-        const std::string n = fd.cFileName;
-        if (n == "." || n == ".." || n[0] == '.') continue;            // dot folders: the Color Mod's own skip, ours too
-        const bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-        if (is_dir == want_dirs) f(n);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-}
-static void set_aside_former_colours(const std::string& game_dir, const std::vector<SlotInfo>& slots,
-                                     const std::vector<RegSlot>& former) {
-    if (former.empty()) return;
-    std::set<std::pair<int, int>> fresh;                           // (fighter, costume number) whose mod changed
-    for (auto& sl : slots) {
-        bool kept = false;
-        for (auto& rs : former)
-            if (rs.fighter == sl.fighter && rs.new_costume_no == sl.new_costume_no && rs.mod_id == sl.mod_id) { kept = true; break; }
-        if (!kept) fresh.insert({ sl.fighter, sl.new_costume_no });
-    }
-    if (fresh.empty()) return;
-    SYSTEMTIME st; GetLocalTime(&st);
-    char stamp[32]; snprintf(stamp, sizeof stamp, "%04d%02d%02d_%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
-    const std::string aside = std::string(".former_outfits\\") + stamp;
-    size_t moved = 0;
-    auto take = [&](const std::string& src, const std::string& dir, const std::string& name, int f, int n) {
-        if (move_aside(src, dir, name)) {
-            ++moved;
-            logf("  colours of the former outfit %d of fighter %d set aside: %s -> %s\\n", n, f, src.c_str(), dir.c_str());
-        }
-    };
-    // the editor's MC colours, per character folder
-    const std::string cm = game_dir + "\\reframework\\color_mods";
-    each_entry(cm, true, [&](const std::string& ch) {
-        each_entry(cm + "\\" + ch, true, [&](const std::string& sub) {
-            if (!name_is(sub, "MANUALCOLORS")) return;
-            const std::string dir = cm + "\\" + ch + "\\" + sub;
-            each_entry(dir, false, [&](const std::string& file) {
-                int f = 0, folder = 0, k = 0; char tail[16] = {};
-                if (sscanf(file.c_str(), "esf%3d_%3d_cmd_%3d%15s", &f, &folder, &k, tail) != 4 || _stricmp(tail, ".user.2") != 0) return;
-                if (folder >= 1 && fresh.count({ f, folder - 1 }))
-                    take(dir + "\\" + file, cm + "\\" + ch + "\\" + aside + "\\" + sub, file, f, folder - 1);
-            });
-        });
-    });
-    // the edited colours and the captured game colours of that number
-    const std::string spin = game_dir + "\\reframework\\data\\SF6_ColorSpinExtra_data";
-    for (const char* sub : { "overrides", "pristine" }) {
-        const std::string dir = spin + "\\" + sub;
-        each_entry(dir, false, [&](const std::string& file) {
-            int f = 0, n = 0; char rest[8] = {};
-            if (sscanf(file.c_str(), "%d_%d_%7s", &f, &n, rest) != 3 || !str_ends_with(str_lower(file), ".user.2")) return;
-            if (fresh.count({ f, n })) take(dir + "\\" + file, dir + "\\" + aside, file, f, n);
-        });
-    }
-    if (moved) logf("  %zu colour file(s) of former outfits set aside (their numbers went to other mods)\\n", moved);
-}
-
 // Mod names by mod_id, for the log (the modinfo name, else the mod's folder or archive)
 static std::unordered_map<std::string, std::string> g_mod_names;
 static std::string mod_label(const std::string& id) {
@@ -1754,6 +1681,31 @@ static bool mod_in_nsfw_dir(const std::string& mod_id) {
     auto it = g_mod_source.find(mod_id);
     return it != g_mod_source.end() && it->second.nsfw_dir;
 }
+
+// The Color Mod keeps an outfit's colours by its costume number: they go with the outfit to the number this build gives it,
+// before the Color Mod reads anything (colour_follow.hpp). former: registry.json's slots as this launch found them; now:
+// this build's. An outfit's name for an updated mod: its label (outfits.json's), none for a Fluffy pak (its file name).
+static void follow_colours(const std::string& game_dir, const std::string& registry_dir,
+                           const std::vector<RegSlot>& former, const std::vector<RegSlot>& now) {
+    colour_follow::RunInput in;
+    in.game_dir = game_dir;
+    in.registry_dir = registry_dir;
+    for (auto& s : former) in.registry.push_back({ s.fighter, s.new_costume_no, s.mod_id, s.original_costume_no, "" });
+    for (auto& s : now) {
+        auto src = g_mod_source.find(s.mod_id);
+        auto nm = g_mod_names.find(s.mod_id);
+        const bool pak_name = src != g_mod_source.end() && src->second.kind == "fluffy pak";
+        in.now.push_back({ s.fighter, s.new_costume_no, s.mod_id, s.original_costume_no,
+                           pak_name || nm == g_mod_names.end() ? std::string() : nm->second });
+    }
+    in.log = [](const std::string& line) { logf("%s", line.c_str()); };
+    try {
+        colour_follow::run(in);
+    } catch (...) {
+        logf("  WARN: colours: the pass stopped on an error (the next launch finishes it or takes it up again)\n");
+    }
+}
+
 // NSFW keywords (common/nsfw_keywords.hpp; costume_mods\settings.ini NsfwKeywords=, empty: detection off) and the
 // outfits made NSFW by their options (an option whose name has a keyword worn by default, a combination with one)
 static std::vector<std::string> g_nsfw_keywords;
@@ -2439,9 +2391,10 @@ static void write_variants_json(const std::string& path, const std::vector<SlotI
 // costume_mods added later: they stay before the NSFW ones in the costume list)
 static const int kNsfwGap = 10;
 
+// random_no: each character's Random outfit number (costume_loader_run: "Each character's Random outfit"), kept out of the mods' numbers
 static std::vector<SlotInfo> assign_slots(
     const std::vector<std::pair<std::string, std::vector<ModCostume>>>& mods,
-    const VanillaIndex& inv, Registry& reg, const StaticMeta& meta) {
+    const VanillaIndex& inv, Registry& reg, const StaticMeta& meta, std::map<int, int>& random_no) {
 
     // Build set of mod_ids that are STILL PRESENT in this run
     std::unordered_set<std::string> present_mod_ids;
@@ -2476,6 +2429,22 @@ static std::vector<SlotInfo> assign_slots(
         taken_cno[rs->fighter].insert(rs->new_costume_no);
         taken_folder[rs->fighter].insert(atoi(rs->new_folder.c_str()));
         if (rs->nsfw) taken_nsfw[rs->fighter].insert(rs->new_costume_no);
+    }
+
+    // Each character's Random outfit: the highest number of its range that an outfit installed before does not keep (the
+    // last one, slot_max, unless a mod numbered before this rule has it) nor an outfit numbered again leaves unused; a new
+    // outfit never gets it (reserved, as those)
+    random_no.clear();
+    {
+        std::set<int> fighters;
+        for (auto& r : meta.records) fighters.insert(r.fighter);
+        for (int f : fighters)
+            for (int n = meta.slot_max; n >= meta.slot_min; --n)
+                if (meta.find(f, n) && !taken_cno[f].count(n) && !reserved[f].count(n)) {
+                    random_no[f] = n;
+                    reserved[f].insert(n);
+                    break;
+                }
     }
 
     // Smallest-free-slot: find smallest value in [lo..hi] not in 'taken'
@@ -11412,6 +11381,27 @@ static StructuralFiles build_structural(PakReader& base_pak, int slot_min, int s
     return st;
 }
 
+// The Random outfit's name per via.Language: the game's own word (CommonMessage756, "Random", copied from its message files
+// on 10/11, as tools/localisation/game_msgs.py reads them); the languages it is not copied for keep the English one
+static std::map<uint32_t, std::string> random_outfit_words() {
+    return {
+        { 0, "\xE3\x83\xA9\xE3\x83\xB3\xE3\x83\x80\xE3\x83\xA0" },                                     // ja
+        { 1, "Random" },                                                                                 // en
+        { 2, "Al\xC3\xA9\x61toire" },                                                                    // fr
+        { 3, "Casuale" },                                                                                // it
+        { 4, "Zufall" },                                                                                 // de
+        { 5, "Aleatorio" },                                                                              // es
+        { 6, "\xD0\x9F\xD1\x80\xD0\xBE\xD0\xB8\xD0\xB7\xD0\xB2\xD0\xBE\xD0\xBB\xD1\x8C\xD0\xBD\xD0\xBE" },   // ru
+        { 7, "Losowo" },                                                                                 // pl
+        { 10, "Aleat\xC3\xB3rio" },                                                                      // pt
+        { 11, "\xEB\x9E\x9C\xEB\x8D\xA4" },                                                              // ko
+        { 12, "\xE9\x9A\xA8\xE6\xA9\x9F" },                                                              // zh-Hant
+        { 13, "\xE9\x9A\x8F\xE6\x9C\xBA" },                                                              // zh-Hans
+        { 21, "\xD8\xB9\xD8\xB4\xD9\x88\xD8\xA7\xD8\xA6\xD9\x8A" },                                      // ar
+        { 32, "Aleatorio" },                                                                             // es-419
+    };
+}
+
 // ============================================================================
 // costume_mods folders of the game's fighters
 // ============================================================================
@@ -11984,7 +11974,8 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     auto registry = load_registry(reg_path.c_str());
     printf("\nAssigning slots...\n");
     const std::vector<RegSlot> former_slots = registry.slots;   // for costume_options.json "former"
-    auto slots = assign_slots(mods_with_costumes, inv, registry, meta);
+    std::map<int, int> random_no;                                 // fighter -> its Random outfit's number (costume_loader_run: "Each character's Random outfit")
+    auto slots = assign_slots(mods_with_costumes, inv, registry, meta, random_no);
     if (slots.empty()) { logf("No slots to create.\n"); write_variants_json(variants_path, {}); log_close(); return 0; }
 
     // Build possession for registry
@@ -12067,6 +12058,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     log_step("files assembled");
 
     // Slot check: every slot must be loadable as the game will load it, else it is left out
+    std::set<int> random_scene;   // the characters whose Random outfit got the Outfit 1 scene (below)
     {
         slotcheck::Ctx ctx;
         ctx.gf.writer = &writer;
@@ -12157,6 +12149,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 std::string p = "natives/stm/product/charparam/esf/" + it->second.first + "/" + nm + ".scn.20";
                 slotcheck::put_file(writer, p, it->second.second);
                 n_fallback++;
+                if (auto rn = random_no.find(r.fighter); rn != random_no.end() && rn->second == r.costume_no) random_scene.insert(r.fighter);
             }
             printf("  %d unused slot numbers given the Outfit 1 scene (a save or a replay naming a removed outfit shows Outfit 1)\n",
                    n_fallback);
@@ -12168,6 +12161,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // game's name file and table, read on this PC; a slot travels as its number (the online alias shows the carrier). With the
     // shipped copies (no table built here), or if the labels' files can't be made: the "Outfit V" ones.
     std::unordered_map<uint32_t, uint32_t> label_message;   // record id -> message id
+    // The Random outfits (costume_loader_run: "Each character's Random outfit"): one name message for all of them; a character has its Random outfit once that name and
+    // its Outfit 1 scene are there
+    uint32_t random_message = 0;
+    std::vector<const StaticRecord*> random_records;
     if (structural.ok) {
         std::vector<MsgEntry> names = structural.names;
         std::vector<std::vector<uint8_t>> guids = structural.guids;
@@ -12185,6 +12182,21 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             guids.push_back(std::move(gb));
             label_message[(uint32_t)sl.record_id] = STATIC_MSG_ID_BASE + (uint32_t)at;
         }
+        // after the mods' labels: theirs keep the ids they had
+        size_t random_at = SIZE_MAX;
+        if (!random_scene.empty()) {
+            char g[64];
+            const size_t at = names.size();
+            snprintf(g, sizeof g, "a1b2c3d4-%04x-4000-8000-%012x", (unsigned)(at + 1), (unsigned)(STATIC_MSG_ID_BASE + at));
+            std::vector<uint8_t> gb;
+            if (guid_bytes(g, gb)) {
+                MsgEntry me{ g, "FighterCostumeMessage" + std::to_string(6 + at), "Random" };
+                me.texts = random_outfit_words();
+                names.push_back(std::move(me));
+                guids.push_back(std::move(gb));
+                random_at = at;
+            }
+        }
         std::vector<uint8_t> table = structural.game_table, msg = structural.game_msg;
         std::string err;
         if (add_costume_records(table, structural.add, STATIC_MSG_ID_BASE, guids, &err) && add_msg_entries(msg, names, &err)) {
@@ -12193,10 +12205,35 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 else if (f.pak == COSTUME_MSG) f.data = std::move(msg);
             }
             printf("  outfit names: %zu slots show their mod's label, %zu their \"Outfit\" name\n", label_message.size(), no_label);
+            if (random_at != SIZE_MAX) random_message = STATIC_MSG_ID_BASE + (uint32_t)random_at;
         } else {
             label_message.clear();
             logf("  WARN: outfit labels not written (%s): the slots show their \"Outfit\" names\n", err.c_str());
         }
+    }
+    // Each character's Random outfit: the last of its Costume row, the character's Outfit 1 scene (given above to every number no
+    // outfit has: its preview is Outfit 1), named Random. Never worn: the plugin draws one of the character's outfits in its place
+    // (plugin/src/random_logic.hpp). In registry.json's possession only ("random": true): it is no mod's outfit, so outfits.json,
+    // variants.json and the options files do not list it.
+    if (random_message) {
+        for (int f : random_scene)
+            if (const StaticRecord* r = meta.find(f, random_no[f])) {
+                random_records.push_back(r);
+                Possession pos;
+                char fd[16];
+                snprintf(fd, sizeof fd, "esf%03d", f);
+                pos.fighter = f;
+                pos.fighter_dir = fd;
+                pos.costume_no = r->costume_no;
+                pos.record_id = r->record_id;
+                pos.manage_id = r->manage_id;
+                pos.name = "Random";
+                pos.random = true;
+                registry.possession.push_back(pos);
+            }
+        printf("  Random outfits: %zu characters, the last outfit of each\n", random_records.size());
+    } else if (!random_no.empty()) {
+        printf("  no Random outfit: %s\n", structural.ok ? "its name could not be written" : "the shipped structural files have no name for it");
     }
 
     // Structural files: built from the game's (4b), else the shipped copies (static_meta.json's list, else
@@ -12237,6 +12274,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
                 auto lm = label_message.find((uint32_t)sl.record_id);
                 message_for_record[(uint32_t)sl.record_id] = lm != label_message.end() ? lm->second
                     : STATIC_MSG_ID_BASE + uint32_t(roman_to_int(sl.outfit_name.substr(7)) - 1);
+            }
+            for (const StaticRecord* r : random_records) {
+                keep.insert((uint32_t)r->record_id);
+                message_for_record[(uint32_t)r->record_id] = random_message;
             }
             size_t kept = 0, removed = 0;
             if (trim_costume_table(data, keep, &kept, &removed, &message_for_record))
@@ -12360,10 +12401,13 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         logf("  %zu game files outside the model folders this pak depends on (%zu of them loose files in its natives "
              "folder) are watched for changes\n", g_loose_probes.size(), loose);
     }
+    // The colours follow their outfits to these numbers, the pak being in place: before the registry naming them is saved
+    // (a launch cut short in between builds again, and the pass finds the colours where colour_owners.txt says), and before
+    // outfits.json is written again (the former labels, for the first launch of this loader)
+    follow_colours(game_dir, registry_dir, former_slots, registry.slots);
     registry.fingerprint = new_fp + loose_probes_digest(g_loose_probes) + meta_tag;
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
-    set_aside_former_colours(game_dir, slots, former_slots);
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);
     write_variants_json(variants_path, slots);
     if (g_rto_layout != RtoLayout::Off) {

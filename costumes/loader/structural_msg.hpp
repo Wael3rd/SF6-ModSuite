@@ -9,6 +9,7 @@ struct MsgEntry {
     std::string guid;   // "a1b2c3d4-0001-4000-8000-000000005000" (hyphenated or 32 hex digits)
     std::string name;   // entry name, ASCII ("FighterCostumeMessage6")
     std::string text;   // UTF-8, written as UTF-16 and used for every language of the file
+    std::map<uint32_t, std::string> texts;   // per via.Language id (0 Japanese, 1 English...): that language's text in place of `text`
 };
 
 // Appends the entries the way REasy-parser's MsgHandler.add_entry() + rebuild() does, and

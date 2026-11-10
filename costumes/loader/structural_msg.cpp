@@ -186,6 +186,11 @@ bool add_msg_entries(std::vector<uint8_t>& msg, const std::vector<MsgEntry>& add
         U16 text;
         if (!utf8_to_utf16(m.name, e.name) || !utf8_to_utf16(m.text, text)) return fail(err, "bad UTF-8");
         e.content.assign(nlang, text);
+        // a language of its own: the column whose via.Language id the file's language table names
+        for (uint32_t l = 0; l < nlang && !m.texts.empty(); ++l) {
+            auto t = m.texts.find(rd32(msg, lang_off + l * 4));
+            if (t != m.texts.end() && !utf8_to_utf16(t->second, e.content[l])) return fail(err, "bad UTF-8");
+        }
         all.push_back(std::move(e));
     }
     // Sorting uses ASCII lower-casing; anything else would not match Python's str.lower().
