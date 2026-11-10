@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.30.1 (2026-11-10) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.26.1 | each character keeps its own Random colour, the Training popup's Random worn at once |
+| SF6 Color Mod | 0.26.1 | the Random value back in Battle Settings' Color rows, kept per character |
+| SF6 Native Core | 0.9.10 | unchanged |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.26.0 and SF6 Color Mod 0.26.0, then install Slots Loader 1.26.1
+and Color Mod 0.26.1 (both together: each needs the other's new part). Native Core 0.9.10, Recording Manager 2.2.9 and Profile Mod
+1.0.0 are the same files as in 1.30.0: keep them. With the all-in-one package, replace 1.30.0 with 1.30.1. The loader itself is
+1.25.0's: no pak is rebuilt at the first launch.
+
+### SF6 Color Mod 0.26.1
+- **Battle Settings > Fighter Settings: the Random value is back** at the end of the Color rows. 0.26.0 left it out there: the
+  Opponent Outfit Settings page, which Battle Settings keeps hidden in the background, was taken for the page on screen. Opponent
+  Outfit Settings itself still offers no Random.
+- **Each character keeps its own Random colour.** A character set to Random shows Random again when Fighter Settings comes back to
+  it (another character shown in between, the menu opened again); picking another colour drops it.
+- **Training popup**: confirming Random on an outfit that was on colour 02 now wears a drawn colour at once, in place (0.26.0: only
+  at the next load).
+
+### SF6 Slots Loader 1.26.1
+- Battle Settings: every character set to Random keeps its Random colour in battle (1.26.0 kept it only for the last character
+  shown in Fighter Settings; the others wore colour 02).
+- Training popup: Random draws at once, from that outfit's round of colours, with no reload; each new confirm draws again.
+
 ## 1.30.0 (2026-11-10) — SF6 Mod Suite
 
 | Package | Version | |
