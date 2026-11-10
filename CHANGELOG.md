@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.29.0 (2026-11-10) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.25.0 | a Random outfit for every character, colours that follow their outfit, the game's own cells in the character grids |
+| SF6 Color Mod | 0.25.0 | copy a whole colour and paste it onto another outfit |
+| SF6 Native Core | 0.9.10 | unchanged |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.24.0 and SF6 Color Mod 0.24.5, then install Slots Loader 1.25.0
+and Color Mod 0.25.0. Native Core 0.9.10, Recording Manager 2.2.9 and Profile Mod 1.0.0 are the same files as in 1.28.0: keep them.
+With the all-in-one package, replace 1.28.0 with 1.29.0. The costume pak is rebuilt once at the first launch (a few minutes, no game
+window meanwhile).
+
+### SF6 Slots Loader 1.25.0
+- **Random outfit** (new): every character has a "Random" outfit, the last one of the Costume row (Battle Settings and the character
+  select of the local modes); its preview is Outfit 1.
+  - Each battle wears an outfit drawn from the character's outfits (the game's and the mods'), never the same one twice before every
+    one was drawn; then a new round starts, never with the last one drawn. The rounds are kept when the game closes.
+  - Never an NSFW outfit while NSFW outfits are hidden (Display NSFW Outfits off); showing or hiding them starts a new round.
+  - Its colour is drawn too, among the drawn outfit's colours.
+  - Online: one draw per opponent, kept for the rematches. A game outfit drawn is what the opponent sees; a mod outfit shows them its
+    carrier outfit, as before.
+- **Colours follow their outfit**: a colour made with the Color Mod (MC entries, edited colours) belongs to the outfit itself, no
+  longer to its number. When mods are added or removed and an outfit's number changes, its colours go with it (Ryu's "Tekken 8 Jin"
+  lost its colours that way). An updated mod keeps its colours when its outfit has the same name.
+- **The game's own cells** in the character grids of Options > Interface (portrait packs) and Replays > Settings, as Battle Settings >
+  Other > Opponent Outfit Settings draws them: the game's cell shape, shadow, outline and dark background, the portrait fading in from
+  its left, the name and "On" in the game's title font, the focused cell light. A battle HUD portrait is framed like the game's own
+  face picture.
+
+### SF6 Color Mod 0.25.0
+- **Copy / paste a whole colour** (new): on the colour editor's main page, C (pad X) copies every part of the colour being edited
+  (unsaved changes included), V (pad Y) pastes it onto the colour being edited, on any outfit of any character. The parts are matched
+  by their names: the title says how many were pasted ("N of M" when the outfit lacks some). The copy stays until the game closes;
+  SAVE / SAVE AS keeps the pasted colour.
+
 ## 1.28.0 (2026-11-10) — SF6 Mod Suite
 
 | Package | Version | |

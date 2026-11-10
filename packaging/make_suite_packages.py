@@ -148,6 +148,8 @@ COLORMOD_README = CRLF.join([
     "",
     "Extra costume colours, a colour editor (Fighter Settings > Edit Character, F on the Color row) and",
     "Drive colours per character and per player (character select and Training popup: X).",
+    "Copy / paste a whole colour: on the editor's main page, C (pad X) copies every part of the colour, V (pad Y) pastes it",
+    "onto the colour being edited, on any outfit of any character (the parts both have).",
     "",
     "REQUIRES the SF6 Native Core package (%s or newer) from the same release.",
     "Without it the mod stays inert; REFramework's log says: [ColorModNative] sf6core_native.dll not loaded: inert",
