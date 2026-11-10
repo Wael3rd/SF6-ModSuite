@@ -845,8 +845,9 @@ SF6Slots_RandomColourFn slots_random_fn() {
     return fn;
 }
 // Opponent Outfit Settings' grid lists the Color rows too: no Random value there (the game's pick for the opponent is a draw
-// already, among what is ticked). Its page is there and Fighter Settings is not on screen (a page the game keeps hidden
-// behind another must not take the value away from Fighter Settings). Once per frame.
+// already, among what is ticked). Its page ON SCREEN and Fighter Settings not: Battle Settings keeps that page's agent the
+// whole time, hidden, and Fighter Settings builds its Color row before its own page shows (seen 10/11: an agent merely there
+// took the value away from every Fighter Settings row). Once per frame.
 bool opp_page_listing() {
     static uint64_t at = UINT64_MAX;
     static bool v = false;
@@ -856,8 +857,12 @@ bool opp_page_listing() {
     const SF6CoreAPI* core = cmn::core();
     if (!core || !SF6CORE_HAS(core, ui_agents)) return v;
     void* buf[4] = {};
-    if (!core->ui_agents("OtherMatchingFighterSetting", buf, 4)) return v;
-    v = true;
+    const uint32_t on = core->ui_agents("OtherMatchingFighterSetting", buf, 4);
+    for (uint32_t i = 0; i < on && i < 4; ++i) {
+        auto r = call(call_obj(reinterpret_cast<MO*>(buf[i]), "get_ControlMain"), "get_ActualVisible");
+        if (!r.exception_thrown && r.byte) { v = true; break; }
+    }
+    if (!v) return v;
     void* fs[4] = {};
     const uint32_t n = core->ui_agents("MatchingFighterSetting", fs, 4);
     for (uint32_t i = 0; i < n && i < 4; ++i) {
