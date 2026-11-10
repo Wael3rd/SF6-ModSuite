@@ -2,6 +2,7 @@
 // (SF6_ColorSpinExtra.lua at commit 4dab476); the order of the calls on the option engine is the Lua's, statement by
 // statement: tools/editor_harness compares the two traces line by line.
 #include "editor_core.hpp"
+#include "whole_colour.hpp"
 
 #include <algorithm>
 #include <array>
@@ -337,6 +338,7 @@ struct EditState {
     bool has_clip = false; int clip = 0;
     bool has_clip_kind = false; std::string clip_kind;
     bool has_clip_color = false; HSV3 clip_color;
+    bool root_armed = false, whole_copy_was_down = false, whole_paste_was_down = false;   // the main page's whole colour keys
     std::weak_ptr<Entry> pal_focus;                             // the row under the cursor last frame (palette rows, 0.21.0)
     // pulse
     bool hl_on = false; TargetsRef hl_targets;
@@ -1825,6 +1827,35 @@ void rebuild_same_page(int idx) {
     edit.page_backup = keep_backup; edit.has_entry_values = keep_has; edit.entry_values = keep_values; edit.has_page = keep_has_page; edit.page = keep_page;
     if (be.opt_navigate) be.opt_navigate(edit.page, kTrue, idx, kNil, kNil, kNil);   // End() -> rebuild the engine units -> Start(), cursor kept
 }
+// The WHOLE colour (Wael 10/11): C / Square on the main page copies every part of the colour being edited (its working
+// tree, unsaved changes included), V / Triangle there pastes the copy onto the colour being edited, part by part,
+// matched by the structure's names (dialogs/whole_colour). Outside `edit`: the copy stays for the game session, through
+// closing the editor and changing outfit or character.
+struct WholeClip { NodeRef tree; std::string from; };          // from = the colour copied (edit_okey)
+WholeClip g_whole;
+// a status in the main page's title (SAVE OK!'s way), the cursor kept on its row, there again when the title comes back
+void root_status(const GroupRef& g, const std::string& text) {
+    const int idx = index_in(g, focused_entry());
+    edit.focus_of[ROOT] = idx;
+    set_status(text, 120, false, true);
+    edit.has_title_hold = true; edit.title_hold = frame_now() + 15;
+    editor_build_pages();
+    if (be.opt_navigate) be.opt_navigate(ROOT, kTrue, idx, kNil, kNil, kNil);
+}
+void whole_copy(const GroupRef& g) {
+    if (!edit.tree) return;
+    g_whole.tree = copy_tree(edit.tree);
+    g_whole.from = edit_okey();
+    root_status(g, L("status.copied_whole", { std::to_string(whole::clusters(g_whole.tree).size()) }));
+}
+void whole_paste(const GroupRef& g) {
+    if (!g_whole.tree || !edit.tree || g_whole.from == edit_okey()) return;   // nothing copied, or this very colour: nothing, as the line / colour paste
+    const whole::Pasted r = whole::paste(edit.tree, g_whole.tree);
+    for (const Node* cc : r.colours) g_memo.erase(MemoKey{ cc, {} });       // the sliders show the pasted values
+    if (r.pasted > 0) editor_refresh();                                     // live, as after the line / colour paste; saved by SAVE / SAVE AS only
+    const std::string n = std::to_string(r.pasted), m = std::to_string(r.total);
+    root_status(g, r.pasted == r.total ? L("status.pasted_all", { n }) : L("status.pasted_some", { n, m }));
+}
 // the three H / S / V sliders of the FOCUSED colour, by their keys (c3_H / di1_H / sq1_H)
 bool color_triple(const GroupRef& g, const EntryRef& e, EntryRef out[3]) {
     if (e && e->pal) {                                          // a palette row: its colour's three sliders
@@ -2016,6 +2047,23 @@ void frame() {
         edit.sliders_armed = false;
         edit.validate_was_down = false; edit.reset_was_down = false;
     }
+    // the main page: the WHOLE colour, on the keys that copy / paste a line or a colour on the colour pages (above)
+    const bool on_root = edit.active && !edit.di && window_open() && cur_group && cur_group->key == ROOT;
+    if (on_root) {
+        const uint32_t mask = pad_mask();
+        const bool copy_k = key_down(0x43) || (mask & PAD.BTN) != 0;      // C / Square
+        const bool paste_k = key_down(0x56) || (mask & PAD.Y) != 0;       // V / Triangle
+        bool closing = false;                                             // SAVED AS / ERASED: the window closes on their title
+        for (auto& st : edit.status) if (st.close) closing = true;
+        if (edit.root_armed && !closing) {
+            if (copy_k && !edit.whole_copy_was_down) whole_copy(cur_group);
+            else if (paste_k && !edit.whole_paste_was_down) whole_paste(cur_group);
+        }
+        edit.whole_copy_was_down = copy_k; edit.whole_paste_was_down = paste_k;
+        edit.root_armed = true;                                           // a key held when the page came up must be released first
+    } else {
+        edit.root_armed = false;
+    }
     // the dialog's guide bar: our hints on slider pages, the verb of the focused row elsewhere
     if (edit.active && window_open()) {
         const bool pad = be.screen_pad && be.screen_pad();
@@ -2031,6 +2079,8 @@ void frame() {
             std::string verb = (fe && fe->has_verb) ? fe->verb : (is_nav(fe) ? "Enter" : "Select");
             verb = L("verb." + lower(verb));
             edit.guide_wanted = pad ? ("<ICON BtnD> " + verb + "    <ICON BtnR> " + L("verb.back")) : ("<ICON KeyF> " + verb + "    <ICON KeyEsc> " + L("verb.back"));
+            if (on_root) edit.guide_wanted += pad ? ("    <ICON BtnL> " + L("verb.copy_whole") + "    <ICON BtnU> " + L("verb.paste_whole"))
+                                                  : ("    <ICON KeyC> " + L("verb.copy_whole") + "    <ICON KeyV> " + L("verb.paste_whole"));
         }
         edit.has_guide_wanted = true;
     } else {

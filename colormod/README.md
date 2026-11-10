@@ -18,6 +18,10 @@ Costume and Drive colours for Street Fighter 6, set from the game's own menus. O
   colour has its own page: Hue, Saturation, Brightness, then a 10 x 5 grid of the game's own colour cells (the avatar
   editor's palette): the arrows move the cursor, F applies the colour under it, Backspace gives the saved colour back.
   The grid needs SF6 Native Core 0.8.2; without it the palette rows show the colour under their cursor as text.
+  On the editor's main page, **C** (Square on the pad) copies the whole colour, every part of it, and **V**
+  (Triangle) pastes it onto the colour being edited, on any outfit of any character: the parts are matched by their
+  names, the title says how many found theirs; the copy stays until the game closes, and nothing is saved before Save
+  or Save As.
 - **Drive colours** per character and per player: Drive Impact, Drive Reversal, Drive Parry and Drive Rush.
   - on the character select: **L1** on the pad, **X** on the keyboard (Edit Drive Colors) switches the panel to the
     four Drive rows (A keeps, B goes back);
