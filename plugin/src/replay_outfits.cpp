@@ -13,7 +13,8 @@
 //     its game colour is asked of the Color Mod for this replay (colormod_link.hpp); the forced stage is written too, and
 //     the Replay Music row's music (Rule.BgmType: this replay's description only, the player's online setting is the save's
 //     MatchingSelectBgm, never touched; Custom's list: replay_music.cpp). Its costume options are told to the runtime options
-//     (rto.hpp, the player's own choices stay as they are).
+//     (rto.hpp, the player's own choices stay as they are). A fighter set to the Random outfit wears a draw of its pool, one
+//     per playback (costumes::replay_random: the Random outfit's rules, its colour among the outfit's and the Color Mod's).
 #include "slots.hpp"
 #include "replay_outfits.hpp"
 #include "colormod_link.hpp"
@@ -252,7 +253,32 @@ void dress_replay(Obj* map) {
     refresh();
     auto je = g_journal.find(key);
     const Entry* entry = je != g_journal.end() ? &je->second : nullptr;
-    const auto wear = plan(recorded, entry, g_forced, g_reg);
+    auto wear = plan(recorded, entry, g_forced, g_reg);
+    // A fighter set to its Random outfit: a draw of its pool for this playback (the Random outfit's rules), its colour one of
+    // the outfit's or a Color Mod entry (asked below, on colour 1, as a forced entry is). The same flow map set up again within
+    // a few seconds (a derived flow map's setupDesc calling its base's: both hooked) keeps its draws.
+    static uintptr_t s_map = 0;
+    static ULONGLONG s_at = 0;
+    struct Drawn { int random = -1, cos = -1, col = 0; std::string cm; };
+    static std::map<size_t, Drawn> s_drawn;                     // side -> the Random outfit's number, what it drew
+    const ULONGLONG now = GetTickCount64();
+    if (s_map != reinterpret_cast<uintptr_t>(map) || now - s_at > 5000) s_drawn.clear();
+    s_map = reinterpret_cast<uintptr_t>(map);
+    s_at = now;
+    for (size_t i = 0; i < ds.size(); ++i) {
+        Wear& w = wear[i];
+        int cos = -1, col = 0;
+        std::string cm;
+        if (!w.forced) continue;
+        if (auto d = s_drawn.find(i); d != s_drawn.end() && d->second.random == w.costume) { cos = d->second.cos; col = d->second.col; cm = d->second.cm; }
+        else if (costumes::replay_random(recorded[i].fid, w.costume, cos, col, cm)) s_drawn[i] = { w.costume, cos, col, cm };
+        else continue;
+        w.costume = cos;
+        w.color = col;
+        w.colormod = cm;
+        w.why = "forced: Random";
+        w.change = cos != recorded[i].costume || col != recorded[i].color;
+    }
     std::string line;
     for (size_t i = 0; i < ds.size(); ++i) {
         char b[160];
