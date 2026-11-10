@@ -76,6 +76,11 @@ extern "C" __declspec(dllexport) int SF6ColorMod_Request(int scope, int fighter,
 extern "C" __declspec(dllexport) void SF6ColorMod_ClearRequests(int scope) {
     try { engine::decide::clear_requests(scope); } catch (...) {}
 }
+// The Slots Loader's Random colour: whether the player chose the Random value on a side, for which fighter / outfit (it draws,
+// then asks for an entry by the battle scopes). Any thread.
+extern "C" __declspec(dllexport) int SF6ColorMod_RandomChoice(int side, int* fighter, int* costume) {
+    try { return engine::decide::random_choice(side, fighter, costume); } catch (...) { return 0; }
+}
 
 namespace {
 

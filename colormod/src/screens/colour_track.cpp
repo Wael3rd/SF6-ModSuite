@@ -38,6 +38,7 @@
 #include "../engine/live_internal.hpp"
 #include "../engine/luajson.hpp"
 #include "../engine/opponent_ticks.hpp"
+#include "../engine/random_value.hpp"
 #include "../engine/requests.hpp"
 #include "../vfx/feed.hpp"
 #include "colour_state.hpp"
@@ -59,6 +60,7 @@ namespace chips = engine::chips;
 namespace rsz = engine::rsz;
 using engine::Entry;
 using Opt = std::optional<int64_t>;
+namespace rv = engine::random_value;
 
 constexpr const char* kAgentP1 = "ui10505";                      // AGENT_NAME
 constexpr const char* kAgentP2 = "ui10507";                      // P2_AGENT_NAME
@@ -221,6 +223,9 @@ Opt g_list_f, g_list_c;                                // list_args
 Opt g_extra_first;                                     // extra_first (nil until a GetColorList)
 int64_t g_extra_count = 0;
 std::map<std::pair<int, int>, std::pair<int, int>> g_extras;   // per fighter / costume (engine::decide::Pull::extras)
+std::map<std::pair<int, int>, int> g_randoms;                  // the Random value's index per fighter / costume (Pull::randoms)
+bool g_extra_random = false;                                  // the last list has it
+std::string g_random_word;                                    // its name in the lists
 uint64_t g_setups[4] = {};                             // dbg.setups[1..3]
 std::optional<uint64_t> g_clears;                      // dbg.decide_clears
 
@@ -275,8 +280,13 @@ const std::vector<Entry>* entries_for(const Opt& f, const Opt& c) {
     return dd::catalog().entries((int)*f, (int)*c);
 }
 const Entry* entry_k(const std::vector<Entry>* list, int64_t k) { return (list && k >= 1 && k <= (int64_t)list->size()) ? &(*list)[k - 1] : nullptr; }
-int64_t label_to_k(const Opt& f, const Opt& c, const std::string& label) {
+int random_at(int64_t f, int64_t c) {                            // the Random value's index in that pair's list, -1 none
+    const auto it = g_randoms.find({ (int)f, (int)c });
+    return it == g_randoms.end() ? -1 : it->second;
+}
+int64_t label_to_k(const Opt& f, const Opt& c, const std::string& label) {   // a spin's text -> rank (kK: the Random value)
     if (!f || !c) return 0;
+    if (!g_random_word.empty() && label == g_random_word && random_at(*f, *c) >= 0) return rv::kK;
     return dd::catalog().label_to_k((int)*f, (int)*c, label);
 }
 // A select menu reads the list of its own fighter / costume: the other side's list (asked last) can hold more game
@@ -286,16 +296,22 @@ std::optional<std::pair<int64_t, int64_t>> extras_of(int64_t f, int64_t c) {   /
     if (it == g_extras.end()) return std::nullopt;
     return std::make_pair((int64_t)it->second.first, (int64_t)it->second.second);
 }
-Opt entry_at(int64_t idx, int64_t f, int64_t c) {                  // list index -> entry number or nil
+Opt entry_at(int64_t idx, int64_t f, int64_t c) {                  // list index -> entry number (kK the Random value) or nil
     const auto x = extras_of(f, c);
-    if (!x || idx < x->first || idx >= x->first + x->second) return std::nullopt;
-    return idx - x->first + 1;
+    if (!x) return std::nullopt;
+    const int k = rv::rank_at((int)idx, (int)x->first, (int)x->second, random_at(f, c));
+    return k ? Opt(k) : std::nullopt;
 }
 Opt index_of_entry(int64_t k, int64_t f, int64_t c) {
     const auto x = extras_of(f, c);
-    if (!x || k < 1 || k > x->second) return std::nullopt;
-    return x->first + k - 1;
+    if (!x) return std::nullopt;
+    const int i = rv::index_of((int)k, (int)x->first, (int)x->second, random_at(f, c));
+    return i >= 0 ? Opt(i) : std::nullopt;
 }
+// A remembered rank the list can show: the Random value only where that list has it (else a walk to it never ends)
+bool reachable(int64_t k, const Opt& f, const Opt& c) { return k != rv::kK || (f && c && random_at(*f, *c) >= 0); }
+// What a remembered selection stores as its identity: an entry's, the Random value's, else nothing
+json path_of(int64_t k, const Entry* e) { return k == rv::kK ? json(rv::kIdent) : e ? json(e->ident) : json(); }
 std::string fc_key(const Opt& f, const Opt& c) { return tostr(f) + "_" + tostr(c); }
 bool chip_known(const std::string& key) { return lj::truthy(lj::index(g_chip_cfg, key.c_str())); }   // chip_cfg[key]
 
@@ -601,7 +617,7 @@ void on_selection_changed(Menu& m, int64_t k, int64_t fighter, int64_t costume) 
     json& sel = sel_of(m.side);
     lj::set(sel, "rw", k); lj::set(sel, "fighter", fighter); lj::set(sel, "costume", costume);
     const Entry* e = k > 0 ? entry_k(entries_for(fighter, costume), k) : nullptr;
-    lj::set(sel, "path", e ? json(e->ident) : json());
+    lj::set(sel, "path", path_of(k, e));
     save_state();
     MO* ctrl = dd::find_visual_ctrl(m.side);
     if (!ctrl) return;
@@ -661,7 +677,7 @@ void tick_menu(Menu& m) {
     }
     if (k > 0) {
         const Entry* entry = entry_k(entries_for(fighter, costume), k);
-        const std::string label = entry ? entry->label : "RW " + std::to_string(k);
+        const std::string label = entry ? entry->label : k == rv::kK ? g_random_word : "RW " + std::to_string(k);
         std::optional<chips::Pair> chip;
         if (entry && m.rect0 && m.rect1) chip = entry_chip(fighter, costume, *entry);
         else if (entry) if (auto it = g_entry_chip.find(fc_key(fighter, costume) + "|" + entry->path); it != g_entry_chip.end()) chip = it->second;
@@ -714,7 +730,7 @@ void tick_fighter_settings() {
         fsm.spin.set(find_parts_spin(field_obj(agent, "_RootItem"), "color", 0));
         fsm.opened_at = g_F;
         const json& s = g_state["fs"];
-        fsm.restore_steps = (rw_or0(s) > 0 && eq(lj::index(s, "fighter"), g_list_f) && eq(lj::index(s, "costume"), g_list_c)) ? g_extra_count + 30 : 0;
+        fsm.restore_steps = (rw_or0(s) > 0 && eq(lj::index(s, "fighter"), g_list_f) && eq(lj::index(s, "costume"), g_list_c) && reachable(rw_or0(s), g_list_f, g_list_c)) ? g_extra_count + 30 : 0;
     }
     if (!fsm.text || !fsm.rect0 || !fsm.rect1) return;
     if (!alive(fsm.text.get())) { fsm.agent.set(nullptr); fsm.text.set(nullptr); return; }
@@ -739,7 +755,7 @@ void tick_fighter_settings() {
         json& s = g_state["fs"];
         lj::set(s, "rw", k); lj::set(s, "fighter", jv(g_list_f)); lj::set(s, "costume", jv(g_list_c));
         const Entry* e = k > 0 ? entry_k(entries_for(num(lj::index(s, "fighter")), num(lj::index(s, "costume"))), k) : nullptr;
-        lj::set(s, "path", e ? json(e->ident) : json());
+        lj::set(s, "path", path_of(k, e));
         save_state();
     }
     if (k != fsm.last_k) fs_shown(k, "fighter settings");
@@ -996,7 +1012,7 @@ void tick_training_settings() {
         tcs.opened_at = g_F;
         tcs.target = field_i32(tcs.param.get(), "SettingTargetPlayerIndex") == 1 ? 2 : 1;
         const json& s = sel_of(tcs.target);
-        tcs.restore_steps = (rw_or0(s) > 0 && eq(lj::index(s, "fighter"), g_list_f) && eq(lj::index(s, "costume"), g_list_c)) ? g_extra_count + 30 : 0;
+        tcs.restore_steps = (rw_or0(s) > 0 && eq(lj::index(s, "fighter"), g_list_f) && eq(lj::index(s, "costume"), g_list_c) && reachable(rw_or0(s), g_list_f, g_list_c)) ? g_extra_count + 30 : 0;
     }
     if (!tcs.text || !tcs.param || !alive(tcs.text.get()) || !alive(tcs.param.get())) { tcs.agent.set(nullptr); tcs.text.set(nullptr); return; }
     if (g_F % 5 == 0 && !fsm.visible) { find_guide_list(); fsm.tcs_guide = true; set_bottom_hint(std::nullopt); }
@@ -1018,7 +1034,7 @@ void tick_training_settings() {
         json& s = sel_of(side);
         lj::set(s, "rw", k); lj::set(s, "fighter", jv(g_list_f)); lj::set(s, "costume", jv(g_list_c));
         const Entry* e = k > 0 ? entry_k(entries_for(g_list_f, g_list_c), k) : nullptr;
-        lj::set(s, "path", e ? json(e->ident) : json());
+        lj::set(s, "path", path_of(k, e));
         save_state();
         Tcs::LiveRefresh r;
         r.side = side; r.at = g_F + 15; r.setups = g_setups[side];
@@ -1338,7 +1354,8 @@ void ned_prepare() {                                   // edit.ned.prepare: what
     }
     const int64_t f = *g_list_f, c = *g_list_c;
     const auto cid = color_num(ctrl);
-    const int64_t k = fs_entry();
+    int64_t k = fs_entry();
+    if (k == rv::kK) k = 0;                            // the Random value is colour 02 underneath: the editor edits that
     const Entry* entry = k > 0 ? entry_k(entries_for(f, c), k) : nullptr;
     if (!entry) snapshot_pristine(ctrl, f, c);
     bool has_live = false;
@@ -1533,15 +1550,16 @@ void editor_tick() {
 
 const char* spin_direction(const std::string& label, const Opt& f, const Opt& c, int64_t k) {   // nullptr = the Lua raised
     if (!g_extra_first) return "Add";
-    const int64_t total = *g_extra_first + g_extra_count;
+    const int64_t total = *g_extra_first + g_extra_count + (g_extra_random ? 1 : 0);   // the Random value last
+    const auto index_of_k = [&](int64_t kk) -> int64_t { return kk == rv::kK ? *g_extra_first + g_extra_count : *g_extra_first + kk - 1; };
     Opt cur;
     const int64_t kk = label_to_k(f, c, label);
-    if (kk > 0) cur = *g_extra_first + kk - 1;
+    if (kk > 0) cur = index_of_k(kk);
     else if (label.size() == 2 && std::isdigit((unsigned char)label[0]) && std::isdigit((unsigned char)label[1])) cur = std::stoi(label) - 1;
     if (!cur) return "Add";
     if (total == 0) return nullptr;                                // integer modulo by zero
     auto mod = [&](int64_t a) { int64_t r = a % total; return (r != 0 && ((r < 0) != (total < 0))) ? r + total : r; };
-    const int64_t target = *g_extra_first + k - 1;
+    const int64_t target = index_of_k(k);
     return mod(cur.value() - target) < mod(target - *cur) ? "Sub" : "Add";
 }
 void track_path(json& s) {                                         // packs may have changed: find the file again
@@ -1594,6 +1612,9 @@ void decide_pull() {
     g_extra_first = p.extra_first >= 0 ? Opt(p.extra_first) : std::nullopt;
     g_extra_count = p.extra_count;
     g_extras = p.extras;
+    g_randoms = p.randoms;
+    g_extra_random = p.extra_random;
+    g_random_word = p.random_word;
     for (int i = 0; i < 3; ++i) g_setups[i + 1] = p.setups[i];
     if (g_clears && p.mirror_clears != *g_clears) {                 // mirror rule: P2 picked P1's entry, left to the game
         json& s = g_state["p2"];

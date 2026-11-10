@@ -28,6 +28,7 @@
 #include "live_internal.hpp"
 #include "code_check.hpp"
 #include "opponent_ticks.hpp"
+#include "random_value.hpp"
 #include "requests.hpp"
 #include "../../include/sf6colormod_entries.h"
 
@@ -87,6 +88,10 @@ bool g_list_known = false;                    // list_args (nil until the first 
 uint32_t g_list_f = 0, g_list_c = 0;
 int g_extra_first = -1, g_extra_count = 0;    // extra_first (-1 = nil), extra_count: the last list
 std::map<std::pair<int, int>, std::pair<int, int>> g_extras;   // (fighter, costume) -> (extra_first, extra_count)
+std::map<std::pair<int, int>, int> g_randoms;                  // (fighter, costume) -> index of its Random value (random_value.hpp)
+bool g_extra_random = false;                                  // the last list has the Random value
+std::map<std::pair<int, int>, void*> g_random_infos;           // its ColorInfo per fighter / costume (made once)
+std::string g_random_word;                                    // the word they are named with (the Slots Loader's, the game's)
 std::unordered_set<uintptr_t> g_p2_ctrls;     // controllers whose last SetColor carried P2_VIRTUAL_ID
 uintptr_t g_side_data[3] = {};                // [1], [2]: ColorData address seen on that side's preview
 std::unordered_map<uintptr_t, std::string> g_applied;   // controller -> signature of what it wears
@@ -301,12 +306,12 @@ std::pair<int, int> battle_identity(const std::string& name) {   // "^esf(%d%d%d
 }
 
 // ---- which entry, which tree ---------------------------------------------------------------------------------------
-int entry_at(int idx, int fighter, int costume) {     // index in that pair's list -> entry number (0 = none)
+int entry_at(int idx, int fighter, int costume) {     // index in that pair's list -> entry number (0 = none, kK Random)
     const auto it = g_extras.find({ fighter, costume });
     if (it == g_extras.end()) return 0;
     const auto [first, count] = it->second;
-    if (idx < first || idx >= first + count) return 0;
-    return idx - first + 1;
+    const auto r = g_randoms.find({ fighter, costume });
+    return random_value::rank_at(idx, first, count, r == g_randoms.end() ? -1 : r->second);
 }
 
 const std::vector<Entry>* entries_for(int fighter, int costume) {
@@ -520,21 +525,34 @@ bool preview_requested(MO* ctrl) {
     std::lock_guard lk(g_req_mx);
     return g_req.find(requests::kPreview, f, c, 0) != nullptr;
 }
-// the request that applies to this controller: scope 1 for the preview side (3), scope 2 for a battle side (1, 2) of
-// the replay it was made for; nullopt = none (the usual decisions)
+// the request that applies to this controller: scope 1 for the preview side (3); for a battle side (1, 2) scope 2 of the
+// replay it was made for, else that side's battle scope (3 / 4: the Slots Loader's Random colour), never on the character
+// select's previews; nullopt = none (the usual decisions)
 std::optional<std::string> requested(MO* ctrl, int side) {
     const int scope = side == 3 ? requests::kPreview : (side == 1 || side == 2) ? requests::kReplay : 0;
     if (!scope) return std::nullopt;
+    const int battle = scope == requests::kReplay ? requests::kBattle1 + side - 1 : 0;
+    bool own = false, drawn = false;
     {
         std::lock_guard lk(g_req_mx);
-        if (!g_req.any(scope)) return std::nullopt;
+        own = g_req.any(scope);
+        drawn = battle && g_req.any(battle);
     }
+    if (!own && !drawn) return std::nullopt;
     if (scope == requests::kPreview && in_battle_flow() && live::side_from_parents(ctrl) != 3) return std::nullopt;
-    const uintptr_t running = scope == requests::kReplay ? running_flow_map() : 0;
     const auto [f, c] = path_identity(ctrl);
-    std::lock_guard lk(g_req_mx);
-    const requests::Request* r = g_req.find(scope, f, c, running);
-    return r ? std::optional<std::string>(r->id) : std::nullopt;
+    if (own) {
+        const uintptr_t running = scope == requests::kReplay ? running_flow_map() : 0;
+        std::lock_guard lk(g_req_mx);
+        if (const requests::Request* r = g_req.find(scope, f, c, running)) return r->id;
+    }
+    if (drawn) {
+        const std::string name = live::go_name(ctrl);
+        if (name == "FighterVisual_01" || name == "FighterVisual_02") return std::nullopt;
+        std::lock_guard lk(g_req_mx);
+        if (const requests::Request* r = g_req.find(battle, f, c, 0)) return r->id;
+    }
+    return std::nullopt;
 }
 
 // what a controller should wear: another mod's request first; an entry of the side's list on BASE_COLOR, else a
@@ -810,8 +828,73 @@ std::optional<chips::Pair> squares_locked(int fighter_id, int only_side) {
     return std::nullopt;
 }
 
+// ---- the Random value (random_value.hpp, include/sf6colormod_entries.h) ---------------------------------------------
+// The Slots Loader names the outfits whose colour it draws, and the word (SF6Slots_RandomColour); looked for again every
+// 10 s while missing. Without it no list gets the value.
+SF6Slots_RandomColourFn slots_random_fn() {
+    static SF6Slots_RandomColourFn fn = nullptr;
+    static ULONGLONG tried_at = 0;
+    if (fn) return fn;
+    const ULONGLONG now = GetTickCount64();
+    if (tried_at && now - tried_at < 10000) return nullptr;
+    tried_at = now;
+    if (HMODULE h = GetModuleHandleW(L"SF6_CostumeSlotsNative.dll"))
+        fn = reinterpret_cast<SF6Slots_RandomColourFn>(GetProcAddress(h, "SF6Slots_RandomColour"));
+    return fn;
+}
+// Opponent Outfit Settings' grid lists the Color rows too: no Random value there (the game's pick for the opponent is a draw
+// already, among what is ticked). Its page is there and Fighter Settings is not on screen (a page the game keeps hidden
+// behind another must not take the value away from Fighter Settings). Once per frame.
+bool opp_page_listing() {
+    static uint64_t at = UINT64_MAX;
+    static bool v = false;
+    if (at == cmn::frame()) return v;
+    at = cmn::frame();
+    v = false;
+    const SF6CoreAPI* core = cmn::core();
+    if (!core || !SF6CORE_HAS(core, ui_agents)) return v;
+    void* buf[4] = {};
+    if (!core->ui_agents("OtherMatchingFighterSetting", buf, 4)) return v;
+    v = true;
+    void* fs[4] = {};
+    const uint32_t n = core->ui_agents("MatchingFighterSetting", fs, 4);
+    for (uint32_t i = 0; i < n && i < 4; ++i) {
+        auto r = call(call_obj(reinterpret_cast<MO*>(fs[i]), "get_ControlMain"), "get_ActualVisible");
+        if (!r.exception_thrown && r.byte) { v = false; break; }
+    }
+    return v;
+}
+// Whether this pair's list gets the Random value, and its word
+bool random_wanted(int fighter, int costume, std::string& word) {
+    SF6Slots_RandomColourFn fn = slots_random_fn();
+    if (!fn) return false;
+    char b[128] = {};
+    if (fn(fighter, costume, b, (int)sizeof b) != 1) return false;
+    b[sizeof b - 1] = 0;
+    word = b;
+    return !word.empty() && !opp_page_listing();
+}
+// Its ColorInfo for this pair (made once, renamed when the game's language changed the word)
+void* random_info(const SF6CoreAPI* core, int fighter, int costume, const std::string& word) {
+    if (word != g_random_word) {
+        for (auto& [k, ci] : g_random_infos) if (ci) core->obj_set_string(cmn::client(), ci, "<Name>k__BackingField", word.c_str());
+        g_random_word = word;
+    }
+    void*& ci = g_random_infos[{ fighter, costume }];
+    if (!ci) {
+        ci = core->obj_new(cmn::client(), kInfoType);
+        if (ci) {
+            core->obj_set_string(cmn::client(), ci, "<Name>k__BackingField", word.c_str());
+            core->obj_set_i64(cmn::client(), ci, "<No>k__BackingField", kBaseColor);
+            ++g_n.infos;
+        }
+    }
+    return ci;
+}
+
 // ---- hooks -----------------------------------------------------------------------------------------------------------
-// ColorInventory.GetColorList(chara, costume): N ColorInfo{ Name = "RW n" / "MC n", No = BASE_COLOR } appended.
+// ColorInventory.GetColorList(chara, costume): N ColorInfo{ Name = "RW n" / "MC n", No = BASE_COLOR } appended, then the
+// Random value when the Slots Loader draws that outfit's colour (random_wanted).
 // GetColorNoList / Param.GetEnableColorList derive from this list: hooking them too would append twice.
 int pre_get_color_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
@@ -831,40 +914,54 @@ void post_get_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsign
     try {
         MO* list = reinterpret_cast<MO*>(*ret_val);
         const auto* entries = g_cat.entries((int)g_list_f, (int)g_list_c);
+        const bool has_entries = entries && !entries->empty();
         const SF6CoreAPI* core = cmn::core();
         const std::pair<int, int> key{ (int)g_list_f, (int)g_list_c };
-        if (list && (!entries || entries->empty())) {                // no entries for this pair: nothing of ours in it
+        std::string word;
+        const bool rnd = list && core && random_wanted(key.first, key.second, word);
+        if (list && !has_entries && !rnd) {                         // nothing of ours for this pair: nothing in its list
             g_extras.erase(key);                                     // (a list with more game colours than the previous
-            g_extra_first = -1; g_extra_count = 0;                   // one showed RW 1 on the game's own EX colour)
+            g_randoms.erase(key);                                    // one showed RW 1 on the game's own EX colour)
+            g_extra_first = -1; g_extra_count = 0; g_extra_random = false;
         }
-        if (!list || !entries || entries->empty() || !core) return;
+        if (!list || !core || (!has_entries && !rnd)) return;
         auto rc = call(list, "get_Count");
         const int32_t n = rc.exception_thrown ? 0 : (int32_t)rc.dword;
         if (n <= 0) return;
         g_extra_first = n;
         g_extra_count = 0;
+        g_extra_random = false;
         // The Edit Character screen asks for the list every frame (OnUpdate -> GetColorId -> GetColorNoList ->
         // GetColorList, 03/10): the ColorInfo objects of a fighter / costume are made once and the same ones are added
         // to every new list (the Lua made new ones per call and never freed them). Each keeps the ref obj_new gave.
-        auto& infos = g_infos[std::to_string(g_list_f) + "_" + std::to_string(g_list_c)];
-        if (infos.size() != entries->size()) {
-            infos.clear();
-            for (const Entry& e : *entries) {
-                void* ci = core->obj_new(cmn::client(), kInfoType);
-                if (ci) {
-                    core->obj_set_string(cmn::client(), ci, "<Name>k__BackingField", e.label.c_str());
-                    core->obj_set_i64(cmn::client(), ci, "<No>k__BackingField", kBaseColor);
-                    ++g_n.infos;
+        if (has_entries) {
+            auto& infos = g_infos[std::to_string(g_list_f) + "_" + std::to_string(g_list_c)];
+            if (infos.size() != entries->size()) {
+                infos.clear();
+                for (const Entry& e : *entries) {
+                    void* ci = core->obj_new(cmn::client(), kInfoType);
+                    if (ci) {
+                        core->obj_set_string(cmn::client(), ci, "<Name>k__BackingField", e.label.c_str());
+                        core->obj_set_i64(cmn::client(), ci, "<No>k__BackingField", kBaseColor);
+                        ++g_n.infos;
+                    }
+                    infos.push_back(ci);
                 }
-                infos.push_back(ci);
+            }
+            for (void* ci : infos) {
+                if (!ci) continue;
+                core->list_add(cmn::client(), list, ci);
+                ++g_extra_count;                                     // (counted whatever list_add says, as the Lua)
             }
         }
-        for (void* ci : infos) {
-            if (!ci) continue;
-            core->list_add(cmn::client(), list, ci);
-            ++g_extra_count;                                         // (counted whatever list_add says, as the Lua)
-        }
-        g_extras[key] = { g_extra_first, g_extra_count };
+        g_extras[key] = { g_extra_first, g_extra_count };            // (count 0: the Random value alone)
+        g_randoms.erase(key);
+        if (rnd)
+            if (void* ci = random_info(core, key.first, key.second, word)) {
+                core->list_add(cmn::client(), list, ci);
+                g_randoms[key] = g_extra_first + g_extra_count;
+                g_extra_random = true;
+            }
         ++g_n.lists;
         g_n.entries += (uint64_t)g_extra_count;
     } catch (...) { fault("GetColorList"); }
@@ -917,10 +1014,11 @@ void mirror_fix(int argc, void** argv, int color_i, bool has_lvl) {
     const uint32_t color = (uint32_t)(uintptr_t)argv[color_i];
     if (player == 0 || g_sel[0].rw <= 0 || color != 0) return;
     if (!g_p2_color_id || *g_p2_color_id != (int32_t)kBaseColor) return;
-    // same RW entry on both sides (same fighter/costume): keep the game's own duplicate rule (P2 -> 01)
+    // same RW entry on both sides (same fighter/costume): keep the game's own duplicate rule (P2 -> 01). Random on both
+    // sides is no duplicate: each side gets a draw of its own (the Slots Loader), P2 keeps its 02
     Sel& s1 = g_sel[0];
     Sel& s2 = g_sel[1];
-    if (s2.rw > 0 && s2.rw == s1.rw && s2.fighter == s1.fighter && s2.costume == s1.costume) {
+    if (s2.rw > 0 && s2.rw == s1.rw && s2.rw != random_value::kK && s2.fighter == s1.fighter && s2.costume == s1.costume) {
         s2.rw = 0;                                    // the Lua clears path / menus[2].selected and saves (pull)
         ++g_mirror_clears;
         ++g_n.mirror_left;
@@ -1103,7 +1201,9 @@ void load_state_file() {                              // state.json as the Lua r
         auto it = j.find(keys[i]);
         if (it == j.end() || !it->is_object()) continue;
         g_sel[i] = { num(*it, "rw", 0), num(*it, "fighter", -2), num(*it, "costume", -2) };
-        if (auto p = it->find("path"); p != it->end() && p->is_string() && !p->get<std::string>().empty() && !g_cat.all().empty())
+        if (auto p = it->find("path"); p != it->end() && p->is_string() && p->get<std::string>() == random_value::kIdent)
+            g_sel[i].rw = random_value::kK;                       // the Random value: its own rank, whatever the entries
+        else if (p != it->end() && p->is_string() && !p->get<std::string>().empty() && !g_cat.all().empty())
             g_sel[i].rw = g_cat.find_ident(g_sel[i].fighter, g_sel[i].costume, p->get<std::string>());   // the colour itself, wherever its rank is now (0 = gone)
     }
 }
@@ -1252,6 +1352,9 @@ Pull pull() {
     p.list_known = g_list_known; p.list_fighter = g_list_f; p.list_costume = g_list_c;
     p.extra_first = g_extra_first; p.extra_count = g_extra_count;
     p.extras = g_extras;
+    p.randoms = g_randoms;
+    p.extra_random = g_extra_random;
+    p.random_word = g_random_word;
     for (int i = 0; i < 3; ++i) p.setups[i] = g_setups[i + 1];
     p.mirror_clears = g_mirror_clears;
     return p;
@@ -1683,6 +1786,16 @@ void clear_requests(int scope) {
         g_req.clear(scope);
     }
     if (n) cmn::journal("requests of scope %d cleared (%zu)", scope, n);
+}
+
+int random_choice(int side, int* fighter, int* costume) {
+    std::lock_guard lk(live::mx());
+    if (!active() || side < 1 || side > 3) return 0;
+    const Sel& s = g_sel[side - 1];
+    if (s.rw != random_value::kK || s.fighter < 0 || s.costume < 0) return 0;
+    if (fighter) *fighter = s.fighter;
+    if (costume) *costume = s.costume;
+    return 1;
 }
 
 }  // namespace engine::decide
