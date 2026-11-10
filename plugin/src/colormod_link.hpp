@@ -23,6 +23,7 @@ struct Fns {
     SF6ColorMod_RequestFn request = nullptr;
     SF6ColorMod_ClearRequestsFn clear = nullptr;
     SF6ColorMod_RandomChoiceFn random_choice = nullptr;   // a Color Mod with the Random value and the battle scopes, else null
+    SF6ColorMod_FighterRandomFn fighter_random = nullptr; // one that keeps Fighter Settings' Random per fighter, else null
 };
 
 inline Fns link() {
@@ -43,6 +44,7 @@ inline Fns link() {
                 n.request = reinterpret_cast<SF6ColorMod_RequestFn>(GetProcAddress(h, "SF6ColorMod_Request"));
                 n.clear = reinterpret_cast<SF6ColorMod_ClearRequestsFn>(GetProcAddress(h, "SF6ColorMod_ClearRequests"));
                 n.random_choice = reinterpret_cast<SF6ColorMod_RandomChoiceFn>(GetProcAddress(h, "SF6ColorMod_RandomChoice"));
+                n.fighter_random = reinterpret_cast<SF6ColorMod_FighterRandomFn>(GetProcAddress(h, "SF6ColorMod_FighterRandom"));
                 if (n.version && n.entries && n.request && n.clear) f = n;
             }
         }
@@ -101,6 +103,15 @@ inline bool random_choice(int side, int& fighter, int& costume) {
     fighter = fi;
     costume = co;
     return true;
+}
+// Battle Settings' Random colour of a fighter (Fighter Settings, kept per fighter): the outfit it was chosen on, -1 none. An
+// older Color Mod keeps one, the last fighter shown there.
+inline int fighter_random(int fighter) {
+    const Fns f = link();
+    if (!f.random_choice || !available()) return -1;
+    if (f.fighter_random) return f.fighter_random(fighter);
+    int fi = -1, co = -1;
+    return f.random_choice(3, &fi, &co) == 1 && fi == fighter ? co : -1;
 }
 // The battle fighter of `side` (1 / 2) wears that entry over colour 02 until replaced or cleared
 inline bool request_battle(int side, int fighter, int costume, const std::string& id) {

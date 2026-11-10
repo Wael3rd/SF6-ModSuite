@@ -737,12 +737,10 @@ int intent_slot(int fid) {
     return in == g_intent.end() ? 0 : in->second.slot;
 }
 // Battle Settings closed: the menu showed `shown` with outfit `v`. Random (on colour 02, the Color Mod's Fighter Settings
-// choice for that fighter and outfit): its next colour kept (made now for a new outfit), the save holds it for a game outfit.
-// Anything else: no Random colour for that fighter (the Color Mod remembers Fighter Settings' last fighter only: another one
-// shows its colour 02 there, so 02 it is).
+// choice for that fighter and outfit, kept per fighter: colormod::fighter_random): its next colour kept (made now for a new
+// outfit), the save holds it for a game outfit. Anything else: no Random colour for that fighter.
 void rand_colour_close(int fid, Obj* e, int v, int shown) {
-    int cf = -1, cc = -1;
-    const bool on = shown == rnd::kEntryCarrier && v >= 0 && !is_random(fid, v) && colormod::random_choice(3, cf, cc) && cf == fid && cc == v;
+    const bool on = shown == rnd::kEntryCarrier && v >= 0 && !is_random(fid, v) && colormod::fighter_random(fid) == v;
     rnd::Fighter& f = g_rand[fid];
     if (!on) {
         if (!f.next_colour.valid()) return;
@@ -2222,10 +2220,9 @@ int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long lon
         for (auto& [fid, e] : save_entries()) {
             const int v = get_cos(e), c = get_col(e);
             if (!is_slot(fid, v)) {
-                // a game outfit on the Color Mod's Random value (colour 02, its Fighter Settings choice): the profile sends the
-                // next colour (made now when there is none), the menu gets 02 back after
-                int cf = -1, cc = -1;
-                if (c != rnd::kEntryCarrier || !colormod::random_choice(3, cf, cc) || cf != fid || cc != v) continue;
+                // a game outfit on the Color Mod's Random value (colour 02, its Fighter Settings choice for that fighter): the
+                // profile sends the next colour (made now when there is none), the menu gets 02 back after
+                if (c != rnd::kEntryCarrier || colormod::fighter_random(fid) != v) continue;
                 rand_ensure_next_colour(fid, v, "Random colour chosen: its next colour");
                 const int nc = rnd::worn_colour(g_rand[fid].next_colour.color);
                 if (nc == c) continue;
@@ -2796,9 +2793,34 @@ int random_colour(int fighter, int costume, char* word, int cap) {
     return 1;
 }
 
+// The training popup confirmed on Random where the game reloads nothing (colormod/include/sf6colormod_entries.h,
+// SF6Slots_RandomNowFn): a colour of that outfit's round now, as a battle load draws one. An entry: dressed by the Color Mod on
+// that side (its battle scope), the side wears 02; a game colour: worn in place by the Color Mod, an entry asked before for that
+// side is over. -1: not drawn here (the Random outfit needs its files: the game reloads for it).
+int random_now(int side, int fighter, int costume) {
+    if ((side != 1 && side != 2) || fighter <= 0 || costume < 0 || !g_draw_hooks.load(std::memory_order_relaxed) ||
+        !g_slot_of.count(fighter) || is_random(fighter, costume))
+        return -1;
+    std::lock_guard lk(g_alias_mx);
+    const int v = rand_draw_colour(fighter, costume, nullptr, "the training popup: Random chosen, worn now");
+    if (rnd::is_entry(v)) {
+        rand_wear_entry(side, fighter, costume, v, "the training popup");
+        return rnd::kEntryCarrier;
+    }
+    if (g_rand_req[side].fid >= 0) {
+        colormod::clear(SF6CM_SCOPE_BATTLE_P1 + side - 1);
+        g_rand_req[side] = RandReq{};
+    }
+    return v;
+}
+
 } // namespace slots::costumes
 
 // Asked by the Color Mod at each Color row it fills (any thread, no game call): see random_colour above
 extern "C" __declspec(dllexport) int SF6Slots_RandomColour(int fighter, int costume, char* word, int cap) {
     try { return slots::costumes::random_colour(fighter, costume, word, cap); } catch (...) { return 0; }
+}
+// Asked by the Color Mod when the training popup is confirmed on Random with no reload (any thread): see random_now above
+extern "C" __declspec(dllexport) int SF6Slots_RandomNow(int side, int fighter, int costume) {
+    try { return slots::costumes::random_now(side, fighter, costume); } catch (...) { return -1; }
 }
