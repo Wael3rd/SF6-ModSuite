@@ -119,6 +119,64 @@ download of the same file; names and authors come from `modinfo.ini`.
 - `reframework/data/SF6_TitleSlots_Data/registry.json` lists the packs (key, name, author, source, by name) and what
   this launch applied, for the plugin. Without a `title_mods` folder nothing is done.
 
+## UI packs
+
+Interface mods made for Fluffy Mod Manager (menu art, portraits, loading screens: a `modinfo.ini` and a `natives` tree
+per option) go **as downloaded** in `reframework/ui_mods/`: the `.zip`, `.7z` or `.rar` file itself, or a folder.
+Archives are unpacked once into `ui_mods\.cache` (a `.pak` is not read, the log says so). Every option of every mod can
+then be ticked in the game, without Fluffy.
+
+- The options form the tree Fluffy shows. Every folder with a `modinfo.ini` or a `natives` tree is a node.
+  `DummyMod=True` is a title (no box). `AddonFor=<name>` hangs a node under the node of that name, also across
+  archives: an add-on downloaded on its own joins its mod. A node with no `AddonFor`, or one that names no node, is a
+  root. A root and everything under it is a **pack**: one row in the game.
+- Under one parent, the options that replace a file in common are a **one-of group** (pick one, or none). The others
+  are check boxes. Separate mods that are alternatives of each other (the 9 Loading Animations archives) are gathered
+  into one pack, where they are a one-of group. That pack is named from the words their names share ("Loading").
+  Alternatives replace nearly the same files: at least half of the files the two replace together are shared by
+  both. Mods that only share some files stay separate packs (Round Announcement UI ships one loading screen among
+  many files; Comic Art and Battlehud Portraits both have battle HUD portraits).
+- Order: packs by name. Under each parent, the options by `MenuPriority` (highest first), then by name; then the sub
+  groups by name.
+- Several ticked options replace the same file: when they are in two packs, the later pack by name wins it (the log
+  names each pair of packs that share files, and how many). In one pack, the option deepest in the tree wins it, then
+  the later in that order. A preset (FG Artwork's *Default Set*, whose banners other options also have) is a box like
+  the others. A deeper option ticked with it wins its own banner.
+- Keys: a pack is `u` + 12 hex digits, a node `n` + 12 hex digits, both from the archive or folder name and the
+  node's folder inside it. A choice survives a new download of the same file under the same name.
+- Choices: `"ui_choices"` in `reframework/data/SF6_CostumeSlots_data/settings.json`,
+  `{ "<pack key>": ["<ticked node id>", ...] }`. A pack that is missing has nothing ticked: the game's own files. Ids that
+  name no option are ignored (logged).
+- In the stage pak:
+  - every option's files, at private paths (`natives/stm/_uislots/<pack>/<node>/...`). Identical data is stored once.
+  - the ticked options' files at their **real paths** too. The game loads some interface files once, at boot, and keeps
+    them (the character select's portraits): written there, they show the choice from the launch on.
+  - the game's own copy of each real path written that way (`_uislots/game/...`, from `re_chunk_000.pak` and its sub
+    paks).
+  - each node's picture, `_uislots/<pack>/<node>/preview.tex` (its modinfo screenshot at 1920x1080 BC1, 1 MB), and the
+    pack's, `_uislots/<pack>/preview.tex`. Past 256 MB of pictures, the others are left out.
+- Pictures (UI packs, title packs) are converted once: the result is kept in `ui_mods\.cache\_pictures` (title packs:
+  `title_mods\.cache\_pictures`), named from the screenshot's path, size and last write time. A changed screenshot is
+  converted again; files no pass asked for are removed after a build. The log gives the time of each part of a rebuild.
+- **A choice changed in the game is served at once** (`SF6UISlots_Apply`). The redirection serves each file whose
+  option changed from its private copy. It serves the game's own copy when nothing ticked replaces it any more. The new
+  choice shows at the next load of the file (the Fighting Ground banners: the next time the menu opens). A file the
+  game keeps in memory stays as it is until the plugin swaps it on screen (`SF6UISlots_Overrides` lists those
+  textures), or until the next launch. The choices are written at the real paths, so **a choice changed since the last
+  launch rebuilds the stage pak** at the next start (the log says so).
+- **Per fighter.** A file under `character_image/<digits>/` belongs to that fighter (the folder decides, not the file
+  name). A choice id may be `"<node id>@<fid>"` (e.g. `n13a08299e134@013`): that option for the fighter only. It is kept
+  when the node is an option with files under that folder; it is dropped for an unknown fid, for a title, and when the
+  whole id of the node is ticked too. The stage pak also holds the game's own copy of every fighter texture of any
+  option (`_uislots/game/...`), ticked or not.
+- `reframework/data/SF6_UISlots_Data/registry.json` lists the packs and their nodes (depth first, in display order:
+  id, parent, name, description, title or option, one-of or box, group, files, picture, depth, source) and the options
+  this launch ticked (`"applied"`). A node with files under fighter folders also has `"fighters": { "013": ["<real
+  texture resource>", ...] }` (a fid with no texture: `[]`) and `"fighters_only"` (all its files are under fighters).
+  The top level has `"game_textures": { "<real resource>": "<resource of the game's own copy>" }` for those textures.
+  Without a `ui_mods` folder nothing is done: the stage pak is not rebuilt, and the
+  registry goes.
+
 ## Limits
 
 - **The choice is local, and it applies to every load of that stage**: training, arcade, replays, and online
@@ -165,7 +223,8 @@ The game imports `amd_ags_x64.dll` from its own folder, before any engine code r
    stays above the stage pak (moved, not rebuilt, when the stage pak comes or goes).
 3. **Redirection** (`stages/loader/stage_redirect.cpp`). The engine turns every file path into a pak hash through one
    function, `path_to_hash`. A small block of memory is reserved near the executable at startup; once a
-   variant is selected (and never in the first 20 s), the entry of `path_to_hash` gets a 5-byte jump to our
+   variant is selected, or a title screen or UI pack choice differs from what the launch wrote (and never in the
+   first 20 s), the entry of `path_to_hash` gets a 5-byte jump to our
    detour, which swaps the hash of each vanilla file the selected variant replaces for its copy's hash. A
    tool that hooked the function first (HARD READ) stays in the chain. The selection is re-read from
    `state.json` when it changes.
@@ -178,7 +237,7 @@ The game imports `amd_ags_x64.dll` from its own folder, before any engine code r
 
 Outputs, in `reframework/data/SF6_StageSlots_Data`: `registry.json` (variants per stage, for the script),
 `loader/variants.tsv` (the same with every redirection), `state.json` (selection); title packs:
-`reframework/data/SF6_TitleSlots_Data/registry.json`. Log:
+`reframework/data/SF6_TitleSlots_Data/registry.json`; UI packs: `reframework/data/SF6_UISlots_Data/registry.json`. Log:
 `SF6_StageSlots.log` in the game folder.
 
 ## Building
@@ -191,7 +250,9 @@ build\amd_ags_x64.dll   costume slots + stage slots
 build\stagepak.exe, stagetest.exe, textest.exe
 ```
 
-- `stagetest <folder>` runs the stage pass on a folder laid out like the game's (no game needed).
+- `stagetest <folder>` runs the stage pass on a folder laid out like the game's (no game needed), and prints the
+  variants and the UI packs' tree. `stagetest --selftest` runs the unit tests. `stagetest --make-base <out.pak> <path>...`
+  makes a stand-in for `re_chunk_000.pak`, for the copies of the game's own files.
 - `textest <image> <out.tex>` makes a preview, `textest --thumb <image> <out.tex>` a thumbnail;
   `textest --dump <in.tex> <out.png>` decodes either.
 - `stages/tools/make_stage_index.py` rebuilds `stages/data/loader/stage_paths.txt` from REasy-parser's

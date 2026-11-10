@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
+#include <set>
 #include <memory>
 #include <random>
 #include <string>
@@ -23,6 +24,8 @@
 #include "stage_loader.hpp"
 #include "stage_log.hpp"
 #include "title_slots.hpp"
+#include "ui_slots.hpp"
+#include "pic_cache.hpp"
 
 namespace {
 
@@ -277,12 +280,14 @@ bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std
 // Mods: sources (what sits in stage_mods) and options (what the game would install)
 // ---------------------------------------------------------------------------------------------
 
-// path: natives trees only; file: where it is on disk (natives trees only), to read it later when listed without its data
-struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; std::string path; std::wstring file; };
+// path: natives trees only, in lower case (cased: as in the archive); file: where it is on disk (natives trees only), to read it
+// later when listed without its data
+struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; std::string path; std::wstring file; std::string cased; };
 struct Option {
     std::string name, author, bundle, rel;     // bundle: Fluffy's nameAsBundle
     std::wstring screenshot;
     std::vector<OptFile> files;
+    std::string modinfo;                       // its modinfo.ini's text (UI packs only)
 };
 
 bool is_image(const std::wstring& n) {
@@ -320,11 +325,13 @@ void read_modinfo(const std::wstring& dir, std::string& name, std::string& autho
 }
 
 // read: false lists the files without reading them (dsize is the size on disk; title packs: only the chosen one is read)
-void add_natives(const std::wstring& dir, const std::string& rel, Option& opt, bool read = true) {
+// cased: rel in the archive's case ("": rel), for the resource paths the plugin is given (UI packs)
+void add_natives(const std::wstring& dir, const std::string& rel, Option& opt, bool read = true, const std::string& cased = std::string()) {
     for (auto& e : list_dir(dir)) {
         std::wstring full = dir + L"\\" + e.name;
         std::string r = rel + "/" + lower_a(narrow(e.name));
-        if (e.dir) { add_natives(full, r, opt, read); continue; }
+        std::string c = (cased.empty() ? rel : cased) + "/" + narrow(e.name);
+        if (e.dir) { add_natives(full, r, opt, read, c); continue; }
         OptFile f;
         if (read && !read_file(full, f.data)) { slog("  cannot read %s", narrow(full).c_str()); continue; }
         f.hash = pak_path_hash(std::string_view(r));
@@ -332,6 +339,7 @@ void add_natives(const std::wstring& dir, const std::string& rel, Option& opt, b
         f.dsize = read ? (int64_t)f.data.size() : (int64_t)e.size;
         f.path = r;
         f.file = full;
+        f.cased = c;
         opt.files.push_back(std::move(f));
     }
 }
@@ -360,15 +368,19 @@ void add_pak(const std::wstring& path, Option& opt) {
 // otherwise its sub-folders are looked at (bundles: one option per sub-folder).
 // read: false (title packs) lists the natives files without reading them and leaves .pak files out: a title pack's
 // files are told apart by their paths, which a pak's entries do not have.
+// nodes (UI packs, ui_slots.hpp): a folder holding only a modinfo.ini is an option too (a Fluffy title, DummyMod), its text is
+// kept, and the folders beside an option's natives tree are looked at as well (some add-ons sit inside their parent's folder).
 void collect_options(const std::wstring& dir, const std::string& rel, const std::string& default_name,
-                     bool is_root, int depth, std::vector<Option>& out, bool read = true) {
+                     bool is_root, int depth, std::vector<Option>& out, bool read = true, bool nodes = false) {
     auto entries = list_dir(dir);
-    bool has_pak = false, has_natives = false;
+    bool has_pak = false, has_natives = false, has_info = false, pak_left = false;
     for (auto& e : entries) {
-        if (read && !e.dir && ends_with(e.name, L".pak")) has_pak = true;
+        if (!e.dir && ends_with(e.name, L".pak")) (read ? has_pak : pak_left) = true;
         if (e.dir && _wcsicmp(e.name.c_str(), L"natives") == 0) has_natives = true;
+        if (!e.dir && _wcsicmp(e.name.c_str(), L"modinfo.ini") == 0) has_info = true;
     }
-    if (has_pak || has_natives) {
+    if (nodes && pak_left) slog("  ui_mods: %s: a .pak inside is not read", rel.c_str());
+    if (has_pak || has_natives || (nodes && has_info)) {
         Option opt;
         opt.rel = rel;
         read_modinfo(dir, opt.name, opt.author, opt.bundle, opt.screenshot);
@@ -379,13 +391,17 @@ void collect_options(const std::wstring& dir, const std::string& rel, const std:
             if (read && !e.dir && ends_with(e.name, L".pak")) add_pak(dir + L"\\" + e.name, opt);
             if (e.dir && _wcsicmp(e.name.c_str(), L"natives") == 0) add_natives(dir + L"\\" + e.name, "natives", opt, read);
         }
+        if (nodes && has_info) {
+            std::vector<uint8_t> text;
+            if (read_file(dir + L"\\modinfo.ini", text)) opt.modinfo.assign(text.begin(), text.end());
+        }
         out.push_back(std::move(opt));
-        return;
+        if (!nodes) return;
     }
     if (depth >= 6) return;
     for (auto& e : entries) {
-        if (!e.dir || e.name[0] == L'.') continue;
-        collect_options(dir + L"\\" + e.name, rel + "/" + narrow(e.name), default_name, false, depth + 1, out, read);
+        if (!e.dir || e.name[0] == L'.' || (nodes && _wcsicmp(e.name.c_str(), L"natives") == 0)) continue;
+        collect_options(dir + L"\\" + e.name, rel + "/" + narrow(e.name), default_name, false, depth + 1, out, read, nodes);
     }
 }
 
@@ -772,6 +788,19 @@ TitleScan scan_titles(const std::wstring& game_dir) {
     return t;
 }
 
+// The game's own files: re_chunk_000.pak and the DLC paks under it, read through one reader (subs must outlive base's use)
+bool open_game_paks(const std::wstring& game_dir, PakReader& base, std::vector<std::unique_ptr<PakReader>>& subs) {
+    if (!base.open(ascii_path(game_dir, L"re_chunk_000.pak").c_str())) return false;
+    for (int k = 0; k < 16; ++k) {
+        wchar_t name[64];
+        swprintf_s(name, L"re_chunk_000.pak.sub_%03d.pak", k);
+        if (!file_exists(game_dir + L"\\" + name)) continue;
+        auto r = std::make_unique<PakReader>();
+        if (r->open(ascii_path(game_dir, name).c_str())) { base.add_overlay(r.get()); subs.push_back(std::move(r)); }
+    }
+    return true;
+}
+
 // Every pack's title files at their private paths (title_slots::private_title_path: the switch on a return to the title),
 // the chosen pack's at their real paths too (this launch's title, served before any hook: the same data, stored once), and,
 // with skip_intro, the chosen startup pack's startup files at their real paths. Read now, one pack at a time; their textures
@@ -819,16 +848,9 @@ void add_title_files(TitleScan& t, PakWriter& writer, const std::wstring& game_d
     if (title_paths.empty()) return;
     PakReader base;
     std::vector<std::unique_ptr<PakReader>> subs;
-    if (!base.open(ascii_path(game_dir, L"re_chunk_000.pak").c_str())) {
+    if (!open_game_paks(game_dir, base, subs)) {
         slog("  the game's own title files: re_chunk_000.pak not readable, no switch back to it on a return to the title");
         return;
-    }
-    for (int k = 0; k < 16; ++k) {                         // the DLC paks under it
-        wchar_t name[64];
-        swprintf_s(name, L"re_chunk_000.pak.sub_%03d.pak", k);
-        if (!file_exists(game_dir + L"\\" + name)) continue;
-        auto r = std::make_unique<PakReader>();
-        if (r->open(ascii_path(game_dir, name).c_str())) { base.add_overlay(r.get()); subs.push_back(std::move(r)); }
     }
     // Every background's resource file of each streamed title file (the game's own, from its pak: the same small file for all),
     // beside the private data: the core's playlist gives the movies those resources
@@ -930,6 +952,73 @@ void make_title_tables(const TitleScan& t, const std::wstring& pak_path) {
          g_titles.backgrounds.size(), entries, g_titles.launch.c_str(), g_titles.playlist_pool.size());
 }
 
+// The converted pictures kept on disk (pic_cache.hpp): <mods folder>\.cache\_pictures\<key>.pic. A picture whose screenshot did not
+// change (path, size, last write time) is read back instead of decoded and compressed again. Files nobody asked for in a pass that
+// wrote the pak are removed, so the folder does not grow for ever.
+struct PicCache {
+    std::wstring dir;
+    std::set<std::wstring> used;     // file names asked for this pass
+    bool active = false;             // opened this pass (its mods folder exists)
+    size_t hits = 0, made = 0;
+};
+PicCache g_pic_title, g_pic_ui;
+
+void pic_open(PicCache& c, const std::wstring& dir) {
+    c = PicCache{};
+    c.dir = dir;
+    c.active = true;
+    const std::wstring parent = dir.substr(0, dir.find_last_of(L'\\'));
+    CreateDirectoryW(parent.c_str(), nullptr);
+    SetFileAttributesW(parent.c_str(), FILE_ATTRIBUTE_HIDDEN);
+    CreateDirectoryW(dir.c_str(), nullptr);
+}
+
+// make_title_preview_tex through the cache; the same arguments, plus the cache's namespace (its key)
+bool pic_make(PicCache& c, const std::string& ns, const std::wstring& shot, std::vector<uint8_t>& tex, std::string& err,
+              std::vector<uint8_t>* cell = nullptr, int cell_w = 0, int cell_h = 0, std::vector<uint8_t>* thumb = nullptr,
+              std::vector<uint8_t>* band = nullptr) {
+    std::wstring file;
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (c.active && GetFileAttributesExW(lp(shot).c_str(), GetFileExInfoStandard, &fa)) {
+        const uint64_t size = (uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow;
+        const uint64_t mtime = (uint64_t(fa.ftLastWriteTime.dwHighDateTime) << 32) | fa.ftLastWriteTime.dwLowDateTime;
+        const std::wstring name = widen(pic_cache::key(ns, narrow(shot), size, mtime, cell ? cell_w : 0, cell ? cell_h : 0)) + L".pic";
+        file = c.dir + L"\\" + name;
+        c.used.insert(name);
+        std::vector<uint8_t> raw;
+        pic_cache::Parts p;
+        if (read_file(file, raw) && pic_cache::unpack(raw, p) && (!cell || !p.cell.empty()) && (!thumb || !p.thumb.empty()) && (!band || !p.band.empty())) {
+            tex = std::move(p.tex);
+            if (cell) *cell = std::move(p.cell);
+            if (thumb) *thumb = std::move(p.thumb);
+            if (band) *band = std::move(p.band);
+            ++c.hits;
+            return true;
+        }
+    }
+    if (!make_title_preview_tex(lp(shot), tex, err, cell, cell_w, cell_h, thumb, band)) return false;
+    ++c.made;
+    if (!file.empty()) {
+        pic_cache::Parts p;
+        p.tex = tex;
+        if (cell) p.cell = *cell;
+        if (thumb) p.thumb = *thumb;
+        if (band) p.band = *band;
+        const std::vector<uint8_t> raw = pic_cache::pack(p);
+        write_text(file, std::string(raw.begin(), raw.end()));      // a failure only means the next pass converts it again
+    }
+    return true;
+}
+
+void pic_prune(PicCache& c) {
+    if (!c.active) return;
+    size_t removed = 0;
+    for (auto& e : list_dir(c.dir))
+        if (!e.dir && !c.used.count(e.name) && DeleteFileW(lp(c.dir + L"\\" + e.name).c_str())) ++removed;
+    if (removed) slog("  picture cache %s: %zu unused file(s) removed", narrow(c.dir.substr(c.dir.find(L"reframework"))).c_str(), removed);
+    c.active = false;
+}
+
 // Every pack's picture, at natives/stm/<preview_resource>.<tex version>: 1280x720 from its screenshot. One that cannot
 // be made is left out, and the registry says so (preview ""). Returns how many were added.
 size_t add_title_previews(TitleScan& t, PakWriter& writer) {
@@ -942,7 +1031,7 @@ size_t add_title_previews(TitleScan& t, PakWriter& writer) {
         if (!p.info.preview) continue;
         std::vector<uint8_t> tex, cell, thumb, band;
         std::string err;
-        if (!make_title_preview_tex(lp(p.opt.screenshot), tex, err, &cell, lay.cell_w, lay.cell_h, &thumb, &band)) {
+        if (!pic_make(g_pic_title, "title", p.opt.screenshot, tex, err, &cell, lay.cell_w, lay.cell_h, &thumb, &band)) {
             p.info.preview = false;
             slog("  title_mods: %s: no picture (%s)", p.opt.rel.c_str(), err.c_str());
             continue;
@@ -979,7 +1068,7 @@ size_t add_title_previews(TitleScan& t, PakWriter& writer) {
     if (t.game_preview) {
         std::vector<uint8_t> tex, thumb, band;
         std::string err;
-        if (make_title_preview_tex(lp(t.game_picture), tex, err, nullptr, 0, 0, &thumb, &band)) {
+        if (pic_make(g_pic_title, "titlegame", t.game_picture, tex, err, nullptr, 0, 0, &thumb, &band)) {
             writer.add_uncompressed(pak_path_hash(std::string_view(std::string("natives/stm/_titleslots/") + title_slots::kGamePictureKey + "/preview" + TEX_SUFFIX)),
                                     std::move(tex));
             if (!thumb.empty())
@@ -1032,6 +1121,359 @@ bool save_title_registry(const std::wstring& game_dir, const TitleScan& t) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// UI packs (ui_slots.hpp): the Fluffy options of reframework\ui_mods, in the stage pak. Every option's files at private paths
+// (the live switch: the redirect serves the ticked ones), the launch's winner of each real file at its real path too (the game
+// reads some UI files once, at boot, before the hook may be armed, and keeps them: the character select's portraits, 10/11),
+// the game's own copy of each real path written that way (switching back to it in the game), and the pictures.
+// ---------------------------------------------------------------------------------------------
+
+// Part of the UI packs' fingerprint: bump it when what is written of a pack changes
+const char* UI_FORMAT_VERSION = "uislots-3";              // 2: roots gathered only when alternatives (Jaccard), a later pack wins
+                                                          // 3: the pak also holds the game's own fighter textures; subset choices (<id>@<fid>)
+// The pictures stop there (1920x1080 BC1: 1 MB each), so a ui_mods of hundreds of options does not grow the pak without end
+const uint64_t UI_PICTURES_BUDGET = 256ull << 20;
+
+struct UIScan {
+    bool present = false;              // reframework\ui_mods exists: nothing is done without it
+    std::vector<Option> opts;          // every node found, its files listed (not read), by path (ui_slots::Node::found)
+    std::vector<ui_slots::Pack> packs; // registry order
+    ui_slots::Choices applied;         // settings.json's ui_choices that name an option: what this launch writes at the real paths
+    std::string fingerprint;           // added to the stage pak's ("" without ui_mods)
+};
+
+std::string ui_tex_entry(const std::string& resource) { return "natives/stm/" + resource + ".241101895"; }
+
+UIScan scan_ui(const std::wstring& game_dir) {
+    UIScan u;
+    const std::wstring dir = game_dir + L"\\reframework\\ui_mods";
+    if (!dir_exists(dir)) return u;
+    u.present = true;
+    const auto sources = list_sources(dir);
+    for (auto& s : sources) {
+        const std::string n = narrow(s.name);
+        if (s.dir) {
+            collect_options(s.path, n, n, true, 0, u.opts, false, true);
+        } else if (s.archive != ArchiveKind::None) {
+            std::wstring out;
+            if (unpack_archive(s, dir + L"\\.cache", out)) collect_options(out, n, narrow(stem(s.name)), true, 0, u.opts, false, true);
+        } else {
+            slog("  ui_mods: %s: a .pak is not read as a UI pack, ignored", n.c_str());
+        }
+    }
+    std::stable_sort(u.opts.begin(), u.opts.end(), [](const Option& a, const Option& b) { return lower_a(a.rel) < lower_a(b.rel); });
+    std::vector<ui_slots::Found> found;
+    for (auto& o : u.opts) {
+        ui_slots::Found f;
+        f.path = o.rel;
+        f.info = ui_slots::parse_modinfo(o.modinfo);
+        if (f.info.name.empty()) f.info.name = ui_slots::to_utf8(o.name);   // no modinfo: the folder's or the archive's name
+        for (auto& file : o.files) f.files.push_back(file.hash);
+        found.push_back(std::move(f));
+    }
+    std::vector<std::string> notes;
+    u.packs = ui_slots::build_packs(found, &notes);
+    for (auto& s : notes) slog("  ui_mods: %s", s.c_str());
+
+    std::vector<uint8_t> data;
+    const bool have_settings = read_file(game_dir + L"\\reframework\\data\\SF6_CostumeSlots_data\\settings.json", data);
+    for (auto& p : u.packs)                                // the fighter folders of each node's files: what "<id>@<fid>" may name
+        for (auto& nd : p.nodes) {
+            if (nd.title) continue;
+            std::set<std::string> fids;
+            for (auto& file : u.opts[nd.found].files) {
+                const std::string fid = ui_slots::fighter_of_path(file.path);
+                if (!fid.empty()) fids.insert(fid);
+            }
+            nd.fids.assign(fids.begin(), fids.end());
+        }
+    const ui_slots::Choices choices = have_settings ? ui_slots::parse_settings_choices(std::string(data.begin(), data.end())) : ui_slots::Choices{};
+    u.applied = ui_slots::applied(u.packs, choices);
+    size_t ticked = 0, ignored = 0;
+    for (auto& [key, ids] : choices) {
+        auto a = u.applied.find(key);
+        const size_t kept = a == u.applied.end() ? 0 : a->second.size();
+        ticked += kept;
+        ignored += ids.size() - kept;
+    }
+
+    // What the pak holds: the sources by name, size and date, and the ticked options (written at the real paths)
+    u.fingerprint = std::string(UI_FORMAT_VERSION) + "\n";
+    for (auto& s : sources) {
+        const std::string n = narrow(s.name);
+        if (s.dir) fingerprint_dir(s.path, "ui_mods/" + n, u.fingerprint);
+        else u.fingerprint += "ui_mods/" + n + "|" + std::to_string(s.size) + "|" + std::to_string(s.mtime) + "\n";
+    }
+    for (auto& [key, ids] : u.applied) {
+        u.fingerprint += "ticked|" + key;
+        for (auto& id : ids) u.fingerprint += "|" + id;
+        u.fingerprint += "\n";
+    }
+
+    std::string names;
+    for (auto& p : u.packs) {
+        size_t options = 0, one = 0, groups = 0;
+        std::vector<std::string> seen;
+        for (auto& nd : p.nodes) {
+            if (nd.title) continue;
+            ++options;
+            if (!nd.one) continue;
+            ++one;
+            if (std::find(seen.begin(), seen.end(), nd.group) == seen.end()) { seen.push_back(nd.group); ++groups; }
+        }
+        names += (names.empty() ? "\"" : ", \"") + p.name + "\" (" + std::to_string(options) + " option(s): " + std::to_string(groups) +
+                 " one-of group(s), " + std::to_string(options - one) + " box(es)" + (p.gathered ? ", gathered" : "") + ")";
+    }
+    slog("ui_mods: %zu node(s), %zu pack(s)%s%s", u.opts.size(), u.packs.size(), names.empty() ? "" : ": ", names.c_str());
+    slog("  ui_choices: %zu option(s) ticked in %zu pack(s)%s%s", ticked, u.applied.size(),
+         ignored ? (", " + std::to_string(ignored) + " id(s) that name no option ignored").c_str() : "",
+         have_settings ? "" : " (no settings.json: nothing ticked)");
+    // The choices are written at the real paths: one changed in the game since the last launch rebuilds the stage pak (said
+    // plainly: the build takes a while and the user did nothing but tick a box)
+    std::vector<uint8_t> old;
+    if (read_file(game_dir + L"\\reframework\\data\\SF6_UISlots_Data\\registry.json", old)) {
+        const std::string was(old.begin(), old.end()), now = ui_slots::registry_text({}, u.applied, {});
+        const size_t a = was.find("\"applied\""), b = now.find("\"applied\"");
+        if (a != std::string::npos && was.substr(a) != now.substr(b))
+            slog("  ui_choices differ from the last launch's: the stage pak is rebuilt to write them at the real paths");
+    }
+    return u;
+}
+
+// Every option's files at its private paths, read one option at a time and checked like a stage mod's; then the launch's winner
+// of each real file (ui_slots::winners of the ticked options) at its real path, the same data stored once; then the game's own
+// copy of each real path written, from re_chunk_000.pak and its sub paks (the switch back to it).
+void add_ui_files(UIScan& u, PakWriter& writer, const std::wstring& game_dir, size_t& n_private, size_t& n_real, size_t& n_game) {
+    n_private = n_real = n_game = 0;
+    if (!u.present) return;
+    using Clock = std::chrono::steady_clock;
+    auto since = [](Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); };
+    const auto t_start = Clock::now();
+    double ms_read = 0, ms_check = 0;                     // reading the files, check_textures
+    std::vector<ui_slots::Served> served;
+    struct Copy { std::string src; OptFile listed; };
+    std::unordered_map<uint64_t, Copy> copies;            // private hash -> what its data was read from
+    std::map<uint64_t, std::string> fighter_tex;          // real hash -> path, for every fighter texture of any option
+    for (size_t pi = 0; pi < u.packs.size(); ++pi) {
+        const ui_slots::Pack& p = u.packs[pi];
+        for (size_t k = 0; k < p.nodes.size(); ++k) {
+            const ui_slots::Node& nd = p.nodes[k];
+            if (nd.title) continue;
+            const Option& o = u.opts[nd.found];
+            Option sel;
+            sel.rel = "ui_mods/" + o.rel;
+            const auto t_read = Clock::now();
+            for (auto& f : o.files) {
+                OptFile g = f;                                // listed: no data yet
+                if (!read_file(g.file, g.data)) { slog("  cannot read %s", narrow(g.file).c_str()); continue; }
+                g.dsize = (int64_t)g.data.size();
+                sel.files.push_back(std::move(g));
+            }
+            ms_read += since(t_read);
+            const auto t_check = Clock::now();
+            check_textures(sel);
+            ms_check += since(t_check);
+            ui_slots::Served s{ p.key, nd.id, nd.depth, int(k), {}, int(pi), {} };
+            for (auto& f : sel.files) {
+                const uint64_t h = pak_path_hash(std::string_view(ui_slots::private_path(p.key, nd.id, f.path)));
+                const std::string fid = ui_slots::fighter_of_path(f.path);
+                if (!fid.empty()) {
+                    s.fid[f.hash] = fid;
+                    if (!ui_slots::texture_resource(f.cased).empty()) fighter_tex[f.hash] = f.path;
+                }
+                Copy c{ "ui:" + nd.id + ":" + f.path, OptFile{ f.hash, {}, 0, 0, f.path, f.file, f.cased } };
+                writer.add_raw(h, std::move(f.data), f.attrib, f.dsize);
+                writer.note_source(c.src);
+                copies[h] = std::move(c);
+                s.files.push_back({ f.hash, h });
+                ++n_private;
+            }
+            std::sort(s.files.begin(), s.files.end());
+            served.push_back(std::move(s));
+        }
+    }
+    const double ms_private = since(t_start);
+    const ui_slots::HashMap written = ui_slots::winners(served, u.applied);
+    for (auto& [real, h] : written) {
+        const Copy& c = copies[h];
+        if (writer.add_same_source(real, c.src)) { ++n_real; continue; }
+        Option again;                                         // not shared after all: read (and checked) again for the real path
+        again.rel = "ui_mods/" + c.src;
+        OptFile g = c.listed;
+        if (!read_file(g.file, g.data)) { slog("  cannot read %s", narrow(g.file).c_str()); continue; }
+        g.dsize = (int64_t)g.data.size();
+        again.files.push_back(std::move(g));
+        check_textures(again);
+        if (again.files.empty()) continue;
+        writer.add_raw(real, std::move(again.files[0].data), again.files[0].attrib, again.files[0].dsize);
+        ++n_real;
+    }
+    if (written.empty() && fighter_tex.empty()) return;
+    const auto t_game = Clock::now();
+    PakReader base;
+    std::vector<std::unique_ptr<PakReader>> subs;
+    if (!open_game_paks(game_dir, base, subs)) {
+        slog("  ui packs: re_chunk_000.pak not readable: no copy of the game's own files, unticking in the game keeps this launch's");
+        return;
+    }
+    std::unordered_map<uint64_t, bool> done;              // real hashes whose game copy is in the pak
+    for (auto& [real, h] : written) {
+        const PakEntry* e = base.find(real);
+        if (!e) continue;
+        std::vector<uint8_t> raw = base.read_raw(*e);
+        if (raw.empty()) continue;
+        writer.add_raw(pak_path_hash(std::string_view(ui_slots::game_path(copies[h].listed.path))), std::move(raw), e->attributes,
+                       e->decompressed_size);
+        done[real] = true;
+        ++n_game;
+    }
+    // the game's own copy of every fighter texture of any option (the plugin shows it for "the game's own" value), written or not
+    size_t n_fighter = 0;
+    for (auto& [real, path] : fighter_tex) {
+        if (done.count(real)) continue;
+        const PakEntry* e = base.find(real);
+        if (!e) continue;
+        std::vector<uint8_t> raw = base.read_raw(*e);
+        if (raw.empty()) continue;
+        writer.add_raw(pak_path_hash(std::string_view(ui_slots::game_path(path))), std::move(raw), e->attributes, e->decompressed_size);
+        done[real] = true;
+        ++n_fighter;
+    }
+    slog("  ui packs: %zu file(s) of the ticked options at the real paths, the game's own of %zu of them copied for the switch back, "
+         "and of %zu more fighter texture(s) for the plugin (private copies %.0f ms: read %.0f, checked %.0f; game paks %.0f ms)",
+         n_real, n_game, n_fighter, ms_private, ms_read, ms_check, since(t_game));
+}
+
+// Every node's picture (its modinfo screenshot, else the first image of its folder) at 1920x1080 like a title pack's, and the
+// pack's: the first of its nodes that has one (the root's when it has one). Identical pictures are stored once (the writer
+// compares contents). Past UI_PICTURES_BUDGET the others are left out (the registry says so: preview "").
+size_t add_ui_previews(UIScan& u, PakWriter& writer) {
+    size_t n = 0;
+    uint64_t bytes = 0;
+    const auto t_start = std::chrono::steady_clock::now();
+    struct Done {                                          // the line, whichever way the function ends
+        size_t& n; const PicCache& c; std::chrono::steady_clock::time_point t;
+        ~Done() {
+            slog("  ui packs: %zu picture(s), %zu from the cache, %zu converted (%.0f ms)", n, c.hits, c.made,
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count());
+        }
+    } done{ n, g_pic_ui, t_start };
+    for (auto& p : u.packs) {
+        bool pack_done = false;
+        for (auto& nd : p.nodes) {
+            const Option& o = u.opts[nd.found];
+            if (o.screenshot.empty() || !image_header_ok(lp(o.screenshot))) continue;
+            if (bytes >= UI_PICTURES_BUDGET) {
+                slog("  ui_mods: the pictures reached %llu MB: the others are left out", (unsigned long long)(UI_PICTURES_BUDGET >> 20));
+                return n;
+            }
+            std::vector<uint8_t> tex;
+            std::string err;
+            if (!pic_make(g_pic_ui, "ui", o.screenshot, tex, err)) {
+                slog("  ui_mods: %s: no picture (%s)", o.rel.c_str(), err.c_str());
+                continue;
+            }
+            bytes += tex.size();
+            if (!pack_done) writer.add_uncompressed(pak_path_hash(std::string_view(ui_tex_entry(ui_slots::pack_preview(p.key)))), tex);
+            pack_done = true;
+            writer.add_uncompressed(pak_path_hash(std::string_view(ui_tex_entry(ui_slots::node_preview(p.key, nd.id)))), std::move(tex));
+            ++n;
+        }
+    }
+    return n;
+}
+
+// The UI tables for the redirect, kept only where the stage pak holds the copy (an up-to-date pak was built by this same code
+// from the same mods and choices; a texture left out by check_textures has no copy), and the pictures the pak holds.
+ui_slots::Tables g_ui;
+void make_ui_tables(UIScan& u, const std::wstring& pak_path) {
+    g_ui = ui_slots::Tables{};
+    g_ui.present = u.present;
+    if (!u.present) return;
+    std::unordered_map<uint64_t, bool> held;
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, lp(pak_path).c_str(), L"rb") == 0 && f) {
+        std::vector<KpkaEntry> idx;
+        if (kpka_index(f, idx)) for (auto& k : idx) held[k.hash] = true;
+        fclose(f);
+    }
+    auto has = [&](const std::string& path) { return held.count(pak_path_hash(std::string_view(path))) != 0; };
+    std::unordered_map<uint64_t, const OptFile*> listed;   // real hash -> a file of that path (its natives path, its case)
+    size_t copies = 0;
+    for (size_t pi = 0; pi < u.packs.size(); ++pi) {
+        ui_slots::Pack& p = u.packs[pi];
+        p.picture = has(ui_tex_entry(ui_slots::pack_preview(p.key)));
+        for (size_t k = 0; k < p.nodes.size(); ++k) {
+            ui_slots::Node& nd = p.nodes[k];
+            nd.preview = has(ui_tex_entry(ui_slots::node_preview(p.key, nd.id)));
+            if (nd.title) continue;
+            ui_slots::Served s{ p.key, nd.id, nd.depth, int(k), {}, int(pi), {} };
+            nd.fighters.clear();
+            size_t under_fighter = 0;
+            for (auto& file : u.opts[nd.found].files) {
+                const uint64_t h = pak_path_hash(std::string_view(ui_slots::private_path(p.key, nd.id, file.path)));
+                if (!held.count(h)) continue;
+                s.files.push_back({ file.hash, h });
+                listed[file.hash] = &file;
+                const std::string fid = ui_slots::fighter_of_path(file.path);
+                if (!fid.empty()) {
+                    s.fid[file.hash] = fid;
+                    ++under_fighter;
+                    nd.fighters[fid];                      // the key exists even when none of its files is a texture
+                }
+                const std::string res = ui_slots::texture_resource(file.cased);
+                if (res.empty()) continue;
+                g_ui.names[file.hash] = res;
+                g_ui.names[h] = ui_slots::texture_resource(ui_slots::private_path(p.key, nd.id, file.cased));
+                if (fid.empty()) continue;
+                nd.fighters[fid].push_back(res);
+                const uint64_t gh = pak_path_hash(std::string_view(ui_slots::game_path(file.path)));
+                if (held.count(gh)) g_ui.game_textures[res] = ui_slots::texture_resource(ui_slots::game_path(file.cased));
+            }
+            std::sort(s.files.begin(), s.files.end());
+            for (auto& [fid, res] : nd.fighters) {
+                std::sort(res.begin(), res.end());
+                res.erase(std::unique(res.begin(), res.end()), res.end());
+            }
+            nd.fighters_only = under_fighter > 0 && under_fighter == s.files.size();
+            nd.files = s.files.size();
+            copies += s.files.size();
+            g_ui.options.push_back(std::move(s));
+        }
+    }
+    g_ui.launch = u.applied;
+    for (auto& w : ui_slots::winners(g_ui.options, u.applied)) {
+        if (!held.count(w.first)) continue;
+        g_ui.written.push_back(w);
+        const OptFile* file = listed[w.first];
+        const uint64_t gh = pak_path_hash(std::string_view(ui_slots::game_path(file->path)));
+        if (!held.count(gh)) continue;
+        g_ui.game.push_back({ w.first, gh });
+        const std::string res = ui_slots::texture_resource(file->cased);
+        if (!res.empty()) g_ui.names[gh] = ui_slots::texture_resource(ui_slots::game_path(file->cased));
+    }
+    g_ui.packs = u.packs;
+    slog("ui packs: %zu pack(s), %zu option(s), %zu private copies; this launch: %zu file(s) at the real paths, %zu copies of the game's own",
+         u.packs.size(), g_ui.options.size(), copies, g_ui.written.size(), g_ui.game.size());
+}
+
+// reframework\data\SF6_UISlots_Data\registry.json: the packs, for the plugin, and what this launch wrote. Written only when its
+// text changes, and only when ui_mods exists; ui_mods gone, the file goes too (the plugin offers no pack).
+bool save_ui_registry(const std::wstring& game_dir, const UIScan& u) {
+    const std::wstring dir = game_dir + L"\\reframework\\data\\SF6_UISlots_Data";
+    const std::wstring path = dir + L"\\registry.json";
+    if (!u.present) {
+        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES && DeleteFileW(path.c_str()))
+            slog("ui_mods is gone: the UI packs' registry removed");
+        return true;
+    }
+    const std::string js = ui_slots::registry_text(u.packs, u.applied, g_ui.game_textures);
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::vector<uint8_t> old;
+    if (read_file(path, old) && std::string(old.begin(), old.end()) == js) return true;
+    return write_text(path, js);
+}
+
+// ---------------------------------------------------------------------------------------------
 // The pass
 // ---------------------------------------------------------------------------------------------
 
@@ -1051,7 +1493,8 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
 
     auto sources = list_sources(mods_dir);
     TitleScan title = scan_titles(game_dir);
-    const std::string fp = compute_fingerprint(sources, index_path, title.fingerprint);
+    UIScan ui = scan_ui(game_dir);
+    const std::string fp = compute_fingerprint(sources, index_path, title.fingerprint + ui.fingerprint);
 
     auto paks = classify_patch_paks(game_dir);
     int max_mod = 0;
@@ -1072,7 +1515,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     // Nothing changed: the saved table is the answer. The pak must be the one the table was saved
     // with (its entry count): a pak rewritten since for other mods, under a table put back, held
     // none of the variants' files and the stage never finished loading (03/10). A pak was written when
-    // the table counts its entries: variants, or title files alone.
+    // the table counts its entries: variants, or title or UI pack files alone.
     {
         std::string saved_fp;
         size_t saved_entries = 0;
@@ -1088,13 +1531,15 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
                 if (!save_registry(data_dir, fp, out)) slog("ERROR: cannot write the registry");
                 if (!save_title_registry(game_dir, title)) slog("ERROR: cannot write the title packs' registry");
                 make_title_tables(title, target_path);
+                make_ui_tables(ui, target_path);
+                if (!save_ui_registry(game_dir, ui)) slog("ERROR: cannot write the UI packs' registry");
                 slog("up to date: %zu variant(s), %.1f ms", out.size(), ms());
                 return;
             }
         }
     }
 
-    // The stage index is needed for stage mods only (title packs alone build without it)
+    // The stage index is needed for stage mods only (title or UI packs alone build without it)
     std::unordered_map<uint64_t, std::string> index, gui_index, index_paths;
     if (!load_stage_index(index_path, index, gui_index, index_paths) && !sources.empty()) {
         slog("ERROR: %s missing or empty: stage mods cannot be recognised", narrow(index_path).c_str());
@@ -1258,12 +1703,24 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
     // The title packs' files: every pack's at its private paths, the chosen one's at the real paths too
     size_t title_files = 0, startup_files = 0, title_private = 0;
     add_title_files(title, writer, game_dir, title_files, startup_files, title_private);
+    if (dir_exists(game_dir + L"\\reframework\\title_mods")) pic_open(g_pic_title, game_dir + L"\\reframework\\title_mods\\.cache\\_pictures");
+    const double t_titlepics = ms();
     const size_t title_pictures = add_title_previews(title, writer);
-    if (title_pictures) slog("  title pack pictures: %zu of %zu pack(s)", title_pictures, title.packs.size());
+    if (title_pictures)
+        slog("  title pack pictures: %zu of %zu pack(s) (%zu from the cache, %zu converted, %.0f ms)", title_pictures, title.packs.size(),
+             g_pic_title.hits, g_pic_title.made, ms() - t_titlepics);
     if (title.choice.title >= 0 || title.choice.startup >= 0)
         slog("  title pack files: %zu title file(s)%s, %zu startup file(s)%s", title_files,
              title.choice.title >= 0 ? (" of \"" + std::string(title_name(title, title.choice.title)) + "\"").c_str() : "",
              startup_files, title.choice.startup >= 0 ? (" of \"" + std::string(title_name(title, title.choice.startup)) + "\"").c_str() : "");
+
+    // The UI packs' files: every option's at its private paths, the ticked ones' at the real paths too, and their pictures
+    size_t ui_private = 0, ui_real = 0, ui_game = 0;
+    if (ui.present) pic_open(g_pic_ui, game_dir + L"\\reframework\\ui_mods\\.cache\\_pictures");
+    const double t_ui = ms();
+    add_ui_files(ui, writer, game_dir, ui_private, ui_real, ui_game);
+    const size_t ui_pictures = add_ui_previews(ui, writer);
+    if (ui.present) slog("  ui packs: %zu private copies, %zu picture(s) (%.0f ms in all)", ui_private, ui_pictures, ms() - t_ui);
 
     // Our old pak goes; the costume loader's pak moves up when it sits where ours goes (it is
     // rebuilt right after us anyway, its mod list having changed).
@@ -1277,7 +1734,7 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
              narrow(leaf(p.path)).c_str());
     }
     size_t pak_entries = 0;
-    if (!vars.empty() || title_files + startup_files + title_pictures + title_private > 0) {
+    if (!vars.empty() || title_files + startup_files + title_pictures + title_private + ui_private + ui_real + ui_game + ui_pictures > 0) {
         if (file_exists(target_path)) {
             std::wstring up = patch_path(game_dir, target + 1);
             if (file_exists(up) || !MoveFileW(target_path.c_str(), up.c_str())) {
@@ -1297,20 +1754,25 @@ void run(const std::wstring& game_dir, std::vector<StageVariant>& out) {
         }
         slog("  wrote %s (%zu entries)", narrow(leaf(target_path)).c_str(), writer.entry_count());
         pak_entries = writer.entry_count();
+        pic_prune(g_pic_title);                      // the pass completed: the pictures nobody asked for go
+        pic_prune(g_pic_ui);
     }
     if (!save_table(data_dir, fp, pak_entries, vars)) slog("ERROR: cannot write the table");
     apply_overrides(mods_dir, vars);
     if (!save_registry(data_dir, fp, vars)) slog("ERROR: cannot write the registry");
     if (!save_title_registry(game_dir, title)) slog("ERROR: cannot write the title packs' registry");
     make_title_tables(title, target_path);
+    make_ui_tables(ui, target_path);
+    if (!save_ui_registry(game_dir, ui)) slog("ERROR: cannot write the UI packs' registry");
     out = std::move(vars);
-    slog("built: %zu variant(s) from %zu option(s), %zu title pack file(s), %.1f ms", out.size(), options.size(),
-         title_files + startup_files, ms());
+    slog("built: %zu variant(s) from %zu option(s), %zu title pack file(s), %zu UI pack file(s), %.1f ms", out.size(), options.size(),
+         title_files + startup_files, ui_private + ui_real + ui_game, ms());
 }
 
 } // namespace
 
 const TitleTables& stage_loader_titles() { return g_titles; }
+const ui_slots::Tables& stage_loader_ui() { return g_ui; }
 
 std::string stage_thumb_resource(const std::string& key) {
     return "_stageslots/" + key + "/thumb.tex";

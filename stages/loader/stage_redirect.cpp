@@ -70,18 +70,20 @@ bool may_log() {
 //
 // The engine hashes every path it opens or looks up, on many threads, so the detour must cost
 // next to nothing for the paths it does not serve (all of them during a fight). `filter` is a
-// 4096-bit set of the low 12 bits of each served vanilla hash (murmur3 output, evenly spread):
-// with a few dozen redirected files about 99% of the calls end on one load and one bit test.
-// A trace sets every bit, so every path then goes through the slow path.
+// 16384-bit set of the low 14 bits of each served vanilla hash (murmur3 output, evenly spread):
+// with a few hundred redirected files (a UI pack's portraits: 400) about 97% of the calls end on
+// one load and one bit test, 99.8% with a few dozen. A trace sets every bit, so every path then
+// goes through the slow path.
 // ---------------------------------------------------------------------------------------------
 
+const size_t FILTER_WORDS = 256;
 struct Active {
-    uint64_t filter[64] = {};                               // bit (h & 4095) set: h may be served
+    uint64_t filter[FILTER_WORDS] = {};                     // bit (h & 16383) set: h may be served
     std::vector<std::pair<uint64_t, uint64_t>> map;         // vanilla hash -> copy's hash, sorted
     std::vector<std::wstring> traces;                       // lower case
 };
 
-inline bool filter_hit(const Active* a, uint64_t h) { return (a->filter[(h >> 6) & 63] >> (h & 63)) & 1; }
+inline bool filter_hit(const Active* a, uint64_t h) { return (a->filter[(h >> 6) & (FILTER_WORDS - 1)] >> (h & 63)) & 1; }
 
 using PathToHashFn = uint64_t (*)(const wchar_t* path);
 
@@ -104,6 +106,12 @@ std::string g_last_state_json;                      // the stage selection last 
 uint32_t g_title_seed = 0;
 title_slots::Bag g_bag;                             // Random's bag (shuffle.json), read at title_slots_set
 std::vector<std::string> g_visit_pool, g_cycle_pool;   // what Random draws from now: the selection kept of random_pool / playlist_pool
+
+// The UI packs (ui_slots_set, ui_slots_apply), all under g_mx
+ui_slots::Tables g_ui;
+ui_slots::HashMap g_ui_served;                      // what the ticked options change now (ui_slots::serve)
+ui_slots::HashMap g_ui_published;                   // what the last publish served of them
+HANDLE g_wake = nullptr;                            // set by the plugin's calls while the hook waits for its delay
 
 void apply_selection(bool has, const std::vector<std::string>& sel) {
     g_visit_pool = title_slots::random_selection(g_tt.random_pool, has, sel);
@@ -531,11 +539,13 @@ void publish(const std::string& state, const std::vector<std::wstring>& traces) 
     const bool random = g_title_choice == "random";
     const std::string title_sel = title ? g_title_target + (random ? "*" : "") : std::string();
     const std::string sel = selection_text(state) + "|title=" + title_sel;
-    if (g_published && sel == g_last_state && traces == g_last_traces) return;
+    if (g_published && sel == g_last_state && traces == g_last_traces && g_ui_served == g_ui_published) return;
     const bool title_changed = !g_published || g_last_state.substr(g_last_state.find("|title=")) != "|title=" + title_sel;
+    const bool ui_changed = !g_published || g_ui_served != g_ui_published;
     g_published = true;
     g_last_state = sel;
     g_last_traces = traces;
+    g_ui_published = g_ui_served;
     auto a = std::make_unique<Active>();
     a->traces = traces;
     for (auto& [id, key] : parse_state(state)) {
@@ -545,10 +555,15 @@ void publish(const std::string& state, const std::vector<std::wstring>& traces) 
         a->map.insert(a->map.end(), v->redirects.begin(), v->redirects.end());
         slog("selection: stage %u -> %s \"%s\" (%zu files)", id, key.c_str(), v->name.c_str(), v->redirects.size());
     }
-    if (title) a->map.insert(a->map.end(), title->begin(), title->end());   // after the stages': the title's win a shared hash
+    // The UI packs' after the stages' (a stage variant never has GUI files), the title's last: the later wins a shared hash
+    a->map.insert(a->map.end(), g_ui_served.begin(), g_ui_served.end());
+    if (title) a->map.insert(a->map.end(), title->begin(), title->end());
     if (title_changed)
         slog("title: %s", title ? ("the copies of \"" + g_title_target + "\" served (" + std::to_string(title->size()) + " files)" + (random ? ", drawn again after each visit" : "")).c_str()
                                 : ("the files this launch wrote (\"" + g_tt.launch + "\")").c_str());
+    if (ui_changed && g_ui.present)
+        slog("ui packs: %s", g_ui_served.empty() ? "the files this launch wrote"
+                                                 : (std::to_string(g_ui_served.size()) + " file(s) served from the copies (other choices than the launch's)").c_str());
     if (a->map.empty() && a->traces.empty()) {
         g_hot.active.store(nullptr, std::memory_order_release);
         slog("selection: vanilla everywhere");
@@ -563,7 +578,7 @@ void publish(const std::string& state, const std::vector<std::wstring>& traces) 
         else uniq.push_back(e);
     }
     a->map.swap(uniq);
-    for (auto& e : a->map) a->filter[(e.first >> 6) & 63] |= 1ull << (e.first & 63);
+    for (auto& e : a->map) a->filter[(e.first >> 6) & (FILTER_WORDS - 1)] |= 1ull << (e.first & 63);
     if (!a->traces.empty()) memset(a->filter, 0xFF, sizeof(a->filter));
     g_hot.active.store(a.get(), std::memory_order_release);
     g_all_active.push_back(std::move(a));
@@ -702,6 +717,13 @@ DWORD follow_selection() {
     return wait;
 }
 
+// follow_selection from the plugin's threads. The watcher sleeps until a file of SF6_StageSlots_Data changes: a choice made in the
+// game while the hook waits for its delay (a UI pack ticked in the first seconds, nothing else selected) would stay unhooked until
+// then. Woken, it waits for the delay's end itself. Never from the watcher (it would wake itself).
+void follow_from_outside() {
+    if (follow_selection() != INFINITE && g_wake) SetEvent(g_wake);
+}
+
 const DWORD STATE_RETRY_MS = 50;
 const int STATE_RETRIES = 40;                          // 2 s, then the previous selection stays
 
@@ -755,9 +777,14 @@ DWORD WINAPI watcher(LPVOID) {
             Sleep(STATE_RETRY_MS < wait ? STATE_RETRY_MS : wait);
             continue;
         }
-        if (change == INVALID_HANDLE_VALUE) { Sleep(wait == INFINITE ? 1000 : (wait < 1000 ? wait : 1000)); continue; }
-        WaitForSingleObject(change, wait);
-        FindNextChangeNotification(change);
+        if (change == INVALID_HANDLE_VALUE) {
+            const DWORD ms = wait == INFINITE ? 1000 : (wait < 1000 ? wait : 1000);
+            if (g_wake) WaitForSingleObject(g_wake, ms);
+            else Sleep(ms);
+            continue;
+        }
+        HANDLE handles[2] = { change, g_wake };
+        if (WaitForMultipleObjects(g_wake ? 2 : 1, handles, FALSE, wait) == WAIT_OBJECT_0) FindNextChangeNotification(change);
     }
 }
 
@@ -775,7 +802,7 @@ int title_slots_next() {
         slog("title: Random drew \"%s\" for the next visit (%zu left this round)", g_title_target.c_str(), g_bag.left.size());
         if (g_variants) {
             publish(g_last_state_json, g_last_traces);
-            follow_selection();
+            follow_from_outside();
         }
         return 1;
     } catch (...) { return 0; }
@@ -822,7 +849,7 @@ void title_slots_select(const char* choice) {
         }
         if (g_variants) {
             publish(g_last_state_json, g_last_traces);
-            follow_selection();
+            follow_from_outside();
         }
     } catch (...) {}
 }
@@ -858,10 +885,47 @@ int stage_slots_apply(const char* state_json) {
     try {
         std::lock_guard<std::mutex> lk(g_mx);
         publish(std::string(state_json), g_last_traces);
-        follow_selection();
+        follow_from_outside();
         return g_hot.active.load() ? 2 : 1;
     } catch (...) {
         return 0;
+    }
+}
+
+void ui_slots_set(const ui_slots::Tables& tables) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    g_ui = tables;
+    g_ui_served = ui_slots::serve(g_ui.options, g_ui.launch, g_ui.written, g_ui.game);   // the launch's own choices: nothing
+}
+
+int ui_slots_apply(const char* choices_json) {
+    if (!choices_json) return -1;
+    try {
+        std::lock_guard<std::mutex> lk(g_mx);
+        if (!g_ui.present || !g_variants) return -1;
+        const ui_slots::Choices ch = ui_slots::parse_choices(choices_json);
+        g_ui_served = ui_slots::serve(g_ui.options, ch, g_ui.written, g_ui.game);
+        size_t ticked = 0;
+        for (auto& [key, ids] : ui_slots::applied(g_ui.packs, ch)) ticked += ids.size();
+        slog("ui packs: %zu option(s) ticked in the game, %zu file(s) differ from what this launch wrote", ticked, g_ui_served.size());
+        publish(g_last_state_json, g_last_traces);
+        follow_from_outside();
+        return static_cast<int>(g_ui_served.size());
+    } catch (...) {
+        return -1;
+    }
+}
+
+int ui_slots_overrides(char* buf, int cap) {
+    try {
+        std::lock_guard<std::mutex> lk(g_mx);
+        if (!g_ui.present || !g_variants) return -1;
+        const std::string text = ui_slots::overrides_text(g_ui_served, g_ui.names);
+        if (!buf || cap <= 0 || text.size() + 1 > static_cast<size_t>(cap)) return static_cast<int>(text.size());
+        memcpy(buf, text.c_str(), text.size() + 1);
+        return static_cast<int>(text.size());
+    } catch (...) {
+        return -1;
     }
 }
 
@@ -879,6 +943,7 @@ void stage_slots_start(const wchar_t* game_dir, const std::vector<StageVariant>*
     reserve_near_block();
     if (g_near) slog("near block at 0x%llx", (unsigned long long)(uintptr_t)g_near);
     else slog("no free block near the executable: no redirection this session");
+    g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     HANDLE t = CreateThread(nullptr, 0, watcher, nullptr, 0, nullptr);
     if (t) CloseHandle(t);
     else slog("cannot start the watcher thread");

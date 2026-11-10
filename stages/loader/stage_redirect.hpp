@@ -12,7 +12,8 @@
 // The selection comes from reframework\data\SF6_StageSlots_Data\state.json, written by the Lua
 // script on the stage select screen and re-read when it changes:
 //   { "selected": { "<stage id>": "<variant key>", ... } }
-// Nothing is hooked while no variant is selected, and never in the first seconds of the game
+// Nothing is hooked while nothing is served (no variant selected, the title screen and the UI
+// packs as this launch wrote them), and never in the first seconds of the game
 // (other tools hook the same function at their first frame and scan for it before patching).
 // Once installed, the hook is disarmed (original bytes back) whenever the selection is empty
 // again and armed again when a variant is selected. The detour itself is one bit test for any
@@ -56,3 +57,18 @@ int title_slots_shown(char* buf, int cap);
 // Random's selection changed in the game (the preview's list): comma-separated keys ("game" the game's own). Exported as
 // SF6TitleSlots_Pool.
 void title_slots_pool(const char* keys);
+
+// The UI packs (stage_loader_ui), before stage_slots_start. The launch wrote its ticked options at the real paths, so nothing is
+// served until the choice changes in the game; then each real file whose winner changed is served from its copy, or from the
+// game's own copy when nothing ticked has it any more (ui_slots::serve). It shows at the next load of the file (the game keeps
+// some for the session: the plugin swaps those on screen, ui_slots_overrides).
+void ui_slots_set(const ui_slots::Tables& tables);
+// The plugin's whole "ui_choices" object (pack key -> ticked node ids), applied at once. Returns the number of real files served
+// from copies now, -1 when the UI slots are not running (no reframework\ui_mods at launch, or the stage slots not started).
+// Exported by amd_ags_x64.dll as SF6UISlots_Apply.
+int ui_slots_apply(const char* choices_json);
+// The textures served now that differ from what this launch put at their real paths (what the engine already holds), one per
+// line: "<real resource path>\t<resource path to show instead>\n" (ui_slots::overrides_text: no natives/stm/, no version suffix,
+// in the archive's case). cap must hold the text and its terminating NUL: returns its length (0 when nothing differs), the
+// length needed when cap is too small (nothing written), -1 when not running. Exported as SF6UISlots_Overrides.
+int ui_slots_overrides(char* buf, int cap);

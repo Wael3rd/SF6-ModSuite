@@ -21,6 +21,10 @@
 //
 // Title screen packs (title_slots.hpp) ride in the same pak: the chosen pack of reframework\title_mods has its files
 // written at their real paths (no redirection), and reframework\data\SF6_TitleSlots_Data\registry.json lists the packs.
+// So do the UI packs of reframework\ui_mods (ui_slots.hpp): every option at private paths, the launch's ticked options at the
+// real paths too, reframework\data\SF6_UISlots_Data\registry.json lists them.
+
+#include "ui_slots.hpp"
 
 struct StageVariant {
     std::string key;            // stable id: selection state, pak folder
@@ -62,6 +66,8 @@ struct TitleTables {
 void stage_loader_run(const wchar_t* game_dir, std::vector<StageVariant>& out);
 // What the last stage_loader_run found for the title screen (empty without reframework\title_mods)
 const TitleTables& stage_loader_titles();
+// What the last stage_loader_run found of the UI packs (not present without reframework\ui_mods)
+const ui_slots::Tables& stage_loader_ui();
 
 // Path of the preview texture of a variant as the engine's resource API takes it.
 std::string stage_preview_resource(const std::string& key);

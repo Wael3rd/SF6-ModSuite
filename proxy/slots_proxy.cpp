@@ -72,6 +72,16 @@ extern "C" __declspec(dllexport) int SF6TitleSlots_Shown(char* buf, int cap) {
     __try { return title_slots_shown(buf, cap); }
     __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
+// The UI packs' choices changed in the game (the plugin's editor, settings.json's "ui_choices" whole): served at once
+extern "C" __declspec(dllexport) int SF6UISlots_Apply(const char* choices_json) {
+    __try { return ui_slots_apply(choices_json); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+// The textures served now that the engine holds otherwise, for the plugin's swap on screen (stage_redirect.hpp)
+extern "C" __declspec(dllexport) int SF6UISlots_Overrides(char* buf, int cap) {
+    __try { return ui_slots_overrides(buf, cap); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
 #endif
 
 // Appends one line to the loader log (same file as loader_core), so a chained module is visible
@@ -128,6 +138,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         slog_open(g_dll_dir);
         run_stage_loader();
         title_slots_set(stage_loader_titles());
+        ui_slots_set(stage_loader_ui());
 #endif
 
         // ---- Costume loader: synchronous, SEH-wrapped. Never crash the game. ----

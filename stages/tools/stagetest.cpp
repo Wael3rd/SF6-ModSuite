@@ -1,18 +1,23 @@
 // stagetest: runs the stage loader pass on a folder laid out like the game's
-// (reframework\stage_mods, reframework\data\SF6_StageSlots_Data\loader\stage_paths.txt),
-// without the game. Usage: stagetest <fake game dir>
-//        stagetest --selftest   unit tests of the tile / variation guess, stage_slots.ini, the menu picture conversion
-//                               and the title packs' choice (title_slots.hpp)
+// (reframework\stage_mods, reframework\data\SF6_StageSlots_Data\loader\stage_paths.txt, reframework\title_mods,
+// reframework\ui_mods), without the game. Usage: stagetest <fake game dir>   (prints the variants and the UI packs' tree)
+//        stagetest --selftest   unit tests of the tile / variation guess, stage_slots.ini, the menu picture conversion,
+//                               the title packs' choice (title_slots.hpp) and the UI packs' tree (ui_slots.hpp)
+//        stagetest --make-base <out.pak> <natives path>...   a stand-in for the game's re_chunk_000.pak (each path holds
+//                               a few bytes of its own), for the copies of the game's own files
 #include <windows.h>
 #include <stdio.h>
 #include <algorithm>
 #include <string>
 #include <vector>
+#include "pak.hpp"
 #include "../loader/preview_tex.hpp"
 #include "../loader/stage_classify.hpp"
 #include "../loader/stage_loader.hpp"
 #include "../loader/stage_log.hpp"
 #include "../loader/title_slots.hpp"
+#include "../loader/ui_slots.hpp"
+#include "../loader/pic_cache.hpp"
 
 namespace {
 
@@ -263,6 +268,392 @@ void test_titles() {
     check(k1 == "ta" && k2 == "tb" && b2.left.empty(), "random bag: a pack removed from title_mods leaves the bag");
 }
 
+// UI packs: modinfo.ini, the keys and paths, Fluffy's tree (shortened from FG Artwork 2.05, Comic Art 2.05a and the Loading
+// Animations, 10/11), the winners, what is served, settings.json's ui_choices, the registry, the plugin's overrides.
+void test_ui() {
+    printf("UI packs\n");
+    using namespace ui_slots;
+
+    ModInfo m = parse_modinfo("\xEF\xBB\xBFname= Dhalsim Token Loading \r\nAuthor = BrewedVFX\r\ndescription=Replaces Ryu\x92s loading screen\r\n"
+                              "category=!Characters > Multiple\r\ncategory=BattleHUD\r\nDummyMod= True\r\nMenuPriority=8\r\nAddonFor= XX) Other\r\n; name=no\r\n");
+    check(m.name == "Dhalsim Token Loading" && m.author == "BrewedVFX" && m.addon_for == "XX) Other" && m.dummy && m.priority == 8,
+          "modinfo: keys in any case, spaces round keys and values trimmed");
+    check(m.categories.size() == 2 && m.categories[1] == "BattleHUD", "modinfo: category repeats");
+    check(m.description == "Replaces Ryu\xE2\x80\x99s loading screen", "modinfo: Windows-1252 text made UTF-8 (typographic apostrophe)");
+    check(to_utf8("Caf\xC3\xA9 \xE2\x80\x99") == "Caf\xC3\xA9 \xE2\x80\x99", "modinfo: UTF-8 text kept as it is");
+    m = parse_modinfo("name=A\nDummyMod=false\nMenuPriority=-2\n");
+    check(!m.dummy && m.priority == -2, "modinfo: DummyMod=false, a negative MenuPriority");
+
+    check(node_id("a") == "naf63dc4c8601" && pack_key("a") == "uaf63dc4c8601", "keys: \"n\" / \"u\" + 12 hex digits of FNV-1a 64 (\"a\")");
+    check(node_id("FG.zip/FG Artwork 2.05/001) FG Default") == node_id("fg.zip/fg artwork 2.05/001) fg default"), "keys: any case");
+    check(node_id("FG.zip/A") != node_id("FG.zip/B") && node_id("FG.zip/A") != node_id("FG (1).zip/A"), "keys: one per source and node folder");
+    check(private_path("u1", "n2", "natives/stm/product/gui/x.tex.241101895") == "natives/stm/_uislots/u1/n2/product/gui/x.tex.241101895" &&
+          private_path("u1", "n2", "natives/stm/streaming/product/gui/x.tex.241101895") == "natives/stm/streaming/_uislots/u1/n2/product/gui/x.tex.241101895",
+          "private paths, a streamed file's under streaming/");
+    check(game_path("natives/STM/product/GUI/x.tex.241101895") == "natives/stm/_uislots/game/product/GUI/x.tex.241101895", "the game's own copy, the case kept");
+    check(texture_resource("natives/stm/product/GUI/cmn/ui01900/part/tex_loading_IAM.tex.241101895") == "product/GUI/cmn/ui01900/part/tex_loading_IAM.tex" &&
+          texture_resource("natives/STM/product/a/b.tex.241101895.X64") == "product/a/b.tex",
+          "a texture's resource path: no natives/stm/, no version or platform suffix, the case kept");
+    check(texture_resource("natives/stm/streaming/product/a/b.tex.241101895").empty() && texture_resource("natives/stm/product/a/b.pfb.17").empty() &&
+          texture_resource("natives/stm/product/a.tex.d/uvs_loading.uvs.7").empty(), "not a texture, or its streamed half: no resource path");
+
+    auto F = [](const char* path, const char* ini, std::vector<uint64_t> files) {
+        Found f;
+        f.path = path;
+        f.info = parse_modinfo(ini);
+        f.files = std::move(files);
+        return f;
+    };
+    const uint64_t A1 = 101, A2 = 102, A3 = 103, CT = 109;   // FG's Arcade, Practice, Versus banners, the controller icon
+    std::vector<Found> in = {
+        F("FG.zip/FG/000) FG Artwork", "name= FG Artwork\nDummyMod=True\n", {}),
+        F("FG.zip/FG/001) FG Default", "name= Default Set\nAddonFor= FG Artwork\n", { A1, A2, A3, CT }),
+        F("FG.zip/FG/020) FG Optional", "name= FG Optional\nAddonFor= FG Artwork\nDummyMod=True\n", {}),
+        F("FG.zip/FG/023) Arcade", "name= 1) Arcade\nAddonFor= FG Optional\nDummyMod=True\n", {}),
+        F("FG.zip/FG/024) Practice", "name= 2) Practice\nAddonFor= FG Optional\nDummyMod=True\n", {}),
+        F("FG.zip/FG/Comic FG ttt Luke", "name=Luke\nAddonFor= 1) Arcade\nMenuPriority=7\n", { A1 }),
+        F("FG.zip/FG/Comic FG ttt Ryu", "name=Ryu Story\nAddonFor= 1) Arcade\nMenuPriority=8\n", { A1 }),
+        F("FG.zip/FG/Comic FG ttt Dark", "name=Dark Reign\nAddonFor= 1) Arcade\nMenuPriority=9\n", { A1 }),
+        F("FG.zip/FG/Comic FG ttt Art", "name=Illustration Contest 2nd\nAddonFor= 1) Arcade\nMenuPriority=9\n", { A1 }),
+        F("FG.zip/FG/Comic FG uuu Zen", "name=Ryu Zen\nAddonFor= 2) Practice\n", { A2 }),
+        F("FG.zip/FG/Comic FG uuu Peace", "name=Peace Out\nAddonFor= 2) Practice\n", { A2 }),
+        F("Extra.rar/Arcade Akuma", "name=Akuma\nAddonFor=1) ARCADE\n", { A1 }),    // another archive, the name in another case
+        F("Comic.rar/Comic Art Bundle/Comic Art", "name=Comic Art Portraits (Arjun Update)\nDummyMod= True\nauthor=brewedVFX\n", {}),
+        F("Comic.rar/Comic Art Bundle/Remove Cart", "name=Remove Cart\nMenuPriority=0\nAddonFor=Comic Art Portraits (Arjun Update)\n", { 201 }),
+        F("Comic.rar/Comic Art Bundle/BattleHud", "name=BattleHud & Battlehub\nMenuPriority=8\nAddonFor=Comic Art Portraits (Arjun Update)\n", { 202, 203 }),
+        F("Comic.rar/Comic Art Bundle/Select", "name=Character Select\nMenuPriority=9\nAddonFor=Comic Art Portraits (Arjun Update)\n", { 204 }),
+        F("Dhalsim Loading.zip/Dalsim Loading", "name= Dhalsim Token Loading\nAddonFor= XX) Other\ncategory=!Other > Misc\n", { 301 }),
+        F("Chun Loading.zip/ChunLi Loading", "name=Chun-Li Token Loading\n", { 301 }),
+        F("Ingrid 8.zip/Ingrid Loading", "name=Ingrid Loading\n", { 301, 302 }),
+        F("Ingrid.zip/Ingrid Loading", "name=Ingrid Loading\n", { 301 }),
+    };
+    std::vector<std::string> notes;
+    const std::vector<Pack> packs = build_packs(in, &notes);
+    auto pack_named = [&](const std::string& n) -> const Pack* { for (auto& p : packs) if (p.name == n) return &p; return nullptr; };
+    auto node_in = [](const Pack* p, const std::string& n) -> const Node* {
+        if (p) for (auto& x : p->nodes) if (x.name == n) return &x;
+        static const Node none;
+        return &none;
+    };
+    const Pack* fg = pack_named("FG Artwork");
+    const Pack* comic = pack_named("Comic Art Portraits (Arjun Update)");
+    const Pack* loading = pack_named("Loading");
+    check(packs.size() == 3 && comic == &packs[0] && fg == &packs[1] && loading == &packs[2], "three packs, by name: Comic Art, FG Artwork, the Loadings gathered");
+    std::string order;
+    if (fg) for (auto& nd : fg->nodes) order += nd.name + ":" + std::to_string(nd.depth) + ";";
+    check(order == "FG Artwork:0;Default Set:1;FG Optional:1;1) Arcade:2;Dark Reign:3;Illustration Contest 2nd:3;Ryu Story:3;Luke:3;Akuma:3;"
+                   "2) Practice:2;Peace Out:3;Ryu Zen:3;",
+          "display order: depth first, options by MenuPriority then name before sub groups by name");
+    const Node* arcade = node_in(fg, "1) Arcade");
+    check(node_in(fg, "Akuma")->parent == arcade->id && node_in(fg, "Akuma")->depth == 3, "AddonFor across archives, any case: under 1) Arcade");
+    bool arcade_one = true;
+    for (const char* n : { "Dark Reign", "Illustration Contest 2nd", "Ryu Story", "Luke", "Akuma" })
+        arcade_one = arcade_one && node_in(fg, n)->one && node_in(fg, n)->group == arcade->id;
+    check(arcade_one && node_in(fg, "Peace Out")->one && node_in(fg, "Peace Out")->group == node_in(fg, "2) Practice")->id,
+          "options of a parent that write the same file: one-of groups, their parent's id");
+    check(!node_in(fg, "Default Set")->one && !node_in(fg, "Default Set")->title && node_in(fg, "FG Optional")->title && arcade->title,
+          "the preset (Default Set) is a box; DummyMods are titles");
+    order.clear();
+    if (comic) for (auto& nd : comic->nodes) order += nd.name + (nd.title ? "#" : nd.one ? "(o)" : "[]") + ";";
+    check(order == "Comic Art Portraits (Arjun Update)#;Character Select[];BattleHud & Battlehub[];Remove Cart[];", "add-ons that share nothing: boxes, by MenuPriority");
+    bool gathered = loading && loading->gathered && loading->nodes.size() == 4 && loading->key == pack_key("Chun Loading.zip/ChunLi Loading");
+    if (loading) for (auto& nd : loading->nodes) gathered = gathered && nd.depth == 0 && nd.parent.empty() && nd.one && nd.group == loading->key;
+    check(gathered, "roots that write the same file (an unknown AddonFor among them): one pack, a one-of group keyed by the pack");
+    check(std::any_of(notes.begin(), notes.end(), [](const std::string& s) { return s.find("XX) Other") != std::string::npos; }),
+          "an AddonFor that names no node is reported");
+
+    // the same archives downloaded again (other contents, other order): the same keys
+    std::vector<Found> again(in.rbegin(), in.rend());
+    for (auto& f : again) { for (auto& h : f.files) h += 1000; f.info.description = "v2"; }
+    const std::vector<Pack> packs2 = build_packs(again);
+    bool same = packs2.size() == packs.size();
+    for (size_t i = 0; same && i < packs.size(); ++i) {
+        same = packs2[i].key == packs[i].key && packs2[i].nodes.size() == packs[i].nodes.size();
+        for (size_t k = 0; same && k < packs[i].nodes.size(); ++k)
+            same = packs2[i].nodes[k].id == packs[i].nodes[k].id && packs2[i].nodes[k].group == packs[i].nodes[k].group;
+    }
+    check(same, "a new download of the same files: the same pack keys, node ids and groups");
+
+    // a name in two archives: the parent in the same archive first, else the first by path
+    const std::vector<Pack> dup = build_packs({
+        F("A.zip/Root", "name=Root\nDummyMod=True\n", {}), F("A.zip/Opt", "name=Optional\nAddonFor=Root\nDummyMod=True\n", {}),
+        F("B.zip/Root", "name=Root\nDummyMod=True\n", {}), F("B.zip/Opt", "name=Optional\nAddonFor=Root\nDummyMod=True\n", {}),
+        F("B.zip/X", "name=X\nAddonFor=Optional\n", { 1 }), F("A.zip/Y", "name=Y\nAddonFor=Optional\n", { 2 }),
+        F("C.zip/Z", "name=Z\nAddonFor=Optional\n", { 3 }) });
+    auto parent_of = [](const std::vector<Pack>& ps, const std::string& n) {
+        for (auto& p : ps) for (auto& x : p.nodes) if (x.name == n) return x.parent;
+        return std::string("?");
+    };
+    check(dup.size() == 2 && parent_of(dup, "X") == node_id("B.zip/Opt") && parent_of(dup, "Y") == node_id("A.zip/Opt") &&
+          parent_of(dup, "Z") == node_id("A.zip/Opt"), "a name in two archives: the same archive's node, else the first");
+
+    // a loop of AddonFor, AddonFor naming itself, a DummyMod with files, a pack with nothing to tick
+    notes.clear();
+    const std::vector<Pack> odd = build_packs({
+        F("L.zip/P", "name=P\nAddonFor=Q\n", { 1 }), F("L.zip/Q", "name=Q\nAddonFor=P\n", { 2 }),
+        F("M.zip/T", "name=Only a title\nDummyMod=True\n", { 5 }), F("N.zip/S", "name=Self\nAddonFor=Self\n", { 6 }) }, &notes);
+    check(odd.size() == 2 && odd[0].name == "P" && odd[0].nodes.size() == 2 && odd[0].nodes[1].parent == odd[0].nodes[0].id && odd[1].name == "Self",
+          "a loop of AddonFor is cut, AddonFor naming itself is a root");
+    check(notes.size() == 4, "reported: the loop, the name that is no node, the DummyMod's files, the pack with nothing to tick");
+
+    // two one-of groups under one parent (one of them transitive), and a box
+    const std::vector<Pack> two = build_packs({
+        F("G.zip/R", "name=R\nDummyMod=True\n", {}),
+        F("G.zip/a1", "name=a1\nAddonFor=R\n", { 1 }), F("G.zip/a2", "name=a2\nAddonFor=R\n", { 1 }),
+        F("G.zip/b1", "name=b1\nAddonFor=R\n", { 2 }), F("G.zip/b2", "name=b2\nAddonFor=R\n", { 2, 3 }), F("G.zip/b3", "name=b3\nAddonFor=R\n", { 3 }),
+        F("G.zip/c", "name=c\nAddonFor=R\n", { 4 }) });
+    bool groups = two.size() == 1 && two[0].nodes.size() == 7;
+    if (groups) {
+        auto& v = two[0].nodes;
+        groups = v[1].group == v[0].id && v[2].group == v[0].id && v[3].group == v[3].id && v[4].group == v[3].id && v[5].group == v[3].id &&
+                 !v[6].one && v[6].group.empty();
+    }
+    check(groups, "two one-of groups under one parent (files shared transitively): the parent's id, then the first member's");
+
+    auto gname = [&](std::vector<Found> v) { const auto p = build_packs(v); return p.size() == 1 ? p[0].name : std::string("?"); };
+    check(gname({ F("x.zip/a", "name=Comic Art Portraits - Ingrid\n", { 1 }), F("y.zip/b", "name=Comic Art Portraits - Yasmine\n", { 1 }) }) == "Comic Art Portraits",
+          "gathered pack's name: the words the names start with");
+    check(gname({ F("x.zip/a", "name=Alpha\ncategory=!Other > Misc\n", { 1 }), F("y.zip/b", "name=Beta\ncategory=Foo\ncategory=!Other > Misc\n", { 1 }) }) == "Misc",
+          "gathered pack's name: else a category they all have");
+    check(gname({ F("y.zip/b", "name=Beta\n", { 1 }), F("x.zip/a", "name=Alpha\n", { 1 }) }) == "Alpha", "gathered pack's name: else the first name");
+
+    // what each option serves: real hash -> a copy of its own (fake hashes)
+    auto copy_of = [](size_t order_in_pack, uint64_t real) { return real * 1000 + order_in_pack; };
+    auto served_of = [&](const std::vector<Pack>& ps, const std::vector<Found>& found) {
+        std::vector<Served> out;
+        for (size_t pi = 0; pi < ps.size(); ++pi) {
+            for (size_t k = 0; k < ps[pi].nodes.size(); ++k) {
+                const Node& nd = ps[pi].nodes[k];
+                if (nd.title) continue;
+                Served s{ ps[pi].key, nd.id, nd.depth, int(k), {}, int(pi) };
+                for (uint64_t h : found[nd.found].files) s.files.push_back({ h, copy_of(k, h) });
+                std::sort(s.files.begin(), s.files.end());
+                out.push_back(std::move(s));
+            }
+        }
+        return out;
+    };
+    const std::vector<Served> opts = served_of(packs, in);
+    auto at = [&](const Pack* p, const char* name) { for (size_t k = 0; p && k < p->nodes.size(); ++k) if (p->nodes[k].name == name) return k; return size_t(0); };
+    auto id = [&](const Pack* p, const char* name) { return node_in(p, name)->id; };
+    auto get = [](const HashMap& w, uint64_t h) { for (auto& e : w) if (e.first == h) return e.second; return uint64_t(0); };
+    const std::string fgk = fg ? fg->key : std::string(), ck = comic ? comic->key : std::string();
+    Choices launch;
+    launch[fgk] = { id(fg, "Default Set"), id(fg, "Dark Reign") };
+    const HashMap w = winners(opts, launch);
+    check(w.size() == 4 && get(w, A1) == copy_of(at(fg, "Dark Reign"), A1) && get(w, A2) == copy_of(at(fg, "Default Set"), A2) &&
+          get(w, CT) == copy_of(at(fg, "Default Set"), CT), "the deepest ticked option wins a file (Dark Reign over the Default Set's banner)");
+    Choices both;
+    both[fgk] = { id(fg, "Dark Reign"), id(fg, "Luke") };
+    check(get(winners(opts, both), A1) == copy_of(at(fg, "Luke"), A1), "at the same depth, the later in display order");
+    check(winners(opts, {}).empty(), "nothing ticked: nothing");
+    Choices bad;
+    bad["u000000000000"] = { id(fg, "Dark Reign") };
+    bad[fgk] = { "n000000000000", arcade->id };
+    check(winners(opts, bad).empty() && applied(packs, bad).empty(), "an unknown pack, an unknown id, a title: nothing ticked");
+    Choices mixed;
+    mixed[fgk] = { id(fg, "Dark Reign"), "nzz", id(fg, "Default Set") };
+    check(applied(packs, mixed)[fgk] == std::vector<std::string>{ id(fg, "Default Set"), id(fg, "Dark Reign") }, "applied: the options named, in display order");
+
+    const HashMap written = w;                              // the launch wrote its winners at the real paths
+    const HashMap game = { { A1, 9001 }, { A2, 9002 }, { CT, 9009 } };   // the game's own copies (none of A3: not in its pak)
+    check(serve(opts, launch, written, game).empty(), "the launch's own choices: nothing served (the real paths hold them)");
+    const HashMap none = serve(opts, {}, written, game);
+    check(none == HashMap{ { A1, 9001 }, { A2, 9002 }, { CT, 9009 } }, "nothing ticked any more: the game's own copies (none where the game has no copy)");
+    Choices other;
+    other[fgk] = { id(fg, "Default Set"), id(fg, "Ryu Story") };
+    check(serve(opts, other, written, game) == HashMap{ { A1, copy_of(at(fg, "Ryu Story"), A1) } }, "another option of the group: its copy, for that file only");
+    Choices more = launch;
+    more[ck] = { id(comic, "Character Select") };
+    check(serve(opts, more, written, game) == HashMap{ { 204, copy_of(at(comic, "Character Select"), 204) } }, "a file the launch did not write, ticked now: its copy");
+
+    const std::map<uint64_t, std::string> names = { { A1, "product/gui/a1.tex" }, { 9001, "_uislots/game/product/gui/a1.tex" }, { A2, "product/gui/a2.tex" } };
+    check(overrides_text(none, names) == "product/gui/a1.tex\t_uislots/game/product/gui/a1.tex\n" && overrides_text({}, names).empty(),
+          "overrides: one line per texture served, the real resource and the one shown instead");
+
+    // roots gathered only when they are alternatives: the Jaccard index of their trees' files 1/2 or more (in game 10/11, sharing
+    // any file put Round Announcement UI with the Loadings, Comic Art with Battlehud Portraits Colour)
+    auto count_packs = [&](std::vector<Found> v) { return build_packs(v).size(); };
+    std::vector<uint64_t> big;
+    for (uint64_t h = 1; h <= 300; ++h) big.push_back(h);
+    check(count_packs({ F("x.zip/a", "name=A\n", { 1, 2, 3 }), F("y.zip/b", "name=B\n", { 3, 2, 1 }) }) == 1, "roots with the same files: gathered");
+    check(count_packs({ F("x.zip/a", "name=A\n", { 1, 2 }), F("y.zip/b", "name=B\n", { 1 }) }) == 1, "2 files against 1 of them (Jaccard 1/2): gathered");
+    check(count_packs({ F("x.zip/a", "name=A\n", big), F("y.zip/b", "name=B\n", { 1 }) }) == 2, "300 files against 1 of them: a pack each");
+    check(count_packs({ F("x.zip/a", "name=A\n", { 1, 2, 3, 4 }), F("y.zip/b", "name=B\n", { 3, 4, 5, 6, 7 }) }) == 2, "a partial overlap (2 of 7): a pack each");
+    notes.clear();
+    const std::vector<Found> cross = {
+        F("Comic.rar/Comic", "name=Comic Art\nDummyMod=True\n", {}),
+        F("Comic.rar/Hud", "name=BattleHud\nAddonFor=Comic Art\n", { 1, 2, 3 }),
+        F("Comic.rar/Select", "name=Character Select\nAddonFor=Comic Art\n", { 10, 11, 12, 13 }),
+        F("Hud.rar/Colour", "name=Battlehud Portraits Colour\n", { 1, 2, 3, 4, 5 }),
+        F("Hud.rar/Customise", "name=Customise\nAddonFor=Battlehud Portraits Colour\nDummyMod=True\n", {}),
+        F("Hud Ryu.rar/Ryu", "name=Ryu C1\nAddonFor=Customise\n", { 1 }),   // depth 2, deeper than Comic Art's BattleHud
+    };
+    const std::vector<Pack> cp = build_packs(cross, &notes);
+    check(cp.size() == 2 && cp[0].name == "Battlehud Portraits Colour" && cp[1].name == "Comic Art" && cp[0].nodes.size() == 3,
+          "packs whose trees share some files stay apart (an add-on archive under its own pack)");
+    check(notes.size() == 1 && notes[0].find("both have 3 file(s)") != std::string::npos && notes[0].find("\"Comic Art\" wins") != std::string::npos,
+          "the files two packs share: reported once per pair, the later by name wins them");
+    if (cp.size() == 2) {
+        const std::vector<Served> co = served_of(cp, cross);
+        Choices ticks;
+        ticks[cp[0].key] = { id(&cp[0], "Ryu C1"), id(&cp[0], "Battlehud Portraits Colour") };
+        ticks[cp[1].key] = { id(&cp[1], "BattleHud") };
+        const HashMap cw = winners(co, ticks);
+        check(get(cw, 1) == copy_of(at(&cp[1], "BattleHud"), 1) && get(cw, 2) == copy_of(at(&cp[1], "BattleHud"), 2) &&
+              get(cw, 4) == copy_of(at(&cp[0], "Battlehud Portraits Colour"), 4),
+              "a file two packs have: the later pack's ticked option wins it (over a deeper one of the other), the rest stays");
+    }
+
+    Choices c = parse_settings_choices("\xEF\xBB\xBF{ \"title_pack\": \"t1\", \"nested\": {\"ui_choices\": {\"ux\": [\"no\"]}},\n"
+                                       " \"ui_choices\": { \"U0123456789AB\": [\" N1 \", \"n2\", 3, \"n2\"], \"u2\": \"not a list\", \"u3\": [] },\n \"skip_intro\": true }");
+    check(c.size() == 2 && c["u0123456789ab"] == std::vector<std::string>{ "n1", "n2" } && c.count("u3") && c["u3"].empty() && !c.count("ux") && !c.count("u2"),
+          "settings.json's ui_choices: top level only, any case, spaces, numbers and other values skipped");
+    check(parse_settings_choices("{\"select_options_key\": \"C\"}").empty() && parse_settings_choices("").empty() && parse_settings_choices("[1]").empty(),
+          "no ui_choices, an empty file, not an object: nothing ticked");
+    c = parse_settings_choices("{\"ui_choices\": {\"u1\": [\"n1\"], \"u2\": [\"n");
+    check(c.count("u1") && c["u1"] == std::vector<std::string>{ "n1" } && (!c.count("u2") || c["u2"].empty()), "a text cut short keeps what came before");
+    c = parse_choices(" {\"u1\": [\"n1\", \"n2\"], \"u2\": []} ");
+    check(c.size() == 2 && c["u1"].size() == 2 && parse_choices("{}").empty() && parse_choices("null").empty(), "the ui_choices object itself (SF6UISlots_Apply)");
+
+    const std::string js = registry_text(packs, applied(packs, launch), {});
+    check(js.find("\"key\": \"" + fgk + "\", \"name\": \"FG Artwork\"") != std::string::npos &&
+          js.find("\"kind\": \"title\", \"choice\": \"\"") != std::string::npos &&
+          js.find("\"name\": \"Luke\", \"description\": \"\", \"kind\": \"option\", \"choice\": \"one\", \"group\": \"" + arcade->id + "\"") != std::string::npos &&
+          js.find("\"name\": \"Default Set\", \"description\": \"\", \"kind\": \"option\", \"choice\": \"check\", \"group\": \"\", \"files\": 4") != std::string::npos &&
+          js.find("\"applied\": { \"" + fgk + "\": [\"" + id(fg, "Default Set") + "\", \"" + id(fg, "Dark Reign") + "\"] }") != std::string::npos,
+          "registry: packs, nodes (kind, choice, group, files), what is applied");
+    check(registry_text({}, {}, {}) == "{\n  \"version\": 1,\n  \"packs\": [],\n  \"game_textures\": {},\n  \"applied\": {}\n}\n", "registry without packs");
+
+    // fighters: the folder after character_image/, subset choices "<id>@<fid>"
+    const std::string fp = "natives/stm/product/gui/data/character_image/013/battlehud/tex_battlehud_012_1p_iam.tex.241101895";
+    check(fighter_of_path(fp) == "013", "fighter of a path: the folder decides, not the file name");
+    check(fighter_of_path("NATIVES/STM/Product/GUI/Data/Character_Image/021/x.tex.1") == "021", "fighter of a path: any case");
+    check(fighter_of_path("natives/stm/product/gui/data/character_image/ryu/x.tex.1").empty() &&
+          fighter_of_path("natives/stm/product/gui/data/character_image//x.tex.1").empty(), "fighter of a path: a folder without digits or empty: none");
+    check(fighter_of_path("natives/stm/product/gui/cmn/ui01900/x.tex.241101895").empty() &&
+          fighter_of_path("natives/stm/streaming/product/gui/cmn/x.tex.241101895").empty(), "fighter of a path: no character_image, a streaming path: none");
+    check(fighter_of_path("natives/stm/streaming/product/gui/data/character_image/005/x.tex.1") == "005", "fighter of a path: a streaming path under a fighter folder");
+
+    auto G = [](const char* path, const char* ini, std::vector<uint64_t> files) {
+        Found f;
+        f.path = path;
+        f.info = parse_modinfo(ini);
+        f.files = std::move(files);
+        return f;
+    };
+    const std::vector<Found> fin = { G("H.zip/Root", "name=Hud\nDummyMod=True\n", {}), G("H.zip/Colour", "name=Colour\nAddonFor=Hud\n", { 11, 12, 13 }) };
+    std::vector<Pack> fpacks = build_packs(fin);
+    check(fpacks.size() == 1 && fpacks[0].nodes.size() == 2, "fighter packs: a title and a box");
+    if (fpacks.size() == 1 && fpacks[0].nodes.size() == 2) {
+        Pack& hp = fpacks[0];
+        Node& title = hp.nodes[0];
+        Node& box = hp.nodes[1];
+        box.fids = { "013", "021" };
+        box.fighters["013"] = { "product/gui/data/character_image/013/a.tex" };
+        box.fighters["021"] = {};
+        box.fighters_only = true;
+        const std::string whole = box.id, s13 = subset_id(box.id, "013"), s21 = subset_id(box.id, "021");
+        std::string w, fid;
+        check(split_choice(s13, w, fid) && w == whole && fid == "013" && !split_choice(whole, w, fid) && w == whole && fid.empty(), "split a choice id");
+        Choices ch;
+        ch[hp.key] = { s21, s13, subset_id(box.id, "099"), subset_id(title.id, "013") };
+        check(applied(fpacks, ch)[hp.key] == std::vector<std::string>{ s13, s21 }, "applied: subset ids kept in fid order, an unknown fid dropped, a title's dropped");
+        ch[hp.key] = { s13, whole };
+        check(applied(fpacks, ch)[hp.key] == std::vector<std::string>{ whole }, "applied: the whole id drops the same node's subset ids");
+
+        // three files: 11 under 013, 12 under 021, 13 under no fighter; a second option (deeper) has 11 too
+        Served a{ hp.key, whole, 1, 1, {}, 0, {} };
+        a.files = { { 11, 1101 }, { 12, 1201 }, { 13, 1301 } };
+        a.fid = { { 11, "013" }, { 12, "021" } };
+        Served b{ hp.key, "nother", 2, 2, {}, 0, {} };
+        b.files = { { 11, 2101 } };
+        b.fid = { { 11, "013" } };
+        const std::vector<Served> fo = { a, b };
+        Choices sub;
+        sub[hp.key] = { s21 };
+        check(winners(fo, sub) == HashMap{ { 12, 1201 } }, "winners: a subset id serves only that fighter's files");
+        sub[hp.key] = { s13 };
+        check(winners(fo, sub) == HashMap{ { 11, 1101 } }, "winners: a subset id of the other fighter");
+        sub[hp.key] = { s13, "nother" };
+        check(winners(fo, sub) == HashMap{ { 11, 2101 } }, "winners: a deeper option ticked whole still wins a file the subset has");
+        sub[hp.key] = { whole };
+        check(winners(fo, sub).size() == 3, "winners: the whole id serves all its files");
+
+        const std::map<std::string, std::string> gt = { { "product/gui/data/character_image/013/a.tex", "_uislots/game/product/gui/data/character_image/013/a.tex" } };
+        const std::string rj = registry_text(fpacks, {}, gt);
+        check(rj.find("\"fighters\": { \"013\": [\"product/gui/data/character_image/013/a.tex\"], \"021\": [] }, \"fighters_only\": true }") != std::string::npos &&
+              rj.find("\"game_textures\": {\n    \"product/gui/data/character_image/013/a.tex\": \"_uislots/game/product/gui/data/character_image/013/a.tex\"\n  }") != std::string::npos &&
+              registry_text(packs, applied(packs, launch), {}).find("\"fighters\"") == std::string::npos,
+              "registry: fighters and fighters_only per node that has fighters, game_textures at the top");
+    }
+}
+
+// The picture cache: the key changes with any input, a cache file round-trips and a damaged one is refused
+void test_pic_cache() {
+    printf("Picture cache\n");
+    using namespace pic_cache;
+    const std::string k = key("ui", "ui_mods/A.zip/x/shot.png", 1000, 5000, 0, 0);
+    check(k.size() == 16 && k == key("ui", "ui_mods/A.zip/x/shot.png", 1000, 5000, 0, 0), "cache key: 16 hex digits, the same inputs the same key");
+    check(k == key("ui", "UI_MODS/a.zip/X/SHOT.png", 1000, 5000, 0, 0), "cache key: the path in any case");
+    check(k != key("title", "ui_mods/A.zip/x/shot.png", 1000, 5000, 0, 0) && k != key("ui", "ui_mods/A.zip/x/shot2.png", 1000, 5000, 0, 0) &&
+          k != key("ui", "ui_mods/A.zip/x/shot.png", 1001, 5000, 0, 0) && k != key("ui", "ui_mods/A.zip/x/shot.png", 1000, 5001, 0, 0) &&
+          k != key("ui", "ui_mods/A.zip/x/shot.png", 1000, 5000, 64, 36) && key("t", "p", 1, 2, 64, 36) != key("t", "p", 1, 2, 36, 64),
+          "cache key: another namespace, path, size, time or cell size, another key");
+    Parts p;
+    p.tex = { 1, 2, 3, 4, 5 };
+    p.thumb = { 9, 8 };
+    const std::vector<uint8_t> raw = pack(p);
+    Parts q;
+    check(unpack(raw, q) && q.tex == p.tex && q.thumb == p.thumb && q.cell.empty() && q.band.empty(), "cache file: written and read back");
+    std::vector<uint8_t> cut(raw.begin(), raw.end() - 1), longer = raw, bad = raw;
+    longer.push_back(0);
+    bad[0] = 'X';
+    Parts none;
+    check(!unpack(cut, none) && !unpack(longer, none) && !unpack(bad, none) && !unpack({}, none) && !unpack(pack(Parts{}), none),
+          "cache file: cut short, longer, wrong magic, empty or without a .tex: refused");
+}
+
+// The UI packs found by the pass: the tree, then what unticking everything in the game would serve
+void print_ui() {
+    const ui_slots::Tables& ui = stage_loader_ui();
+    if (!ui.present) return;
+    for (auto& p : ui.packs) {
+        printf("UI pack %s  \"%s\"  by %s%s%s\n", p.key.c_str(), p.name.c_str(), p.author.c_str(), p.gathered ? "  (gathered roots)" : "",
+               p.picture ? "  picture" : "");
+        for (auto& nd : p.nodes) {
+            printf("  %*s%s %s", nd.depth * 2, "", nd.title ? "#  " : nd.one ? "(o)" : "[ ]", nd.name.c_str());
+            if (!nd.title) printf("  %zu file(s)", nd.files);
+            if (nd.one) printf("  group %s", nd.group.c_str());
+            printf("%s  %s\n", nd.preview ? "  preview" : "", nd.id.c_str());
+        }
+    }
+    size_t ticked = 0;
+    for (auto& [key, ids] : ui.launch) ticked += ids.size();
+    const ui_slots::HashMap none = ui_slots::serve(ui.options, {}, ui.written, ui.game);
+    const std::string ov = ui_slots::overrides_text(none, ui.names);
+    printf("UI launch: %zu option(s) ticked, %zu file(s) at the real paths, %zu copies of the game's own; untick all in the game: %zu file(s) served, "
+           "%zu texture override(s)\n", ticked, ui.written.size(), ui.game.size(), none.size(), (size_t)std::count(ov.begin(), ov.end(), '\n'));
+    size_t shown = 0;
+    for (size_t a = 0; a < ov.size() && shown < 3; ++shown) {
+        const size_t e = ov.find('\n', a);
+        printf("  %s\n", ov.substr(a, e - a).c_str());
+        a = e + 1;
+    }
+}
+
+// A stand-in for the game's re_chunk_000.pak: each natives path given holds a few bytes of its own
+int make_base(int argc, wchar_t** argv) {
+    PakWriter w;
+    for (int i = 3; i < argc; ++i) {
+        const std::string p = narrow(argv[i]), data = "the game's own " + p;
+        w.add_uncompressed(pak_path_hash(std::string_view(p)), std::vector<uint8_t>(data.begin(), data.end()));
+    }
+    const bool ok = w.write(narrow(argv[2]).c_str());
+    printf("%s: %d entr%s%s\n", narrow(argv[2]).c_str(), argc - 3, argc - 3 == 1 ? "y" : "ies", ok ? "" : " NOT WRITTEN");
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -271,10 +662,13 @@ int wmain(int argc, wchar_t** argv) {
         test_overrides();
         test_pictures();
         test_titles();
+        test_ui();
+        test_pic_cache();
         printf(g_fails ? "%d FAILED\n" : "all ok\n", g_fails);
         return g_fails ? 1 : 0;
     }
-    if (argc < 2) { fprintf(stderr, "usage: stagetest <fake game dir> | stagetest --selftest\n"); return 2; }
+    if (argc >= 3 && wcscmp(argv[1], L"--make-base") == 0) return make_base(argc, argv);
+    if (argc < 2) { fprintf(stderr, "usage: stagetest <fake game dir> | stagetest --selftest | stagetest --make-base <out.pak> <path>...\n"); return 2; }
     slog_open(argv[1]);
     std::vector<StageVariant> vars;
     stage_loader_run(argv[1], vars);
@@ -282,5 +676,6 @@ int wmain(int argc, wchar_t** argv) {
         printf("%s  stage %u (%s)  \"%s\"  %zu files%s%s  %s: %s\n", v.key.c_str(), v.stage_id, v.ess.c_str(), v.name.c_str(),
                v.redirects.size(), v.has_preview ? "  preview" : "", v.banner.empty() ? "" : (" (" + v.banner + ")").c_str(),
                v.tile ? "TILE" : "variation", v.kind_reason.c_str());
+    print_ui();
     return 0;
 }
