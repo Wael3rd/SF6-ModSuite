@@ -14,7 +14,16 @@
  *       scope 2 (replay):  the fighters of one replay's battle; `battle` = its flow map (app.battle.ReplayFlowMap).
  *                          Applied only while it is the running flow map (bFlowManager.m_flow_work._FlowMap); dropped
  *                          once another one runs, or when it never ran within 10 s. A new request replaces the old.
+ *       scope 3 / 4 (battle, P1 / P2): the battle fighter of that side (its model and sub-models, never the character
+ *                          select's previews) while it wears colour 02, from the request until the requester replaces or
+ *                          clears it: the Slots Loader's Random colour drew that entry for this battle (or set, online).
+ *                          A replay's request (scope 2) comes first. `battle` unused. Older Color Mods refuse them.
  *   - Costumes are FighterDesc.Costume numbers (0-based: the colour folder 001 is costume 0), slots included.
+ *   - The Random value: while the Slots Loader (SF6_CostumeSlotsNative.dll) exports SF6Slots_RandomColour, the Color row of
+ *     each outfit it names gets one more value after the entries, named with the word it gives (the game's own), on colour
+ *     02 like them; never on Opponent Outfit Settings' page. The Color Mod remembers it where it remembers an entry (the
+ *     character select's / training popup's P1 and P2, Fighter Settings) and dresses nothing of its own for it (the plain
+ *     colour 02): the Slots Loader draws among the game's colours and the entries, and asks for an entry by scope 3 / 4.
  * Any thread; no game call except the running flow map, read on the game thread by the Color Mod itself. */
 #ifndef SF6COLORMOD_ENTRIES_H
 #define SF6COLORMOD_ENTRIES_H
@@ -26,6 +35,8 @@ extern "C" {
 #define SF6CM_ENTRIES_VERSION 1
 #define SF6CM_SCOPE_PREVIEW 1
 #define SF6CM_SCOPE_REPLAY 2
+#define SF6CM_SCOPE_BATTLE_P1 3
+#define SF6CM_SCOPE_BATTLE_P2 4
 
 typedef struct SF6CMEntry {
     char label[16];             /* "RW 3", "MC 1": the Color Mod's own label, as its colour menus show it */
@@ -44,6 +55,16 @@ typedef void (*SF6ColorMod_ClearRequestsFn)(int scope);
 /* Added with the ticks of Opponent Outfit Settings, absent from older Color Mods: how many entries are ticked for an outfit there, on top of the colour numbers the
  * game's save holds for it. Any thread. */
 typedef int (*SF6ColorMod_OpponentTicksFn)(int fighter, int costume);
+/* Added with the Random value, absent from older Color Mods (which refuse scopes 3 and 4 too): 1 when the remembered choice
+ * of `side` (1 = the character select's / training popup's P1, 2 = P2, 3 = Battle Settings' Fighter Settings) is the Random
+ * value, its fighter and costume written to *fighter / *costume (either may be NULL); 0 otherwise. Any thread. */
+typedef int (*SF6ColorMod_RandomChoiceFn)(int side, int* fighter, int* costume);
+
+/* The other way, SF6_CostumeSlotsNative.dll's export, looked for by the Color Mod (absent = no Random value anywhere):
+ * 1 when the Slots Loader draws a Random colour for that outfit (every outfit but a character's Random outfit, whose one
+ * colour is Random already), the game's word for Random written to `word` (UTF-8, NUL-terminated) when cap > 0;
+ * 0 otherwise. Any thread, no game call. */
+typedef int (*SF6Slots_RandomColourFn)(int fighter, int costume, char* word, int cap);
 
 #ifdef __cplusplus
 }

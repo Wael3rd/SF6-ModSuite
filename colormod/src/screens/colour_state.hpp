@@ -32,6 +32,7 @@ bool learn_chip_slots(json& chip_cfg, const std::string& key, const std::string&
 // Re-derives a remembered selection's rank (sel.rw) from the colour's identity (sel.path = Entry::ident), after the
 // colour lists changed (load, catalogue rebuild). Returns true when `sel` was modified (the caller saves it).
 //  - no path, rank > 0 (state of an older version): the rank stays, the path is filled in (migration)
+//  - path "random": the Random value, its own rank (random_value.hpp), whatever the lists hold
 //  - path found: rank = its current rank
 //  - path not found (the file is not there NOW: an archive whose cache is being unpacked again, a first start after
 //    .cache was deleted, or a removed mod): rank 0 (default colour) and the identity is parked in sel.path_pending

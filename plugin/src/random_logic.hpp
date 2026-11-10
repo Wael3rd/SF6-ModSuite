@@ -7,7 +7,12 @@
 //     sees), Random left out, never an NSFW outfit while those are hidden (left out when the list is read, checked again at
 //     each draw). A draw takes one the pool has not given in this round; once every one was given, a new round starts (never
 //     with the last one drawn, when there are two or more).
-//   - The colour: the same rule among the colours the drawn outfit's Color row lists (the player's own), one round per outfit.
+//   - The colour: the same rule among the colours the drawn outfit's Color row lists (the player's own) and the Color Mod's RW /
+//     MC entries of that outfit (when the Color Mod can dress them in a battle), one round per outfit. An entry rides on colour
+//     02 (1): the game wears 02, the Color Mod dresses the entry on this PC (its battle requests); online the opponent sees 02.
+//   - A Random colour of any outfit (the Color Mod's Random value in its Color row, SF6ColorMod_RandomChoice): the same colour
+//     draw for the outfit chosen, the same round as the Random outfit's draws of it. Battle Settings keeps its next one
+//     (next_colour), as it keeps the Random outfit's next draw.
 //   - Local modes (the outfit is picked on a select screen): a draw at each battle load.
 //   - Online, rooms, Battle Hub (Battle Settings' choice): the next draw is made before matchmaking. A game outfit goes in the
 //     save, which the fighter profile sends (the opponent sees it); a Slots Loader outfit leaves the carrier there and the alias
@@ -48,7 +53,22 @@ struct Fighter {
     Pool outfits;
     std::map<int, Pool> colours;   // per outfit drawn
     Draw next;
+    Draw next_colour;              // Battle Settings' Random colour: its outfit and its next colour (none: not chosen)
 };
+
+// ---- the colours a draw takes: the game's numbers (0 = Color 1...) and the Color Mod's RW / MC entries ------------------
+// An entry is drawn as a number of its own, from its id (the entry file's path): the same file gives the same number whatever
+// the Color Mod's order (a new pack renumbers the labels, not the files), so the rounds kept in state.json stay right.
+constexpr int kEntryMin = 1000;    // at or above: an entry
+constexpr int kEntryCarrier = 1;   // the game's colour an entry rides on (02)
+inline bool is_entry(int v) { return v >= kEntryMin; }
+inline int entry_value(const std::string& id) {
+    uint32_t h = 2166136261u;                               // FNV-1a
+    for (unsigned char ch : id) { h ^= ch; h *= 16777619u; }
+    return kEntryMin + static_cast<int>(h % (0x7FFFFFFFu - static_cast<uint32_t>(kEntryMin)));
+}
+// The colour number the game wears for a value drawn
+inline int worn_colour(int v) { return is_entry(v) ? kEntryCarrier : v; }
 
 // A source of random numbers (costumes.cpp: a Mersenne Twister; the tests: a fixed sequence)
 using Rng = std::function<uint32_t()>;
@@ -79,16 +99,25 @@ inline int draw(Pool& p, const std::vector<int>& candidates, const Allowed& allo
     return v;
 }
 
+// A colour of one outfit from its pool: `colours` the candidates (the game's and the entries), `allowed` those it may take
+// now (a mirror's colour left out; none given: all). Nothing to take: colour 0 (Color 1, which every outfit has).
+inline int draw_colour(Fighter& f, int costume, const std::vector<int>& colours, const Allowed& allowed, const Rng& rng) {
+    const int v = draw(f.colours[costume], colours, allowed, rng);
+    return v < 0 ? 0 : v;
+}
+
 // An outfit from the character's pool, then its colour from that outfit's pool. `colours_of` gives the colours the outfit's
-// Color row lists; none known: colour 0 (Color 1, which every outfit has). Not valid: no outfit allowed.
+// Color row lists (and its entries); none known: colour 0. `colour_allowed(costume, colour)`: what the colour may be (none
+// given: any). Not valid: no outfit allowed.
 inline Draw draw_outfit(Fighter& f, const std::vector<int>& outfits, const Allowed& allowed,
-                        const std::function<std::vector<int>(int)>& colours_of, const Rng& rng) {
+                        const std::function<std::vector<int>(int)>& colours_of, const Rng& rng,
+                        const std::function<bool(int, int)>& colour_allowed = nullptr) {
     Draw d;
     d.costume = draw(f.outfits, outfits, allowed, rng);
     if (d.costume < 0) return Draw{};
     const std::vector<int> cs = colours_of ? colours_of(d.costume) : std::vector<int>{};
-    d.color = draw(f.colours[d.costume], cs, nullptr, rng);
-    if (d.color < 0) d.color = 0;
+    const int cos = d.costume;
+    d.color = draw_colour(f, cos, cs, colour_allowed ? Allowed([&](int v) { return colour_allowed(cos, v); }) : Allowed(), rng);
     return d;
 }
 
@@ -96,14 +125,19 @@ inline Draw draw_outfit(Fighter& f, const std::vector<int>& outfits, const Allow
 inline void refill(Fighter& f) { f.outfits.drawn.clear(); }
 
 // What the save holds outside Battle Settings while Random is the choice: the next draw when it is one of the game's outfits
-// (the profile sends it: the opponent sees it), else nothing (the carrier, as for any Slots Loader outfit)
-inline Draw save_holds(const Draw& next, bool next_is_ours) { return next.valid() && !next_is_ours ? next : Draw{}; }
+// (the profile sends it: the opponent sees it), an entry as the colour it rides on; else nothing (the carrier, as for any
+// Slots Loader outfit)
+inline Draw save_holds(const Draw& next, bool next_is_ours) {
+    return next.valid() && !next_is_ours ? Draw{ next.costume, worn_colour(next.color) } : Draw{};
+}
 
 // The first load of an online match's fighters (a new opponent): what the player's fighter wears for the whole set.
 // `net_cos` / `net_col`: what the match holds for it (what the opponent sees). A game outfit drawn that the match holds (the
 // profile carried it) is worn by the game itself, on both screens. Any other draw is worn on this PC only, over what the match
 // holds (the alias, `local`): a Slots Loader outfit always, a game outfit when no profile was sent since the draw. Outfit 1
 // (costume 0) cannot be worn that way (0 is the alias's "no outfit"): the set wears what the match holds and the draw waits.
+// An entry drawn is worn over colour 02 where the outfit wears it (the Color Mod, on this PC): with the match's outfit when the
+// match holds 02, with the alias's always.
 // consumed: the next draw was taken (a new one is due).
 struct Bind {
     Draw set;
@@ -113,13 +147,25 @@ struct Bind {
 inline Bind bind_set(const Draw& next, bool next_is_ours, int net_cos, int net_col) {
     const Draw net{ net_cos, net_col };
     if (!next.valid()) return { net, false, false };
-    if (!next_is_ours && net_cos == next.costume) return { net, true, false };
+    if (!next_is_ours && net_cos == next.costume)
+        return { Draw{ net_cos, is_entry(next.color) && net_col == kEntryCarrier ? next.color : net_col }, true, false };
     if (next_is_ours || next.costume > 0) return { next, true, true };
     return { net, false, false };
 }
 
+// The same for Battle Settings' Random colour of one of the game's outfits (`next`: next_colour), the match holding `net_cos`
+// / `net_col`: taken for the whole set when the match holds that outfit in the colour drawn (the profile carried it; an entry:
+// its colour 02, the Color Mod dresses it on this PC). Any other colour in the match (no profile sent since the draw): the set
+// wears it, the draw waits.
+inline Bind bind_colour(const Draw& next, int net_cos, int net_col) {
+    const Draw net{ net_cos, net_col };
+    if (!next.valid() || next.costume != net_cos || worn_colour(next.color) != net_col) return { net, false, false };
+    return { next, true, false };
+}
+
 // ---- state.json "random" ----------------------------------------------------------------------------------------------
-// { "<fighter id>": { "outfits": { "drawn": [7, 0], "last": 0 }, "next": [7, 3], "colours": { "7": { "drawn": [3], "last": 3 } } } }
+// { "<fighter id>": { "outfits": { "drawn": [7, 0], "last": 0 }, "next": [7, 3], "next_colour": [2, 5],
+//                     "colours": { "7": { "drawn": [3], "last": 3 } } } }
 
 inline std::string ints_json(const std::vector<int>& v) {
     std::string o = "[";
@@ -135,9 +181,11 @@ inline std::string state_json(const std::map<int, Fighter>& all, int indent) {
     std::string o = "{";
     bool first = true;
     for (auto& [fid, f] : all) {
-        if (f.outfits.drawn.empty() && f.outfits.last < 0 && !f.next.valid() && f.colours.empty()) continue;
+        if (f.outfits.drawn.empty() && f.outfits.last < 0 && !f.next.valid() && !f.next_colour.valid() && f.colours.empty()) continue;
         o += std::string(first ? "" : ",") + "\n" + pad + "    \"" + std::to_string(fid) + "\": { \"outfits\": " + pool_json(f.outfits);
         if (f.next.valid()) o += ", \"next\": [" + std::to_string(f.next.costume) + ", " + std::to_string(f.next.color) + "]";
+        if (f.next_colour.valid())
+            o += ", \"next_colour\": [" + std::to_string(f.next_colour.costume) + ", " + std::to_string(f.next_colour.color) + "]";
         if (!f.colours.empty()) {
             o += ", \"colours\": {";
             bool fc = true;
@@ -178,6 +226,8 @@ inline std::map<int, Fighter> parse_state(const Json* j) {
         f.outfits = json_pool(v.get("outfits"));
         const std::vector<int> nx = json_ints(v.get("next"));
         if (nx.size() == 2 && nx[0] >= 0 && nx[1] >= 0) f.next = { nx[0], nx[1] };
+        const std::vector<int> nc = json_ints(v.get("next_colour"));
+        if (nc.size() == 2 && nc[0] >= 0 && nc[1] >= 0) f.next_colour = { nc[0], nc[1] };
         if (const Json* cs = v.get("colours"); cs && cs->kind == Json::Object)
             for (auto& [ck, cv] : cs->obj) {
                 const int cos = std::atoi(ck.c_str());

@@ -14,7 +14,9 @@
 //       back to 01) and the fighter in 3D at the game's place (a colour change recolours it in place, as the game's page
 //       does). The colours: the outfit's game colours, then the Color Mod's RW / MC entries with its own labels
 //       (colormod_link.hpp: each rides on colour 02; the preview and the replay ask the Color Mod for exactly that
-//       entry, or for the game's own colours). For an outfit with costume options, R / pad X opens the same Costume
+//       entry, or for the game's own colours). The character's Random outfit is the Costume row's last value, its Color row
+//       reading Random, previewed as Outfit 1: a replay set to it wears a draw of the character's pool at each playback (the
+//       Random outfit's rules, replay_outfits.cpp). For an outfit with costume options, R / pad X opens the same Costume
 //       options menu as Edit Character (without its Player side row; the guide bar says "Costume options"), the choices
 //       kept per fighter and outfit for replays only. Back (Esc, pad B) goes back to the grid; Confirm and the tab
 //       keys do nothing there, as on the game's page;
@@ -494,8 +496,18 @@ void build_catalog() {
                 const int fid = static_cast<int>(f->as_int()), cos = static_cast<int>(c->as_int());
                 if (fid <= 0 || cos <= 0) continue;
                 slot_keys.insert({ fid, cos });
-                // the Random outfit (costumes.cpp): never worn, nothing a replay could be shown in
-                if (const Json* rn = e.get("random"); rn && rn->kind == Json::Bool && rn->b) continue;
+                // the Random outfit (costumes.cpp): never worn as such, a replay set to it wears a draw of the character's pool
+                // (costumes::replay_random); the last outfit, its one colour reading Random, its preview Outfit 1
+                if (const Json* rn = e.get("random"); rn && rn->kind == Json::Bool && rn->b) {
+                    Outfit o;
+                    o.costume = cos;
+                    o.extra = true;
+                    o.random = true;
+                    o.name = game(G::Random);
+                    o.colors = { 0 };
+                    by[fid].outfits.push_back(o);
+                    continue;
+                }
                 if (const Json* ns = e.get("nsfw"); ns && ns->kind == Json::Bool && ns->b && !nsfw_ok) { ++nsfw_left; continue; }
                 Outfit o;
                 o.costume = cos;
@@ -2165,9 +2177,11 @@ void render_page(void* title, const Fighter* f) {
     // the preview wears this choice live, not the player's own (rto.hpp); the page left, or Off: back to what it was
     if (on && c.forced) rto::replay_preview(slot, saved);
     else rto::replay_preview_end();
-    // Off: no model at all, the room given back; On: the model once it shows the choice, nothing meanwhile
+    // Off: no model at all, the room given back; On: the model once it shows the choice, nothing meanwhile. Random: Outfit 1,
+    // as the game previews it
     const bool forced = on && c.forced;
-    preview::want(forced ? f->fid : 0, forced ? c.costume : 0, forced ? c.color : 0, forced ? c.colormod : std::string());
+    const bool rnd = forced && oi >= 0 && f->outfits[static_cast<size_t>(oi)].random;
+    preview::want(forced ? f->fid : 0, forced && !rnd ? c.costume : 0, forced && !rnd ? c.color : 0, forced && !rnd ? c.colormod : std::string());
     const bool model = forced && preview::showing();
     g_model_shown = model;
     put_model(title, model);

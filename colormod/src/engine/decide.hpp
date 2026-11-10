@@ -46,6 +46,11 @@ struct Pull {
     // (fighter, costume) -> (extra_first, extra_count) of that pair's last list; absent = no entries. The select
     // screen's two menus ask for two lists: each menu reads its own pair, never the other side's last list.
     std::map<std::pair<int, int>, std::pair<int, int>> extras;
+    // The Random value (random_value.hpp): (fighter, costume) -> its index in that pair's last list (absent = none); whether
+    // the last list has it; the word it is named with
+    std::map<std::pair<int, int>, int> randoms;
+    bool extra_random = false;
+    std::string random_word;
     uint64_t setups[3] = {};                                               // dbg.setups[1..3]
     uint64_t mirror_clears = 0;                                            // P2's selection cleared by the mirror rule
 };
@@ -64,6 +69,7 @@ int entries_version();                                                     // SF
 int entries_export(int fighter, int costume, SF6CMEntry* out, int cap);   // the catalogue's entries (labels, ids)
 int request(int scope, int fighter, int costume, const char* id, void* battle);  // 1 taken
 void clear_requests(int scope);
+int random_choice(int side, int* fighter, int* costume);                  // 1: side's remembered choice is the Random value
 
 // Opponent Outfit Settings' ticks of entries (opponent_ticks.hpp). Saved at each change, in reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt.
 bool opp_ticked(int fighter, int costume, const std::string& id);

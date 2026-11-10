@@ -45,6 +45,8 @@ struct Outfit {
     bool extra = false;               // one of the Slots Loader's outfits
     std::vector<int> colors;          // the colours that exist for it (FighterDesc.Color), ascending
     std::vector<ColorEntry> cm;       // the Color Mod's entries for it, its order (after the game colours on the page)
+    bool random = false;              // the character's Random outfit (registry "random": true): the last one, its one colour
+                                      // reads Random; a replay set to it wears a draw (costumes::replay_random), its preview Outfit 1
 };
 
 struct Fighter {
@@ -77,11 +79,12 @@ struct StageChoice {
 };
 
 // The outfit list of a fighter: game outfits first in costume order, then extra outfits by name (case-insensitive),
-// ties by costume number. Outfits without any colour are dropped.
+// ties by costume number, the Random outfit last (as in the game's Costume row). Outfits without any colour are dropped.
 inline void sort_outfits(std::vector<Outfit>& v) {
     auto lower = [](std::string s) { for (auto& c : s) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a'); return s; };
     v.erase(std::remove_if(v.begin(), v.end(), [](const Outfit& o) { return o.colors.empty(); }), v.end());
     std::stable_sort(v.begin(), v.end(), [&](const Outfit& a, const Outfit& b) {
+        if (a.random != b.random) return !a.random;
         const bool ea = a.extra, eb = b.extra;
         if (ea != eb) return !ea;
         if (!ea) return a.costume < b.costume;
@@ -161,8 +164,10 @@ inline std::string color_label(int color) {
 }
 
 // A choice's colour as the page shows it: the game's name ("01", "EX 1", "DX 1"), or a Color Mod entry's own label
-// ("RW 3", "MC 1"); an entry the Color Mod no longer lists (or no Color Mod): what is worn then, the game's colour 1
+// ("RW 3", "MC 1"); an entry the Color Mod no longer lists (or no Color Mod): what is worn then, the game's colour 1. The
+// Random outfit's one colour: Random (the game's word), as its Color row reads in the game.
 inline std::string choice_color_label(const Outfit& o, const Choice& c) {
+    if (o.random) return words::game(words::G::Random);
     if (!c.colormod.empty())
         for (const ColorEntry& e : o.cm) if (e.id == c.colormod) return e.label;
     return color_label(c.color);

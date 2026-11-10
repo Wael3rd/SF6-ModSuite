@@ -10,7 +10,8 @@
 
 namespace engine::requests {
 
-constexpr int kPreview = 1, kReplay = 2;
+constexpr int kPreview = 1, kReplay = 2, kBattle1 = 3, kBattle2 = 4;   // kBattle1 / 2: the battle fighter of P1 / P2
+inline bool known(int scope) { return scope >= kPreview && scope <= kBattle2; }
 
 struct Request {
     std::string id;             // entry id ("" = the game's own colours)
@@ -23,7 +24,7 @@ class Table {
 public:
     // false: refused (unknown scope, bad fighter / costume, scope 2 without its battle)
     bool set(int scope, int fighter, int costume, const std::string& id, uintptr_t battle, uint64_t now) {
-        if ((scope != kPreview && scope != kReplay) || fighter < 0 || costume < 0) return false;
+        if (!known(scope) || fighter < 0 || costume < 0) return false;
         if (scope == kReplay && !battle) return false;
         auto& t = t_[scope];
         if (scope == kReplay)                     // a request for another battle: that battle's requests are over
@@ -35,11 +36,12 @@ public:
         t[{ fighter, costume }] = r;
         return true;
     }
-    void clear(int scope) { if (scope == kPreview || scope == kReplay) t_[scope].clear(); }
-    bool any(int scope) const { return (scope == kPreview || scope == kReplay) && !t_[scope].empty(); }
-    // What applies to a fighter / costume: scope 1 as set; scope 2 only while `running` is its battle
+    void clear(int scope) { if (known(scope)) t_[scope].clear(); }
+    bool any(int scope) const { return known(scope) && !t_[scope].empty(); }
+    // What applies to a fighter / costume: scopes 1, 3, 4 as set (the requester clears them); scope 2 only while `running`
+    // is its battle
     const Request* find(int scope, int fighter, int costume, uintptr_t running) const {
-        if (scope != kPreview && scope != kReplay) return nullptr;
+        if (!known(scope)) return nullptr;
         auto it = t_[scope].find({ fighter, costume });
         if (it == t_[scope].end()) return nullptr;
         if (scope == kReplay && (!running || it->second.battle != running)) return nullptr;
@@ -56,10 +58,10 @@ public:
             it = over ? t.erase(it) : std::next(it);
         }
     }
-    size_t size(int scope) const { return (scope == kPreview || scope == kReplay) ? t_[scope].size() : 0; }
+    size_t size(int scope) const { return known(scope) ? t_[scope].size() : 0; }
 
 private:
-    std::map<std::pair<int, int>, Request> t_[3];
+    std::map<std::pair<int, int>, Request> t_[kBattle2 + 1];
 };
 
 }  // namespace engine::requests

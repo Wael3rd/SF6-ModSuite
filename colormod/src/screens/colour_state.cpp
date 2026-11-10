@@ -3,6 +3,7 @@
 #include "colour_state.hpp"
 
 #include "../engine/luajson.hpp"
+#include "../engine/random_value.hpp"
 
 namespace screens::colour {
 namespace {
@@ -77,9 +78,11 @@ bool resolve_selection(json& s, const engine::Catalog& cat, std::string* note) {
             say("colour " + pp.get<std::string>() + " is back at rank " + std::to_string(k));
         }
     }
-    // 2. the stored identity
+    // 2. the stored identity (the Random value has a rank of its own, no file)
     const json p = index(s, "path");
-    if (truthy(p) && p.is_string() && !p.get<std::string>().empty()) {
+    if (truthy(p) && p.is_string() && p.get<std::string>() == engine::random_value::kIdent) {
+        if (rw != engine::random_value::kK) { set(s, "rw", (int64_t)engine::random_value::kK); changed = true; }
+    } else if (truthy(p) && p.is_string() && !p.get<std::string>().empty()) {
         const int64_t k = cat.find_ident((int)f, (int)c, p.get<std::string>());
         if (k != rw) {
             set(s, "rw", k);

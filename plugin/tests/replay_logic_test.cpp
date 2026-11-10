@@ -37,6 +37,26 @@ int main() {
     check(f.outfits[0].costume == 0 && f.outfits[1].costume == 1, "game outfits first, by costume number");
     check(f.outfits[2].name == "Aloha Ryu" && f.outfits[3].name == "Beta (no mod id)" && f.outfits[4].name == "zeta Ryu",
           "then extra outfits by name, case-insensitive");
+    {   // the Random outfit: the last value of the Costume row, its one colour reading Random
+        Fighter r = ryu();
+        Outfit rnd;
+        rnd.costume = 104;
+        rnd.extra = true;
+        rnd.random = true;
+        rnd.name = "Random";
+        rnd.colors = { 0 };
+        r.outfits.insert(r.outfits.begin(), rnd);
+        sort_outfits(r.outfits);
+        check(r.outfits.size() == 6 && r.outfits.back().random, "the Random outfit last, whatever its name");
+        Choice rc;
+        for (int i = 0; i < 6; ++i) rc = cycle_outfit(r, rc, +1);
+        check(rc.forced && rc.costume == 104 && rc.color == 0, "Right to the last outfit: Random, its one colour");
+        check(choice_color_label(r.outfits.back(), rc) == slots::words::game(slots::words::G::Random), "its colour reads Random");
+        check(cycle_color(r, rc, +1) == rc, "its Color row has that one value");
+        const std::string text = to_json({ { 1, rc } });
+        Choices back;
+        check(from_json(text, back) && back[1] == rc, "saved and read back by its number");
+    }
 
     // outfit cycling
     Choice c;
