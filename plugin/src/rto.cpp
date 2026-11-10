@@ -1132,26 +1132,20 @@ void pass(Model& md) {
                 logf("rto: %s %s %s: texture bindings out of the part's materials (%u): searched again", md.name, side_name, mc.go.c_str(), nm);
                 continue;
             }
-            // Cow girl Mai's "no sleeves" meshes (09/11): every setMaterialTexture on them threw inside the game, then the
-            // game crashed. Only on a part whose materials the engine says it can update, and never again on a part (mesh +
-            // material) that refused once.
+            // Never again on a part (mesh + material) that refused once (Cow girl Mai's "no sleeves" meshes, 09/11: every
+            // setMaterialTexture on them threw inside the game, then the game crashed; the causes were the part not ready and
+            // bindings kept from another mesh, both guarded above). The engine's "updatable" flags are only logged: 1.27.1
+            // refused the textures of every part they said no for, and Aloha Ryu's (0/1), Mai's and Viper's options showed
+            // nothing any more (Wael 10/11), while those parts take setMaterialTexture (they did up to 1.27.0) and Mai's
+            // parts that threw said 1/1.
             if (mc.binds.empty()) continue;
             if (g_tex_refused.count(pt)) continue;
-            {
+            if (mc.tex_logged != pt) {
+                mc.tex_logged = pt;
                 const bool u1 = !T.mats_upd || ret_bool(T.mats_upd, mc.c), u2 = !T.upd_mat || ret_bool(T.upd_mat, mc.c);
-                if (mc.tex_logged != pt) {
-                    mc.tex_logged = pt;
-                    logf("rto: %s %s %s: materials %u, updatable %d/%d, materials enable count %u, parts enable count %u (%s)",
-                         md.name, side_name, mc.go.c_str(), nm, u1 ? 1 : 0, u2 ? 1 : 0,
-                         T.mats_en_n ? ret_u32(T.mats_en_n, mc.c) : 0u, T.parts_en_n ? ret_u32(T.parts_en_n, mc.c) : 0u, short_path(pt).c_str());
-                }
-                if (!u1 || !u2) {
-                    g_tex_refused.insert(pt);
-                    tell_once(md, "textures not set: the part's materials cannot be updated");
-                    logf("rto: %s %s %s: the engine says its materials cannot be updated: its textures are left as they are",
-                         md.name, side_name, mc.go.c_str());
-                    continue;
-                }
+                logf("rto: %s %s %s: materials %u, updatable %d/%d, materials enable count %u, parts enable count %u (%s)",
+                     md.name, side_name, mc.go.c_str(), nm, u1 ? 1 : 0, u2 ? 1 : 0,
+                     T.mats_en_n ? ret_u32(T.mats_en_n, mc.c) : 0u, T.parts_en_n ? ret_u32(T.parts_en_n, mc.c) : 0u, short_path(pt).c_str());
             }
             for (auto& b : mc.binds) {
                 const auto key = std::make_tuple(mc.c, b.mi, b.ti);
