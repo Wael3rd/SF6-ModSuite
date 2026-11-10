@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.28.0 (2026-11-10) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.24.0 | interface mods chosen in Options > Interface, costume texture options fixed, add-on archives, faster launches |
+| SF6 Color Mod | 0.24.5 | unchanged |
+| SF6 Native Core | 0.9.10 | the game's own rows in a client's Options section, Restore Default Settings on them |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.23.1 and SF6 Native Core 0.9.9, then install Slots Loader 1.24.0
+and Native Core 0.9.10 together. Color Mod 0.24.5, Recording Manager 2.2.9 and Profile Mod 1.0.0 are the same files as in 1.27.1: keep
+them. With the all-in-one package, replace 1.27.1 with 1.28.0. The costume pak and the stage pak are rebuilt once at the first launch
+(a few minutes, no game window meanwhile). The interface mods' sections need Native Core 0.9.10; without it everything else works.
+
+### SF6 Slots Loader 1.24.0
+- **Interface mods** (new): drop Fluffy-style interface mods into `reframework\ui_mods` as downloaded (Fighting Ground artwork,
+  character select portraits, battle HUD portraits, loading screens, round announcements...), then choose their options in game, in
+  Options > Interface:
+  - each mod is a section above Other Settings, made of the game's own rows: a set of alternatives is one row (Left / Right cycles the
+    game's own files and each option), an option on its own is an Off / On row; long names slide;
+  - the picture of the option under the cursor shows under the rows;
+  - a choice applies at once: a screen shows it the next time it opens (the character select grid changes even while it is loaded);
+  - a mod with more rows than the game's list holds (25) is cut into "1", "2"... sections;
+  - a mod with a portrait per character (battle HUD portraits) is a grid of characters, as Replays > Settings' outfits: Confirm on the
+    section, then X (R) shows the character's next portrait on its cell, A (Confirm) chooses it, Y gives it to every character that
+    has it (after the game's Yes / No box). A portrait the mod gives every character (e.g. "C1 Full") is one of each character's
+    choices;
+  - Restore Default Settings puts the game's own files back, on every section (rows, the grid, Title Screen Selection);
+  - several mods that change the same files: the later one by name wins a file both have.
+- **Costume texture options fixed** (since 1.23.1): options that change a texture (No Gloves, No Headband, a bra or a skin colour...)
+  showed nothing on many outfits (Aloha Ryu, Mai, C. Viper...); they apply again, live in the menus as before.
+- **Add-on archives**: an archive that only adds options to another mod's menu (e.g. an NSFW add-on of an outfit) joins that mod's
+  outfit; it no longer makes a second, incomplete outfit (a black model) of the same name.
+- **Faster launches**: the pictures of the title screen and interface packs are kept converted (`.cache\_pictures` in their folders):
+  a launch that rebuilds the stage pak (Random title screen) no longer converts them again (54 s down to 13 s on a 250-picture setup).
+
+### SF6 Native Core 0.9.10
+- A client's section in an Options tab can hold the game's own rows (`opt_section_place_rows`): the game draws them, moves the cursor,
+  shows the description line and cycles the values; at most 25 rows a section.
+- The game's Restore Default Settings works on those rows (each back to its entry's default, shown at once once the game's prompt is
+  gone) and is told to a section with a client page (`SF6CoreOptSectionState.resets`).
+- A row whose value a client sets (`opt_set_value`) shows it at once.
+
 ## 1.27.1 (2026-11-09) — SF6 Mod Suite
 
 | Package | Version | |
