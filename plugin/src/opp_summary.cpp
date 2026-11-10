@@ -54,7 +54,7 @@ constexpr const char* kCacheFile = "reframework/data/SF6_CostumeSlots_data/codec
 
 TD* g_page = nullptr;                              // the page's type
 Method* g_m = nullptr;                             // UpdateCosColorTextList()
-API::Field *f_dup = nullptr, *f_fid = nullptr, *f_sum = nullptr, *f_cos = nullptr, *f_size = nullptr;
+API::Field *f_dup_init = nullptr, *f_dup = nullptr, *f_fid = nullptr, *f_sum = nullptr, *f_cos = nullptr, *f_size = nullptr;
 Method* m_len = nullptr;                           // System.Array.get_Length
 
 // ---- R18 ----
@@ -115,10 +115,36 @@ void restore_locked(const char* why) {
     if (why) logf("Opponent Outfit Settings: the outfit list's full length put back (%s)", why);
 }
 
+// The character's Random outfit is no choice for an opponent (it is never worn: a draw replaces it): out of the page's two working copies
+// of the settings (SettingDataDuplicated, which the page spins, shows and saves, and its _Initial twin), found by the registry's "random"
+// number (costumes::random_outfit), never a fixed one. Only the entry of that CostumeId is taken out (RemoveAt): the entries before it keep
+// their places (Random is the last outfit of its character), so no index the game, the Color Mod or the lines below hold moves. A page that
+// has no such entry is left alone. Called before the list's length is read, in the draw's pre hook (the page's own thread).
+void drop_random(Obj* page) {
+    int32_t fid = -1;
+    const int rno = i32_at(page, f_fid, fid) ? costumes::random_outfit(fid) : -1;
+    if (rno < 0 || !f_cos) return;
+    for (API::Field* fd : { f_dup, f_dup_init }) {
+        Obj* list = obj_at(obj_at(page, fd), f_cos);
+        if (!list) continue;
+        for (int i = list_count(list) - 1; i >= 0; --i) {
+            Obj* o = list_item(list, i);
+            int32_t cos = -1;
+            if (!o || !get_i32(o, "CostumeId", cos) || cos != rno) continue;
+            if (!call(list, "RemoveAt", { arg_i32(i) }).exception_thrown) {
+                static std::atomic<int> told{ 0 };
+                if (told.fetch_add(1) < 10) logf("[F%d] Opponent Outfit Settings: Random (outfit %d) left out of the page's outfits", fid, rno);
+            }
+            break;
+        }
+    }
+}
+
 void on_draw(Obj* page) {
     if (!page || page->get_type_definition() != g_page) return;   // the page's own call only
     std::lock_guard<std::mutex> lk(g_mx);
     restore_locked("the last summary draw threw before its end");
+    drop_random(page);
     Obj* list = obj_at(obj_at(page, f_dup), f_cos);
     Obj* summary = obj_at(page, f_sum);
     int32_t outfits = 0;
@@ -443,6 +469,7 @@ void install_hooks() {
     g_m = method_of(g_page, kMethod, 0);
     TD* save = tdb->find_type("app.OtherFighterSettingSaveData");
     f_dup = g_page ? g_page->find_field("<SettingDataDuplicated>k__BackingField") : nullptr;
+    f_dup_init = g_page ? g_page->find_field("<SettingDataDuplicated_Initial>k__BackingField") : nullptr;
     f_fid = g_page ? g_page->find_field("SettingFighterId") : nullptr;
     f_sum = g_page ? g_page->find_field("mCosColorTextList") : nullptr;
     f_cos = save ? save->find_field("CostumeSettings") : nullptr;
