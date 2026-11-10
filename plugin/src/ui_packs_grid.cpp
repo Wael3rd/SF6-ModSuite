@@ -6,10 +6,12 @@
 // author. Its page, in the right side of the Options screen, is Battle Settings > Other > Opponent Outfit Settings' grid as the
 // Replays' Settings tab draws it (replay_tab.cpp, read 05/11), moved to the Options screen's right side (options_page.hpp's kPX):
 // the panel and the left line of the stage page (title_preview.cpp's), 4 columns of 160 x 72 cells 168 x 80 apart, 8 rows shown
-// (the scroll bar of the stage page past them), the characters in the game's grid order. A cell: its box, the portrait on its right
-// (96 x 72, the texture's middle band), the character's name at its bottom left, the game's "On" at its top left when the character
-// has a portrait of the pack. The portrait: the one the character has now (the game's own: the game's texture, as the stage pak
-// holds a copy of it), its pak copy loaded once for the session (options_page.cpp's pictures).
+// (the scroll bar of the stage page past them), the characters in the game's grid order. A cell is the game's own (game_cell.hpp,
+// Wael 10/11: "much more faithful to the game's page"): the Options rows' cell shell at the game's cell size, the portrait inside it
+// fading in from its left, the character's name and the game's "On" (when the character has a portrait of the pack) in the title
+// font, the game's darken while the left list has the cursor, the focused cell light. The portrait: the one the character has now
+// (the game's own: the game's texture, as the stage pak holds a copy of it), its pak copy loaded once for the session
+// (options_page.cpp's pictures).
 //
 // While the cursor of the left list is on the section: the grid dimmed, no cell focused. Confirm there gives the page the input
 // (opt_section_hold; the screen's input blocked, every key read here: optpage::Keys, the game's own bindings):
@@ -29,6 +31,7 @@
 // under the screen's main control, named e_slots_uig_*, found again by name (R35), hidden and ForceInvisible until shown. Every write
 // from LateUpdateBehavior, through the core (R1).
 #include "ui_packs_grid.hpp"
+#include "game_cell.hpp"
 #include "slots.hpp"
 #include "slots_ui.hpp"
 #include "options_page.hpp"
@@ -51,7 +54,9 @@ using words::W;
 using words::tr;
 using words::trf;
 
-// the copies (not "p_...": never taken for a UI part, R20); their order in defs(): these six, then four per cell
+// the copies (not "p_...": never taken for a UI part, R20); their order in defs(): these six; the cells' (game_cell.hpp) after them,
+// named kCellPrefix + "g?NN"
+constexpr const char* kCellPrefix = "e_slots_uig_";
 constexpr const char* kPanel = "e_slots_uig_panel";        // the page's panel: a cell shell holding the three below
 constexpr const char* kPMask = "e_slots_uig_pmask";        // in its c_bg: the fading mask
 constexpr const char* kPBg = "e_slots_uig_pbg";            //   its background
@@ -61,20 +66,14 @@ constexpr const char* kTrack = "e_slots_uig_track";        // the scroll bar
 constexpr const char* kThumb = "e_slots_uig_thumb";
 constexpr const char* kKeysLine = "e_slots_uig_keys";      // the keys, at the guide bar's place
 constexpr const char* kDescLine = "e_slots_uig_desc";      // the description, at the game's description line's place
-enum { kIPanel, kILine, kITrack, kIThumb, kIKeys, kIDesc, kIFirstCell };
+enum { kIPanel, kILine, kITrack, kIThumb, kIKeys, kIDesc };
 constexpr int kCols = 4, kVisRows = 8, kSlots = kCols * kVisRows;
 // the grid (replay_tab.cpp's: Opponent Outfit Settings' places, read 05/11), moved to the Options screen's right side
-constexpr float kGX = 760 + kPX, kGY = 184, kCW = 160, kCH = 72, kSX = 168, kSY = 80;
-constexpr float kPicW = 96, kTextX = 10, kNameY = 54, kOnY = 20, kTextW = 146, kTextH = 30, kFont = 24;
-constexpr float kFaceV0 = 0.125f, kFaceV1 = 0.875f;          // the portrait's middle band (the cell's picture is 4:3)
+constexpr float kGX = 760 + kPX, kGY = 184, kCH = 72, kSX = 168, kSY = 80;
 constexpr float kBarX = kGX + kCols * kSX + 2, kBarY = kGY, kBarW = 6, kBarH = kVisRows * kSY - (kSY - kCH);
 constexpr float kBottomW = 1840;
-// replay_tab.cpp's grid colours (via.Color, 0xAABBGGRR): the cell, focused (light, a dark name), dimmed while the left list has the
-// cursor; "On" (the game's e_text_on)
-constexpr uint32_t kColCell = 0xE62A201Eu, kColCellFocus = 0xF5EEEEEEu, kColCellDim = 0xE6241F1Fu;
-constexpr uint32_t kColName = 0xFFFFFFFFu, kColNameDim = 0xFF999999u, kColNameDark = 0xFF2A2A2Au;
-constexpr uint32_t kColOn = 0xFFFDBF3Fu, kColOnDim = 0xFF987226u;
-constexpr int64_t kPrioPanel = 60023, kPrioCell = 60024, kPrioPic = 60025, kPrioText = 60026, kPrioTop = 60027;
+// the cells: their shell at kPrioCell, the darken one over, the texts two over (game_cell.hpp)
+constexpr int64_t kPrioPanel = 60023, kPrioCell = 60024, kPrioPic = 60025, kPrioTop = 60027;
 constexpr uint32_t kCopyAskEvery = 120;
 constexpr int kCopyRefusedMax = 3;
 constexpr int kMenuDecide = 63, kMenuCancel = 64, kMenuRemove = 88, kMenuExtra = 306;   // app.InputAssign.Digital.Id
@@ -86,13 +85,6 @@ std::vector<CopyDef> g_defs;
 const std::vector<CopyDef>& defs() {
     if (!g_defs.empty()) return g_defs;
     g_defs = { { kPanel, kTShell }, { kLine, kTMask }, { kTrack, kTBarBg }, { kThumb, kTBar }, { kKeysLine, kTGuideText }, { kDescLine, kTGuideText } };
-    const std::pair<const char*, int> cell[] = { { "e_slots_uig_b", kTRect }, { "e_slots_uig_p", kTTexture }, { "e_slots_uig_n", kTText }, { "e_slots_uig_o", kTText } };
-    for (int i = 0; i < kSlots; ++i)
-        for (const auto& [base, t] : cell) {
-            char b[48];
-            std::snprintf(b, sizeof b, "%s%02d", base, i);
-            g_defs.push_back({ b, t });
-        }
     return g_defs;
 }
 std::atomic<int> g_copy_status{ 1 };        // the last copy job: SF6CORE_OK, an error, 1 none yet
@@ -118,19 +110,31 @@ void make_copies() {
                 }
                 if (w.name == kPanel && c) make_panel_parts(c, tm, kPMask, kPBg, kPTint);
             }
+            // the cells: the game's (game_cell.hpp) from the screen's own parts: the rows' cell shell, the header's title text, a
+            // plain texture, a row's darken (missing: the rounded mask, same shape)
+            gamecell::Parts parts;
+            parts.shell = tm.t[kTShell];
+            parts.text = tm.for_copy(kTTitle, kTText);
+            parts.tex = tm.t[kTTexture];
+            parts.darken = tm.for_copy(kTDarken, kTMask);
+            if (status == SF6CORE_OK && !parts.ok()) status = -3002;
+            for (int s = 0; status == SF6CORE_OK && s < kSlots; ++s) status = gamecell::make(cm, parts, kCellPrefix, s);
         }
     } catch (...) { status = -2000; }
     g_copy_status.store(status, std::memory_order_release);
 }
 struct Copies {
     std::vector<void*> c;
+    std::vector<gamecell::Cell> cells;           // kSlots
     void* pmask = nullptr; void* pbg = nullptr; void* ptint = nullptr;
     void* get(size_t i) const { return i < c.size() ? c[i] : nullptr; }
-    void* box(int s) const { return get(kIFirstCell + 4 * static_cast<size_t>(s)); }
-    void* pic(int s) const { return get(kIFirstCell + 4 * static_cast<size_t>(s) + 1); }
-    void* name(int s) const { return get(kIFirstCell + 4 * static_cast<size_t>(s) + 2); }
-    void* on(int s) const { return get(kIFirstCell + 4 * static_cast<size_t>(s) + 3); }
-    bool all() const { if (c.size() != g_defs.size() || c.empty()) return false; for (void* x : c) if (!x) return false; return true; }
+    const gamecell::Cell& cell(int s) const { return cells[static_cast<size_t>(s)]; }
+    bool all() const {
+        if (c.size() != g_defs.size() || c.empty() || cells.size() != static_cast<size_t>(kSlots)) return false;
+        for (void* x : c) if (!x) return false;
+        for (const gamecell::Cell& x : cells) if (!x.all()) return false;
+        return true;
+    }
 };
 // The copies, found once per screen (one walk per 32 names, core ui_find_many), kept while the main control and the panel are the ones
 // found (one cached look a frame)
@@ -149,6 +153,8 @@ Copies copies(void* cm) {
     static std::vector<std::string> names;
     if (names.size() != d.size()) { names.clear(); for (const CopyDef& w : d) names.push_back(w.name); }
     find_all(cm, names, g_cache.c);
+    g_cache.cells.resize(kSlots);
+    for (int s = 0; s < kSlots; ++s) g_cache.cells[static_cast<size_t>(s)] = gamecell::find(cm, kCellPrefix, s);
     void* panel = g_cache.get(kIPanel);
     void* pbg = panel ? a->ui_find_child(panel, "c_bg", 1) : nullptr;
     g_cache.pmask = pbg ? a->ui_find_child(pbg, kPMask, 0) : nullptr;
@@ -179,21 +185,7 @@ void lay_out(void* cm, const Copies& c) {
         a->ui_set_color(C(), k, kColText);
     }
     const std::string on = words::game(G::On);
-    for (int s = 0; s < kSlots; ++s) {
-        const float x = cell_x(s), y = cell_y(s);
-        style_rect(c.box(s), x, y, kCW, kCH, kColCell, kPrioCell);
-        void* pic = c.pic(s);
-        set_enum(pic, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
-        set_enum(pic, "set_Priority(System.UInt16)", kPrioPic);
-        place(pic, x + kCW - kPicW, y);
-        a->ui_set_size(C(), pic, kPicW, kCH);
-        a->ui_set_color(C(), pic, kColWhite);
-        style_text_left(c.name(s), kFont, kTextW, kTextH, kPrioText);
-        place(c.name(s), x + kTextX, y + kNameY);
-        style_text_left(c.on(s), kFont, kTextW, kTextH, kPrioText);
-        place(c.on(s), x + kTextX, y + kOnY);
-        a->ui_set_text(C(), c.on(s), on.c_str());
-    }
+    for (int s = 0; s < kSlots; ++s) gamecell::lay_out(c.cell(s), cell_x(s), cell_y(s), origin_x(), origin_y(), kPrioCell, on.c_str());
 }
 
 // ---- the game's description line (InputGuide > p_ScrollText_0): hidden while the page has the input, ours at its place ----
@@ -274,8 +266,14 @@ const GridFighter* fighter_at(int i) {
 }
 void preload(const GridFighter& f) { for (const GridValue& v : f.values) if (!v.picture.empty()) picture(v.picture, "ui grid"); }
 
+// A cell's parts the page shows and hides (its two pictures inside its shell: shown with it)
+void show_cell(const gamecell::Cell& cell, bool on) {
+    for (gamecell::What w : { gamecell::kShell, gamecell::kName, gamecell::kDarken }) g_paint.show_if(cell.get(w), on);
+    if (!on) g_paint.show_if(cell.get(gamecell::kOn), false);
+}
 void page_hide(const Copies& c) {
     for (size_t i = 0; i < c.c.size(); ++i) g_paint.show_if(c.c[i], false);
+    for (const gamecell::Cell& cell : c.cells) show_cell(cell, false);
     g_paint.show_if(c.ptint, false);
     forget_shown();
     g_up = false;
@@ -304,9 +302,10 @@ void paint(const Copies& c, const Ticks& t, int mode) {
         SlotShown& sh = g_slot[sl];
         const int idx = g_top * kCols + sl;
         const GridFighter* f = idx < n ? fighter_at(idx) : nullptr;
+        const gamecell::Cell& cell = c.cell(sl);
         if (!f) {
             if (sh.f != -1) {
-                for (void* x : { c.box(sl), c.pic(sl), c.name(sl), c.on(sl) }) g_paint.show_if(x, false);
+                show_cell(cell, false);
                 sh = SlotShown{};
                 sh.f = -1;
             }
@@ -319,23 +318,21 @@ void paint(const Copies& c, const Ticks& t, int mode) {
         if (sh.f != g_order[static_cast<size_t>(idx)]) {
             sh = SlotShown{};
             sh.f = g_order[static_cast<size_t>(idx)];
-            a->ui_set_text(C(), c.name(sl), caption_of(f->fid).c_str());
-            g_paint.show_if(c.box(sl), true);
-            g_paint.show_if(c.name(sl), true);
+            a->ui_set_text(C(), cell.get(gamecell::kName), caption_of(f->fid).c_str());
+            show_cell(cell, true);
         }
-        if (sh.look != look) {
-            a->ui_set_color(C(), c.box(sl), look == 2 ? kColCellFocus : look == 1 ? kColCell : kColCellDim);
-            a->ui_set_color(C(), c.name(sl), look == 2 ? kColNameDark : look == 1 ? kColName : kColNameDim);
-            a->ui_set_color(C(), c.on(sl), look ? kColOn : kColOnDim);
-            a->ui_set_color(C(), c.pic(sl), look ? kColWhite : kColNameDim);
-            sh.look = look;
-        }
+        gamecell::look(cell, look == 2 ? gamecell::Look::Focus : look == 1 ? gamecell::Look::Plain : gamecell::Look::Dim);   // every frame
+        sh.look = look;
         // the portrait: the one wanted once loaded; until then the one it showed (same character), so a change never blinks
         const std::string& res = f->values[static_cast<size_t>(shown)].picture;
-        const bool ready = !res.empty() && g_paint.put_tex(c.pic(sl), res, kFaceV0, kFaceV1);
-        if (ready) sh.pic = res;
-        g_paint.show_if(c.pic(sl), ready || (!res.empty() && !sh.pic.empty()));     // (shown / hidden written when it changes)
-        g_paint.show_if(c.on(sl), chosen != 0);
+        void* h = res.empty() ? nullptr : picture(res, "ui grid");
+        if (h && a->ui_texture_ready(h) == 1) {
+            gamecell::picture(cell, h, gamecell::crop_for(res));
+            sh.pic = res;
+        } else if (res.empty() || sh.pic.empty()) {
+            gamecell::no_picture(cell);
+        }
+        g_paint.show_if(cell.get(gamecell::kOn), chosen != 0);
     }
     const bool bar = rows > kVisRows;
     g_paint.show_if(c.get(kITrack), bar);

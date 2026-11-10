@@ -85,6 +85,7 @@
 // Gate: nothing but one core registry read every 15 frames while the Replays screen is not up.
 #include "slots.hpp"
 #include "slots_ui.hpp"
+#include "game_cell.hpp"
 #include "replay_logic.hpp"
 #include "name_scroll.hpp"
 #include "scroll_logic.hpp"
@@ -306,6 +307,7 @@ int g_stage_cursor = 0, g_stage_top = 0;          // the focused cell (0 = Defau
 enum Kind { kText, kRect, kImage, kLine, kRow, kLabel, kLeftArrow, kRightArrow, kPillPart };
 struct Copy { std::string name; Kind kind; };
 
+constexpr const char* kCellPrefix = "e_ro_";       // the grid's cells (game_cell.hpp): "e_ro_g?NN"
 std::string cname(const char* what, int i) {
     char b[48];
     std::snprintf(b, sizeof b, "e_ro_%s_%02d", what, i);
@@ -317,8 +319,7 @@ const std::vector<Copy>& copies() {
     if (!v.empty()) return v;
     v.push_back({ "e_ro_gpanel", kRect });         // the grid's panel and its focus tint: under the cells
     v.push_back({ "e_ro_gfocus", kRect });
-    for (int i = 0; i < kCells; ++i) v.push_back({ cname("cbg", i), kRect });
-    for (int i = 0; i < kCells; ++i) v.push_back({ cname("cimg", i), kImage });
+    // (the grid's cells: the game's, game_cell.hpp, made after this list: make_copies)
     v.push_back({ "e_ro_sfocus", kRect });         // the stage grid: the focus frame (under its cell), cells, banner
     for (int i = 0; i < kSCells; ++i) v.push_back({ cname("simg", i), kImage });
     v.push_back({ "e_ro_sbanner", kImage });
@@ -334,8 +335,6 @@ const std::vector<Copy>& copies() {
     v.push_back({ "e_ro_larr", kRightArrow });
     for (int r = 0; r < kListRows; ++r) v.push_back({ cname("llbl", r), kLabel });
     for (int r = 0; r < kRows; ++r) v.push_back({ cname("rlbl", r), kLabel });
-    for (int i = 0; i < kCells; ++i) v.push_back({ cname("cname", i), kText });
-    for (int i = 0; i < kCells; ++i) v.push_back({ cname("con", i), kText });
     v.push_back({ "e_ro_name", kText });
     v.push_back({ "e_ro_sname", kText });          // the banner's stage name, the Default cell's label
     v.push_back({ "e_ro_sdeflbl", kText });
@@ -402,6 +401,22 @@ bool make_copies() {
             a->obj_invoke(C(), c, "set_MaskType(via.gui.MaskType)", &m, 1, nullptr);
         }
         a->ui_set_visible(C(), c, 0);                           // placed and shown by the frame
+    }
+    // the grid's cells: the game's (game_cell.hpp, Wael 10/11: the plain rectangles were not the game's look), from this screen's
+    // parts: the resident row's background panel (c_bg_m) and darken, the header's title text, the badge's texture
+    gamecell::Parts parts;
+    parts.shell = a->ui_find_child(t_row, "c_bg_m", 1);
+    parts.text = t_text;
+    parts.tex = t_image;
+    parts.darken = a->ui_find_child(t_row, "e_darken", 1);
+    if (!parts.ok()) {
+        ++g_refused;
+        g_copy_status.store(-3002);
+        return false;
+    }
+    for (int i = 0; i < kCells; ++i) {
+        const SF6CoreStatus st = gamecell::make(title, parts, kCellPrefix, i);
+        if (st != SF6CORE_OK) { ++g_refused; g_copy_status.store(static_cast<int>(st)); return false; }
     }
     return true;
 }
@@ -479,6 +494,8 @@ void build_catalog() {
                 const int fid = static_cast<int>(f->as_int()), cos = static_cast<int>(c->as_int());
                 if (fid <= 0 || cos <= 0) continue;
                 slot_keys.insert({ fid, cos });
+                // the Random outfit (costumes.cpp): never worn, nothing a replay could be shown in
+                if (const Json* rn = e.get("random"); rn && rn->kind == Json::Bool && rn->b) continue;
                 if (const Json* ns = e.get("nsfw"); ns && ns->kind == Json::Bool && ns->b && !nsfw_ok) { ++nsfw_left; continue; }
                 Outfit o;
                 o.costume = cos;
@@ -1444,6 +1461,9 @@ void hide_copies(Obj* main) {
     void* title = find(main, "c_title");
     if (!title) return;
     for (const Copy& cp : copies()) set_vis(A()->ui_find_child(title, cp.name.c_str(), 0), false);
+    for (int i = 0; i < kCells; ++i)                     // the grid's cells (their pictures go with their shell)
+        for (gamecell::What w : { gamecell::kShell, gamecell::kName, gamecell::kOn, gamecell::kDarken })
+            set_vis(A()->ui_find_child(title, gamecell::name_of(kCellPrefix, w, i).c_str(), 0), false);
 }
 
 void* copy_of(void* title, const std::string& name) { return A()->ui_find_cached(title, name.c_str()); }
@@ -2069,27 +2089,46 @@ std::vector<SumItem> grid_summary() {
 
 // The grid (on: the option row or the grid is up; grid: the grid has the focus: the focused portrait light; otherwise
 // every portrait dimmed, none focused, as the game's grid behind its option row)
+// The grid's cells (game_cell.hpp), found again when the screen is built again or one is missing
+std::vector<gamecell::Cell> g_cells;
+void* g_cells_title = nullptr;
+const std::vector<gamecell::Cell>& grid_cells(void* title) {
+    bool whole = title == g_cells_title && g_cells.size() == static_cast<size_t>(kCells);
+    if (whole) for (const gamecell::Cell& c : g_cells) if (!c.all()) { whole = false; break; }
+    if (!whole) {
+        g_cells.clear();
+        for (int i = 0; i < kCells; ++i) g_cells.push_back(gamecell::find(title, kCellPrefix, i));
+        g_cells_title = title;
+    }
+    return g_cells;
+}
 void render_grid(void* title, bool on, bool grid) {
     const int n = on ? static_cast<int>(g_cat.size()) : 0;
     if (on) g_top_row = window_top(g_top_row, n ? g_cursor / kCols : 0, (n + kCols - 1) / kCols, kVisRows);
+    const auto& cells = grid_cells(title);
+    const std::string on_word = game(G::On);
     for (int i = 0; i < kCells; ++i) {
+        const gamecell::Cell& c = cells[static_cast<size_t>(i)];
+        if (!c.all()) continue;
         const int idx = g_top_row * kCols + i;
         const bool cell = idx < n;
         const bool foc = grid && idx == g_cursor;
         const float x = kGridX + (i % kCols) * kStepX, y = kGridY + (i / kCols) * kStepY;
-        put_box(title, cname("cbg", i), x, y, kCellW, kCellH, foc ? kColCellFocus : grid ? kColCell : kColCellDim, cell);
-        if (!cell) {
-            put_image(title, cname("cimg", i), 0, 0, 0, 0, 0, false);
-            put_text(title, cname("cname", i), "", 0, 0, 0, 0, false);
-            put_text(title, cname("con", i), "", 0, 0, 0, 0, false);
-            continue;
-        }
+        if (g_styled.insert(reinterpret_cast<uintptr_t>(c.get(gamecell::kShell))).second)   // once per screen build
+            gamecell::lay_out(c, x, y, 0, 0, kPrioFrame, on_word.c_str());
+        for (gamecell::What w : { gamecell::kShell, gamecell::kName, gamecell::kDarken }) show(c.get(w), cell);
+        if (!cell) { show(c.get(gamecell::kOn), false); continue; }
         const Fighter& f = g_cat[static_cast<size_t>(idx)];
-        const bool forced = choice_of(f).forced;
-        put_image(title, cname("cimg", i), f.fid, x + kCellW - 96, y, 96, kCellH, true, grid ? kColText : kColTextDim);
-        put_text(title, cname("cname", i), f.caption.empty() ? grid_caption(f.name) : f.caption, x + 10, y + 40, kFontCell,
-                 foc ? kColDark : grid ? kColText : kColTextDim);
-        put_text(title, cname("con", i), game(G::On), x + 10, y + 6, kFontCell, grid ? kColOn : kColOnDim, forced);
+        gamecell::look(c, foc ? gamecell::Look::Focus : grid ? gamecell::Look::Plain : gamecell::Look::Dim);
+        A()->ui_set_text(C(), c.get(gamecell::kName), (f.caption.empty() ? grid_caption(f.name) : f.caption).c_str());
+        auto it = g_faces.find(f.fid);
+        void* holder = it != g_faces.end() ? it->second : nullptr;
+        if (holder && A()->ui_texture_ready(holder) == 1) gamecell::picture(c, holder);
+        else {
+            gamecell::no_picture(c);
+            if (holder) g_dirty = true;                // drawn again once its picture has loaded
+        }
+        show(c.get(gamecell::kOn), choice_of(f).forced);
     }
 }
 

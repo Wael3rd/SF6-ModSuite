@@ -84,6 +84,8 @@ void show(void* c, bool on);                // shown, or hidden and ForceInvisib
 // Places are screen units (1920 x 1080): the copies' parent's own place, taken at each lay-out (set_origin), is taken off
 void set_origin(void* parent);
 void place(void* c, float x, float y);
+float origin_x();                           // the copies' parent's place on the screen (set_origin)
+float origin_y();
 // A text centred on its point, never squeezed (a long line slides: name_scroll.cpp); font 0: the template's own size
 void style_text(void* t, float font, float w, float h, int64_t prio);
 // A text by its left point, the same otherwise (a list's line, the guide's keys)
@@ -105,6 +107,8 @@ enum Tmpl {
     kTBarBg,        // the sub list's scroll bar: its track (BG)
     kTBar,          // and its thumb (Bar)
     kTGuideText,    // the guide bar's own key text (InputGuide, e_text_0_d_*)
+    kTTitle,        // the screen's header title (c_header > c_title > e_text_title: the title font)
+    kTDarken,       // a row's darken (e_darken: the hub's cell shape)
     kTmplCount
 };
 struct Templates {

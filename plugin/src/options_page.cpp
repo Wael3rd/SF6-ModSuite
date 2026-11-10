@@ -210,6 +210,8 @@ void set_origin(void* parent) {
     g_gx = g[0]; g_gy = g[1];
 }
 void place(void* c, float x, float y) { A()->ui_set_position(C(), c, x - g_gx, y - g_gy, 0); }
+float origin_x() { return g_gx; }
+float origin_y() { return g_gy; }
 void style_text(void* t, float font, float w, float h, int64_t prio) {
     set_enum(t, "set_ControlPoint(via.gui.ControlPoint)", g_cp_center);
     set_enum(t, "set_PageAlignment(via.gui.PageAlignment)", g_cp_center);
@@ -237,7 +239,7 @@ void style_rect(void* r, float x, float y, float w, float h, uint32_t col, int64
 }
 
 void* Templates::for_copy(int want, int no_checks) const {
-    static const int kFallback[kTmplCount] = { 0, 1, 2, 3, 1, 0, 0, 1, 1, 0, 0, 3 };
+    static const int kFallback[kTmplCount] = { 0, 1, 2, 3, 1, 0, 0, 1, 1, 0, 0, 3, 2, 5 };
     int k = want;
     if (!t[k]) k = kFallback[k];
     if (k == kTBox || k == kTTick) k = game_checks ? k : no_checks;
@@ -254,12 +256,15 @@ Templates templates(void* cm, const std::string& unit_hint) {
     void* shell = unit ? a->ui_find_child(unit, "c_bg_s", 6) : nullptr;
     void* radio = cm ? a->ui_find_child(cm, "p_Group_radiobtn_switch", 5) : nullptr;
     void* bar = sub ? a->ui_find_child(sub, "c_ScrollBar", 3) : nullptr;
+    void* header = cm ? a->ui_find_child(cm, "c_header", 1) : nullptr;
+    void* htitle = header ? a->ui_find_child(header, "c_title", 3) : nullptr;
     void* t[kTmplCount] = {
         spin ? a->ui_find_child(spin, "e_rect_bar", 4) : nullptr, unit ? a->ui_find_child(unit, "e_flag", 5) : nullptr,
         spin ? a->ui_find_child(spin, "e_text_title", 1) : nullptr, spin ? a->ui_find_child(spin, "e_text_0", 2) : nullptr,
         shell, shell ? a->ui_find_child(shell, "e_scale9grid_mask", 2) : nullptr, shell ? a->ui_find_child(shell, "e_scale9grid_default", 1) : nullptr,
         radio ? a->ui_find_child(radio, "e_texture_box", 5) : nullptr, radio ? a->ui_find_child(radio, "e_texture_check", 5) : nullptr,
-        bar ? a->ui_find_child(bar, "BG", 1) : nullptr, bar ? a->ui_find_child(bar, "Bar", 1) : nullptr, guide_key_text() };
+        bar ? a->ui_find_child(bar, "BG", 1) : nullptr, bar ? a->ui_find_child(bar, "Bar", 1) : nullptr, guide_key_text(),
+        htitle ? a->ui_find_child(htitle, "e_text_title", 0) : nullptr, unit ? a->ui_find_child(unit, "e_darken", 3) : nullptr };
     for (int i = 0; i < kTmplCount; ++i) out.t[i] = t[i];
     out.game_checks = t[kTBox] && t[kTTick];
     return out;

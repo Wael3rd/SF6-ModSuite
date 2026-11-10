@@ -11,6 +11,7 @@ rem   amd_ags_x64.dll                  costume slots + stage slots: the DLL the 
 rem   costumes_only\amd_ags_x64.dll    the costume loader alone (what the releases ship so far)
 rem   SF6_CostumeSlotsNative.dll       REFramework plugin used during online matches
 rem   costume_loader.exe paktool.exe loadtest.exe    costume tools
+rem   colourtest.exe                  colourtest --selftest: the colours following their outfit (colour_follow.hpp)
 rem   SF6_SlotsClean.exe              removes the loader's runtime paks and state (shipped next to amd_ags_x64.dll)
 rem   stagepak.exe stagetest.exe textest.exe         stage tools
 rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first; "build.bat archive_deps" builds only them, when missing (the Color Mod needs them).
@@ -69,13 +70,13 @@ rem Shared objects, compiled once and linked into each target
 rem ---------------------------------------------------------------------------------------------
 for %%d in (core stage proxy proxy_costumes tools) do if not exist %O%\%%d mkdir %O%\%%d
 echo === common + costume loader ===
-cl %CF% /c /Fo%O%\core\ %C%\third_party\zstddeclib.c %C%\third_party\miniz.c %C%\pak.cpp %C%\archive.cpp %C%\fighter_names.cpp %CO%\patch.cpp %CO%\swap_repairs.cpp %CO%\structural_scene.cpp %CO%\structural_msg.cpp %CO%\vanilla_inventory.cpp %CO%\loader_core.cpp
+cl %CF% /c /Fo%O%\core\ %C%\third_party\zstddeclib.c %C%\third_party\miniz.c %C%\pak.cpp %C%\archive.cpp %C%\fighter_names.cpp %CO%\patch.cpp %CO%\swap_repairs.cpp %CO%\structural_scene.cpp %CO%\structural_msg.cpp %CO%\vanilla_inventory.cpp %CO%\colour_follow.cpp %CO%\loader_core.cpp
 if errorlevel 1 goto :failed
 echo === stage slots ===
 cl %CF% /c /Fo%O%\stage\ %ST%\stage_log.cpp %ST%\stage_loader.cpp %ST%\stage_classify.cpp %ST%\preview_tex.cpp %ST%\stage_redirect.cpp
 if errorlevel 1 goto :failed
 set PAK=%O%\core\zstddeclib.obj %O%\core\miniz.obj %O%\core\pak.obj
-set CORE=%PAK% %O%\core\archive.obj %O%\core\fighter_names.obj %O%\core\patch.obj %O%\core\swap_repairs.obj %O%\core\structural_scene.obj %O%\core\structural_msg.obj %O%\core\vanilla_inventory.obj %O%\core\loader_core.obj
+set CORE=%PAK% %O%\core\archive.obj %O%\core\fighter_names.obj %O%\core\patch.obj %O%\core\swap_repairs.obj %O%\core\structural_scene.obj %O%\core\structural_msg.obj %O%\core\vanilla_inventory.obj %O%\core\colour_follow.obj %O%\core\loader_core.obj
 
 echo === amd_ags_x64.dll (costume slots + stage slots) ===
 cl %CF% /c /Fo%O%\proxy\ proxy\slots_proxy.cpp
@@ -98,6 +99,8 @@ cl %CF% /Fo%O%\tools\ %CO%\loadtest.cpp /Fe%B%\loadtest.exe %LK%
 if errorlevel 1 goto :failed
 cl %CF% /Fo%O%\tools\ costumes\tools\slots_clean.cpp %PAK% /Fe%B%\SF6_SlotsClean.exe %LK%
 if errorlevel 1 goto :failed
+cl %CF% /Fo%O%\tools\ costumes\tools\colourtest.cpp %O%\core\colour_follow.obj /Fe%B%\colourtest.exe %LK%
+if errorlevel 1 goto :failed
 
 echo === stage tools ===
 cl %CF% /Fo%O%\tools\ stages\tools\stagepak.cpp %PAK% /Fe%B%\stagepak.exe %LK%
@@ -113,7 +116,7 @@ echo === SF6_CostumeSlotsNative.dll (REFramework plugin, API 1.5.8: costume and 
 if not exist %O%\plugin mkdir %O%\plugin
 rem SLOTS_LEGACY_UI_FALLBACK: compiles the direct implementations so the plugin
 rem works without sf6core_native.dll.  Remove when the core becomes mandatory.
-cl /nologo /MP /std:c++20 /EHa /O2 /W4 /LD /DSLOTS_LEGACY_UI_FALLBACK /I plugin\include /I core\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\json.cpp plugin\src\costumes.cpp plugin\src\rto_data.cpp plugin\src\rto.cpp plugin\src\rto_menu.cpp plugin\src\rto_select.cpp plugin\src\rto_camera.cpp plugin\src\nsfw_option.cpp plugin\src\title_preview.cpp plugin\src\options_page.cpp plugin\src\ui_packs.cpp plugin\src\ui_packs_grid.cpp plugin\src\fs_name.cpp plugin\src\opp_summary.cpp plugin\src\stages.cpp plugin\src\codecheck.cpp plugin\src\main.cpp plugin\src\slots_ui.cpp plugin\src\slots_ui_legacy.cpp plugin\src\perf.cpp plugin\src\wjournal.cpp plugin\src\replay_outfits.cpp plugin\src\replay_tab.cpp plugin\src\replay_music.cpp plugin\src\name_scroll.cpp plugin\src\ui_retexture.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
+cl /nologo /MP /std:c++20 /EHa /O2 /W4 /LD /DSLOTS_LEGACY_UI_FALLBACK /I plugin\include /I core\include /Fo%O%\plugin\ plugin\src\common.cpp plugin\src\json.cpp plugin\src\costumes.cpp plugin\src\rto_data.cpp plugin\src\rto.cpp plugin\src\rto_menu.cpp plugin\src\rto_select.cpp plugin\src\rto_camera.cpp plugin\src\nsfw_option.cpp plugin\src\title_preview.cpp plugin\src\options_page.cpp plugin\src\ui_packs.cpp plugin\src\ui_packs_grid.cpp plugin\src\game_cell.cpp plugin\src\fs_name.cpp plugin\src\opp_summary.cpp plugin\src\stages.cpp plugin\src\codecheck.cpp plugin\src\main.cpp plugin\src\slots_ui.cpp plugin\src\slots_ui_legacy.cpp plugin\src\perf.cpp plugin\src\wjournal.cpp plugin\src\replay_outfits.cpp plugin\src\replay_tab.cpp plugin\src\replay_music.cpp plugin\src\name_scroll.cpp plugin\src\ui_retexture.cpp /Fe%B%\SF6_CostumeSlotsNative.dll /link /opt:ref
 if errorlevel 1 goto :failed
 
 if /i "%1"=="plugin" goto :done_one
