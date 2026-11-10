@@ -1,7 +1,9 @@
 // SF6 Slots — the Color Mod's colour entries (RW / MC) and requests: the contract colormod/include/sf6colormod_entries.h,
 // resolved with GetModuleHandleW + GetProcAddress (the suite's DLL-to-DLL pattern), looked for again every 10 s while
 // missing. Without a Color Mod, or an older one (no SF6ColorMod_EntriesVersion, or its colour engine off), entries() is
-// empty and requests do nothing: the Replays > Settings tab then lists the game's own colours only.
+// empty and requests do nothing: the Replays > Settings tab then lists the game's own colours only. A Color Mod with the
+// Random value (SF6ColorMod_RandomChoice) also says where the player chose Random, and dresses an entry drawn for a battle
+// (scopes 3 / 4): costumes.cpp's Random draws.
 #pragma once
 
 #include <windows.h>
@@ -20,6 +22,7 @@ struct Fns {
     SF6ColorMod_EntriesFn entries = nullptr;
     SF6ColorMod_RequestFn request = nullptr;
     SF6ColorMod_ClearRequestsFn clear = nullptr;
+    SF6ColorMod_RandomChoiceFn random_choice = nullptr;   // a Color Mod with the Random value and the battle scopes, else null
 };
 
 inline Fns link() {
@@ -39,6 +42,7 @@ inline Fns link() {
                 n.entries = reinterpret_cast<SF6ColorMod_EntriesFn>(GetProcAddress(h, "SF6ColorMod_Entries"));
                 n.request = reinterpret_cast<SF6ColorMod_RequestFn>(GetProcAddress(h, "SF6ColorMod_Request"));
                 n.clear = reinterpret_cast<SF6ColorMod_ClearRequestsFn>(GetProcAddress(h, "SF6ColorMod_ClearRequests"));
+                n.random_choice = reinterpret_cast<SF6ColorMod_RandomChoiceFn>(GetProcAddress(h, "SF6ColorMod_RandomChoice"));
                 if (n.version && n.entries && n.request && n.clear) f = n;
             }
         }
@@ -79,6 +83,33 @@ inline bool request(int scope, int fighter, int costume, const std::string& id, 
 inline void clear(int scope) {
     const Fns f = link();
     if (f.clear) f.clear(scope);
+}
+
+// ---- the Random colour (the Color Mod's Random value; costumes.cpp draws) ----
+// The Color Mod can dress an entry drawn for a battle (scopes 3 / 4) and says where Random was chosen: a draw may take its
+// entries. Without it (no Color Mod, or an older one) Random colours draw among the game's colours only, and none is chosen.
+inline bool battle_ok() {
+    const Fns f = link();
+    return f.random_choice && available();
+}
+// Side 1 / 2 (the character select's / training popup's P1 / P2) or 3 (Fighter Settings): the fighter and outfit whose
+// colour the player set to Random there, if that is the choice
+inline bool random_choice(int side, int& fighter, int& costume) {
+    const Fns f = link();
+    int fi = -1, co = -1;
+    if (!f.random_choice || !available() || f.random_choice(side, &fi, &co) != 1) return false;
+    fighter = fi;
+    costume = co;
+    return true;
+}
+// The battle fighter of `side` (1 / 2) wears that entry over colour 02 until replaced or cleared
+inline bool request_battle(int side, int fighter, int costume, const std::string& id) {
+    return battle_ok() && (side == 1 || side == 2) && request(SF6CM_SCOPE_BATTLE_P1 + side - 1, fighter, costume, id);
+}
+inline void clear_battle() {
+    if (!battle_ok()) return;
+    clear(SF6CM_SCOPE_BATTLE_P1);
+    clear(SF6CM_SCOPE_BATTLE_P2);
 }
 
 // How many entries are ticked for an outfit on Opponent Outfit Settings: 0 with no Color Mod or an older one

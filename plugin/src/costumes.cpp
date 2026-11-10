@@ -16,7 +16,7 @@
 //     carrier's: that fighter is built from the slot, every other one from its own outfit, a mirror on
 //     the carrier included (see "Online alias" below);
 //   - Random: every character's Random outfit (random_logic.hpp) is never worn; a draw takes its place where the outfit
-//     worn is decided (see "Random" below).
+//     worn is decided (see "Random" below). The same for a Random colour of any outfit (the Color Mod's Random value).
 // Everything starts from an event (see slots.hpp); nothing is watched in between.
 #include "slots.hpp"
 #include "slots_ui.hpp"
@@ -27,6 +27,7 @@
 #include "../../common/outfit_display.hpp"
 #include "carrier.hpp"
 #include "codecheck_rt.hpp"
+#include "colormod_link.hpp"
 #include "perf.hpp"
 #include "random_logic.hpp"
 #include "words.hpp"
@@ -156,6 +157,11 @@ std::map<int, rnd::Fighter> g_rand;    // per character: its rounds and Battle S
 // Online: what the player's fighter wears for the set against the current opponent (taken at the match's first load)
 struct RandSet { rnd::Draw set; bool bound = false, local = false; };   // local: worn on this PC only (the alias)
 std::map<int, RandSet> g_rand_set;
+std::map<int, rnd::Draw> g_rand_cset;  // the same for Battle Settings' Random colour: the set's outfit and colour
+// The entry the Color Mod dresses on each battle side now (its scopes 3 / 4), as asked last: [1] P1, [2] P2
+struct RandReq { int fid = -1, cos = -1; std::string id; };
+RandReq g_rand_req[3];
+std::atomic<bool> g_draw_hooks{false}; // the battle's loads are hooked (install_hooks): a Random colour can be drawn
 std::atomic<bool> g_rand_dirty{false}; // a draw since state.json was written: the tick writes it (read without the lock)
 std::mt19937 g_rng{ std::random_device{}() };
 // A Battle Settings choice of a retouch's former outfit (runtime options): the retouch is an option of the game
@@ -363,9 +369,13 @@ void save_state();
 void load_state() {
     Json j;
     if (!json_parse(read_file(kState), j)) return;
-    // Random's rounds and next draws (a character without its Random outfit any more: dropped at the next write)
-    for (auto& [fid, f] : rnd::parse_state(j.get("random")))
-        if (g_random_no.count(fid)) g_rand[fid] = f;
+    // Random's rounds and next draws (a character without its Random outfit any more: its outfit draws dropped at the next
+    // write; a Random colour needs none)
+    for (auto& [fid, f] : rnd::parse_state(j.get("random"))) {
+        if (!g_slot_of.count(fid)) continue;
+        g_rand[fid] = f;
+        if (!g_random_no.count(fid)) { g_rand[fid].outfits = rnd::Pool{}; g_rand[fid].next = rnd::Draw{}; }
+    }
     const Json* fs = j.get("fighters");
     if (!fs || fs->kind != Json::Object) return;
     bool migrated = false;
@@ -549,6 +559,35 @@ std::vector<int> rand_colours_of(int fid, int cos) {
     auto it = g_rand_colours.find({ fid, cos });
     return it != g_rand_colours.end() ? it->second : std::vector<int>{};
 }
+// A game outfit's colours as its Color row listed them when the game showed it (rand_seen_row: any outfit of any character,
+// where the player can choose Random): for the outfits rand_read_lists did not read
+std::map<std::pair<int, int>, std::vector<int>> g_row_colours;
+// Every colour a draw of that outfit takes: the game's (rand_colours_of, else its Color row's, none known: Color 1) and the
+// Color Mod's RW / MC entries of it, when it can dress them in a battle (as numbers: rnd::entry_value). Under g_alias_mx (the
+// Color Mod's lock is taken after it).
+std::vector<int> rand_draw_colours_of(int fid, int cos) {
+    std::vector<int> v = rand_colours_of(fid, cos);
+    if (v.empty())
+        if (auto r = g_row_colours.find({ fid, cos }); r != g_row_colours.end()) v = r->second;
+    if (v.empty()) v.push_back(0);
+    if (colormod::battle_ok())
+        for (const auto& e : colormod::entries(fid, cos)) v.push_back(rnd::entry_value(e.id));
+    return v;
+}
+// The Color Mod's entry a colour drawn stands for ("": a game colour, or an entry gone since)
+std::string rand_entry_id(int fid, int cos, int v) {
+    if (!rnd::is_entry(v)) return {};
+    for (const auto& e : colormod::entries(fid, cos))
+        if (rnd::entry_value(e.id) == v) return e.id;
+    return {};
+}
+// A colour drawn in the log lines: "colour 3", "RW 2"
+std::string rand_colour_name(int fid, int cos, int v) {
+    if (!rnd::is_entry(v)) return "colour " + std::to_string(v);
+    for (const auto& e : colormod::entries(fid, cos))
+        if (rnd::entry_value(e.id) == v) return e.label;
+    return "an entry gone since";
+}
 // The row lists it (not read yet this session: a draw kept from the last one stays)
 bool rand_listed(int fid, int cos) {
     auto it = g_rand_outfits.find(fid);
@@ -566,19 +605,59 @@ bool rand_intent(int fid) {
     return in != g_intent.end() && is_random(fid, in->second.slot);
 }
 
-// A draw from the character's pool (under g_alias_mx)
-rnd::Draw rand_draw(int fid, const char* why) {
+// A draw from the character's pool (under g_alias_mx). `colour_ok(costume, colour)`: what the colour may be (a mirror's left
+// out; none: any).
+rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr) {
     const rnd::Rng rng = [] { return static_cast<uint32_t>(g_rng()); };
     rnd::Fighter& f = g_rand[fid];
     const rnd::Draw d = rnd::draw_outfit(f, rand_outfits_of(fid), [fid](int c) { return rand_allowed(fid, c); },
-                                         [fid](int c) { return rand_colours_of(fid, c); }, rng);
+                                         [fid](int c) { return rand_draw_colours_of(fid, c); }, rng, colour_ok);
     if (!d.valid()) { logf("[F%d] Random: nothing to draw (%s)", fid, why); return d; }
     g_rand_dirty = true;
     size_t pool = 0;
     for (int c : rand_outfits_of(fid)) pool += rand_allowed(fid, c) ? 1 : 0;
-    logf("[F%d] Random: %s colour %d drawn (%s; %zu of %zu outfits given in this round)", fid, rand_name(fid, d.costume).c_str(),
-         d.color, why, f.outfits.drawn.size(), pool);
+    logf("[F%d] Random: %s %s drawn (%s; %zu of %zu outfits given in this round)", fid, rand_name(fid, d.costume).c_str(),
+         rand_colour_name(fid, d.costume, d.color).c_str(), why, f.outfits.drawn.size(), pool);
     return d;
+}
+// A Random colour of outfit `cos` (the Color Mod's Random value), from that outfit's round (under g_alias_mx). `ok`: what it may
+// be (a mirror's colour left out; none: any).
+int rand_draw_colour(int fid, int cos, const rnd::Allowed& ok, const char* why) {
+    const rnd::Rng rng = [] { return static_cast<uint32_t>(g_rng()); };
+    rnd::Fighter& f = g_rand[fid];
+    const std::vector<int> cs = rand_draw_colours_of(fid, cos);
+    const int v = rnd::draw_colour(f, cos, cs, ok, rng);
+    g_rand_dirty = true;
+    logf("[F%d] Random colour: %s of %s drawn (%s; %zu of %zu colours given in this round)", fid, rand_colour_name(fid, cos, v).c_str(),
+         rand_name(fid, cos).c_str(), why, f.colours[cos].drawn.size(), cs.size());
+    return v;
+}
+// Battle Settings' Random colour of outfit `cos`: its next colour, made again when it was another outfit's or its entry is gone
+void rand_ensure_next_colour(int fid, int cos, const char* why) {
+    rnd::Fighter& f = g_rand[fid];
+    const rnd::Draw& n = f.next_colour;
+    if (n.costume == cos && n.color >= 0 && (!rnd::is_entry(n.color) || !rand_entry_id(fid, cos, n.color).empty())) return;
+    f.next_colour = { cos, rand_draw_colour(fid, cos, nullptr, why) };
+}
+
+// The Color Mod dresses an entry drawn on a battle side (its scopes 3 / 4) until the next battle's fighters are asked for
+// (rand_clear_worn). A game colour drawn: nothing to ask (the game wears it). Under g_alias_mx.
+void rand_wear_entry(int side, int fid, int cos, int v, const char* why) {
+    if (!rnd::is_entry(v) || (side != 1 && side != 2)) return;
+    const std::string id = rand_entry_id(fid, cos, v);
+    RandReq& r = g_rand_req[side];
+    if (!id.empty() && r.fid == fid && r.cos == cos && r.id == id) return;   // asked already (a rematch's fighters built again)
+    if (id.empty()) { logf("[F%d] Random: the entry drawn for %s is gone: colour 02 (%s)", fid, rand_name(fid, cos).c_str(), why); return; }
+    if (!colormod::request_battle(side, fid, cos, id)) { logf("[F%d] Random: the Color Mod refused the entry drawn: colour 02 (%s)", fid, why); return; }
+    r = { fid, cos, id };
+    logf("[F%d] Random: P%d wears %s of %s, dressed by the Color Mod (%s)", fid, side, rand_colour_name(fid, cos, v).c_str(),
+         rand_name(fid, cos).c_str(), why);
+}
+void rand_clear_worn(const char* why) {
+    if (g_rand_req[1].fid < 0 && g_rand_req[2].fid < 0) return;
+    colormod::clear_battle();
+    g_rand_req[1] = g_rand_req[2] = RandReq{};
+    logf("costumes: Random: the entries drawn for the last battle are over (%s)", why);
 }
 // Battle Settings' Random: its next draw, made again when it is gone from the row or hidden (NSFW) (under g_alias_mx)
 void rand_ensure_next(int fid, const char* why) {
@@ -621,6 +700,55 @@ rnd::Draw rand_worn(int fid, bool net) {
     auto r = g_rand.find(fid);
     return r != g_rand.end() ? r->second.next : rnd::Draw{};
 }
+
+// ---- Battle Settings' Random colour (the Color Mod's Random value on Fighter Settings), under g_alias_mx ----
+// Chosen when Battle Settings closes on it (rand_colour_close): next_colour holds its outfit and next colour from then on.
+// Outside the menu the save holds that colour for a game outfit (a game colour: what the profile sends, the opponent sees it;
+// an entry: its colour 02, the Color Mod dresses it here); a slot's save holds the carrier, the alias wears the colour.
+const rnd::Draw* rand_colour_of(int fid) {
+    auto r = g_rand.find(fid);
+    return r != g_rand.end() && r->second.next_colour.valid() ? &r->second.next_colour : nullptr;
+}
+int intent_slot(int fid) {
+    auto in = g_intent.find(fid);
+    return in == g_intent.end() ? 0 : in->second.slot;
+}
+// Battle Settings closed: the menu showed `shown` with outfit `v`. Random (on colour 02, the Color Mod's Fighter Settings
+// choice for that fighter and outfit): its next colour kept (made now for a new outfit), the save holds it for a game outfit.
+// Anything else: no Random colour for that fighter (the Color Mod remembers Fighter Settings' last fighter only: another one
+// shows its colour 02 there, so 02 it is).
+void rand_colour_close(int fid, Obj* e, int v, int shown) {
+    int cf = -1, cc = -1;
+    const bool on = shown == rnd::kEntryCarrier && v >= 0 && !is_random(fid, v) && colormod::random_choice(3, cf, cc) && cf == fid && cc == v;
+    rnd::Fighter& f = g_rand[fid];
+    if (!on) {
+        if (!f.next_colour.valid()) return;
+        f.next_colour = rnd::Draw{};
+        g_rand_cset.erase(fid);
+        g_rand_dirty = true;
+        logf("[F%d] Random colour: no longer the choice", fid);
+        return;
+    }
+    if (f.next_colour.costume != v) g_rand_cset.erase(fid);   // another outfit: the set (online) is taken again
+    rand_ensure_next_colour(fid, v, "Random colour chosen: its next colour");
+    if (!is_slot(fid, v)) set_col(e, rnd::worn_colour(f.next_colour.color), fid, "Random colour: its next colour");
+}
+// Outside the menu: the save of a game outfit whose colour is Random holds its next colour (a profile built, a screen that
+// lists outfits); a save that holds another outfit now is left as it is
+void rand_colour_save(int fid, Obj* e, const char* why) {
+    const rnd::Draw* n = rand_colour_of(fid);
+    if (!n || intent_slot(fid) || get_cos(e) != n->costume) return;
+    set_col(e, rnd::worn_colour(n->color), fid, why);
+}
+// Battle Settings' Random colour of a slot the alias wears: online the set's (once taken), elsewhere the next one; -1 none
+int rand_slot_colour(int fid, int slot, bool net) {
+    const rnd::Draw* n = rand_colour_of(fid);
+    if (!n || n->costume != slot) return -1;
+    if (!net) return n->color;
+    auto s = g_rand_cset.find(fid);
+    return s != g_rand_cset.end() && s->second.costume == slot ? s->second.color : -1;
+}
+
 // "Display NSFW Outfits" changed: a new round of every pool (the rows list other outfits now); a next draw, or a set's, hidden
 // now is dropped (the next one is made at once, the alias stops wearing the set's at the next build of the fighters)
 void rand_nsfw_changed() {
@@ -703,6 +831,10 @@ void on_menu_open() {
     logf("costumes: Battle Settings opened");
     for (auto& [fid, e] : save_entries()) {
         auto& in = g_intent[fid];
+        // a game outfit whose colour is Random: colour 02 back in the save, the Color Mod's Random value rides on it (its
+        // Fighter Settings walk to Random starts there)
+        if (const rnd::Draw* n = rand_colour_of(fid); n && !in.slot && get_cos(e) == n->costume && get_col(e) != rnd::kEntryCarrier)
+            set_col(e, rnd::kEntryCarrier, fid, "so the menu shows Random");
         if (!in.slot || !shown(fid, in.slot)) continue;
         if (get_cos(e) == held_cos_of(fid)) set_cos(e, in.slot, fid, is_random(fid, in.slot) ? "so the menu shows Random" : "so the menu shows the slot");
         // Random's Color row has one value (insert_colors)
@@ -716,9 +848,11 @@ void on_menu_close() {
     logf("costumes: Battle Settings closed");
     for (auto& [fid, e] : save_entries()) {
         int v = get_cos(e);
+        const int col_shown = get_col(e);
         // The menu showed the carrier in place of a hidden slot: left so, the choice is kept for the
         // day the outfit is the player's again (until then the alias leaves it out)
         if (v == save_cos_of(fid) && g_intent[fid].slot && !shown(fid, g_intent[fid].slot)) continue;
+        rand_colour_close(fid, e, v, col_shown);       // a Random colour (before the slot's save gets its carrier colour)
         const int chosen = is_slot(fid, v) ? v : 0;
         if (chosen != g_intent[fid].slot) g_rand_set.erase(fid);   // another choice: Random's set (online) is taken again
         set_intent_slot(fid, chosen, "chosen in the menu");
@@ -809,6 +943,7 @@ void safety_net() {
         }
         // Random: the save holds its next draw (a game outfit) or the carrier, whatever was written above
         if (is_random(fid, g_intent[fid].slot)) rand_apply_save(fid, e, "Random: its next draw");
+        rand_colour_save(fid, e, "Random colour: its next colour");
     }
     if (carriers_saved) save_state();
     drop_nsfw_choices(entries);
@@ -1441,13 +1576,16 @@ int wanted_slot(int fid, const DescInfo* d = nullptr) {
     const rnd::Draw w = rand_worn(fid, false);
     return w.valid() && is_mod_slot(fid, w.costume) && rand_allowed(fid, w.costume) && shown(fid, w.costume) ? w.costume : 0;
 }
-// The colour the player's fighter wears with that slot: the one chosen with it, Random's drawn one, else the description's
-int wanted_color(const DescInfo& d, const DescFighter& f) {
+// The colour the player's fighter wears with that slot, as drawn (rnd::is_entry: one of the Color Mod's entries): the one
+// chosen with it, Random's drawn one, a Random colour's (Battle Settings), else the description's
+int wanted_value(const DescInfo& d, const DescFighter& f) {
     auto in = g_intent.find(f.fid);
     if (in != g_intent.end() && is_random(f.fid, in->second.slot)) {
         const rnd::Draw w = rand_worn(f.fid, d.net);
         return w.valid() && w.color >= 0 ? w.color : f.color;
     }
+    if (in != g_intent.end() && in->second.slot)
+        if (const int v = rand_slot_colour(f.fid, in->second.slot, d.net); v >= 0) return v;
     return in != g_intent.end() && in->second.color >= 0 ? in->second.color : f.color;
 }
 
@@ -1465,15 +1603,46 @@ void rand_bind(int fid, const DescInfo& d) {
     const rnd::Bind b = rnd::bind_set(rf.next, is_mod_slot(fid, rf.next.costume), mine->cos, mine->color);
     g_rand_set[fid] = { b.set, true, b.local };
     if (b.consumed) {
-        logf("[F%d] Random: this set wears %s colour %d%s", fid, rand_name(fid, b.set.costume).c_str(), b.set.color,
+        logf("[F%d] Random: this set wears %s %s%s", fid, rand_name(fid, b.set.costume).c_str(), rand_colour_name(fid, b.set.costume, b.set.color).c_str(),
              !b.local ? " (what the opponent sees)" : is_mod_slot(fid, b.set.costume) ? " (on this PC: the opponent sees what the match holds)"
                       : " (on this PC: no fighter profile sent since the draw, the opponent sees what the match holds)");
+        if (!b.local) rand_wear_entry(mine->team + 1, fid, b.set.costume, b.set.color, "this set");   // (the alias's: as it dresses)
         rf.next = rand_draw(fid, "the next set");
     } else {
         logf("[F%d] Random: the match holds %s, not %s drawn (no fighter profile sent since the draw, and Outfit 1 cannot be "
              "worn over another): this set wears it, the draw waits for the next one", fid, ownership::outfit_label(mine->cos).c_str(),
              rand_name(fid, rf.next.costume).c_str());
     }
+}
+// The same for Battle Settings' Random colour: its next colour is taken for the set when the match holds it (random_logic.hpp
+// bind_colour) or when the alias wears the outfit (a slot: on this PC whatever the match holds), and the one after is made. An
+// entry is dressed by the Color Mod on this PC (the alias's: as it dresses).
+std::set<int> g_rand_cbatch;            // characters whose colour set was taken in this batch of managed requests
+void rand_bind_colour(int fid, const DescInfo& d) {
+    const rnd::Draw* n = rand_colour_of(fid);
+    if (!d.net || !n || rand_intent(fid) || g_rand_cbatch.count(fid)) return;
+    const DescFighter* mine = nullptr;
+    for (auto& f : d.f) if (f.fid == fid && f.ours) { mine = &f; break; }
+    if (!mine) return;
+    g_rand_cbatch.insert(fid);
+    const int slot = intent_slot(fid);
+    if (slot && slot != n->costume) return;
+    const int cos = n->costume;
+    rand_ensure_next_colour(fid, cos, "a match begins");
+    const rnd::Draw next = *rand_colour_of(fid);
+    const rnd::Bind b = slot ? rnd::Bind{ next, true, true } : rnd::bind_colour(next, mine->cos, mine->color);
+    if (!b.consumed) {
+        g_rand_cset.erase(fid);
+        logf("[F%d] Random colour: the match holds %s colour %d, not %s drawn (no fighter profile sent since the draw): this set "
+             "wears it, the draw waits for the next one", fid, ownership::outfit_label(mine->cos).c_str(), mine->color,
+             rand_colour_name(fid, cos, next.color).c_str());
+        return;
+    }
+    g_rand_cset[fid] = b.set;
+    logf("[F%d] Random colour: this set wears %s of %s%s", fid, rand_colour_name(fid, cos, b.set.color).c_str(), rand_name(fid, cos).c_str(),
+         slot ? " (the alias's, on this PC)" : rnd::is_entry(b.set.color) ? " (on this PC: the opponent sees colour 02)" : " (what the opponent sees)");
+    if (!slot) rand_wear_entry(mine->team + 1, fid, cos, b.set.color, "this set");
+    g_rand[fid].next_colour = { cos, rand_draw_colour(fid, cos, nullptr, "the next set") };
 }
 // Offline the player's fighter comes in the save's outfit, the carrier. Online in what the network holds: the carrier,
 // or another outfit when the server had another one (the Custom Room took Outfit 1 for a slot, 23/10): the slot is
@@ -1510,6 +1679,13 @@ bool dress(const DescFighter& f, int slot, int col) {
     if (g_dressed.insert_or_assign(f.fd, Dressed{ f.fid, slot, col, ++g_dress_seq }).second) f.fd->add_ref();
     ui::set_effective(f.fid, carrier_of(f.fid), slot, col);
     logf("[F%d] alias: the player's fighter wears slot v%02d colour %d over %s", f.fid, slot, col, carrier_name(f.fid).c_str());
+    return true;
+}
+// dress, in the colour drawn for it (wanted_value): an entry rides on colour 02 and the Color Mod dresses it on this PC
+bool dress_drawn(const DescInfo& d, const DescFighter& f, int slot) {
+    const int v = wanted_value(d, f);
+    if (!dress(f, slot, rnd::worn_colour(v))) return false;
+    rand_wear_entry(f.team + 1, f.fid, slot, v, "the alias's outfit");
     return true;
 }
 
@@ -1602,7 +1778,7 @@ void on_carrier_load(Obj* map, int fid, int cls, int n) {
     if (wjournal::on()) wjournal::log("ALIAS_LOAD map=%p F%d v%d cls=%d n=%d ok=%d", (void*)map, fid, slot, cls, n, r.exception_thrown ? 0 : 1);
     if (r.exception_thrown) { logf("[F%d] alias: the slot's files could not be asked for: no alias", fid); return; }
     g_extra[fid].push_back({ slot, cls, n, carrier_of(fid) });
-    for (auto& f : d.f) if (f.fid == fid && wears_slot(d, f, slot)) dress(f, slot, wanted_color(d, f));
+    for (auto& f : d.f) if (f.fid == fid && wears_slot(d, f, slot)) dress_drawn(d, f, slot);
     alias_line(fid, ("slot v" + std::to_string(slot)).c_str(), d);
     logf("[F%d] alias: slot v%02d's files asked for next to %s's", fid, slot, carrier_name(fid).c_str());
 }
@@ -1643,26 +1819,129 @@ std::map<int, std::deque<int>> g_rand_pending;
 std::map<int, int> g_rand_last;
 std::map<int, std::deque<int>> g_rand_loaded;
 
-// Every FighterDesc of an offline description in a Random outfit gets its draw: Costume and Color, as a replay's are written
-// (replay_outfits.cpp), so the game asks for that outfit's files and builds the fighter from it itself
+// The FighterDescs drawn for in this batch of offline requests (a colour drawn as an entry leaves Color on 02: a further request
+// of the files must not draw again), until the fighters are built; a batch older than 20 s is over (a load given up)
+std::set<Obj*> g_rand_done;
+bool g_rand_load_open = false;
+ULONGLONG g_rand_load_at = 0;
+constexpr int kColourModP2 = 91;       // the Color Mod's mark of a P2 on colour 02 in a mirror (its P2_VIRTUAL_ID): 02 too
+
+// What Battle Settings drew that the save holds and the game wears itself (a game outfit): the Random outfit's next draw, else
+// the Random colour's next colour (a slot's is the alias's)
+rnd::Draw rand_settings_draw(int fid) {
+    if (rand_intent(fid)) {
+        const rnd::Draw w = rand_worn(fid, false);
+        return w.valid() && !is_mod_slot(fid, w.costume) ? w : rnd::Draw{};
+    }
+    const rnd::Draw* n = rand_colour_of(fid);
+    return n && !intent_slot(fid) ? *n : rnd::Draw{};
+}
+
+// The draws of an offline battle (Costume and Color written as a replay's are, replay_outfits.cpp: the game asks for that
+// outfit's files and builds the fighter from it itself):
+//   - every FighterDesc in a Random outfit: an outfit and its colour;
+//   - picked on a select screen (Arcade: the player's fighters only, the CPU's colours are the game's), a FighterDesc on colour
+//     02 whose side (team + 1: the Color Mod's P1 / P2) chose the Random value for that fighter and outfit: its colour.
+// A colour another fighter of the same outfit wears in this battle is not drawn (the game's own rule: no mirror in one colour;
+// an entry is colour 02). An entry drawn is dressed by the Color Mod on that side (rand_wear_entry).
+// Elsewhere (Battle Settings' choice, offline: Combo Trials, the hub's...): the save holds what was drawn and the game wears
+// it; an entry drawn there is dressed on the player's side.
 void rand_dress_desc(Obj* desc) {
+    struct One { Obj* f; int fid, cos, col, team, pad; bool pending; };
+    std::vector<One> v;
+    uint8_t mode = 0;
+    if (Obj* rule = get_obj(desc, "Rule"))
+        if (auto* p = field_ptr(rule, "GameMode")) mode = *static_cast<uint8_t*>(p);
     Obj* teams = get_obj(desc, "Teams");
     for (int t = 0, nt = list_count(teams); t < nt; ++t) {
         Obj* team = list_item(teams, t);
         Obj* fs = team ? get_obj(team, "Fighters") : nullptr;
         for (int i = 0, nf = list_count(fs); i < nf; ++i) {
             Obj* f = list_item(fs, i);
-            int32_t fid = 0, cos = -1;
-            if (!f || !get_i32(f, "FighterId", fid) || !get_i32(f, "Costume", cos) || !is_random(fid, cos)) continue;
-            const rnd::Draw d = rand_draw(fid, "picked on a select screen: this battle");
-            if (!d.valid()) continue;              // nothing to draw: the Random outfit's own files, Outfit 1's scene
-            set_i32(f, "Costume", d.costume);
-            set_i32(f, "Color", d.color);
-            if (wjournal::on()) wjournal::log("RANDOM_DESC fd=%p F%d c%d -> c%d/%d", (void*)f, fid, cos, d.costume, d.color);
-            g_rand_pending[fid].push_back(d.costume);
-            g_rand_last[fid] = d.costume;
+            int32_t fid = 0, cos = -1, col = 0, pad = -1;
+            if (!f || !get_i32(f, "FighterId", fid) || !get_i32(f, "Costume", cos)) continue;
+            get_i32(f, "Color", col);
+            get_i32(f, "PadId", pad);
+            v.push_back({ f, fid, cos, col, t, pad, false });
         }
     }
+    const bool any_pad = std::any_of(v.begin(), v.end(), [](const One& o) { return o.pad >= 0; });
+    const bool picked = (mode == 1 || mode == 2 || mode == 3 || mode == 4 || mode == 19) && any_pad;   // (a replay has no pad)
+    const bool colours = colormod::battle_ok();
+    auto worn = [](int col) { return col == kColourModP2 ? rnd::kEntryCarrier : col; };
+    if (!picked && colours)
+        for (const One& o : v) {
+            if (o.pad < 0 || worn(o.col) != rnd::kEntryCarrier || is_random(o.fid, o.cos) || g_rand_done.count(o.f)) continue;
+            g_rand_done.insert(o.f);
+            const rnd::Draw w = rand_settings_draw(o.fid);
+            if (w.valid() && w.costume == o.cos) rand_wear_entry(o.team + 1, o.fid, o.cos, w.color, "Battle Settings' draw");
+        }
+    for (One& o : v) {
+        if (g_rand_done.count(o.f)) continue;
+        int cf = -1, cc = -1;
+        o.pending = is_random(o.fid, o.cos)
+                    || (picked && colours && (mode != 1 || o.pad >= 0) && worn(o.col) == rnd::kEntryCarrier
+                        && colormod::random_choice(o.team + 1, cf, cc) && cf == o.fid && cc == o.cos);
+    }
+    // a colour (as worn) another fighter of that fighter and outfit wears, the ones still to draw left out
+    auto taken = [&](const One& me, int cos, int col) {
+        for (const One& o : v)
+            if (&o != &me && !o.pending && o.fid == me.fid && o.cos == cos && worn(o.col) == rnd::worn_colour(col)) return true;
+        return false;
+    };
+    for (One& o : v) {
+        if (!o.pending) continue;
+        const int side = o.team + 1;
+        if (is_random(o.fid, o.cos)) {
+            const int was = o.cos;
+            const rnd::Draw d = rand_draw(o.fid, "picked on a select screen: this battle", [&](int cos, int col) { return !taken(o, cos, col); });
+            o.pending = false;
+            g_rand_done.insert(o.f);
+            if (!d.valid()) continue;              // nothing to draw: the Random outfit's own files, Outfit 1's scene
+            o.cos = d.costume;
+            o.col = rnd::worn_colour(d.color);
+            set_i32(o.f, "Costume", o.cos);
+            set_i32(o.f, "Color", o.col);
+            if (wjournal::on()) wjournal::log("RANDOM_DESC fd=%p F%d c%d -> c%d/%d", (void*)o.f, o.fid, was, d.costume, d.color);
+            g_rand_pending[o.fid].push_back(d.costume);
+            g_rand_last[o.fid] = d.costume;
+            rand_wear_entry(side, o.fid, d.costume, d.color, "picked on a select screen: this battle");
+        } else {
+            const int c = rand_draw_colour(o.fid, o.cos, [&](int col) { return !taken(o, o.cos, col); }, "picked on a select screen: this battle");
+            o.pending = false;
+            g_rand_done.insert(o.f);
+            if (!rnd::is_entry(c)) {               // a game colour: worn by the game (an entry: 02 stays, the Color Mod's P2 mark too)
+                o.col = c;
+                set_i32(o.f, "Color", c);
+            }
+            if (wjournal::on()) wjournal::log("RANDOM_COLOUR fd=%p F%d c%d -> %d", (void*)o.f, o.fid, o.cos, c);
+            rand_wear_entry(side, o.fid, o.cos, c, "picked on a select screen: this battle");
+        }
+    }
+}
+// The first offline request of a battle's files: the last battle's entries are over (not for a Custom Room's training area,
+// mode 2 with no pad: the room's online set keeps its own), the FighterDescs drawn for before are forgotten
+void rand_batch(Obj* desc) {
+    const ULONGLONG now = GetTickCount64();
+    const bool fresh = !g_rand_load_open || now - g_rand_load_at > 20000;
+    g_rand_load_at = now;
+    if (!fresh) return;
+    g_rand_load_open = true;
+    g_rand_done.clear();
+    uint8_t mode = 0;
+    if (Obj* rule = get_obj(desc, "Rule"))
+        if (auto* p = field_ptr(rule, "GameMode")) mode = *static_cast<uint8_t*>(p);
+    bool pads = false;
+    Obj* teams = get_obj(desc, "Teams");
+    for (int t = 0, nt = list_count(teams); t < nt && !pads; ++t) {
+        Obj* team = list_item(teams, t);
+        Obj* fs = team ? get_obj(team, "Fighters") : nullptr;
+        for (int i = 0, nf = list_count(fs); i < nf; ++i) {
+            int32_t pad = -1;
+            if (Obj* f = list_item(fs, i); f && get_i32(f, "PadId", pad) && pad >= 0) { pads = true; break; }
+        }
+    }
+    if (mode != 2 || pads) rand_clear_worn("a battle's fighters asked for");
 }
 // The game asks for a fighter's files (an offline battle): its description's Random outfits drawn, then this request of Random's
 // number asks for the drawn outfit's files (the game read the number before the description changed) - or, when it asks for a
@@ -1675,6 +1954,7 @@ void rand_on_load(Obj* map, int fid, void** argv) {
     if (alive(own) && get_bool(own, "IsNetwork", net) && net) return;
     Obj* desc = g_reload_desc && map == g_reload_map && alive(g_reload_desc) ? g_reload_desc : own;
     if (!alive(desc) || (get_bool(desc, "IsNetwork", net) && net)) return;
+    rand_batch(desc);
     rand_dress_desc(desc);
     const int cos = arg_int(argv[4]);
     auto& q = g_rand_pending[fid];
@@ -1713,7 +1993,7 @@ int pre_asset_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsi
     g_load_map.store(reinterpret_cast<Obj*>(argv[1]), std::memory_order_relaxed);
     g_load_desc.store(nullptr, std::memory_order_relaxed);
     post(EV_FIGHTER_LOAD);
-    if (!g_random_no.empty())
+    if (!g_random_no.empty() || colormod::battle_ok())         // (a Random colour needs no Random outfit)
         try { std::lock_guard lk(g_alias_mx); rand_on_load(reinterpret_cast<Obj*>(argv[1]), arg_int(argv[2]), argv); } catch (...) {}
     const int fid = arg_int(argv[2]), cos = arg_int(argv[4]);
     auto it = g_f.find(fid);
@@ -1760,7 +2040,7 @@ void on_carrier_managed(Obj* map, int fid, int cls, int n) {
             if (f.cos != carrier_of(fid))
                 logf("[F%d] alias: the network holds %s for the player's fighter, not %s: the slot is worn over it", fid,
                      ownership::outfit_label(f.cos).c_str(), carrier_name(fid).c_str());
-            dress(f, slot, wanted_color(d, f));
+            dress_drawn(d, f, slot);
         }
     alias_line(fid, ("slot v" + std::to_string(slot)).c_str(), d);
     logf("[F%d] alias: slot v%02d's files asked for (managed) next to %s's", fid, slot, carrier_name(fid).c_str());
@@ -1779,6 +2059,12 @@ int pre_managed_load(int argc, void** argv, REFrameworkTypeDefinitionHandle*, un
             g_mbatch_open = true;
             for (auto& [f, s] : g_mlive) logf("[F%d] alias: slot v%02d's managed files are the last match's: no longer counted", f, s);
             g_mlive.clear();
+            rand_clear_worn("a new match's fighters asked for");
+        }
+        // Battle Settings' Random colour: the set against this opponent
+        if (rand_colour_of(fid) && !rand_intent(fid) && !g_rand_cbatch.count(fid)) {
+            DescInfo d;
+            if (read_desc(request_desc(reinterpret_cast<Obj*>(argv[1])), d, true)) rand_bind_colour(fid, d);
         }
     } catch (...) {}
     auto it = g_f.find(fid);
@@ -1826,7 +2112,7 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
                          f.fid, d.net ? "online" : "offline", d.mode);
                     continue;
                 }
-                if (dress(f, slot, wanted_color(d, f))) keep.insert(f.fd);
+                if (dress_drawn(d, f, slot)) keep.insert(f.fd);
             }
         std::set<int> gone;
         for (auto it = g_dressed.begin(); it != g_dressed.end();) {
@@ -1840,8 +2126,11 @@ int pre_setup_fighters(int argc, void** argv, REFrameworkTypeDefinitionHandle*, 
     g_mbatch.clear();
     g_mbatch_open = false;
     g_rand_batch.clear();
+    g_rand_cbatch.clear();
     g_rand_pending.clear();
     g_rand_last.clear();
+    g_rand_done.clear();
+    g_rand_load_open = false;
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 
@@ -1869,18 +2158,22 @@ void put_back_swapped() {
 }
 
 // Outside Battle Settings: the save of a character whose intent is Random holds its next draw when the profile is built (a draw
-// made since the last screen that lists outfits: a set began online), so the profile sends it
+// made since the last screen that lists outfits: a set began online), so the profile sends it; the same for a Random colour
 void rand_profile_outside_menu() {
     std::lock_guard lk(g_alias_mx);
-    if (std::none_of(g_intent.begin(), g_intent.end(), [](const auto& in) { return is_random(in.first, in.second.slot); })) return;
-    for (auto& [fid, e] : save_entries())
+    const bool outfit = std::any_of(g_intent.begin(), g_intent.end(), [](const auto& in) { return is_random(in.first, in.second.slot); });
+    const bool colour = std::any_of(g_rand.begin(), g_rand.end(), [](const auto& r) { return r.second.next_colour.valid(); });
+    if (!outfit && !colour) return;
+    for (auto& [fid, e] : save_entries()) {
         if (rand_intent(fid)) rand_apply_save(fid, e, "the fighter profile is built: Random's next draw");
+        else rand_colour_save(fid, e, "the fighter profile is built: the Random colour's next one");
+    }
 }
 
 int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || tl_profile_depth++ > 0) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     if (!g_menu_open) {
-        if (!g_random_no.empty()) try { rand_profile_outside_menu(); } catch (...) {}
+        try { rand_profile_outside_menu(); } catch (...) {}
         return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     }
     try {
@@ -1888,7 +2181,20 @@ int pre_profile(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long lon
         int n = 0;
         for (auto& [fid, e] : save_entries()) {
             const int v = get_cos(e), c = get_col(e);
-            if (!is_slot(fid, v)) continue;
+            if (!is_slot(fid, v)) {
+                // a game outfit on the Color Mod's Random value (colour 02, its Fighter Settings choice): the profile sends the
+                // next colour (made now when there is none), the menu gets 02 back after
+                int cf = -1, cc = -1;
+                if (c != rnd::kEntryCarrier || !colormod::random_choice(3, cf, cc) || cf != fid || cc != v) continue;
+                rand_ensure_next_colour(fid, v, "Random colour chosen: its next colour");
+                const int nc = rnd::worn_colour(g_rand[fid].next_colour.color);
+                if (nc == c) continue;
+                g_swapped.push_back({ e, fid, v, c, v });
+                ++n;
+                g_swapped_n.store(static_cast<int>(g_swapped.size()), std::memory_order_relaxed);
+                set_i32(e, "MatchingFighterColor", nc);
+                continue;
+            }
             // Random: its next draw (made now when there is none: the profile the menu sends must hold it), a game outfit in
             // its colour, else the carrier
             rnd::Draw rd;
@@ -1977,9 +2283,51 @@ Method *g_cl_count = nullptr, *g_cl_item = nullptr;
 codecheck::Batch g_cl_check;
 bool g_cl_check_started = false, g_cl_hooked = false;
 
+thread_local int tl_cl_fid = -1, tl_cl_cos = -1;      // a game outfit's Color row asked for (rand_seen_row)
+std::map<std::pair<int, int>, int> g_row_len;           // under g_cl_mx: each row's length when its colours were read
+
 int pre_color_list(int argc, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    tl_rand_colours = argc >= 4 && !g_closing.load(std::memory_order_relaxed) && is_random(arg_int(argv[2]), arg_int(argv[3]));
+    const bool on = argc >= 4 && !g_closing.load(std::memory_order_relaxed);
+    const int fid = on ? arg_int(argv[2]) : -1, cos = on ? arg_int(argv[3]) : -1;
+    tl_rand_colours = on && is_random(fid, cos);
+    const bool game = on && fid > 0 && cos >= 0 && !is_slot(fid, cos);
+    tl_cl_fid = game ? fid : -1;
+    tl_cl_cos = game ? cos : -1;
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+// A game outfit's colours as its Color row lists them (each number once: the Color Mod's entries and Random value ride on 1),
+// for the draws of that outfit (rand_colours_of). Read again when the row's length changed: the Edit Character screen asks
+// for it every frame. The numbers are taken under g_cl_mx, kept under g_alias_mx (never both).
+void rand_seen_row(Obj* list, int fid, int cos) {
+    std::vector<int> nos;
+    {
+        std::lock_guard lk(g_cl_mx);
+        TD* td = list->get_type_definition();
+        if (td != g_cl_td) {
+            g_cl_td = td;
+            g_cl_count = method_of(td, "get_Count", 0);
+            g_cl_item = method_of(td, "get_Item", 1);
+        }
+        if (!g_cl_count || !g_cl_item) return;
+        auto rc = call(g_cl_count, list);
+        if (rc.exception_thrown) return;
+        const int n = static_cast<int>(rc.dword);
+        int& len = g_row_len[{ fid, cos }];
+        if (n <= 0 || n == len) return;
+        for (int i = 0; i < n && i < 64; ++i) {
+            Obj* ci = call_obj(g_cl_item, list, { arg_i32(i) });
+            int32_t no = -1;
+            if (ci && get_i32(ci, "<No>k__BackingField", no) && no >= 0 && no < rnd::kEntryMin && std::find(nos.begin(), nos.end(), no) == nos.end())
+                nos.push_back(no);
+        }
+        len = n;
+    }
+    if (nos.empty()) return;
+    std::lock_guard lk(g_alias_mx);
+    std::vector<int>& was = g_row_colours[{ fid, cos }];
+    if (was == nos) return;
+    was = nos;
+    logf("[F%d] Random: %s's Color row lists %zu colours", fid, ownership::outfit_label(cos).c_str(), nos.size());
 }
 void name_random_colours(Obj* list) {
     const SF6CoreAPI* core = ui::core();
@@ -2004,10 +2352,15 @@ void name_random_colours(Obj* list) {
     }
 }
 void post_color_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    if (!tl_rand_colours) return;
+    const bool rnd_row = tl_rand_colours;
+    const int fid = tl_cl_fid, cos = tl_cl_cos;
     tl_rand_colours = false;
-    if (!ret_val || !*ret_val || g_closing.load(std::memory_order_relaxed)) return;
-    try { name_random_colours(reinterpret_cast<Obj*>(*ret_val)); } catch (...) {}
+    tl_cl_fid = tl_cl_cos = -1;
+    if ((!rnd_row && fid < 0) || !ret_val || !*ret_val || g_closing.load(std::memory_order_relaxed)) return;
+    try {
+        if (rnd_row) name_random_colours(reinterpret_cast<Obj*>(*ret_val));
+        else rand_seen_row(reinterpret_cast<Obj*>(*ret_val), fid, cos);
+    } catch (...) {}
 }
 
 // ---- hooks: screens ----
@@ -2176,6 +2529,7 @@ void install_hooks() {
         hook_all(bfm, "requestManagedFighterAssetLoad", pre_managed_load, nullptr);
         hook_all(bfm, "setupFighterAsset", pre_setup_fighters, nullptr);
         hook_all(bfm, "SetupReloadBattleAsset", pre_reload_setup, nullptr);
+        g_draw_hooks = true;
     } else logf("costumes: the battle description's costume override is missing (game update?): no alias");
     // the fighter profile sent to the server: built, sent, checked (see "the fighter profile")
     if (auto* tdm = tdb->find_type("app.TemporarilyDataManager"))
@@ -2197,8 +2551,9 @@ void install_hooks() {
     hook_all(tdb->find_type("app.menu.UIFlowTitle"), "onDestroy", pre_title_end, nullptr);
     // Only with NSFW outfits installed: a fighter's outfit list, without them while they are hidden
     if (g_nsfw_slots) hook_all(tdb->find_type("app.InventoryManager.CostumeInventory"), "GetCostumeNoList", pre_costume_list, post_costume_list);
-    // The Random outfits: their Color row's one value named Random, once the code check (R18) passed (tick)
-    if (!g_random_no.empty()) {
+    // The Color rows, once the code check (R18) passed (tick): the Random outfits' one value named Random, and the colours a
+    // game outfit's row lists (a Random colour's draws, any character)
+    {
         TD* ci = tdb->find_type("app.InventoryManager.ColorInventory");
         g_cl_check.add(ci ? method_of(ci, "GetColorList", 2) : nullptr, "app.InventoryManager.ColorInventory.GetColorList(Int32, Int32)");
         g_cl_check.start("reframework/data/SF6_CostumeSlots_data/codecheck_random.txt", "costumes: Random's Color row");
@@ -2239,9 +2594,10 @@ void tick(uint32_t ev) {
         g_cl_check.log_summary();
         Method* m = g_cl_check.method(0);
         if (g_cl_check.unique(0) && m && m->add_hook(pre_color_list, post_color_list, false))
-            logf("costumes: Random's Color row named Random (ColorInventory.GetColorList hooked)");
+            logf("costumes: Random's Color row named Random, the Color rows' colours followed (ColorInventory.GetColorList hooked)");
         else
-            logf("costumes: ColorInventory.GetColorList %s: the Random outfit's one colour keeps the game's name for it",
+            logf("costumes: ColorInventory.GetColorList %s: the Random outfit's one colour keeps the game's name for it, a Random "
+                 "colour draws among the colours read for the Random outfit (else Color 1) and the Color Mod's entries",
                  m ? ("refused by the code check (R18, another method enters its code: " + g_cl_check.other_label(0) + ")").c_str() : "not found");
     }
 
@@ -2339,6 +2695,16 @@ bool load_fighters(std::vector<LoadFighter>& out, const char** why) {
     }
     return !out.empty();
 }
+bool replay_random(int fighter, int costume, int& out_costume, int& out_color, std::string& entry) {
+    if (!is_random(fighter, costume)) return false;
+    std::lock_guard lk(g_alias_mx);
+    const rnd::Draw d = rand_draw(fighter, "a replay set to Random in Replays > Settings");
+    if (!d.valid()) return false;
+    out_costume = d.costume;
+    out_color = rnd::worn_colour(d.color);
+    entry = rand_entry_id(fighter, d.costume, d.color);
+    return true;
+}
 bool dressed_slot(Obj* fd, int fid, int& slot, int& color) {
     std::lock_guard lk(g_alias_mx);
     const Dressed* w = nullptr;
@@ -2371,4 +2737,19 @@ int slot_by_name(int fighter, const std::string& name) {
     return -1;
 }
 
+// The Color Mod's Random value (colormod/include/sf6colormod_entries.h, SF6Slots_RandomColourFn): every outfit of a character
+// this plugin manages but its Random outfit (whose one colour is Random already), while the battles' loads are hooked (the
+// draws are made there); the game's word for Random
+int random_colour(int fighter, int costume, char* word, int cap) {
+    if (fighter <= 0 || costume < 0 || !g_draw_hooks.load(std::memory_order_relaxed) || !g_slot_of.count(fighter) || is_random(fighter, costume))
+        return 0;
+    if (word && cap > 0) std::snprintf(word, static_cast<size_t>(cap), "%s", words::game(words::G::Random).c_str());
+    return 1;
+}
+
 } // namespace slots::costumes
+
+// Asked by the Color Mod at each Color row it fills (any thread, no game call): see random_colour above
+extern "C" __declspec(dllexport) int SF6Slots_RandomColour(int fighter, int costume, char* word, int cap) {
+    try { return slots::costumes::random_colour(fighter, costume, word, cap); } catch (...) { return 0; }
+}

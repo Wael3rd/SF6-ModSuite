@@ -188,6 +188,11 @@ namespace costumes {
     // The slot the online alias dressed the player's fighter in: that FighterDesc's, else the last one dressed for `fid` still
     // alive (any thread); false: none
     bool dressed_slot(Obj* fd, int fid, int& slot, int& color);
+    // Replays > Settings: a replay fighter set to the character's Random outfit (`costume` its number) wears a draw of its pool,
+    // the Random outfit's rules (random_logic.hpp: no repeat, never NSFW while hidden, the colour among the outfit's and the
+    // Color Mod's entries). Any thread. The outfit and the game's colour drawn, the Color Mod's entry ("" a game colour);
+    // false: not the Random outfit, or nothing to draw
+    bool replay_random(int fighter, int costume, int& out_costume, int& out_color, std::string& entry);
 }
 // replay_outfits.cpp: Replay Outfits, what each fighter wears in a replay (rules: replay_outfits.hpp)
 namespace replay {
