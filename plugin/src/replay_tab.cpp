@@ -251,6 +251,9 @@ std::atomic<int> g_copy_status{ 1000 };
 std::atomic<uint32_t> g_swallowed{ 0 };
 std::atomic<uint32_t> g_leave_frame{ 0 };
 std::atomic<uint32_t> g_wrap_frame{ 0xFFFFFFFFu };   // a press that wraps round the tabs: the game's own move, once (+1: the frame)
+std::atomic<bool> g_to_first{ false };          // tab next on Settings: the frame selects the game's first tab (its list does not wrap
+uint32_t g_first_at = 0;                        // forward from Search, seen 10/11): when it did, to check the page followed
+int g_first_step = 0;                           // 0 nothing, 1 selected, waiting to check
 thread_local bool tl_skipped = false;
 
 // ---- frame state ----
@@ -429,7 +432,8 @@ bool make_copies() {
 constexpr int kCall = REFRAMEWORK_HOOK_CALL_ORIGINAL, kSkip = REFRAMEWORK_HOOK_SKIP_ORIGINAL;
 
 // The tabs wrap round as the game's do (Wael 10/11): Settings is the last tab, after Search, before Recommended Replays.
-//   - Settings, tab next: ours gives way and the game's own next runs (its list is on Search: it goes to its first tab).
+//   - Settings, tab next: ours gives way and the frame selects the game's first tab (its list's SetSelectedIndex, a mouse click's
+//     way; the game's own next does not wrap forward from Search, seen 10/11: the press is swallowed).
 //   - Recommended Replays, tab back: the game's own back runs (to Search, its list then where ours keeps it) and ours comes up.
 // One press reaches decide twice (InputTab, then InputTabNext / InputTabBack): the second of a wrapping press lets the game go on.
 int decide(void* self, int dir, uint32_t flag) {
@@ -441,16 +445,16 @@ int decide(void* self, int dir, uint32_t flag) {
         if (g_music_open.load()) return kSkip;          // the music screen has the keys: this tab stays
         // tab back leaves from the option row; in the grid and on the character's page the tab keys do nothing (the game's)
         if (acts && dir < 0 && g_level.load() == kLevelList) { g_ours.store(false); g_leave.store(true); g_leave_frame.store(g_frame); }
-        if (acts && dir > 0 && g_level.load() == kLevelList) {      // tab next: round to the game's first tab
+        if (acts && dir > 0 && g_level.load() == kLevelList) {      // tab next: round to the game's first tab (the frame)
             g_ours.store(false);
             g_leave.store(true);
-            g_wrap_frame.store(g_frame);
-            return kCall;
+            g_leave_frame.store(g_frame);
+            g_to_first.store(true);
         }
         g_swallowed.fetch_add(1);
         return kSkip;                                   // our tab: the game's list stays on Search
     }
-    if (dir < 0 && g_leave_frame.load() == g_frame) return kSkip;   // the same press seen again (InputTab + InputTabBack)
+    if (g_leave_frame.load() == g_frame) return kSkip;   // the same press seen again (InputTab + InputTabBack / InputTabNext)
     if (dir < 0 && acts && g_tab.load(std::memory_order_acquire) == kFirstTab) {   // tab back on the first tab: round to ours
         bool ok = false;
         try { ok = make_copies(); } catch (...) { ++g_refused; g_copy_status.store(-2000); }
@@ -2398,6 +2402,25 @@ void tick() {
     }
     if (g_enter.exchange(false) && g_ours.load()) enter(main);
     if (g_leave.exchange(false)) leave(main, "tab back");
+    // tab next on Settings: the game's first tab selected as a mouse click does it; its page not up two frames later: the list's
+    // selection-changed event raised (once)
+    if (g_to_first.exchange(false)) {
+        if (Obj* ti = get_obj(agent, "_TabItem")) {
+            call(ti, "SetSelectedIndex", { arg_i32(kFirstTab), arg_bool(true) });
+            g_first_step = 1;
+            g_first_at = g_frame;
+            logf("replay tab: tab next on Settings: the game's first tab selected");
+        }
+    } else if (g_first_step == 1 && g_frame - g_first_at >= 2) {
+        g_first_step = 0;
+        void* pages[2] = {};
+        Obj* page = A()->ui_agents("CFNReplayChildList", pages, 2) ? static_cast<Obj*>(pages[0]) : nullptr;
+        if (!actual_visible(page ? call_obj(page, "get_ControlMain") : nullptr))
+            if (Obj* ti = get_obj(agent, "_TabItem")) {
+                call(ti, "InvokeSelectionChanged");
+                logf("replay tab: the first tab's page not up: the list's selection-changed event raised");
+            }
+    }
     if (g_leaving) {
         hide_copies(main);
         const Keys k = read_keys();
