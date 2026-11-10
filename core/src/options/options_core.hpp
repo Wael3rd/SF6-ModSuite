@@ -51,8 +51,15 @@ struct Entry {
     Obj unit = nullptr;
     uint64_t title_guid[2] = {0, 0};
     std::vector<uint64_t> option_guids; // hi, lo per option
-    bool placed = false;                // its group is placed in a section of the game's Options screen (increment 11)
+    bool placed = false;                // its group is placed in a section of the game's Options screen (increment 11), or
+                                        // is a section with rows of its own (increment 14)
+    bool has_default = false;           // increment 14: the value the game's reset gives its row (the game's int)
+    int64_t default_int = 0;
 };
+
+// Increment 14: the value the game's "Restore Default Settings" gives a section's row (the game's int): the entry's own, else
+// the first value (choice 0, i.e. 1-based 1) or the slider's minimum, kept in the range.
+int64_t default_of(const Entry& e);
 
 struct Group {
     int64_t id = -1;
@@ -63,6 +70,7 @@ struct Group {
     int32_t place_section = -1;         // increment 11: app.Option.GroupType of the section
     int32_t section_tab = -1;           // increment 13: the group is a section of the left list of this tab (-1: not)
     int32_t section_before = -1;        // increment 13: app.Option.GroupType it is placed before (-1: at the end)
+    bool section_rows = false;          // increment 14: the section's right side is the game's sub list holding its entries
 };
 
 // Increment 13: what the game side needs of a section (a copy, taken under the engine's lock).
@@ -70,6 +78,8 @@ struct SectionDef {
     int64_t gid = -1;
     int32_t tab = -1, before = -1;
     std::string key, title, desc;       // key: id_key_of(group)
+    bool rows = false;                  // increment 14: its entries are rows of the game's sub list
+    std::vector<int64_t> entries;       // increment 14: its entries that are rows (no button), in order
 };
 
 // The game operations. `false` from a bool-returning call = the call failed (the Lua's pcall returned false).
@@ -100,7 +110,9 @@ void set_group_place(int64_t group_id, int32_t tab, int32_t section);
 // Increment 13: the group becomes a section of the left list of a game Options tab (tab = app.Option.TabType), before
 // the section whose app.Option.GroupType is `before` (-1: at the end); tab -1 = no section any more. A section group
 // has no page and no rows: the game side (options.cpp) keeps its unit in the tab's list. False: no such group.
-bool set_group_section(int64_t group_id, int32_t tab, int32_t before);
+// Increment 14 (rows): its entries become rows of the game's sub list on its right side instead (placed entries: never
+// loaded, reset or saved by the game, read every full pass with the window closed); their units are made at a build.
+bool set_group_section(int64_t group_id, int32_t tab, int32_t before, bool rows = false);
 std::vector<SectionDef> sections();                            // every section group, in registry order
 // What build() reads from the Lua tables, pushed by the wrapper before each build (titles and option lists may be
 // functions there): :291 group title, :302 entry title, :227 descriptions, :309-315 options, :326 range and value.
@@ -111,7 +123,13 @@ std::shared_ptr<Entry> entry_by_id(int64_t entry_id);          // nullptr once n
 std::shared_ptr<Entry> entry_by_type(int32_t type_id);         // known_ids[TypeId]
 bool known(int32_t type_id);
 bool placed_type(int32_t type_id);                             // known and placed in a game section (increment 11)
+// Increment 14: a TypeId this load gave out (every unit of the core's, known now or retired since: a rebuild, a removed
+// group); the game's own ids are all below them.
+bool issued_type_id(int32_t type_id);
 void set_value(int64_t entry_id, int64_t value, bool refresh); // Group:set / M.set_value (:193-197, :1095-1101)
+// Increment 14: the group's entries read now (a V event per change), for the rows of a section while the player is on them.
+void poll_group(int64_t group_id);
+void set_entry_default(int64_t entry_id, int64_t default_int);   // increment 14: the entry's own default (the game's int)
 
 // ---- build (:262-392, :608-612) ------------------------------------------------------------------------------
 const std::vector<std::shared_ptr<Group>>& groups();

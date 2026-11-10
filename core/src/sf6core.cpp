@@ -39,7 +39,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.9";
+static constexpr const char* CORE_VERSION = "0.9.10";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2038,6 +2038,8 @@ SF6CoreStatus SF6CORE_CALL api_opt_set_value(SF6CoreClient*, int64_t, int64_t);
 SF6CoreStatus SF6CORE_CALL api_opt_section_place(SF6CoreClient*, int64_t, int32_t, int32_t);
 SF6CoreStatus SF6CORE_CALL api_opt_section_state(SF6CoreClient*, int64_t, SF6CoreOptSectionState*);
 SF6CoreStatus SF6CORE_CALL api_opt_section_hold(SF6CoreClient*, int64_t, int32_t);
+// Increment 14: a client's section whose right side is the game's sub list holding its entries (options/options_service.cpp)
+SF6CoreStatus SF6CORE_CALL api_opt_section_place_rows(SF6CoreClient*, int64_t, int32_t, int32_t);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2681,7 +2683,9 @@ static const SF6CoreAPI s_api = {
     // increment 13 (core 0.9.9)
     api_opt_section_place,
     api_opt_section_state,
-    api_opt_section_hold
+    api_opt_section_hold,
+    // increment 14 (core 0.9.10)
+    api_opt_section_place_rows
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)

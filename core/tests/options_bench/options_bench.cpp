@@ -3,7 +3,8 @@
 //
 // Covers increment 11 (ADR-0021, a group placed in a section of the game's Options screen) and checks that a tree
 // without a placed group behaves as before (no placement call, its pages recorded as before). Increment 13 (a group as a
-// section of a game tab's left list): the registry side (the units, the screen and the holds are options.cpp's).
+// section of a game tab's left list): the registry side (the units, the screen and the holds are options.cpp's). Increment 14
+// (a section whose right side is the game's sub list of its entries): placed entries, their reads, the issued ids.
 #include "../../src/options/options_core.hpp"
 
 #include <cstdio>
@@ -27,12 +28,13 @@ int g_sync_calls = 0, g_sync_keep = 0, g_sync_drop = 0;
 oc::Obj new_obj() { return reinterpret_cast<oc::Obj>(static_cast<uintptr_t>(0x1000 * g_next_obj++)); }
 
 // What be_build_units does with the registry, without the game: a unit per group (none for a placed one, nothing for a
-// section) and per entry (buttons of a placed group skipped), type ids by key.
+// section) and per entry (buttons of a placed group skipped; a section with rows: its entries as a placed group's), type ids
+// by key.
 bool be_build() {
     oc::build_set_root(new_obj());
     for (auto& gp : oc::groups()) {
-        if (gp->section_tab >= 0) { oc::build_set_group(*gp, nullptr); continue; }
-        const bool placed = gp->place_tab >= 0;
+        if (gp->section_tab >= 0 && !gp->section_rows) { oc::build_set_group(*gp, nullptr); continue; }
+        const bool placed = gp->place_tab >= 0 || gp->section_rows;
         oc::build_set_group(*gp, placed ? nullptr : new_obj());
         for (auto& e : gp->entries) {
             if (placed && e->kind == oc::Kind::Button) continue;
@@ -197,6 +199,61 @@ int main() {
     oc::set_group_section(oc::add_group("other"), 1, 290);
     oc::reset();
     check(oc::sections().empty(), "9 reset forgets the sections");
+
+    // ---- 10. increment 14: a section whose right side is the game's sub list holding its entries ----
+    oc::reset();
+    g_sync_calls = 0;
+    const int64_t s10 = oc::add_group("slots.rows");
+    const int64_t a10 = oc::add_entry(s10, oc::Kind::Choice, "a");
+    const int64_t b10 = oc::add_entry(s10, oc::Kind::Button, "never_a_row");
+    oc::set_entry_def(a10, "A", "", { "Off", "On" }, 0, 0, 0);
+    check(oc::set_group_section(s10, 1, 290, true), "10 placed with rows");
+    const int64_t c10 = oc::add_entry(s10, oc::Kind::Choice, "c");                    // after: inherits it
+    oc::set_entry_def(c10, "C", "", { "1", "2", "3" }, 0, 0, 2);
+    auto xa = oc::entry_by_id(a10), xb = oc::entry_by_id(b10), xc = oc::entry_by_id(c10);
+    check(xa && xa->placed && xb && xb->placed && xc && xc->placed, "10 its entries are placed (never loaded, reset or saved)");
+    secs = oc::sections();
+    check(secs.size() == 1 && secs[0].rows && secs[0].entries.size() == 2 && secs[0].entries[0] == a10 && secs[0].entries[1] == c10,
+          "10 its definition: rows, the two value entries in order, no button");
+    oc::rebuild();
+    check(oc::build() && oc::groups()[0]->unit == nullptr, "10 built, no page unit");
+    check(xa->unit && xc->unit && oc::placed_type(xa->type_id) && oc::placed_type(xc->type_id) && !xb->unit, "10 rows built and placed, button not");
+    check(!oc::on_page_setup(reinterpret_cast<oc::Obj>(0xA0), { { xa->type_id, 0, reinterpret_cast<oc::Obj>(0xA1) } }), "10 a page showing a row is not ours");
+    events();
+    g_values[xa->unit] = 1;                                                            // the window is closed: the full pass reads them
+    run_ticks(tick, 10);
+    ev = events();
+    check(has_event(ev, "V " + std::to_string(a10) + " 1"), "10 a change read by the full pass with the window closed");
+    g_values[xc->unit] = 0;
+    oc::poll_group(s10);                                                               // the player on its rows: read at once
+    ev = events();
+    check(has_event(ev, "V " + std::to_string(c10) + " 0") && ev.size() == 1, "10 poll_group reports the change at once, once");
+    oc::poll_group(s10);
+    check(events().empty(), "10 nothing more without a change");
+    check(g_sync_calls == 0, "10 a section with rows is no placed group (no game-section sync)");
+    const int32_t tid10 = xa->type_id;
+    check(oc::issued_type_id(tid10) && !oc::issued_type_id(290) && !oc::issued_type_id(100000), "10 issued ids: ours only");
+    oc::rebuild();
+    check(!oc::known(tid10) && oc::issued_type_id(tid10), "10 after a rebuild: not known, still issued (the save skips it)");
+    oc::build();
+    check(oc::set_group_section(s10, 1, 290, false), "10 back to a client page");
+    check(!xa->placed && !xc->placed && !oc::sections()[0].rows && oc::sections()[0].entries.empty(), "10 a client page: no placed entry, no row");
+    // the game's "Restore Default Settings": the value each row goes to (the game's int)
+    check(oc::default_of(*xa) == 0 && oc::default_of(*xc) == 0, "10 default without one: the first value (1-based 1)");
+    oc::set_entry_default(c10, 2);
+    check(oc::default_of(*xc) == 2 && xc->has_default, "10 the entry's own default");
+    oc::set_entry_default(c10, 7);
+    check(oc::default_of(*xc) == 2, "10 a default past the values: the last one");
+    const int64_t sl10 = oc::add_entry(s10, oc::Kind::Slider, "sl");
+    oc::set_entry_def(sl10, "S", "", {}, 5, 20, 9);
+    auto xs = oc::entry_by_id(sl10);
+    check(xs && oc::default_of(*xs) == 5, "10 slider default without one: its minimum");
+    oc::set_entry_default(sl10, 12);
+    check(oc::default_of(*xs) == 12, "10 slider's own default");
+    oc::set_group_section(s10, -1, -1, true);
+    check(oc::sections().empty() && !oc::groups()[0]->section_rows && !xa->placed, "10 no section: rows off too");
+    oc::reset();
+    check(!oc::issued_type_id(tid10), "10 reset forgets the issued ids");
 
     std::printf("options_bench: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

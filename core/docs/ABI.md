@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | ABI version | 1 |
-| Core version | 0.9.9 |
+| Core version | 0.9.10 |
 | Header | `include/sf6core/sf6core_api.h` |
 
 ## Versioning and the append-only rule
@@ -355,6 +355,16 @@ Probe with `SF6CORE_HAS(api, opt_section_place)`. Details: `OPTIONS.md`, "A sect
 | 94 | `opt_section_place` | `SF6CoreStatus (client, int64_t group, int32_t tab, int32_t before_section)` | Game thread | The group (`opt_group`: its title = the left list's line, its description = the screen's description line) becomes one more section of the left list of `tab` (`app.Option.TabType`), just above the section whose `app.Option.GroupType` is `before_section` (290 = Other Settings; -1 = at the end). Shows from the next time the game fills that tab (entering it). No rows, never loaded, reset or saved by the game. `-1, -1` = removed. `ERR_NOT_FOUND`: not the client's group; `ERR_INVALID_ARG`: `tab` -1 with a section, or a group placed with `opt_group_place`; `ERR_DISABLED`: the option service could not be installed |
 | 95 | `opt_section_state` | `SF6CoreStatus (client, int64_t group, SF6CoreOptSectionState* out)` | Game thread | This frame's state (read once per core frame, before the clients' frames): `shown`, `focused`, `held`, `decides` (a count), `menu_state` / `list_state` / `tab` (-1 when the screen is not up), `agent`, `control_main`, `right_panel` (c_bg_right), `item` (the left list's control showing the section, only while shown), `area` (c_bg_right/e_bg: x, y, w, h). `out->struct_size` set by the caller (the core writes only what it covers). `ERR_NOT_FOUND`: not the client's section |
 | 96 | `opt_section_hold` | `SF6CoreStatus (client, int64_t group, int32_t hold)` | Game thread | 1: the screen's agent is blocked (`ui_set_block_input`, the core's client) and the left list's Back swallowed while held (H2); only while the section is shown (`ERR_NOT_READY` otherwise). 0: given back; call it once every key the page read is up. Given back by the core when the screen goes, the section goes, the client is no longer active, or the option hooks are off |
+
+## Function list (increment 14 -- a client's section with the game's own rows on its right, appended, core 0.9.10)
+
+Probe with `SF6CORE_HAS(api, opt_section_place_rows)`. Details: `OPTIONS.md`, "A section with the game's own rows on its right".
+`SF6CoreOptEntryDesc` gains `int32_t has_default` and `int64_t default_value` at its end, `SF6CoreOptSectionState` gains `int64_t focused_entry` then `uint32_t resets` (a section with a client page: the game's "Restore Default Settings" confirmed on it, a count) at its end (an older core, or a caller compiled against 0.9.9, never sees
+it: the core writes only what `struct_size` covers).
+
+| # | Function pointer | Signature | Threading | Notes |
+|---|---|---|---|---|
+| 97 | `opt_section_place_rows` | `SF6CoreStatus (client, int64_t group, int32_t tab, int32_t before_section)` | Game thread | As `opt_section_place` (same place, texts, state, `-1, -1` = removed), but the right side is the game's own sub list: the group's entries are its rows (choice / slider; buttons not shown), filled and run by the game (Confirm into the rows, Back out, the description line, Left / Right). Its setting is copied from a real section with rows. `on_value` for every change (read every frame while the cursor is in its rows); `opt_set_value` at once; texts in place; entries added later at the next build, shown from the game's next fill of the right list. At most one row per part of the sub list (25). Never loaded or saved by the game; its "Restore Default Settings" gives each row its entry's default (`SF6CoreOptEntryDesc.has_default` / `default_value`, appended, read when `struct_size` covers them; else choice 1, slider minimum), with `on_value` for each change. `opt_section_state.focused_entry`: the entry under the right list's cursor (0 elsewhere). `opt_section_hold` 1 on it = `ERR_INVALID_ARG`. Errors as `opt_section_place` |
 
 ## Lua bridge API
 

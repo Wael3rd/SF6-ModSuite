@@ -15,6 +15,7 @@
 #include <windows.h>
 
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -123,6 +124,7 @@ struct DGroup {
     std::vector<std::shared_ptr<DEntry>> entries;
     bool placed = false;                               // increment 11: its rows are in a game section
     bool section = false;                              // increment 13: a section of a game tab's left list
+    bool rows = false;                                 // increment 14: that section's right side is the game's sub list of its entries
 };
 struct Queued { std::shared_ptr<DEntry> e; bool nav = false; std::string key; int flags = 0; };
 
@@ -137,6 +139,12 @@ bool g_wanted = false, g_installed = false, g_install_failed = false;
 
 template <class F> void guard(const char* where, F&& f) {
     try { f(); } catch (...) { ++g_faults; dialogs::options::note_fault(where); }
+}
+
+// Increment 14: the section with rows an entry belongs to (nullptr: none), for the log
+std::shared_ptr<DGroup> rows_group_of(const std::shared_ptr<DEntry>& e) {
+    for (auto& g : g_groups) if (g->rows) for (auto& x : g->entries) if (x == e) return g;
+    return nullptr;
 }
 
 int64_t to_int(const DEntry& e) { return e.kind == "choice" ? e.value - 1 : e.value; }
@@ -222,6 +230,9 @@ void pump_now() {
                 auto e = it->second;
                 const int64_t n = num(f[2], 0);
                 e->last_int = n; e->value = from_int(*e, n);
+                if (auto rg = rows_group_of(e))
+                    core_log(SF6CORE_LOG_INFO, nullptr, "[options] section %lld: row of entry %lld (\"%s\") changed by the player: value %lld, on_value",
+                             (long long)rg->gid, (long long)e->eid, e->title.c_str(), (long long)e->value);
                 if (e->kind != "button") { CbCall c; c.what = 1; c.a = e->eid; c.b = e->value; call(e->client, c); }
             }
         } else if (t == "B") {
@@ -408,6 +419,9 @@ int64_t SF6CORE_CALL api_opt_entry(SF6CoreClient* client, int64_t group, const S
     int64_t id = -1;
     guard("opt_entry", [&] { id = dialogs::options::add_entry(g->gid, e->kind, e->key); });
     if (id >= 0) { e->eid = id; g_by_id[id] = e; }
+    // increment 14: the entry's own reset value, when the caller's struct has it (choice 1-based -> the game's int)
+    if (id >= 0 && e->kind != "button" && d->struct_size >= offsetof(SF6CoreOptEntryDesc, default_value) + sizeof(d->default_value) && d->has_default)
+        guard("opt_entry_default", [&] { oc::set_entry_default(id, e->kind == "choice" ? d->default_value - 1 : d->default_value); });
     return id;
 }
 SF6CoreStatus SF6CORE_CALL api_opt_rebuild(SF6CoreClient*) { guard("opt_rebuild", [] { oc::rebuild(); }); return SF6CORE_OK; }
@@ -438,7 +452,7 @@ SF6CoreStatus SF6CORE_CALL api_opt_set_option_text(SF6CoreClient*, int64_t entry
     return dialogs::options::set_option_text(entry, index, s(text)) ? SF6CORE_OK : SF6CORE_ERR_FAULTED;
 }
 uint32_t SF6CORE_CALL api_opt_status(char* buf, uint32_t cap) {
-    char b[512];
+    char b[1024];
     const std::string eng = g_installed ? dialogs::options::status() : std::string("not installed");
     std::snprintf(b, sizeof b, "options: %s, clients %zu, tick %lld, groups %zu, entries %zu, window %d, faults %llu; %s",
                   g_installed ? "on" : (g_install_failed ? "failed" : "idle"), g_owners.size(), (long long)g_tick, g_groups.size(),
@@ -461,6 +475,9 @@ SF6CoreStatus SF6CORE_CALL api_opt_set_value(SF6CoreClient* client, int64_t entr
     e->last_int = to_int(*e);
     bool done = false;
     guard("opt_set_value", [&] { oc::set_value(entry, e->last_int, true); done = true; });
+    if (auto rg = rows_group_of(e))
+        core_log(SF6CORE_LOG_INFO, nullptr, "[options] section %lld: row of entry %lld (\"%s\") set by its client: value %lld (%s)", (long long)rg->gid,
+                 (long long)entry, e->title.c_str(), (long long)value, done ? "written to its unit" : "FAULTED");
     return done ? SF6CORE_OK : SF6CORE_ERR_FAULTED;
 }
 
@@ -480,26 +497,41 @@ SF6CoreStatus SF6CORE_CALL api_opt_group_place(SF6CoreClient* client, int64_t gr
 }
 
 // ---- increment 13: a client's section in the left list of a game Options tab, its right side the client's page ------
-SF6CoreStatus SF6CORE_CALL api_opt_section_place(SF6CoreClient* client, int64_t group, int32_t tab, int32_t before_section) {
+// Increment 14 (rows): its right side is the game's own sub list holding its entries. The section shows as in increment 13;
+// its entries' units are made by a build, started here when the kind changed (opt_rebuild + opt_ensure_built: the client's
+// own calls afterwards are harmless, a kept row is not made again).
+static SF6CoreStatus section_place(SF6CoreClient* client, int64_t group, int32_t tab, int32_t before_section, bool rows) {
     auto g = group_by_id(client, group);
     if (!g) return SF6CORE_ERR_NOT_FOUND;
     if (g_install_failed) return SF6CORE_ERR_DISABLED;
     const bool off = tab < 0 && before_section < 0;
     if (!off && tab < 0) return SF6CORE_ERR_INVALID_ARG;
     if (!off && g->placed) return SF6CORE_ERR_INVALID_ARG;     // a group with rows in a game section
+    const bool rows_now = !off && rows;
     bool done = false;
     guard("opt_section_place", [&] {
         oc::set_group_def(g->gid, g->title, g->desc);           // its texts at once: a section is not built
-        done = oc::set_group_section(g->gid, off ? -1 : tab, off ? -1 : before_section);
+        done = oc::set_group_section(g->gid, off ? -1 : tab, off ? -1 : before_section, rows_now);
         dialogs::options::sections_dirty();
     });
     if (!done) return SF6CORE_ERR_FAULTED;
     g->has_p = true; g->pt = g->title; g->pd = g->desc;
     g->section = !off;
+    const bool rows_changed = g->rows != rows_now;
+    g->rows = rows_now;
     if (!off) g_wanted = true;                                  // the service installs on the next frame (as opt_set_callbacks)
     core_log(SF6CORE_LOG_INFO, nullptr, "[options] group %lld %s", (long long)group,
-             off ? "is no section any more" : ("is a section of tab " + std::to_string(tab) + ", before section " + std::to_string(before_section)).c_str());
+             off ? "is no section any more"
+                 : ("is a section of tab " + std::to_string(tab) + ", before section " + std::to_string(before_section) +
+                    (rows_now ? ", its " + std::to_string(g->entries.size()) + " entries the rows of the game's sub list on its right" : "")).c_str());
+    if (rows_changed && usable()) { guard("opt_rebuild", [] { oc::rebuild(); }); native_build(); }
     return SF6CORE_OK;
+}
+SF6CoreStatus SF6CORE_CALL api_opt_section_place(SF6CoreClient* client, int64_t group, int32_t tab, int32_t before_section) {
+    return section_place(client, group, tab, before_section, false);
+}
+SF6CoreStatus SF6CORE_CALL api_opt_section_place_rows(SF6CoreClient* client, int64_t group, int32_t tab, int32_t before_section) {
+    return section_place(client, group, tab, before_section, true);
 }
 SF6CoreStatus SF6CORE_CALL api_opt_section_state(SF6CoreClient* client, int64_t group, SF6CoreOptSectionState* out) {
     if (!out || out->struct_size < sizeof(uint32_t)) return SF6CORE_ERR_INVALID_ARG;
@@ -518,6 +550,7 @@ SF6CoreStatus SF6CORE_CALL api_opt_section_state(SF6CoreClient* client, int64_t 
 SF6CoreStatus SF6CORE_CALL api_opt_section_hold(SF6CoreClient* client, int64_t group, int32_t hold) {
     auto g = group_by_id(client, group);
     if (!g || !g->section) return SF6CORE_ERR_NOT_FOUND;
+    if (g->rows) return hold ? SF6CORE_ERR_INVALID_ARG : SF6CORE_OK;   // increment 14: the game runs its rows, no hold
     if (!g_installed || core_closing()) return hold ? SF6CORE_ERR_NOT_READY : SF6CORE_OK;
     SF6CoreStatus st = SF6CORE_ERR_FAULTED;
     guard("opt_section_hold", [&] { st = dialogs::options::section_hold(group, hold != 0); });

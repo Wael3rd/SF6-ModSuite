@@ -123,13 +123,114 @@ with `SF6CORE_HAS(api, opt_section_place)`.
   list and every hold given back. `opt_status` adds `sections=.. live=.. hooks=check:..,H2:..,H1:.. held=.. cancels=..
   faults=..` once a section was placed.
 - A group is either placed (`opt_group_place`, rows in a game section) or a section, never both (`ERR_INVALID_ARG`).
-- Not done here: a section with rows of its own on the right (the game's sub list); the mouse on the right side.
+- Not done here: the mouse on the right side. A section with rows of its own on the right: increment 14.
+
+## A section with the game's own rows on its right (increment 14, core 0.9.10)
+
+`opt_section_place_rows(client, group, tab, before_section)` is `opt_section_place` (same place in the left list, same texts,
+same `opt_section_state`, `-1, -1` = no section any more), but the section's right side is the **game's own sub list**, filled and
+run by the game as for its own sections: the group's entries are its rows (choice: title, `desc` = the screen's description line
+while the row is focused, `options[]` cycled by Left / Right, value 1-based; slider as a placed row; buttons are not shown).
+Confirm on the section moves the cursor into its rows, Back brings it back to the left list; no hold (`opt_section_hold` 1 =
+`ERR_INVALID_ARG`), no client page, no hook of its own. Probe with `SF6CORE_HAS(api, opt_section_place_rows)`.
+
+- **What the game does with a section** (read 08/11, `sp_data` / `sp_types`): a game section with rows is an `OptionGroupUnit`
+  whose setting is DataType Group, **EventType OpenSubMenu (2)**, its children (`ChildUnits`, their settings in `ChildUnitList`)
+  the value units of its rows (Interface > Other Settings, 290: InputType Button_Type1, SupportModeType 55, SupportPlatform 0, not
+  online). With the left list's cursor on it, the screen copies its children into `OptionMenuParam.CurrentSubUnitLists` (another
+  list object; with the cursor on Battle HUD, EventType 7, the copy was empty although that group has 7 children) and shows them in
+  its sub list `mSubListGroup` (`p_GroupScroll_sub_v`, a `UIPartsGroupScroll` of **25 parts** `p_OptionUnit_0 .. 24`, 58 apart,
+  scrolled by the game). Confirm (OpenSubMenu) = MenuState SUB (1), ListState SubList (1), `GetSubListFocusUnit()` the row under
+  the cursor.
+- **The section's unit** (`options.cpp`, `make_rows_section_unit`, made once and held): its setting is a **copy
+  (`MemberwiseClone`) of a real section's** with rows on its right: `before_section` when it is one, else the tab's first one,
+  else another tab's (never a section of ours); then its own TypeId (the core's range), its title / description (owned GUID texts,
+  as increment 13) and **its own empty ValueMessageList / ChildUnitList** (the copy shares the real section's lists until they are
+  replaced: the unit is refused when that fails, so the game's lists are never touched), `MakeUnitData`, an `OptionGroupUnit`
+  with an empty children list of its own (checked: not the source's, empty). Placed in `UnitLists[tab]` as increment 13. The log
+  gives the source section (GroupType, title, tab, row count) and every field of its setting, its first row's, ours.
+- **Its rows** (`build_section_rows`, at each build): one value unit per entry, built as a placed row's (`OptionSettingUnit` ->
+  `MakeUnitData`, `OptionValueSetting`, InputType SpinText / Slider, TypeId by the key `e:<group>/<entry>`), but **made once and
+  kept across builds**: their texts are owned (never purged by a build) and changed in place. So the rows the screen shows (its
+  copy of the children) are always the live units: values read from them, texts never blank, nothing freed under the game. Only
+  another structure (another number of values or slider range: not possible through the C API, an entry's definition is fixed)
+  makes a new unit; the old one, like the unit of an entry that went (its group removed, or no longer a section with rows), stays
+  held and its texts are given back once no list of the screen shows it.
+- **Its children** (`sec_sync_rows`, at each build, every 60 frames and when dirty): `ChildUnits` and the setting's
+  `ChildUnitList` = the entries' units in entry order, rewritten only when they differ (our own lists: the screen shows its copy).
+  EventType OpenSubMenu with a row, Invalid without one (Confirm then opens nothing, the right side stays hidden). **At most one
+  row per part of the sub list** (25, read again from each screen's `mSubListGroup.GetChildCount()`): the entries past it are not
+  shown (a warning names the count). A longer list is split into several sections by the client.
+- **When changes show**: values at once (`opt_set_value` = `SetValue(v, true)` on the shown unit, then `UpdateDisp()` on the sub
+  list's part showing it: SetValue alone left the row's text unchanged until the player moved its value, seen 10/11); `opt_group_def` (the section's
+  texts) and `opt_set_option_text` (a row's value text) in place; entries added later become rows at the next build
+  (`opt_rebuild` + `opt_ensure_built`) and **show from the game's next fill of the right list** (the left cursor coming onto the
+  section, entering the tab): the core never refills the screen's list itself. Placing the group with rows (or taking them away)
+  starts that build itself when the service is up; the client's own `opt_rebuild` + `opt_ensure_built` afterwards is harmless (a
+  kept row is not made again).
+- **Values**: `on_value` (choice 1-based) for every change the player makes: the section's entries are read **every frame while
+  the cursor is in its rows** (`poll_group`), and every full pass (10 ticks) otherwise, the window closed or not.
+- **The game's "Restore Default Settings"** (the game's button at the end of the rows, seen in game on 10/11, and its own
+  prompt) **works on them**: the game calls `ResetEvent` on each unit it resets; the hook still skips every unit of
+  ours (nothing of the game's reset code runs on them) and notes it; at the next frame each live row of a section with rows goes
+  to its entry's default (`SF6CoreOptEntryDesc.has_default` / `default_value`, appended in 0.9.10, read when `struct_size`
+  covers them; without one: choice 1, slider `min_val`; kept in range) with `SetValue(v, true)` and the part's `UpdateDisp()`, shown at once, and the read
+  that follows calls `on_value` for each row that changed. Rows placed in a game section (increment 11), the core's own window
+  and every unit of the game are not touched by this: a game section's reset runs as before. Logged: the prompt over the rows
+  (`the game's reset prompt is up over its rows`), each row moved (`a -> b`), the count per section; `opt_status` `resets=..
+  rows_reset=..`.
+- **No link with the game's save**, as increment 11: the entries are placed (`LoadValueEvent` / `ResetEvent` skip them;
+  `SaveEvent`, hooked at the first build with a placed group or a section with rows,
+  sets their `PrevValue` and skips them). Since 0.9.10 the three hooks also skip a unit of ours that is **no longer known** (a
+  rebuild, a removed group: the screen's copy of a list may still hold it), so a retired row is never loaded, reset (by the game or by the above) or saved either.
+- **Restore Default Settings on a section with a client page** (increment 13's sections, 0.9.10): the game has no unit of it to
+  reset, so H3 (`OptionMenuParam.InputEvent_ResetCurrentMainListValue`, code-checked with H1 / H2, the game's code runs on) counts the
+  reset confirmed with the left list's cursor on it: `SF6CoreOptSectionState.resets` (appended after `focused_entry`); the client puts
+  its page's settings back when the count moves. A row reset by the game (a section with rows) is shown again once the reset prompt is
+  gone (DispSet + UpdateDisp on its part, retried for 600 frames: the reset comes while the prompt is up and the game then shows its
+  parts as they were).
+- **State**: `SF6CoreOptSectionState.focused_entry` (appended, `struct_size` versioning): the entry under the right list's cursor
+  (MenuState SUB, ListState SubList, the right list holding the section's rows, `GetSubListFocusUnit()` one of them); 0 on the left
+  list, on another section's rows, or when the screen is not up; always 0 for a section with a client page. `focused` keeps
+  increment 13's meaning (the left list's cursor on the section). `held` and `decides` stay 0 (H1 / H2 serve the sections with a
+  client page only, and their code check runs only while one exists).
+- **Headers**: none. The game has no non-interactive title or separator unit for a sub list (`UnitInputType`: Button_Type0 - 3,
+  SpinText, SpinText_OnOff, SpinText_Num, Slider; `UIPartsOptionUnit.ItemPartsType`: Button, Spin, Slider; none in any section
+  read 08/11), so there is no `SF6CORE_OPT_HEADER`.
+- **Log** (the core's, one run is enough): the source section and the fields copied; each row made; each rewrite of the children
+  and EventType; the sub list's parts; every fill of the right list that shows (or stops showing) the section's rows, with the
+  screen's states; the left cursor coming onto / leaving the section (with the right list's content); a warning when it stays 30
+  frames on the section and the right list holds none of its rows (the one thing left to the game); the cursor going into /
+  leaving its rows; the row under the cursor (entry, type id, title, value); each `on_value` and `opt_set_value` of a row.
+  `opt_status` adds `rows: sections=.. units=.. made=.. shown=.. fills=.. retired=.. parts=.. save_skips=.. save_hook=..`.
+
+Example (two rows in a section "Costume Options" of Options > Interface, above Other Settings):
+
+```cpp
+static void SF6CORE_CALL on_value(void*, int64_t entry, int64_t value) { save_row(entry, value); }   // choice: 1-based
+
+SF6CoreOptCallbacks cb{ sizeof cb };
+cb.on_value = on_value;
+api->opt_set_callbacks(client, &cb);
+const int64_t g = api->opt_group(client, "slots.costume_rows", "Costume Options", "Options of the outfits of the costume packs.");
+const char* onoff[] = { "Off", "On" };
+SF6CoreOptEntryDesc d{ sizeof d };
+d.kind = SF6CORE_OPT_CHOICE; d.key = "nsfw"; d.title = "Display NSFW Outfits"; d.desc = "Show the outfits marked NSFW.";
+d.options = onoff; d.n_options = 2; d.value = load_row("nsfw");
+api->opt_entry(client, g, &d);
+if (SF6CORE_HAS(api, opt_section_place_rows)) api->opt_section_place_rows(client, g, 1, 290);   // Interface, above Other Settings
+api->opt_rebuild(client); api->opt_ensure_built(client);
+
+// each frame: the picture of the focused row's value (an older core leaves focused_entry 0)
+SF6CoreOptSectionState st{ sizeof st };
+if (api->opt_section_state(client, g, &st) == SF6CORE_OK && st.focused_entry) show_picture(st.focused_entry);
+```
 
 ## Frame model
 
 - LateUpdateBehavior: `options_frame()` runs after the flow callbacks and before the clients' frame callbacks
   (install on demand, then the driver's tick: events, open / build / rebuild, button queue, value pass; then the
-  sections, increment 13).
+  sections, increment 13, and their rows, increment 14: the right list read, the focused row, its section's values).
 - BeginRendering: `options_pump()` (the hooks' events since the tick).
 - The engine's display calls are made for the core's own client `sf6core.options`.
 

@@ -31,6 +31,7 @@ int64_t g_next_group_id = 1, g_next_entry_id = 1;
 std::unordered_map<int32_t, std::shared_ptr<Entry>> g_known_ids;      // :108
 std::unordered_map<std::string, int32_t> g_ids_by_key;                // :209
 int32_t g_next_type_id = 0;
+int32_t g_type_id_base = 0;             // the first id of this load is g_type_id_base + 1 (increment 14: issued_type_id)
 bool g_type_id_inited = false;
 
 // built state (:200-201)
@@ -80,7 +81,7 @@ std::string addr(Obj o) { return std::to_string(reinterpret_cast<uint64_t>(o)); 
 
 // :110-121
 int32_t new_type_id() {
-    if (!g_type_id_inited) { g_next_type_id = be.type_id_base ? be.type_id_base() : 100000; g_type_id_inited = true; }
+    if (!g_type_id_inited) { g_next_type_id = g_type_id_base = be.type_id_base ? be.type_id_base() : 100000; g_type_id_inited = true; }
     return ++g_next_type_id;
 }
 
@@ -218,7 +219,7 @@ int64_t add_entry(int64_t group_id, Kind kind, const std::string& key) {
     if (!g) return -1;
     auto e = std::make_shared<Entry>();
     e->id = g_next_entry_id++; e->kind = kind; e->key = key;
-    e->placed = g->place_tab >= 0;
+    e->placed = g->place_tab >= 0 || g->section_rows;
     g->entries.push_back(e);
     g_entries_by_id[e->id] = e;
     return e->id;
@@ -237,12 +238,15 @@ void set_group_place(int64_t group_id, int32_t tab, int32_t section) {
 }
 
 // Increment 13. The game side reads the sections (sections()) at each of its syncs; nothing is built here.
-bool set_group_section(int64_t group_id, int32_t tab, int32_t before) {
+// Increment 14: a section with rows has placed entries (the units are made by the build, as a placed group's).
+bool set_group_section(int64_t group_id, int32_t tab, int32_t before, bool rows) {
     std::lock_guard lk(mx);
     Group* g = find_group(group_id);
     if (!g) return false;
     const bool on = tab >= 0;
     g->section_tab = on ? tab : -1; g->section_before = on ? (before >= 0 ? before : -1) : -1;
+    g->section_rows = on && rows;
+    for (auto& e : g->entries) e->placed = g->place_tab >= 0 || g->section_rows;
     return true;
 }
 std::vector<SectionDef> sections() {
@@ -253,6 +257,8 @@ std::vector<SectionDef> sections() {
         SectionDef d;
         d.gid = g->id; d.tab = g->section_tab; d.before = g->section_before;
         d.key = id_key_of(*g); d.title = g->title; d.desc = g->desc;
+        d.rows = g->section_rows;
+        if (d.rows) for (auto& e : g->entries) if (e->kind != Kind::Button) d.entries.push_back(e->id);
         out.push_back(std::move(d));
     }
     return out;
@@ -289,6 +295,32 @@ bool placed_type(int32_t type_id) {
     std::lock_guard lk(mx);
     auto it = g_known_ids.find(type_id);
     return it != g_known_ids.end() && it->second->placed;
+}
+bool issued_type_id(int32_t type_id) {
+    std::lock_guard lk(mx);
+    return g_type_id_inited && type_id > g_type_id_base && type_id <= g_next_type_id;
+}
+
+int64_t default_of(const Entry& e) {
+    const int64_t lo = e.kind == Kind::Slider ? e.min_val : 0;
+    const int64_t hi = e.kind == Kind::Slider ? e.max_val : (int64_t)e.options.size() - 1;
+    const int64_t v = e.has_default ? e.default_int : lo;
+    return hi < lo ? lo : (v < lo ? lo : (v > hi ? hi : v));
+}
+void set_entry_default(int64_t entry_id, int64_t default_int) {
+    std::lock_guard lk(mx);
+    auto e = entry_by_id(entry_id);
+    if (!e) return;
+    e->has_default = true; e->default_int = default_int;
+}
+
+// Increment 14 (game thread): the rows of a section the player is on are read every frame, not every full pass
+void poll_group(int64_t group_id) {
+    std::lock_guard lk(mx);
+    Group* g = find_group(group_id);
+    if (!g) return;
+    const auto es = g->entries;
+    for (auto& e : es) poll(e);
 }
 
 // :193-197 Group:set and :1095-1101 M.set_value: the value is the game's int here
@@ -492,10 +524,10 @@ void tick_b() {
     // :959-988 composite window (mode spin, mirrored entries): not ported
     // :989-995 every entry, every 10 ticks (the deferred callbacks of :996-999 are the wrapper's)
     // A value only changes in our own window, except the rows placed in a game section (edited in the game's own
-    // options): with the window closed only those are read.
+    // options) and the rows of a section of ours (increment 14): with the window closed only those are read.
     const auto all = g_groups;
     for (auto& g : all) {
-        if (!g_window_open && g->place_tab < 0) continue;
+        if (!g_window_open && g->place_tab < 0 && !g->section_rows) continue;
         const auto es = g->entries;
         for (auto& e : es) poll(e);
     }

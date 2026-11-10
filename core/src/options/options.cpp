@@ -10,8 +10,10 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -186,11 +188,15 @@ bool be_get_value(core::Obj unit, int32_t& out) {
     return true;
 }
 
-// e.unit:call("SetValue", n, refresh) (:196, :1099)
+bool redraw_unit(MO* unit);                    // below, with the screen
+
+// e.unit:call("SetValue", n, refresh) (:196, :1099). With refresh, the sub list's row showing the unit is redrawn too: SetValue
+// alone leaves the row's text as it was until the player moves its value (Wael 10/11, after "Restore Default Settings")
 void be_set_value(core::Obj unit, int32_t value, bool refresh) {
     if (!unit) return;
     auto* sv = ll::find_method_full(mo(unit)->get_type_definition(), "SetValue");
     if (sv) sv->invoke(mo(unit), std::vector<void*>{ ll::arg_i32(value), ll::arg_bool(refresh) });
+    if (sv && refresh) redraw_unit(mo(unit));
 }
 
 // :110-118 fresh ids per load, above the game's own ValueType values
@@ -217,6 +223,22 @@ int32_t be_type_id_base() {
 
 MO* g_empty_guids = nullptr;
 MO* g_empty_settings = nullptr;
+
+// Increment 14: the texts of a section's rows are owned (never purged by a build: the units live across builds) and given
+// back once the screen no longer shows their unit.
+char g_row_tag = 0;
+const guid_text::Owner kRowOwner = &g_row_tag;
+bool row_keep(guid_text::Owner) { return true; }
+
+// A GUID text: the engine's (purged with its tree), or owned by the rows when `owned` is given (pushed there, a zero GUID
+// when the table refused it: the order of `owned` stays the order of the texts)
+guid_text::GuidBytes text_guid(const std::string& text, std::vector<guid_text::GuidBytes>* owned) {
+    if (!owned) return guid_text::alloc(text);
+    guid_text::GuidBytes g{};
+    if (!guid_text::alloc_owned(kRowOwner, text, row_keep, g, nullptr)) g = {};
+    owned->push_back(g);
+    return g;
+}
 
 int32_t g_InputType_Button1 = 0, g_InputType_Button2 = 0, g_InputType_Slider = 0, g_InputType_SpinText = 0;
 int32_t g_EventType_OpenSubMenu = 0, g_EventType_OpenBattleHud = 0, g_EventType_SettingReset = 0;
@@ -289,9 +311,10 @@ MO* clone_list(MO* empty) {
     return l;
 }
 
-// :223-236 make_unit. option_guids receives hi, lo of each value message.
+// :223-236 make_unit. option_guids receives hi, lo of each value message. owned (increment 14): the texts are the rows'
+// own (text_guid), the description's GUID then each value message's pushed there.
 MO* make_unit(MO* desc, const std::string& description, const std::vector<std::string>& value_messages,
-              std::vector<uint64_t>* option_guids) {
+              std::vector<uint64_t>* option_guids, std::vector<guid_text::GuidBytes>* owned = nullptr) {
     if (!desc) return nullptr;
     auto* make_m = ll::find_method_noargs(desc->get_type_definition(), "MakeUnitData");
     if (!make_m) return nullptr;
@@ -304,7 +327,7 @@ MO* make_unit(MO* desc, const std::string& description, const std::vector<std::s
     if (sret.exception_thrown || !sret.ptr) return nullptr;
     MO* s = reinterpret_cast<MO*>(sret.ptr);
 
-    guid_text::set_field(s, "DescriptionMessage", guid_text::alloc(description));
+    guid_text::set_field(s, "DescriptionMessage", text_guid(description, owned));
     MO* vml = clone_list(g_empty_guids);
     MO* cul = clone_list(g_empty_settings);
     if (vml) ll::write_field_raw(s, "ValueMessageList", &vml, sizeof(void*));
@@ -312,7 +335,7 @@ MO* make_unit(MO* desc, const std::string& description, const std::vector<std::s
     if (vml && !value_messages.empty()) {
         auto* add_m = ll::find_method_full(vml->get_type_definition(), "Add");
         for (auto& msg : value_messages) {
-            const auto gb = guid_text::alloc(msg);
+            const auto gb = text_guid(msg, owned);
             if (option_guids) { option_guids->push_back(gb.hi); option_guids->push_back(gb.lo); }
             if (add_m) {                                         // List<System.Guid>.Add: a value type goes by pointer
                 uint8_t buf[16];
@@ -524,6 +547,143 @@ bool empty_lists(MO*& guids, MO*& settings) {
     return guids && settings;
 }
 
+// A value unit's OptionValueSetting (its range, InitValue = the entry's value) and its ValueData (:316-330)
+bool give_value_setting(MO* u, int32_t tid, const core::Entry& e) {
+    auto* vs_td = API::get()->tdb()->find_type("app.Option.OptionValueSetting");
+    MO* vs = vs_td ? vs_td->create_instance() : nullptr;
+    if (!vs) return false;
+    vs->add_ref();                                               // held (03/09)
+    const int32_t init = (int32_t)e.value;
+    const bool slider = e.kind == core::Kind::Slider;
+    ll::write_field_i32(vs, "TypeId", tid);
+    ll::write_field_i32(vs, "MinValue", slider ? e.min_val : 0);
+    ll::write_field_i32(vs, "MaxValue", slider ? e.max_val : (int32_t)e.options.size() - 1);
+    ll::write_field_i32(vs, "InitValue", init);
+    if (auto* set_pv = ll::find_method_full(u->get_type_definition(), "set_PrevValue")) set_pv->invoke(u, std::vector<void*>{ ll::arg_i32(init) });
+    if (auto* set_vs = ll::find_method_full(u->get_type_definition(), "set_ValueSetting")) set_vs->invoke(u, std::vector<void*>{ vs });
+    if (auto* make_vd = ll::find_method_noargs(vs->get_type_definition(), "MakeValueData")) {
+        auto vd_ret = make_vd->invoke(vs, std::vector<void*>{});
+        if (!vd_ret.exception_thrown && vd_ret.ptr) {
+            MO* vd = reinterpret_cast<MO*>(vd_ret.ptr);
+            vd->add_ref();                                       // a raw store alone would leave it to the GC (R34)
+            ll::write_field_raw(u, "ValueData", &vd, sizeof(void*));
+        }
+    }
+    return true;
+}
+
+// ---- increment 14: the rows of a section of ours (the game's sub list on its right side) ----
+// Each entry's unit is made once and kept across builds: a build that changes nothing of it keeps it, its texts (owned, never
+// purged) are changed in place. The rows the screen shows are its copy of the section's children (CurrentSubUnitLists, made
+// when the game fills the right list), so they are always the live units: their values are the ones read, their texts stay.
+// Only another structure (another number of values, another slider range; never through the C API, an entry's definition is
+// fixed) makes a new unit. The old one, like the unit of an entry that went, stays held (the screen's copy may still hold it)
+// and its texts are given back once no list of the screen shows it (rows_retired_frame). TypeIds: the placed rows' scheme
+// ("e:<group>/<entry>"); the entries are placed, so LoadValueEvent / ResetEvent / SaveEvent skip them (increment 11).
+struct RowUnit {
+    MO* unit = nullptr;                        // held, never released
+    MO* setting = nullptr;                     // its OptionSettingUnit (get_Setting)
+    int32_t tid = 0;
+    bool slider = false;
+    int32_t min_val = 0, max_val = 0;          // slider range
+    std::string title, desc;
+    std::vector<std::string> opts;             // the texts its GUIDs carry
+    guid_text::GuidBytes tg{}, dg{};
+    std::vector<guid_text::GuidBytes> og;      // one per value
+    uint32_t serial = 0;                       // the last build that had its entry as a section's row
+};
+std::unordered_map<int64_t, RowUnit> g_rows;   // by entry id
+struct Retired { MO* unit; bool in_main; guid_text::Owner owner; std::vector<guid_text::GuidBytes> texts; };
+std::vector<Retired> g_retired;                // owned texts kept while a list of the screen may show their unit
+uint32_t g_build_serial = 0;
+size_t g_rows_made = 0;
+// The game's "Restore Default Settings" (its prompt, then ResetEvent on every unit it resets): a unit of ours is never reset by
+// the game (the hook skips it, as since increment 6); the hook only notes it (any thread) and the frame gives each live row of a
+// section with rows its entry's default (core::default_of), with SetValue(v, true): on screen at once, on_value from the read.
+// Rows placed in a game section (increment 11) and every unit of the game are not touched by this.
+std::mutex g_reset_mx;
+std::vector<MO*> g_reset_queue;                // identity only, compared with the held row units
+std::atomic<uint32_t> g_reset_calls{0};        // ResetEvent calls on units of ours
+uint32_t g_rows_reset = 0;                     // rows a reset changed
+
+void release_texts(guid_text::Owner owner, const std::vector<guid_text::GuidBytes>& texts) {
+    for (const auto& t : texts) if (t.hi || t.lo) guid_text::release_owned(owner, t);
+}
+// in_main: the unit is a section (the screen's left list, CurrentMainUnitLists), else a row (its right list)
+void retire_texts(MO* unit, bool in_main, guid_text::Owner owner, std::vector<guid_text::GuidBytes> texts) {
+    if (!texts.empty()) g_retired.push_back({ unit, in_main, owner, std::move(texts) });
+}
+void retire_row(RowUnit& r, const char* why) {
+    std::vector<guid_text::GuidBytes> t{ r.tg, r.dg };
+    t.insert(t.end(), r.og.begin(), r.og.end());
+    retire_texts(r.unit, false, kRowOwner, std::move(t));
+    cmn::journal("[options] section row type id %d (\"%s\") retired (%s): its unit stays held, its texts go once the screen no longer "
+                 "shows it", r.tid, r.title.c_str(), why);
+    r = RowUnit{};
+}
+
+// The entry's unit, as a placed row's (its setting, MakeUnitData, its value setting) with owned texts
+bool make_row(const std::string& gkey, const std::shared_ptr<core::Entry>& e, RowUnit& r) {
+    int32_t tid = 0;
+    MO* ed = create_setting("e:" + gkey + "/" + e->key, tid);   // held
+    if (!ed) return false;
+    std::vector<guid_text::GuidBytes> owned;                     // the title, the description, then each value
+    r.tg = text_guid(e->title, &owned);
+    guid_text::set_field(ed, "TitleMessage", r.tg);
+    r.slider = e->kind == core::Kind::Slider;
+    ll::write_field_i32(ed, "_DataType", g_DataType_Value);
+    ll::write_field_i32(ed, "InputType", r.slider ? g_InputType_Slider : g_InputType_SpinText);
+    std::vector<uint64_t> option_guids;
+    MO* u = make_unit(ed, e->desc, r.slider ? std::vector<std::string>{} : e->options, &option_guids, &owned);
+    if (!u || owned.size() < 2 || !give_value_setting(u, tid, *e)) { release_texts(kRowOwner, owned); r = RowUnit{}; return false; }
+    u->add_ref();                                                // held: the screen's copy of the right list may outlive a build
+    r.unit = u;
+    r.setting = call_obj(u, "get_Setting");
+    r.tid = tid;
+    r.min_val = e->min_val; r.max_val = e->max_val;
+    r.title = e->title; r.desc = e->desc;
+    if (!r.slider) r.opts = e->options;
+    r.dg = owned[1];
+    r.og.assign(owned.begin() + 2, owned.end());
+    return true;
+}
+
+// New texts of a kept unit, in place (the game reads them again at its next fill or draw)
+void retext_row(RowUnit& r, const core::Entry& e) {
+    if (e.title != r.title && guid_text::retext_owned(kRowOwner, r.tg, e.title)) r.title = e.title;
+    if (e.desc != r.desc && guid_text::retext_owned(kRowOwner, r.dg, e.desc)) r.desc = e.desc;
+    for (size_t i = 0; !r.slider && i < r.og.size() && i < e.options.size() && i < r.opts.size(); ++i)
+        if (e.options[i] != r.opts[i] && guid_text::retext_owned(kRowOwner, r.og[i], e.options[i])) r.opts[i] = e.options[i];
+}
+
+// The units of a section's entries (buttons excepted: a row holds a value), made or kept, given to the engine
+bool build_section_rows(core::Group& g) {
+    const std::string gkey = core::id_key_of(g);
+    for (auto& e : g.entries) {
+        if (e->kind == core::Kind::Button) continue;
+        RowUnit& r = g_rows[e->id];
+        const bool slider = e->kind == core::Kind::Slider;
+        const bool same = r.unit && r.slider == slider
+                       && (slider ? (r.min_val == e->min_val && r.max_val == e->max_val) : r.opts.size() == e->options.size());
+        if (r.unit && !same) retire_row(r, "its entry's structure changed");
+        if (!r.unit) {
+            if (!make_row(gkey, e, r)) { g_rows.erase(e->id); return false; }
+            ++g_rows_made;
+            cmn::journal("[options] section %lld: row of entry %lld made (type id %d, \"%s\", %s %zu, value %lld)", (long long)g.id,
+                         (long long)e->id, r.tid, r.title.c_str(), r.slider ? "slider" : "values", r.slider ? (size_t)(r.max_val - r.min_val + 1) : r.opts.size(),
+                         (long long)e->value);
+        } else {
+            retext_row(r, *e);
+        }
+        r.serial = g_build_serial;
+        e->title_guid[0] = r.tg.hi; e->title_guid[1] = r.tg.lo;
+        e->option_guids.clear();
+        for (const auto& o : r.og) { e->option_guids.push_back(o.hi); e->option_guids.push_back(o.lo); }
+        core::build_set_entry(e, r.tid, r.unit);
+    }
+    return true;
+}
+
 // :262-392 (radio groups and the composite window are not ported)
 bool be_build_units() {
     if (!API::get()->get_managed_singleton("app.OptionManager")) return false;
@@ -550,10 +710,18 @@ bool be_build_units() {
     core::build_set_root(root);
 
     // groups and entries (:284-332)
-    bool any_placed = false;
+    bool any_placed = false, any_rows = false;
+    ++g_build_serial;
     for (auto& gp : core::groups()) {
         auto& g = *gp;
-        if (g.section_tab >= 0) { core::build_set_group(g, nullptr); continue; }   // increment 13: a section, no page, no row
+        if (g.section_tab >= 0) {                                // increment 13: a section, no page, no row
+            core::build_set_group(g, nullptr);
+            if (g.section_rows) {                                // increment 14: its entries are the rows of its right side
+                any_rows = true;
+                if (!build_section_rows(g)) return false;
+            }
+            continue;
+        }
         const std::string gkey = core::id_key_of(g);
         const bool placed = g.place_tab >= 0;                    // increment 11: rows of a game section, no page
         MO* gunit = nullptr;
@@ -598,26 +766,7 @@ bool be_build_units() {
             MO* u = make_unit(ed, e->desc, (e->kind == core::Kind::Slider) ? std::vector<std::string>{} : e->options, &e->option_guids);
             if (!u) return false;
             attach_unit(gunit, u);
-            auto* vs_td = API::get()->tdb()->find_type("app.Option.OptionValueSetting");
-            MO* vs = vs_td ? vs_td->create_instance() : nullptr;
-            if (!vs) return false;
-            vs->add_ref();                                           // held (03/09)
-            const int32_t init = (int32_t)e->value;
-            const bool slider = e->kind == core::Kind::Slider;
-            ll::write_field_i32(vs, "TypeId", tid);
-            ll::write_field_i32(vs, "MinValue", slider ? e->min_val : 0);
-            ll::write_field_i32(vs, "MaxValue", slider ? e->max_val : (int32_t)e->options.size() - 1);
-            ll::write_field_i32(vs, "InitValue", init);
-            if (auto* set_pv = ll::find_method_full(u->get_type_definition(), "set_PrevValue")) set_pv->invoke(u, std::vector<void*>{ ll::arg_i32(init) });
-            if (auto* set_vs = ll::find_method_full(u->get_type_definition(), "set_ValueSetting")) set_vs->invoke(u, std::vector<void*>{ vs });
-            if (auto* make_vd = ll::find_method_noargs(vs->get_type_definition(), "MakeValueData")) {
-                auto vd_ret = make_vd->invoke(vs, std::vector<void*>{});
-                if (!vd_ret.exception_thrown && vd_ret.ptr) {
-                    MO* vd = reinterpret_cast<MO*>(vd_ret.ptr);
-                    vd->add_ref();                                   // a raw store alone would leave it to the GC (R34)
-                    ll::write_field_raw(u, "ValueData", &vd, sizeof(void*));
-                }
-            }
+            if (!give_value_setting(u, tid, *e)) return false;
             core::build_set_entry(e, tid, u);
             if (placed) {
                 u->add_ref();                                        // held: the game may rebuild its lists without it
@@ -625,7 +774,13 @@ bool be_build_units() {
             }
         }
     }
-    if (any_placed) { install_save_hook(); be_sync_placed(true); }
+    if (any_placed || any_rows) install_save_hook();
+    if (any_placed) be_sync_placed(true);
+    for (auto it = g_rows.begin(); it != g_rows.end();) {        // increment 14: the rows whose entry is no section row any more
+        if (it->second.serial == g_build_serial) { ++it; continue; }
+        retire_row(it->second, "its entry is no section row any more");
+        it = g_rows.erase(it);
+    }
     sections_sync();                                             // increment 13 (nothing without a section)
     cmn::journal("[options] built: %zu groups, guid_text %s", core::groups().size(), guid_text::status().c_str());
     return true;
@@ -714,10 +869,28 @@ struct Sec {
     int32_t list_index = -1;                   // its index in CurrentMainUnitLists, this frame
     MO* part = nullptr;                        // the left list's part that shows it (valid with g_parts_of)
     SF6CoreOptSectionState st{};               // this frame's
+    // increment 14: a section whose right side is the game's sub list holding its entries' units
+    bool rows = false;
+    MO* usetting = nullptr;                    // its unit's setting (get_Setting): EventType and ChildUnitList are read there
+    std::vector<int64_t> row_eids;             // the entries whose units are its children, in order
+    std::vector<MO*> row_units;                // their units (identity, for the per-frame look)
+    size_t capped_at = 0;                    // the row count last reported as more than the sub list's parts
+    bool first_row_logged = false;
+    int sub_ours = 0;                          // its rows in the screen's right list (the last fill seen)
+    size_t sub_n = 0;
+    MO* sub_first = nullptr;                   // identity only, never read
+    bool in_sub = false;                       // the cursor is in its rows
+    bool left_on = false;                      // the left list's cursor is on it
+    bool reset_prompt = false;                 // the game's reset prompt is up over its rows
+    uint32_t left_on_at = 0;                   // the frame it came there
+    bool nofill_warned = false;
+    int64_t focus_eid = 0;
+    uint32_t fills = 0, entered = 0;           // the game's fills of the right list with its rows, the cursor going into them
 };
 std::vector<Sec> g_secs;
 std::atomic<MO*> g_slot_unit[kMaxSections] = {};
 std::atomic<uint32_t> g_slot_decides[kMaxSections] = {};
+std::atomic<uint32_t> g_slot_resets[kMaxSections] = {};     // the game's reset confirmed on the section (H3)
 std::atomic<int> g_slot_live{0};               // slots holding a unit (H1 does nothing without one)
 std::atomic<int> g_held{0};                    // sections held: H2 swallows the left list's Back
 std::atomic<uint32_t> g_cancels{0};            // Backs swallowed by H2
@@ -863,6 +1036,10 @@ void sec_drop(Sec& s, const char* why) {
     sec_release(s, why);
     sec_unlist(s);
     if (s.slot >= 0 && g_slot_unit[s.slot].exchange(nullptr)) g_slot_live.fetch_sub(1);
+    if (s.texts && s.rows) {                   // increment 14: kept while the screen's left list may still show it
+        retire_texts(s.unit, true, kSecOwner, { s.tg, s.dg });
+        s.texts = false;
+    }
     if (s.texts) {
         guid_text::release_owned(kSecOwner, s.tg);
         guid_text::release_owned(kSecOwner, s.dg);
@@ -936,6 +1113,208 @@ MO* make_section_unit(Sec& s, MO* list) {
     return unit;
 }
 
+// ---- increment 14: a section whose right side is the game's sub list holding its entries ----
+// Read 08/11 (sp_data): a game section with rows on its right is an OptionGroupUnit whose setting is DataType Group, EventType
+// OpenSubMenu (2), its children (ChildUnits, and their settings in ChildUnitList) the value units of its rows (Interface > Other
+// Settings, 290: InputType Button_Type1, SupportModeType 55, SupportPlatform 0, not online). When the left list's cursor is on
+// it, the screen copies its children into OptionMenuParam.CurrentSubUnitLists (another list: with the cursor on Battle HUD,
+// EventType 7, that copy was empty although the group has 7 children) and shows them in its sub list (p_GroupScroll_sub_v, a
+// scroll group of 25 parts p_OptionUnit_0 .. 24); Confirm (OpenSubMenu) moves the cursor there (MenuState SUB 1, ListState
+// SubList 1), Back brings it back. Ours is built the same way: its setting a copy (MemberwiseClone) of such a section's, then
+// its own TypeId, texts and lists; its children the units of its entries (sec_sync_rows). The game does the rest.
+constexpr int32_t kMenuSub = 1;                // app.UIOptionSettingMenu.eMenuState.SUB (read 08/11)
+constexpr int32_t kListSub = 1;                // app.UIOptionSettingMenu.eListState.SubList (read 08/11)
+constexpr int32_t kMenuResetConfirm = 3;       // app.UIOptionSettingMenu.eMenuState.RESET_CONFIRM (read 08/11)
+constexpr int32_t kSubPoolDefault = 25;        // the sub list's parts (read 08/11), read again from each screen
+constexpr int kMaxTabs = 8;                    // app.Option.TabType: 0 .. 6 read 08/11
+int32_t g_sub_pool = kSubPoolDefault;          // the most rows a section shows: one per part of the sub list
+
+bool list_clear(MO* list) {
+    auto* m = list ? ll::find_method_noargs(list->get_type_definition(), "Clear") : nullptr;
+    if (!m) return false;
+    auto r = m->invoke(list, std::vector<void*>{});
+    return !r.exception_thrown;
+}
+
+// Every field of an app.Option.OptionSettingUnit (read 08/11), for the log
+std::string setting_dump(MO* st) {
+    if (!st) return "none";
+    int32_t dt = -1, in = -1, tid = 0, sm = 0, plat = 0, ev = -1, xev = -1;
+    uint32_t se = 0;
+    bool online = false;
+    ll::read_field_i32(st, "_DataType", dt);
+    ll::read_field_i32(st, "InputType", in);
+    ll::read_field_i32(st, "TypeId", tid);
+    ll::read_field_i32(st, "SupportModeType", sm);
+    ll::read_field_i32(st, "SupportPlatform", plat);
+    ll::read_field_bool(st, "IsOnlineSetting", online);
+    ll::read_field_i32(st, "EventType", ev);
+    ll::read_field_i32(st, "ExtraEventType", xev);
+    ll::read_field_u32(st, "ChangeValueSETriggerId", se);
+    MO* vml = ll::read_field_object(st, "ValueMessageList");
+    MO* cul = ll::read_field_object(st, "ChildUnitList");
+    char b[320];
+    std::snprintf(b, sizeof b, "DataType %d InputType %d TypeId %d SupportModeType %d SupportPlatform %d IsOnlineSetting %d EventType %d "
+                  "ExtraEventType %d ChangeValueSETriggerId %u ValueMessageList %d ChildUnitList %d", dt, in, tid, sm, plat, (int)online, ev, xev,
+                  se, vml ? list_count(vml) : -1, cul ? list_count(cul) : -1);
+    return b;
+}
+
+// A game section with rows on its right side: `before` if it is one, else the list's first one (never a section of ours)
+MO* rows_source(MO* list, int32_t before) {
+    MO* first = nullptr;
+    for (int32_t i = 0, n = list_count(list); i < n; ++i) {
+        MO* u = list_item(list, i);
+        const int32_t gt = group_type_of(u);
+        if (gt < 0 || g_sec_tids.count(gt)) continue;
+        MO* st = call_obj(u, "get_Setting");
+        int32_t ev = -1, dt = -1;
+        if (!st || !ll::read_field_i32(st, "EventType", ev) || !ll::read_field_i32(st, "_DataType", dt)) continue;
+        if (ev != g_EventType_OpenSubMenu || dt != g_DataType_Group) continue;
+        if (!first) first = u;
+        if (before >= 0 && gt == before) return u;
+    }
+    return first;
+}
+
+// The section's unit, made once: its setting copied from a real section's (rows_source: this tab's, else another tab's; none
+// anywhere, never seen: increment 13's fields), MakeUnitData, its children list its own and empty. EventType Invalid until it
+// has a row (sec_sync_rows): Confirm on an empty one opens nothing.
+MO* make_rows_section_unit(Sec& s, MO* list) {
+    MO* guids = nullptr, *settings = nullptr;
+    if (!empty_lists(guids, settings)) return nullptr;
+    int32_t src_tab = s.tab;
+    MO* src = rows_source(list, s.before);
+    for (int32_t t = 0; !src && t < kMaxTabs; ++t) if (t != s.tab) { src = rows_source(tab_list(t), -1); src_tab = t; }
+    MO* src_setting = src ? call_obj(src, "get_Setting") : nullptr;
+    const int32_t tid = core::type_id_for_key("s:" + std::to_string(s.gid) + ":" + s.key);
+    MO* d = src_setting ? clone_list(src_setting) : nullptr;     // MemberwiseClone (held): every field of the real one's
+    if (d && d->get_type_definition() != src_setting->get_type_definition()) { d->release(); d = nullptr; }
+    const bool copied = d != nullptr;
+    if (!d) {
+        auto* td = API::get()->tdb()->find_type("app.Option.OptionSettingUnit");
+        d = td ? td->create_instance() : nullptr;
+        if (!d) return nullptr;
+        d->add_ref();                                            // held (03/09)
+        ll::write_field_i32(d, "_DataType", g_DataType_Group);
+        ll::write_field_i32(d, "InputType", g_InputType_Button1);
+        ll::write_field_i32(d, "ExtraEventType", g_ExtraType_Invalid);
+    }
+    // its own TypeId, texts and lists: the copy shares the real section's lists until they are replaced (its children are
+    // cleared and refilled here: never the game's)
+    auto own = [&](MO* st) -> bool {
+        MO* vml = clone_list(guids);
+        MO* cul = clone_list(settings);
+        if (!vml || !cul) { if (vml) vml->release(); if (cul) cul->release(); return false; }
+        ll::write_field_i32(st, "TypeId", tid);
+        ll::write_field_i32(st, "EventType", g_EventType_Invalid);
+        guid_text::set_field(st, "TitleMessage", s.tg);
+        guid_text::set_field(st, "DescriptionMessage", s.dg);
+        ll::write_field_raw(st, "ValueMessageList", &vml, sizeof(void*));
+        ll::write_field_raw(st, "ChildUnitList", &cul, sizeof(void*));
+        return ll::read_field_object(st, "ValueMessageList") == vml && ll::read_field_object(st, "ChildUnitList") == cul;
+    };
+    if (!own(d)) { d->release(); return nullptr; }
+    auto* make_m = ll::find_method_noargs(d->get_type_definition(), "MakeUnitData");
+    auto ret = make_m ? make_m->invoke(d, std::vector<void*>{}) : reframework::InvokeRet{};
+    if (!make_m || ret.exception_thrown || !ret.ptr) { d->release(); return nullptr; }
+    MO* unit = reinterpret_cast<MO*>(ret.ptr);
+    static API::TypeDefinition* s_group_td = API::get()->tdb()->find_type("app.Option.OptionGroupUnit");
+    if (!s_group_td || unit->get_type_definition() != s_group_td) { d->release(); return nullptr; }
+    unit->add_ref();                                             // held: the game may rebuild its lists without it
+    MO* us = call_obj(unit, "get_Setting");
+    if (us && us != d && !own(us)) { unit->release(); d->release(); return nullptr; }
+    if (!us) us = d;
+    MO* kids = call_obj(unit, "get_ChildUnits");
+    MO* src_kids = src ? call_obj(src, "get_ChildUnits") : nullptr;
+    if (!kids) {                                                 // never seen: an empty List<OptionUnitBase> of its own
+        auto* gr_m = src_kids ? ll::find_method_full(src_kids->get_type_definition(), "GetRange") : nullptr;
+        auto gr = gr_m ? gr_m->invoke(src_kids, std::vector<void*>{ ll::arg_i32(0), ll::arg_i32(0) }) : reframework::InvokeRet{};
+        auto* set_m = ll::find_method_full(unit->get_type_definition(), "set_ChildUnits");
+        if (gr_m && !gr.exception_thrown && gr.ptr && set_m) {
+            MO* empty = reinterpret_cast<MO*>(gr.ptr);
+            empty->add_ref();
+            set_m->invoke(unit, std::vector<void*>{ empty });
+        }
+        kids = call_obj(unit, "get_ChildUnits");
+    }
+    if (!kids || kids == src_kids || list_count(kids) != 0) {    // never the game's list, nothing built from the real one
+        cmn::log_warn("[options] section %lld (rows): its children list is %s: not used", (long long)s.gid,
+                      !kids ? "missing" : (kids == src_kids ? "the real section's" : "not empty"));
+        unit->release(); d->release();
+        return nullptr;
+    }
+    s.setting = d;
+    s.usetting = us;
+    s.tid = tid;
+    g_sec_tids.insert(tid);
+    if (copied) {
+        cmn::journal("[options] section %lld (rows): its setting copied from the game's section %d \"%s\" of tab %d (%d rows): %s", (long long)s.gid,
+                     group_type_of(src), ll::managed_string_to_utf8(call_obj(src_setting, "get_DisplayName")).c_str(), src_tab,
+                     list_count(src_kids), setting_dump(src_setting).c_str());
+        MO* first = src_kids ? list_item(src_kids, 0) : nullptr;
+        cmn::journal("[options] section %lld (rows): the game section's first row: %s %s", (long long)s.gid,
+                     first ? first->get_type_definition()->get_full_name().c_str() : "none", setting_dump(first ? call_obj(first, "get_Setting") : nullptr).c_str());
+    } else {
+        cmn::log_warn("[options] section %lld (rows): no game section with rows in any tab: its setting written field by field", (long long)s.gid);
+    }
+    cmn::journal("[options] section %lld (rows): unit %s 0x%p, setting %s%s", (long long)s.gid, unit->get_type_definition()->get_full_name().c_str(),
+                 (void*)unit, setting_dump(us).c_str(), us == d ? "" : " (MakeUnitData made a setting of its own)");
+    return unit;
+}
+
+// Its children = the units of its entries (built: g_rows), in entry order, at most one per part of the sub list (g_sub_pool):
+// ChildUnits and its setting's ChildUnitList, rewritten only when they differ (our own lists: the screen shows its copy, made
+// at its next fill of the right list). EventType OpenSubMenu with a row, Invalid without.
+void sec_sync_rows(Sec& s, const std::vector<int64_t>& eids) {
+    if (!s.rows || !s.unit || !s.usetting) return;
+    std::vector<int64_t> keep;
+    std::vector<MO*> units, settings;
+    size_t built = 0;
+    for (int64_t eid : eids) {
+        auto it = g_rows.find(eid);
+        if (it == g_rows.end() || !it->second.unit || !it->second.setting) continue;   // not built yet: at the next build
+        ++built;
+        if ((int32_t)units.size() >= g_sub_pool) continue;
+        keep.push_back(eid);
+        units.push_back(it->second.unit);
+        settings.push_back(it->second.setting);
+    }
+    if (built > units.size() && s.capped_at != built) {
+        s.capped_at = built;
+        cmn::log_warn("[options] section %lld: %zu rows, the game's sub list has %d parts: the rows past the %dth are not shown", (long long)s.gid,
+                      built, g_sub_pool, g_sub_pool);
+    }
+    MO* kids = call_obj(s.unit, "get_ChildUnits");
+    MO* cul = ll::read_field_object(s.usetting, "ChildUnitList");
+    if (!kids || !cul) return;
+    bool same = list_count(kids) == (int32_t)units.size() && list_count(cul) == (int32_t)settings.size();
+    for (size_t i = 0; same && i < units.size(); ++i)
+        same = list_item(kids, (int32_t)i) == units[i] && list_item(cul, (int32_t)i) == settings[i];
+    if (!same) {
+        list_clear(kids);
+        list_clear(cul);
+        for (size_t i = 0; i < units.size(); ++i) { list_add(kids, units[i]); list_add(cul, settings[i]); }
+        cmn::journal("[options] section %lld: %zu rows in its children (ChildUnits %d, ChildUnitList %d): the game shows them from its next fill of "
+                     "the right list", (long long)s.gid, units.size(), list_count(kids), list_count(cul));
+    }
+    const int32_t ev = units.empty() ? g_EventType_Invalid : g_EventType_OpenSubMenu;
+    int32_t cur = -1;
+    if (!ll::read_field_i32(s.usetting, "EventType", cur) || cur != ev) {
+        ll::write_field_i32(s.usetting, "EventType", ev);
+        if (s.setting && s.setting != s.usetting) ll::write_field_i32(s.setting, "EventType", ev);
+        cmn::journal("[options] section %lld: EventType %d (%s)", (long long)s.gid, ev,
+                     units.empty() ? "Invalid: no row yet, Confirm opens nothing" : "OpenSubMenu: Confirm moves the cursor into its rows");
+    }
+    if (!s.first_row_logged && !settings.empty()) {
+        s.first_row_logged = true;
+        cmn::journal("[options] section %lld: its first row: %s %s", (long long)s.gid, units[0]->get_type_definition()->get_full_name().c_str(),
+                     setting_dump(settings[0]).c_str());
+    }
+    s.row_eids = std::move(keep);
+    s.row_units = std::move(units);
+}
+
 // Just before the game's section `before` (at the end when the tab has none); a unit already there stays.
 void sec_place(MO* list, Sec& s) {
     int32_t at = -1, before_at = -1;
@@ -993,10 +1372,10 @@ void sections_sync_inner() {
     std::vector<core::SectionDef> defs;
     if (!off) defs = core::sections();
     for (size_t i = g_secs.size(); i-- > 0;) {
-        bool live = false;
-        for (auto& d : defs) if (d.gid == g_secs[i].gid) { live = true; break; }
+        bool live = false, kind = false;
+        for (auto& d : defs) if (d.gid == g_secs[i].gid) { kind = d.rows != g_secs[i].rows; live = !kind; break; }
         if (live) continue;
-        sec_drop(g_secs[i], off ? "the sections are off" : "no section any more");
+        sec_drop(g_secs[i], off ? "the sections are off" : (kind ? "its kind changed (rows / a client page): made again" : "no section any more"));
         g_secs.erase(g_secs.begin() + (std::ptrdiff_t)i);
     }
     if (!defs.empty() && API::get()->get_managed_singleton("app.OptionManager") && sec_enums()) {
@@ -1009,10 +1388,11 @@ void sections_sync_inner() {
                     continue;
                 }
                 Sec n;
-                n.gid = d.gid; n.slot = slot; n.key = d.key;
+                n.gid = d.gid; n.slot = slot; n.key = d.key; n.rows = d.rows;
                 n.st.struct_size = sizeof n.st;
                 n.st.menu_state = n.st.list_state = n.st.tab = -1;
                 g_slot_decides[slot].store(0);
+                g_slot_resets[slot].store(0);
                 g_secs.push_back(n);
                 s = &g_secs.back();
             }
@@ -1033,7 +1413,7 @@ void sections_sync_inner() {
             if (!list) continue;
             if (!s->unit) {
                 if (s->tries >= kSecMaxTries) continue;
-                s->unit = make_section_unit(*s, list);
+                s->unit = s->rows ? make_rows_section_unit(*s, list) : make_section_unit(*s, list);
                 if (!s->unit) {
                     if (++s->tries >= kSecMaxTries && !s->fail_logged) {
                         s->fail_logged = true;
@@ -1041,9 +1421,11 @@ void sections_sync_inner() {
                     }
                     continue;
                 }
-                if (!g_slot_unit[s->slot].exchange(s->unit)) g_slot_live.fetch_add(1);
+                // H1 (Confirm counted and turned into Invalid) is for a client page only: a section with rows opens its sub list
+                if (!s->rows && !g_slot_unit[s->slot].exchange(s->unit)) g_slot_live.fetch_add(1);
             }
             sec_place(list, *s);
+            if (s->rows) sec_sync_rows(*s, d.entries);           // increment 14
         }
     }
     sec_remove_stale();
@@ -1074,6 +1456,30 @@ struct Screen {
     float area[4] = {};
 };
 Screen g_scr;
+
+// The sub list's part (app.UIPartsOptionUnit) whose UnitData is `unit`, shown again from it: DispSet, the game's own set-up of a
+// row's display from its unit (its spin's value), then UpdateDisp (its state). UpdateDisp alone left the spin on the former value
+// (Wael 10/11: the values were reset and applied, the rows still showed the old ones). Nothing when the screen is not up or no part
+// of the sub list shows the unit. True when a part was shown again.
+bool redraw_unit(MO* unit) {
+    if (!unit || !g_scr.up || !g_scr.param) return false;
+    MO* sg = ll::read_field_object(g_scr.param, "mSubListGroup");
+    MO* part = sg ? find_part(sg, unit, -1) : nullptr;
+    if (!part) return false;
+    bool thrown = false, any = false;
+    for (const char* name : { "DispSet", "UpdateDisp" }) {
+        auto* m = ll::find_method_noargs(part->get_type_definition(), name);
+        if (!m) continue;
+        any = true;
+        thrown = m->invoke(part, std::vector<void*>{}).exception_thrown || thrown;
+    }
+    static bool logged = false;
+    if (!logged && any) {
+        logged = true;
+        cmn::journal("[options] a row's value set by the core: its part shown again (DispSet, UpdateDisp)%s", thrown ? ": EXCEPTION (logged once)" : "");
+    }
+    return any;
+}
 MO* g_area_of = nullptr;                       // the panel g_area was read from
 MO* g_parts_of = nullptr;                      // the param the sections' parts were found under
 float g_area[4] = {};
@@ -1142,6 +1548,7 @@ void sec_states() {
         st.menu_state = st.list_state = st.tab = -1;
         st.held = s.held ? 1 : 0;
         st.decides = s.slot >= 0 ? g_slot_decides[s.slot].load(std::memory_order_relaxed) : 0;
+        st.resets = s.slot >= 0 ? g_slot_resets[s.slot].load(std::memory_order_relaxed) : 0;
         if (g_scr.up) {
             st.menu_state = g_scr.menu; st.list_state = g_scr.list; st.tab = g_scr.tab;
             st.agent = g_scr.agent; st.control_main = g_scr.cm; st.right_panel = g_scr.right;
@@ -1178,6 +1585,191 @@ void sec_holds() {
     if (g_held.load() == 0 && g_held_agent) unblock_if_free();
 }
 
+// ---- increment 14: the sections with rows, once per frame (after sec_states) ----
+std::vector<MO*> g_sub_units;                  // this frame's CurrentSubUnitLists: the units the right list shows (identity)
+MO* g_pool_of = nullptr;                       // the screen the sub list's parts were counted on
+uint32_t g_fills = 0;                          // fills of the right list with a section's rows
+size_t g_rows_shown = 0;                       // rows of ours in the right list, this frame
+
+int64_t row_eid(const Sec& s, MO* u) {         // the entry whose live unit `u` is, 0 when none of the section's
+    if (!u) return 0;
+    for (size_t i = 0; i < s.row_units.size() && i < s.row_eids.size(); ++i) if (s.row_units[i] == u) return s.row_eids[i];
+    return 0;
+}
+
+// A list's items (at most `max`), its get_Count / get_Item looked up once per list type (read every frame)
+void read_list(MO* list, std::vector<MO*>& out, int32_t max) {
+    out.clear();
+    if (!list) return;
+    static std::unordered_map<API::TypeDefinition*, API::Method*> s_item;
+    auto* td = list->get_type_definition();
+    auto it = s_item.find(td);
+    if (it == s_item.end()) it = s_item.emplace(td, ll::find_method_full(td, "get_Item")).first;
+    int32_t n = 0;
+    if (!it->second || !sc_i32(list, "get_Count", n)) return;
+    for (int32_t i = 0; i < n && i < max; ++i) {
+        auto r = it->second->invoke(list, std::vector<void*>{ ll::arg_i32(i) });
+        out.push_back((!r.exception_thrown && r.ptr) ? reinterpret_cast<MO*>(r.ptr) : nullptr);
+    }
+}
+
+void sec_rows_one(Sec& s) {
+    int ours = 0;
+    for (MO* u : g_sub_units) if (row_eid(s, u)) ++ours;
+    g_rows_shown += (size_t)ours;
+    MO* first = g_sub_units.empty() ? nullptr : g_sub_units[0];
+    if (first != s.sub_first || g_sub_units.size() != s.sub_n || ours != s.sub_ours) {   // the game filled the right list again
+        if (ours > 0 || s.sub_ours > 0) {
+            if (ours > 0) { ++s.fills; ++g_fills; }
+            cmn::journal("[options] section %lld: the right list %s: %zu rows, %d of its %zu (menu %d, list %d, left cursor on it %d)", (long long)s.gid,
+                         ours > 0 ? "shows its rows" : "shows no row of it any more", g_sub_units.size(), ours, s.row_eids.size(), g_scr.menu,
+                         g_scr.list, (int)(g_scr.focus && g_scr.focus == s.unit));
+        }
+        s.sub_first = first; s.sub_n = g_sub_units.size(); s.sub_ours = ours;
+    }
+    const bool left_on = g_scr.up && g_scr.focus && g_scr.focus == s.unit && g_scr.menu == kMenuMain && g_scr.list == kListMain;
+    if (left_on != s.left_on) {
+        int32_t ev = -1;
+        if (s.usetting) ll::read_field_i32(s.usetting, "EventType", ev);
+        if (left_on) s.left_on_at = g_sec_frame;
+        cmn::journal("[options] section %lld: the left list's cursor %s (right list: %zu rows, %d of its %zu; EventType %d)", (long long)s.gid,
+                     left_on ? "came onto it" : "left it", g_sub_units.size(), ours, s.row_eids.size(), ev);
+    }
+    s.left_on = left_on;
+    if (left_on && ours == 0 && !s.row_eids.empty() && !s.nofill_warned && g_sec_frame - s.left_on_at >= 30) {
+        s.nofill_warned = true;                                  // the one thing this increment relies on the game for
+        cmn::log_warn("[options] section %lld: the left list's cursor is on it for 30 frames and the game's right list holds none of its %zu rows "
+                      "(%zu rows there): the game did not fill it from the section's children", (long long)s.gid, s.row_eids.size(), g_sub_units.size());
+    }
+    const bool prompt = ours > 0 && g_scr.menu == kMenuResetConfirm;   // its rows in the right list, the game's reset prompt up
+    if (prompt != s.reset_prompt)
+        cmn::journal("[options] section %lld: the game's reset prompt %s (ResetEvent calls on units of ours so far: %u)", (long long)s.gid,
+                     prompt ? "is up over its rows" : "went", g_reset_calls.load());
+    s.reset_prompt = prompt;
+    const bool in_sub = ours > 0 && g_scr.menu == kMenuSub && g_scr.list == kListSub;
+    const int64_t focus = in_sub ? row_eid(s, sc_obj(g_scr.param, "GetSubListFocusUnit")) : 0;
+    if (in_sub != s.in_sub) {
+        if (in_sub) ++s.entered;
+        cmn::journal("[options] section %lld: the cursor %s (menu %d, list %d)", (long long)s.gid,
+                     in_sub ? "went into its rows" : "left its rows", g_scr.menu, g_scr.list);
+    }
+    if (focus != s.focus_eid) {
+        int32_t v = -1;
+        auto it = focus ? g_rows.find(focus) : g_rows.end();
+        if (it != g_rows.end()) be_get_value(it->second.unit, v);
+        if (it != g_rows.end())
+            cmn::journal("[options] section %lld: cursor on the row of entry %lld (type id %d, \"%s\", value %d)", (long long)s.gid, (long long)focus,
+                         it->second.tid, it->second.title.c_str(), v);
+        else if (in_sub)
+            cmn::journal("[options] section %lld: the cursor is on none of its rows", (long long)s.gid);
+    }
+    s.in_sub = in_sub;
+    s.focus_eid = focus;
+    s.st.focused_entry = focus;
+    if (in_sub && g_on) core::poll_group(s.gid);                 // the player changes them now: read every frame, not every 10
+}
+
+// The retired texts whose unit no list of the screen shows any more are given back (all of them when the screen is not up)
+void rows_retired_frame() {
+    for (size_t i = g_retired.size(); i-- > 0;) {
+        const Retired& r = g_retired[i];
+        bool shown = false;
+        if (g_scr.up && r.in_main && g_scr.main_list)
+            for (int32_t k = 0, n = list_count(g_scr.main_list); k < n && k < 64 && !shown; ++k) shown = list_item(g_scr.main_list, k) == r.unit;
+        if (g_scr.up && !r.in_main) for (MO* u : g_sub_units) if (u == r.unit) shown = true;
+        if (shown) continue;
+        release_texts(r.owner, r.texts);
+        g_retired.erase(g_retired.begin() + (std::ptrdiff_t)i);
+    }
+}
+
+// The rows a reset changed, shown again once the game shows its list without a prompt over it: the reset comes while the game's
+// "Restore Default Settings" prompt is up (the screen is not taken for up then: nothing to redraw), and when the prompt goes the game
+// shows its parts as they were (Wael 10/11: the values reset and applied, the rows still on the old ones). Each unit until its part
+// was shown again with the screen in MAIN or SUB, for at most kRedrawFrames.
+constexpr uint32_t kRedrawFrames = 600;
+std::vector<std::pair<MO*, uint32_t>> g_redraw;   // unit (a held row unit, checked before each use), the frame it is given up
+void redraw_later(MO* unit) {
+    for (auto& r : g_redraw) if (r.first == unit) { r.second = g_sec_frame + kRedrawFrames; return; }
+    g_redraw.push_back({ unit, g_sec_frame + kRedrawFrames });
+}
+void redraw_pending() {
+    if (g_redraw.empty()) return;
+    const bool calm = g_scr.up && (g_scr.menu == kMenuMain || g_scr.menu == kMenuSub);
+    size_t shown = 0;
+    for (size_t i = g_redraw.size(); i-- > 0;) {
+        MO* u = g_redraw[i].first;
+        bool held = false;
+        for (auto& s : g_secs) for (MO* x : s.row_units) if (x == u) held = true;
+        bool done = !held || g_sec_frame > g_redraw[i].second;
+        if (!done && calm && redraw_unit(u)) { done = true; ++shown; }
+        if (done) g_redraw.erase(g_redraw.begin() + (std::ptrdiff_t)i);
+    }
+    if (shown) cmn::journal("[options] %zu row(s) a reset changed shown again (the prompt gone)", shown);
+}
+
+// The game reset units of ours since the last frame: each live row of a section with rows goes to its entry's default
+void rows_reset_frame() {
+    std::vector<MO*> q;
+    { std::lock_guard lk(g_reset_mx); q.swap(g_reset_queue); }
+    if (q.empty()) return;
+    std::sort(q.begin(), q.end());                               // a unit reset twice (its group, then itself) counts once
+    q.erase(std::unique(q.begin(), q.end()), q.end());
+    size_t ours = 0, changed = 0;
+    for (auto& s : g_secs) {
+        if (!s.rows) continue;
+        size_t mine = 0, moved = 0;
+        for (size_t i = 0; i < s.row_units.size() && i < s.row_eids.size(); ++i) {
+            bool asked = false;
+            for (MO* u : q) if (u == s.row_units[i]) asked = true;
+            if (!asked) continue;
+            ++mine;
+            auto e = core::entry_by_id(s.row_eids[i]);
+            int32_t cur = 0;
+            if (!e || !be_get_value(s.row_units[i], cur)) continue;
+            const int32_t def = (int32_t)core::default_of(*e);
+            if (cur == def) continue;
+            be_set_value(s.row_units[i], def, true);             // the read below reports it (on_value)
+            redraw_later(s.row_units[i]);                        // shown again once the prompt is gone
+            ++moved;
+            cmn::journal("[options] section %lld: the game's reset: row of entry %lld (type id %d) %d -> %d", (long long)s.gid,
+                         (long long)s.row_eids[i], e->type_id, cur, def);
+        }
+        if (!mine) continue;
+        ours += mine; changed += moved;
+        cmn::journal("[options] section %lld: the game reset its rows: %zu of its %zu asked, %zu changed", (long long)s.gid, mine, s.row_units.size(), moved);
+        if (moved && g_on) core::poll_group(s.gid);
+    }
+    g_rows_reset += (uint32_t)changed;
+    if (ours < q.size())
+        cmn::journal("[options] the game's reset reached %zu unit(s) of ours that are no row of a section with rows (placed rows, retired units): left "
+                     "as they are", q.size() - ours);
+}
+
+void sec_rows_frame() {
+    rows_reset_frame();                                          // first: this frame's reads report the new values
+    redraw_pending();
+    g_sub_units.clear();
+    g_rows_shown = 0;
+    bool any = false;
+    for (auto& s : g_secs) if (s.rows) any = true;
+    if (!any && g_retired.empty()) return;
+    if (g_scr.up && g_scr.param) {
+        read_list(ll::read_field_object(g_scr.param, "CurrentSubUnitLists"), g_sub_units, 64);
+        if (any && g_scr.param != g_pool_of) {                // the sub list's parts, once per screen: the most rows shown
+            g_pool_of = g_scr.param;
+            MO* sg = ll::read_field_object(g_scr.param, "mSubListGroup");
+            int32_t n = 0;
+            if (sg && sc_i32(sg, "GetChildCount", n) && n > 0) {
+                cmn::journal("[options] sections: the game's sub list has %d parts (%d before): a section shows at most %d rows", n, g_sub_pool, n);
+                if (n != g_sub_pool) { g_sub_pool = n; g_secs_dirty = true; }
+            }
+        }
+    }
+    for (auto& s : g_secs) if (s.rows) sec_rows_one(s);
+    rows_retired_frame();
+}
+
 // ---- R18: the code check of the sections' hooks, on a thread of its own, and its cache ----
 // As the pause-menu engine's (pausemenu.cpp, "R18"): every method of the game is compared with each target (its entry,
 // and the code its jump thunks lead to, as REFramework's add_hook follows them); a target another method enters is never
@@ -1186,6 +1778,7 @@ int pre_main_cancel(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long
 int pre_decide_list(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long);
 void post_decide_list(void**, REFrameworkTypeDefinitionHandle, unsigned long long);
 void post_sec_none(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
+int pre_reset_main(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long);
 
 struct SecHook {
     const char* type; const char* name; const char* tag;
@@ -1199,12 +1792,15 @@ struct SecHook {
     long long other = -1;
     bool tried = false, hooked = false;
 };
-SecHook g_hooks[2] = {
+SecHook g_hooks[3] = {
     { "app.UIOptionSettingMenu.Flow_MainList.InputDelegates", "EventCancel", "H2", pre_main_cancel, post_sec_none,
       "a Back that leaks through a hold's input block leaves the Options screen" },
     { "app.UIOptionSettingMenu.OptionMenuParam", "InputEvent_DecideList", "H1", pre_decide_list, post_decide_list,
       "no Confirm count: SF6CoreOptSectionState.decides stays 0" },
+    { "app.UIOptionSettingMenu.OptionMenuParam", "InputEvent_ResetCurrentMainListValue", "H3", pre_reset_main, post_sec_none,
+      "no Restore Default Settings count: SF6CoreOptSectionState.resets stays 0" },
 };
+constexpr size_t kSecHooks = sizeof g_hooks / sizeof g_hooks[0];
 std::atomic<int> g_check_state{0};             // 0 not started, 1 running, 2 done
 bool g_check_ok = false, g_check_cache = false, g_check_written = false, g_check_logged = false;
 uint64_t g_check_ms = 0;
@@ -1277,15 +1873,15 @@ bool sec_cache_read() {
     if (fopen_s(&f, path, "r") != 0 || !f) { std::snprintf(g_check_note, sizeof g_check_note, "no cache file yet"); return false; }
     char line[600];
     const char* why = nullptr;
-    int shared[2] = { -1, -1 };
-    long long other[2] = { -1, -1 };
+    int shared[kSecHooks] = { -1, -1, -1 };
+    long long other[kSecHooks] = { -1, -1, -1 };
     if (!std::fgets(line, sizeof line, f)) why = "empty cache file";
     else { sec_chomp(line); if (std::strcmp(line, kSecCacheHeader) != 0) why = "another cache format"; }
     if (!why) {
         if (!std::fgets(line, sizeof line, f)) why = "no key";
         else { sec_chomp(line); if (std::strncmp(line, "key ", 4) != 0 || std::strcmp(line + 4, g_check_key) != 0) why = "another game executable"; }
     }
-    for (size_t i = 0; !why && i < 2; ++i) {
+    for (size_t i = 0; !why && i < kSecHooks; ++i) {
         const SecHook& h = g_hooks[i];
         if (!std::fgets(line, sizeof line, f)) { why = "targets missing"; break; }
         sec_chomp(line);
@@ -1304,7 +1900,7 @@ bool sec_cache_read() {
     }
     std::fclose(f);
     if (why) { std::snprintf(g_check_note, sizeof g_check_note, "%s", why); return false; }
-    for (size_t i = 0; i < 2; ++i) { g_hooks[i].shared = shared[i]; g_hooks[i].other = other[i]; }
+    for (size_t i = 0; i < kSecHooks; ++i) { g_hooks[i].shared = shared[i]; g_hooks[i].other = other[i]; }
     return true;
 }
 bool sec_cache_write() {
@@ -1469,6 +2065,30 @@ void post_decide_list(void** ret_val, REFrameworkTypeDefinitionHandle, unsigned 
     perf::end(perf::OptHooks, pt);
 }
 
+// H3: OptionMenuParam.InputEvent_ResetCurrentMainListValue, the game's "Restore Default Settings" confirmed with the left list's
+// cursor on a section: one with a page of a client gets its count (SF6CoreOptSectionState.resets; the game has no unit of it to
+// reset, the client puts its page's settings back). The game's own code runs on as before.
+void pre_reset_main_inner(MO* p) {
+    int32_t ls = -1;
+    if (!ll::read_field_i32(p, "<ListState>k__BackingField", ls) || ls != kListMain) return;
+    MO* fu = call_obj(p, "GetMainListFocusUnit");
+    if (!fu) return;
+    for (int i = 0; i < kMaxSections; ++i) {
+        if (g_slot_unit[i].load(std::memory_order_acquire) != fu) continue;
+        g_slot_resets[i].fetch_add(1, std::memory_order_relaxed);
+        cmn::journal("[options] the game's Restore Default Settings on a section with a page (slot %d): its count told to its client", i);
+        return;
+    }
+}
+int pre_reset_main(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (g_slot_live.load(std::memory_order_acquire) <= 0 || g_sec_off.load() || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int64_t pt = perf::begin();
+    __try { pre_reset_main_inner(reinterpret_cast<MO*>(argv[1])); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { sec_fault("reset_main_pre"); }
+    perf::end(perf::OptHooks, pt);
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
 #pragma warning(pop)
 
 void sections_sync() {
@@ -1480,10 +2100,13 @@ void sections_frame_inner() {
     ++g_sec_frame;
     const bool off = g_sec_off.load() || !g_on;                  // withdrawn at once (the sync drops every section)
     if (g_secs_dirty || g_sec_frame - g_sec_synced_at >= kSecSyncEvery || (off && !g_secs.empty())) sections_sync_inner();
-    if (g_secs.empty()) { g_scr = Screen{}; g_parts_of = nullptr; return; }
-    sec_hooks_step();
+    if (g_secs.empty() && g_retired.empty()) { g_scr = Screen{}; g_parts_of = nullptr; g_sub_units.clear(); return; }
+    bool page = false;                                           // the hooks serve the sections with a client page only
+    for (auto& s : g_secs) if (!s.rows) page = true;
+    if (page) sec_hooks_step();
     sec_read_screen();
     sec_states();
+    sec_rows_frame();                                            // increment 14
     sec_holds();
 }
 bool sections_frame_seh() {
@@ -1634,10 +2257,11 @@ void post_check_can_select(void** ret_val, REFrameworkTypeDefinitionHandle, unsi
     perf::end(perf::OptHooks, pt);
 }
 
-// LoadValueEvent + ResetEvent (:574-581): the game must not load / reset our ids from its save data
+// LoadValueEvent (:574-581, ResetEvent: pre_reset_ours): the game must not load our ids from its save data. Increment 14: nor
+// a unit of ours that is no longer known (a rebuild, a removed group) and that a list of the screen may still hold.
 int pre_skip_ours_inner(void** argv) {
     int32_t tid = 0;
-    if (unit_setting(reinterpret_cast<MO*>(argv[1]), tid) && core::known(tid)) return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
+    if (unit_setting(reinterpret_cast<MO*>(argv[1]), tid) && (core::known(tid) || core::issued_type_id(tid))) return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
 int pre_skip_ours(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
@@ -1651,12 +2275,36 @@ int pre_skip_ours(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned l
 }
 void post_skip_ours(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {}
 
+// ResetEvent: skipped for our ids as LoadValueEvent; increment 14: the unit noted for the frame (rows_reset_frame)
+int pre_reset_ours_inner(void** argv) {
+    MO* u = reinterpret_cast<MO*>(argv[1]);
+    int32_t tid = 0;
+    if (!unit_setting(u, tid) || !(core::known(tid) || core::issued_type_id(tid))) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    g_reset_calls.fetch_add(1, std::memory_order_relaxed);
+    { std::lock_guard lk(g_reset_mx); if (g_reset_queue.size() < 512) g_reset_queue.push_back(u); }
+    return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
+}
+int pre_reset_ours(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (!g_on || cmn::closing()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    int64_t pt = perf::begin();
+    int rc = REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    __try { rc = pre_reset_ours_inner(argv); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { fault("reset_ours_pre"); }
+    perf::end(perf::OptHooks, pt);
+    return rc;
+}
+
 // SaveEvent (increment 11): a placed row is never written into the game's save. Its PrevValue follows its value, as
 // the game's save would make it (no pending change left on the screen). Every other unit: the game's, untouched.
+// Increment 14: a section's rows are placed rows; a unit of ours no longer known (retired by a rebuild or a removed group,
+// which the screen's copy of a list may still hold) is skipped the same way.
+std::atomic<uint32_t> g_save_skips{0};
 int pre_save_ours_inner(void** argv) {
     MO* u = reinterpret_cast<MO*>(argv[1]);
     int32_t tid = 0;
-    if (!unit_setting(u, tid) || !core::placed_type(tid)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!unit_setting(u, tid)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    if (!core::placed_type(tid) && (core::known(tid) || !core::issued_type_id(tid))) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    g_save_skips.fetch_add(1, std::memory_order_relaxed);
     int32_t v = 0;
     if (be_get_value(u, v)) {
         if (auto* set_pv = ll::find_method_full(u->get_type_definition(), "set_PrevValue")) set_pv->invoke(u, std::vector<void*>{ ll::arg_i32(v) });
@@ -1728,7 +2376,7 @@ bool install() {
         auto* ml = vu_td->find_method("LoadValueEvent");
         if (ml && ml->get_function_raw() && ml->add_hook(pre_skip_ours, post_skip_ours, false)) ++total;
         auto* mr = vu_td->find_method("ResetEvent");
-        if (mr && mr->get_function_raw() && mr->add_hook(pre_skip_ours, post_skip_ours, false)) ++total;
+        if (mr && mr->get_function_raw() && mr->add_hook(pre_reset_ours, post_skip_ours, false)) ++total;
     }
     if (auto* tm_td = tdb->find_type("app.training.TrainingManager")) {
         auto* mo_ = tm_td->find_method("OpenMenu(app.training.TrainingManager.MenuType, app.training.BaseParam)");
@@ -1782,7 +2430,15 @@ uint64_t row_part(int64_t entry_id) { return reinterpret_cast<uint64_t>(find_row
 // unit is rebuilt and nothing is freed (:1088-1111).
 bool set_option_text(int64_t entry_id, int index, const std::string& text) {
     auto e = core::entry_by_id(entry_id);
-    if (!e || !e->unit || index < 1 || (size_t)index * 2 > e->option_guids.size()) return false;
+    if (!e || !e->unit || index < 1) return false;
+    if (auto it = g_rows.find(entry_id); it != g_rows.end() && it->second.unit == e->unit) {   // increment 14: a row's text is owned
+        RowUnit& r = it->second;
+        if ((size_t)index > r.og.size() || (size_t)index > r.opts.size() || !guid_text::retext_owned(kRowOwner, r.og[(size_t)index - 1], text)) return false;
+        r.opts[(size_t)index - 1] = text;
+        if ((size_t)index <= e->options.size()) e->options[(size_t)index - 1] = text;
+        return true;
+    }
+    if ((size_t)index * 2 > e->option_guids.size()) return false;
     if (!guid_text::retext({ e->option_guids[(size_t)(index - 1) * 2], e->option_guids[(size_t)(index - 1) * 2 + 1] }, text)) return false;
     if ((size_t)index <= e->options.size()) e->options[(size_t)index - 1] = text;
     return true;
@@ -1805,6 +2461,7 @@ bool section_state(int64_t group_id, SF6CoreOptSectionState& out) {
     out.struct_size = sizeof out;
     out.held = s->held ? 1 : 0;
     out.decides = s->slot >= 0 ? g_slot_decides[s->slot].load(std::memory_order_relaxed) : 0;
+    out.resets = s->slot >= 0 ? g_slot_resets[s->slot].load(std::memory_order_relaxed) : 0;
     return true;
 }
 
@@ -1850,10 +2507,18 @@ std::string status() {
         const int cs = g_check_state.load();
         const char* check = cs == 0 ? "pending" : cs == 1 ? "running" : (g_check_ok ? (g_check_cache ? "cache" : "scanned") : "failed");
         auto hk = [](const SecHook& h) { return h.hooked ? "on" : (!h.tried ? "wait" : (h.shared > 0 ? "refused" : "off")); };
-        std::snprintf(buf, sizeof(buf), " | sections=%zu live=%zu hooks=check:%s,H2:%s,H1:%s held=%d cancels=%u faults=%d%s",
-                      g_secs.size(), live, check, hk(g_hooks[0]), hk(g_hooks[1]), g_held.load(), g_cancels.load(), g_sec_faults.load(),
+        std::snprintf(buf, sizeof(buf), " | sections=%zu live=%zu hooks=check:%s,H2:%s,H1:%s,H3:%s held=%d cancels=%u faults=%d%s",
+                      g_secs.size(), live, check, hk(g_hooks[0]), hk(g_hooks[1]), hk(g_hooks[2]), g_held.load(), g_cancels.load(), g_sec_faults.load(),
                       g_sec_off.load() ? " OFF" : "");
         out += buf;
+        size_t rows_secs = 0;                                    // increment 14, once a section with rows exists
+        for (auto& s : g_secs) if (s.rows) ++rows_secs;
+        if (rows_secs || !g_rows.empty()) {
+            std::snprintf(buf, sizeof(buf), " | rows: sections=%zu units=%zu made=%zu shown=%zu fills=%u retired=%zu parts=%d resets=%u rows_reset=%u save_skips=%u save_hook=%d",
+                          rows_secs, g_rows.size(), g_rows_made, g_rows_shown, g_fills, g_retired.size(), g_sub_pool, g_reset_calls.load(), g_rows_reset,
+                          g_save_skips.load(), (int)g_save_hook);
+            out += buf;
+        }
     }
     return out;
 }

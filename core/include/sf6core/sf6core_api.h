@@ -255,6 +255,10 @@ typedef struct SF6CoreOptEntryDesc {
     int64_t            min_val;       /* slider range */
     int64_t            max_val;
     int64_t            value;         /* choice: 1-based; slider: raw; button: unused */
+    /* core 0.9.10 (increment 14, appended: read only when struct_size covers them): the value the game's "Restore Default
+       Settings" gives the row in a section with rows (opt_section_place_rows). has_default 0: choice 1, slider min_val. */
+    int32_t            has_default;
+    int64_t            default_value; /* choice: 1-based; slider: raw */
 } SF6CoreOptEntryDesc;
 
 /* What a button press asks for, filled by the owner's on_button. */
@@ -312,6 +316,15 @@ typedef struct SF6CoreOptSectionState {
                                  unless shown */
     float    area[4];         /* the right side (c_bg_right/e_bg): x, y (its top left), w, h in screen units; 0 when
                                  not up */
+    /* core 0.9.10 (increment 14, appended): a section with rows (opt_section_place_rows): the entry whose row is under
+       the cursor of the right list (the game's sub list), 0 when the cursor is on the left list, on another section's
+       rows, or the screen is not up. Always 0 for a section with a client page. */
+    int64_t  focused_entry;
+    /* core 0.9.10 (increment 14, appended): a section with a client page (opt_section_place): the game's "Restore Default
+       Settings" confirmed with the left list's cursor on it (a count: compare it with the last one seen; the game has no
+       unit of it to reset, the client puts its page's settings back). Always 0 for a section with rows (the game resets
+       those itself) and when the hook is not installed. */
+    uint32_t resets;
 } SF6CoreOptSectionState;
 
 /* ---- Training pause-menu types (increment 8, ADR-0016) ---------------- */
@@ -843,6 +856,28 @@ typedef struct SF6CoreAPI {
      * that key too. The core gives it back by itself when the screen goes, when the section is removed, or when
      * its option hooks are switched off. */
     SF6CoreStatus (SF6CORE_CALL *opt_section_hold)(SF6CoreClient* client, int64_t group, int32_t hold);
+
+    /* -- Increment 14: a client's section whose right side is the game's own sub list holding its entries (append-only) --
+     *
+     * Probe with SF6CORE_HAS(api, opt_section_place_rows) (core >= 0.9.10). Game thread. */
+
+    /* As opt_section_place (same place in the left list, same texts from the group's title and description, the same
+     * opt_section_state, -1, -1 = no section any more), but the section's right side is the game's own sub list, filled
+     * and run by the game as for its own sections: the group's entries are its rows (SF6CORE_OPT_CHOICE: title, desc =
+     * the screen's description line while the row is focused, options[] cycled by Left / Right, value 1-based;
+     * SF6CORE_OPT_SLIDER as a placed row; buttons are not shown). Confirm on the section moves the cursor into its rows,
+     * Back brings it back: no hold (opt_section_hold 1 = ERR_INVALID_ARG), no client page.
+     * on_value for every change the player makes (read every frame while the cursor is in its rows); opt_set_value shows
+     * on the row at once; opt_group_def and opt_set_option_text change texts in place. Entries added later become rows
+     * at the next build (opt_rebuild + opt_ensure_built), shown from the game's next fill of the right list (the cursor
+     * coming onto the section). At most one row per part of the game's sub list (25 read 08/11): the entries past it
+     * are not shown (logged). The game never loads or saves these rows: the client stores the values itself. The game's
+     * "Restore Default Settings" (its button and prompt) gives each row its entry's default (has_default / default_value
+     * of SF6CoreOptEntryDesc, else choice 1, slider min_val), shown at once, with on_value for each row that changed.
+     * opt_section_state's focused_entry: the entry under the right list's cursor. ERR_NOT_FOUND: not one of the client's
+     * groups; ERR_INVALID_ARG: tab -1 with a section, or a group placed with opt_group_place; ERR_DISABLED: the option
+     * service could not be installed. */
+    SF6CoreStatus (SF6CORE_CALL *opt_section_place_rows)(SF6CoreClient* client, int64_t group, int32_t tab, int32_t before_section);
 
 } SF6CoreAPI;
 
