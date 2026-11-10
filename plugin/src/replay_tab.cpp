@@ -246,14 +246,16 @@ std::atomic<bool> g_ours{ false };
 std::atomic<bool> g_enter{ false }, g_leave{ false };
 std::atomic<bool> g_music_open{ false };          // the game's music screen is up (its Back must not reach the tab)
 bool g_leaving = false;                           // Back pressed on the grid: the page waits for the key's release
+bool g_leaving_next = false;                      // ... the tab-next key: the game's first tab selected then
+uint32_t g_wrap_enter_at = 0;                     // tab back on the game's first tab: ours comes up once the game is on Search
+uint32_t g_wrap_search_at = 0;                    // ... and its page has had a few frames to replace the first tab's
 std::atomic<int> g_refused{ 0 };
 std::atomic<int> g_copy_status{ 1000 };
 std::atomic<uint32_t> g_swallowed{ 0 };
 std::atomic<uint32_t> g_leave_frame{ 0 };
 std::atomic<uint32_t> g_wrap_frame{ 0xFFFFFFFFu };   // a press that wraps round the tabs: the game's own move, once (+1: the frame)
-std::atomic<bool> g_to_first{ false };          // tab next on Settings: the frame selects the game's first tab (its list does not wrap
-uint32_t g_first_at = 0;                        // forward from Search, seen 10/11): when it did, to check the page followed
-int g_first_step = 0;                           // 0 nothing, 1 selected, waiting to check
+std::atomic<bool> g_to_first{ false };          // tab next on Settings: the frame selects the game's first tab (its list does not
+                                                // wrap forward from Search, seen 10/11)
 thread_local bool tl_skipped = false;
 
 // ---- frame state ----
@@ -459,8 +461,8 @@ int decide(void* self, int dir, uint32_t flag) {
         bool ok = false;
         try { ok = make_copies(); } catch (...) { ++g_refused; g_copy_status.store(-2000); }
         if (!ok) return kCall;                          // no page to show: the game does its own thing (Search)
-        g_ours.store(true);
-        g_enter.store(true);
+        g_wrap_enter_at = g_frame;                      // ours comes up once the game is on Search (the frame)
+        g_wrap_search_at = 0;
         g_wrap_frame.store(g_frame);
         return kCall;                                   // the game goes to Search, where ours keeps its list
     }
@@ -1174,10 +1176,10 @@ struct Rep {
     }
     void prime(bool now) { held = now; next = g_frame + 1000000; }   // a key held at entry acts only once released
 };
-Rep k_up, k_down, k_left, k_right, k_esc, k_tab, k_ok, k_var, k_music;
+Rep k_up, k_down, k_left, k_right, k_esc, k_tab, k_next, k_ok, k_var, k_music;
 Method* m_pad_merged = nullptr;
 Method* m_pad_button = nullptr;
-uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_l1 = 256, b_b = 128, b_a = 32;   // via.hid.GamePadButton
+uint32_t b_up = 1, b_down = 2, b_left = 4, b_right = 8, b_l1 = 256, b_r1 = 512, b_b = 128, b_a = 32;   // via.hid.GamePadButton
 uint32_t b_sup = 0, b_sdown = 0, b_sleft = 0, b_sright = 0;
 
 bool focused() {
@@ -1199,7 +1201,7 @@ uint32_t pad_buttons() {
     auto r = call(m_pad_button, dev);
     return r.exception_thrown ? 0u : r.dword;
 }
-struct Keys { bool up, down, left, right, esc, tab, ok, var, music; };   // esc: Back; tab: the tab-back key; var: the stage variation key; music: T / pad Y
+struct Keys { bool up, down, left, right, esc, tab, next, ok, var, music; };   // esc: Back; tab: the tab-back key; next: the tab-next key; var: the stage variation key; music: T / pad Y
 Keys read_keys() {
     Keys k{};
     if (focused()) {
@@ -1209,6 +1211,7 @@ Keys read_keys() {
         k.right = vk_down(VK_RIGHT) || sc_down(0x20);
         k.esc = vk_down(VK_ESCAPE);
         k.tab = sc_down(0x10);                     // the tab-back key (Q's place: A on AZERTY)
+        k.next = sc_down(0x12);                    // the tab-next key (E's place)
         k.ok = vk_down(VK_RETURN) || sc_down(0x21);     // Enter, F (the game's Confirm)
     }
     const uint32_t b = pad_buttons();
@@ -1218,6 +1221,7 @@ Keys read_keys() {
     k.right = k.right || (b & b_right) || (b_sright && (b & b_sright));
     k.esc = k.esc || (b & b_b);
     k.tab = k.tab || (b & b_l1);
+    k.next = k.next || (b & b_r1);
     k.ok = k.ok || (b & b_a);
     k.var = stages::replay_key_down();             // the pad's X / its keyboard key (stages.hpp)
     k.music = stages::replay_music_key_down();     // the pad's Y / its keyboard key
@@ -1226,7 +1230,7 @@ Keys read_keys() {
 void prime_keys() {
     const Keys k = read_keys();
     k_up.prime(k.up); k_down.prime(k.down); k_left.prime(k.left); k_right.prime(k.right);
-    k_esc.prime(k.esc); k_tab.prime(k.tab); k_ok.prime(k.ok); k_var.prime(k.var); k_music.prime(k.music);
+    k_esc.prime(k.esc); k_tab.prime(k.tab); k_next.prime(k.next); k_ok.prime(k.ok); k_var.prime(k.var); k_music.prime(k.music);
 }
 
 const Fighter* focused_fighter() {
@@ -1301,11 +1305,12 @@ void input() {
         return;
     }
     const Keys k = read_keys();
-    const bool esc = k_esc.press(k.esc), tab = k_tab.press(k.tab), ok = k_ok.press(k.ok);
+    const bool esc = k_esc.press(k.esc), tab = k_tab.press(k.tab), tab_next = k_next.press(k.next), ok = k_ok.press(k.ok);
     const Fighter* f = focused_fighter();
     const int level = g_level.load();
     if (level == kLevelList) {                     // the option rows: Up / Down (wrapping), Confirm into its grid, Back to Search
         if (esc || tab) { g_ours.store(false); g_leaving = true; return; }   // (the page's input comes back once released)
+        if (tab_next) { g_ours.store(false); g_leaving = true; g_leaving_next = true; return; }   // round to the game's first tab
         if (k_up.step(k.up)) { g_list_row = (g_list_row + kListRows - 1) % kListRows; g_dirty = true; }
         if (k_down.step(k.down)) { g_list_row = (g_list_row + 1) % kListRows; g_dirty = true; }
         const bool music_press = k_music.press(k.music);
@@ -1462,8 +1467,9 @@ void tab_bar(Obj* main) {
 }
 
 // The Search page's agents: every visible CFN* agent but the hub and the tab bar's
-void hide_page(bool quiet) {
-    g_hidden.clear();
+void hide_page(bool quiet, bool more = false) {
+    if (!more) g_hidden.clear();
+    const size_t had = g_hidden.size();
     TD* td = api().tdb()->find_type("app.UIAgent");
     Obj* list = find_components(td);
     for (int i = 0, n = list_count(list); i < n; ++i) {
@@ -1471,6 +1477,7 @@ void hide_page(bool quiet) {
         Obj* go = ag ? call_obj(ag, "get_GameObject") : nullptr;
         const std::string nm = go ? str(call_obj(go, "get_Name")) : "";
         if (nm.rfind("CFN", 0) != 0 || nm == "CFNTop" || nm == kTop) continue;
+        if (more && std::find(g_hidden.begin(), g_hidden.end(), nm) != g_hidden.end()) continue;
         Obj* cm = call_obj(ag, "get_ControlMain");
         if (!actual_visible(cm)) continue;
         A()->ui_set_block_input(C(), ag, 1);
@@ -1478,7 +1485,7 @@ void hide_page(bool quiet) {
         g_hidden.push_back(nm);
     }
     std::string names;
-    for (auto& s : g_hidden) names += (names.empty() ? "" : ", ") + s;
+    for (size_t i = more ? had : 0; i < g_hidden.size(); ++i) names += (names.empty() ? "" : ", ") + g_hidden[i];
     if (!quiet || !names.empty()) logf("replay tab: page hidden: %s", names.empty() ? "(no agent found)" : names.c_str());
 }
 void restore_page() {
@@ -2347,7 +2354,7 @@ void init() {
     if (TD* btn = api().tdb()->find_type("via.hid.GamePadButton")) {
         auto bit = [&](const char* f, uint32_t fb) { auto* x = btn->find_field(f); return x ? static_cast<uint32_t>(x->get_data<int32_t>(nullptr)) : fb; };
         b_up = bit("LUp", 1); b_down = bit("LDown", 2); b_left = bit("LLeft", 4); b_right = bit("LRight", 8);
-        b_l1 = bit("LTrigTop", 256); b_b = bit("RRight", 128); b_a = bit("RDown", 32);
+        b_l1 = bit("LTrigTop", 256); b_r1 = bit("RTrigTop", 512); b_b = bit("RRight", 128); b_a = bit("RDown", 32);
         b_sup = bit("EmuLup", 0); b_sdown = bit("EmuLdown", 0); b_sleft = bit("EmuLleft", 0); b_sright = bit("EmuLright", 0);
     }
     if (TD* cp = api().tdb()->find_type("via.gui.ControlPoint"))
@@ -2399,36 +2406,43 @@ void tick() {
         }
     } else {
         g_tab.store(sel, std::memory_order_release);
+        if (g_wrap_enter_at) {                        // tab back on the first tab: Search reached, its page settled for 6 frames
+            if (sel == kSearch && !g_wrap_search_at) g_wrap_search_at = g_frame;
+            if (g_wrap_search_at && g_frame - g_wrap_search_at >= 6) {
+                g_wrap_enter_at = g_wrap_search_at = 0;
+                g_ours.store(true);
+                g_enter.store(true);
+            } else if (g_frame - g_wrap_enter_at > 60) {
+                g_wrap_enter_at = g_wrap_search_at = 0;
+                logf("replay tab: tab back on the first tab: the game did not reach Search, Settings not opened");
+            }
+        }
     }
     if (g_enter.exchange(false) && g_ours.load()) enter(main);
     if (g_leave.exchange(false)) leave(main, "tab back");
-    // tab next on Settings: the game's first tab selected as a mouse click does it; its page not up two frames later: the list's
-    // selection-changed event raised (once)
+    // tab next on Settings: the game's first tab selected, then the screen's flow told the tab changed (its InputDelegates'
+    // EventTabChanged: what switches the page; the list's selection alone moved the highlight and left Search's page, seen 10/11)
     if (g_to_first.exchange(false)) {
-        if (Obj* ti = get_obj(agent, "_TabItem")) {
-            call(ti, "SetSelectedIndex", { arg_i32(kFirstTab), arg_bool(true) });
-            g_first_step = 1;
-            g_first_at = g_frame;
-            logf("replay tab: tab next on Settings: the game's first tab selected");
-        }
-    } else if (g_first_step == 1 && g_frame - g_first_at >= 2) {
-        g_first_step = 0;
-        void* pages[2] = {};
-        Obj* page = A()->ui_agents("CFNReplayChildList", pages, 2) ? static_cast<Obj*>(pages[0]) : nullptr;
-        if (!actual_visible(page ? call_obj(page, "get_ControlMain") : nullptr))
-            if (Obj* ti = get_obj(agent, "_TabItem")) {
-                call(ti, "InvokeSelectionChanged");
-                logf("replay tab: the first tab's page not up: the list's selection-changed event raised");
-            }
+        Obj* ti = get_obj(agent, "_TabItem");
+        Obj* dg = get_obj(agent, "<InputDelegates>k__BackingField");
+        if (ti && dg) {
+            call(ti, "SetSelectedIndex", { arg_i32(kFirstTab), arg_bool(false) });
+            call(dg, "EventTabChanged");
+            logf("replay tab: tab next on Settings: the game's first tab selected, its flow told");
+        } else logf("replay tab: tab next on Settings: no tab list / input delegates: Search stays");
     }
     if (g_leaving) {
         hide_copies(main);
         const Keys k = read_keys();
-        if (!k.esc && !k.tab) { g_leaving = false; leave(main, "back key"); }
+        if (!k.esc && !k.tab && !k.next) {
+            g_leaving = false;
+            leave(main, g_leaving_next ? "tab next" : "back key");
+            if (g_leaving_next) { g_leaving_next = false; g_to_first.store(true); }
+        }
     }
     tab_bar(main);
     if (g_ours.load()) {
-        if (g_frame % 30 == 0 && g_hidden.empty()) hide_page(true);   // the page's agents were not up yet at entry
+        if (g_frame % 30 == 0) hide_page(true, true);   // a page up after the entry (not up yet then, or the game's own switch)
         input();
         render(main);                             // sets the wanted model
         if (void* title = find(main, "c_title")) {     // long names scroll inside their place (name_scroll.cpp)
