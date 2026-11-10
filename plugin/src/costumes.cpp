@@ -153,6 +153,13 @@ std::recursive_mutex g_alias_mx;       // the alias's state (see "Online alias")
 // What each character's Costume row lists (the Random outfit left out) and the colours each of its game outfits' Color row
 // lists, read on the game thread offline (the screens that list outfits) and kept as numbers for the hooks that draw
 std::map<int, std::vector<int>> g_rand_outfits;
+// The same without the game outfits the player does not really have (true_owner.hpp: an unlock-all script lists them all): ranked
+// matches draw from it, everything else from the whole row (Wael 10/11). The online draw made before matchmaking does not know the
+// next match's mode: it follows the last online set's (ranked or none seen yet: the owned pool; another online mode: the whole row).
+std::map<int, std::vector<int>> g_rand_owned;
+std::map<int, std::vector<int>> g_rand_owned_seen;   // the last owned lists logged
+bool g_online_owned = true;
+constexpr int kRankedMatch = 14;       // app.EGameMode.RANKED_MATCH
 std::map<std::pair<int, int>, std::vector<int>> g_rand_colours;
 std::map<int, rnd::Fighter> g_rand;    // per character: its rounds and Battle Settings' next draw (state.json "random")
 // Online: what the player's fighter wears for the set against the current opponent (taken at the match's first load)
@@ -550,10 +557,12 @@ bool rand_allowed(int fid, int cos) {
     auto it = g_nsfw_nos.find(fid);
     return it == g_nsfw_nos.end() || std::find(it->second.begin(), it->second.end(), static_cast<uint32_t>(cos)) == it->second.end();
 }
-// The pool's outfits, as the Costume row last listed them; never read yet: Outfit 1 alone (under g_alias_mx)
-std::vector<int> rand_outfits_of(int fid) {
-    auto it = g_rand_outfits.find(fid);
-    return it != g_rand_outfits.end() && !it->second.empty() ? it->second : std::vector<int>{ carrier::kOutfit1 };
+// The pool's outfits, as the Costume row last listed them (owned: the ones the player really has); never read yet: Outfit 1 alone
+// (under g_alias_mx)
+std::vector<int> rand_outfits_of(int fid, bool owned = false) {
+    const auto& m = owned ? g_rand_owned : g_rand_outfits;
+    auto it = m.find(fid);
+    return it != m.end() && !it->second.empty() ? it->second : std::vector<int>{ carrier::kOutfit1 };
 }
 std::vector<int> rand_colours_of(int fid, int cos) {
     if (is_mod_slot(fid, cos)) return { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
@@ -590,9 +599,10 @@ std::string rand_colour_name(int fid, int cos, int v) {
     return "an entry gone since";
 }
 // The row lists it (not read yet this session: a draw kept from the last one stays)
-bool rand_listed(int fid, int cos) {
-    auto it = g_rand_outfits.find(fid);
-    return it == g_rand_outfits.end() || std::find(it->second.begin(), it->second.end(), cos) != it->second.end();
+bool rand_listed(int fid, int cos, bool owned = false) {
+    const auto& m = owned ? g_rand_owned : g_rand_outfits;
+    auto it = m.find(fid);
+    return it == m.end() || std::find(it->second.begin(), it->second.end(), cos) != it->second.end();
 }
 std::string rand_name(int fid, int cos) {
     if (!is_mod_slot(fid, cos)) return ownership::outfit_label(cos);
@@ -607,18 +617,18 @@ bool rand_intent(int fid) {
 }
 
 // A draw from the character's pool (under g_alias_mx). `colour_ok(costume, colour)`: what the colour may be (a mirror's left
-// out; none: any).
-rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr) {
+// out; none: any). owned: only the outfits the player really has (ranked).
+rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr, bool owned = false) {
     const rnd::Rng rng = [] { return static_cast<uint32_t>(g_rng()); };
     rnd::Fighter& f = g_rand[fid];
-    const rnd::Draw d = rnd::draw_outfit(f, rand_outfits_of(fid), [fid](int c) { return rand_allowed(fid, c); },
+    const rnd::Draw d = rnd::draw_outfit(f, rand_outfits_of(fid, owned), [fid](int c) { return rand_allowed(fid, c); },
                                          [fid](int c) { return rand_draw_colours_of(fid, c); }, rng, colour_ok);
     if (!d.valid()) { logf("[F%d] Random: nothing to draw (%s)", fid, why); return d; }
     g_rand_dirty = true;
     size_t pool = 0;
-    for (int c : rand_outfits_of(fid)) pool += rand_allowed(fid, c) ? 1 : 0;
-    logf("[F%d] Random: %s %s drawn (%s; %zu of %zu outfits given in this round)", fid, rand_name(fid, d.costume).c_str(),
-         rand_colour_name(fid, d.costume, d.color).c_str(), why, f.outfits.drawn.size(), pool);
+    for (int c : rand_outfits_of(fid, owned)) pool += rand_allowed(fid, c) ? 1 : 0;
+    logf("[F%d] Random: %s %s drawn (%s; %zu of %zu outfits given in this round%s)", fid, rand_name(fid, d.costume).c_str(),
+         rand_colour_name(fid, d.costume, d.color).c_str(), why, f.outfits.drawn.size(), pool, owned ? ", the player's own only" : "");
     return d;
 }
 // A Random colour of outfit `cos` (the Color Mod's Random value), from that outfit's round (under g_alias_mx). `ok`: what it may
@@ -663,8 +673,8 @@ void rand_clear_worn(const char* why) {
 // Battle Settings' Random: its next draw, made again when it is gone from the row or hidden (NSFW) (under g_alias_mx)
 void rand_ensure_next(int fid, const char* why) {
     rnd::Fighter& f = g_rand[fid];
-    if (f.next.valid() && rand_allowed(fid, f.next.costume) && rand_listed(fid, f.next.costume)) return;
-    f.next = rand_draw(fid, why);
+    if (f.next.valid() && rand_allowed(fid, f.next.costume) && rand_listed(fid, f.next.costume, g_online_owned)) return;
+    f.next = rand_draw(fid, why, nullptr, g_online_owned);
 }
 // What the save holds for Random outside the menu: its next draw when that is a game outfit, else nothing (the carrier)
 rnd::Draw rand_save_draw(int fid) {
@@ -777,25 +787,21 @@ void rand_read_lists(const char* why) {
     Method* m_cols = tm ? method_of(tm->get_type_definition(), "GetFighterCostumeColors", 2) : nullptr;
     auto* im = api().get_managed_singleton("app.InventoryManager");
     Obj* col_inv = im ? get_obj(im, "_Color") : nullptr;
-    std::map<int, std::vector<int>> outs;
+    std::map<int, std::vector<int>> outs, owns;
     std::map<std::pair<int, int>, std::vector<int>> cols;
     int not_owned = 0;
     for (auto& [fid, rno] : g_random_no) {
         bool ok = false;
-        std::vector<uint32_t> listed;
-        bool honest = false;
-        {
-            const trueown::Honest h;                   // the game's list with Steam's DLC answer, on this thread only
-            honest = h.ok();
-            listed = listed_outfits(m_list, ci, fid, &ok);
-        }
+        const std::vector<uint32_t> listed = listed_outfits(m_list, ci, fid, &ok);
         if (!ok) continue;
         std::vector<int>& v = outs[fid];
+        std::vector<int>& vo = owns[fid];
         for (uint32_t c : listed) {
             const int cos = static_cast<int>(c);
             if (cos == rno || (is_slot(fid, cos) && !shown(fid, cos)) || std::find(v.begin(), v.end(), cos) != v.end()) continue;
-            if (!honest && !is_slot(fid, cos) && trueown::dlc_only_unowned(fid, cos)) { ++not_owned; continue; }
             v.push_back(cos);
+            if (is_slot(fid, cos) || trueown::owned(fid, cos)) vo.push_back(cos);
+            else ++not_owned;
         }
         for (int cos : v) {
             const std::pair<int, int> key{ fid, cos };
@@ -822,9 +828,13 @@ void rand_read_lists(const char* why) {
             }
         }
     }
-    if (not_owned) logf("Random: %d game outfits given only by DLCs Steam does not count as the player's left out (%s)", not_owned, why);
     std::lock_guard lk(g_alias_mx);
     for (auto& [k, v] : cols) g_rand_colours[k] = std::move(v);
+    if (owns != g_rand_owned_seen) {
+        g_rand_owned_seen = owns;
+        logf("Random: ranked matches leave out %d game outfits the player does not really have (%s)", not_owned, why);
+    }
+    for (auto& [fid, v] : owns) g_rand_owned[fid] = std::move(v);
     for (auto& [fid, v] : outs) {
         if (g_rand_outfits[fid] == v) continue;
         std::string line;
@@ -1610,6 +1620,11 @@ void rand_bind(int fid, const DescInfo& d) {
     for (auto& f : d.f) if (f.fid == fid && f.ours) { mine = &f; break; }
     if (!mine) return;
     g_rand_batch.insert(fid);
+    if (const bool ranked = d.mode == kRankedMatch; ranked != g_online_owned) {
+        g_online_owned = ranked;
+        logf("Random: %s: the online draws take %s", ranked ? "a ranked match" : "an online match that is not ranked",
+             ranked ? "only the outfits the player really has" : "from the whole Costume row");
+    }
     rand_ensure_next(fid, "a match begins");
     rnd::Fighter& rf = g_rand[fid];
     const rnd::Bind b = rnd::bind_set(rf.next, is_mod_slot(fid, rf.next.costume), mine->cos, mine->color);
@@ -1619,7 +1634,7 @@ void rand_bind(int fid, const DescInfo& d) {
              !b.local ? " (what the opponent sees)" : is_mod_slot(fid, b.set.costume) ? " (on this PC: the opponent sees what the match holds)"
                       : " (on this PC: no fighter profile sent since the draw, the opponent sees what the match holds)");
         if (!b.local) rand_wear_entry(mine->team + 1, fid, b.set.costume, b.set.color, "this set");   // (the alias's: as it dresses)
-        rf.next = rand_draw(fid, "the next set");
+        rf.next = rand_draw(fid, "the next set", nullptr, g_online_owned);
     } else {
         logf("[F%d] Random: the match holds %s, not %s drawn (no fighter profile sent since the draw, and Outfit 1 cannot be "
              "worn over another): this set wears it, the draw waits for the next one", fid, ownership::outfit_label(mine->cos).c_str(),
