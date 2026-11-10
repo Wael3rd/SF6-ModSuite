@@ -81,6 +81,10 @@ extern "C" __declspec(dllexport) void SF6ColorMod_ClearRequests(int scope) {
 extern "C" __declspec(dllexport) int SF6ColorMod_RandomChoice(int side, int* fighter, int* costume) {
     try { return engine::decide::random_choice(side, fighter, costume); } catch (...) { return 0; }
 }
+// The same for Battle Settings, per fighter: Fighter Settings' Random colour of that fighter, its outfit (-1 none). Any thread.
+extern "C" __declspec(dllexport) int SF6ColorMod_FighterRandom(int fighter) {
+    try { return engine::decide::fighter_random(fighter); } catch (...) { return -1; }
+}
 
 namespace {
 

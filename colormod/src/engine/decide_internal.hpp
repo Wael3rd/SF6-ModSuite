@@ -25,5 +25,8 @@ MO* battle_ctrl(int side);                               // gBattle.PBManager.Pl
 // dbg.set_color: only on a live colour controller still in the current scene (fresh = found in this frame's list)
 bool set_color(MO* ctrl, std::optional<uint32_t> num, const std::string& why, bool fresh);
 int ctrl_fighter(MO* ctrl);                              // dbg.ctrl_fighter: the fighter of its colour file (-1 = nil)
+// A battle side's model and its sub-models take colour `num` in place (SetColor on each, as the confirm re-issue does; a P2
+// marked on 02 keeps its mark): false when that side has no model
+bool recolour_side(int side, uint32_t num, const std::string& why);
 
 }  // namespace engine::decide::internal

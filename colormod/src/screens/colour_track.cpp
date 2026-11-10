@@ -258,6 +258,7 @@ struct Fsm {                                           // fsm
     std::vector<Guide> guides;
     std::optional<Refresh> refresh;
     bool mouse_known = false; LONG mouse_x = 0, mouse_y = 0;
+    Opt pair_f, pair_c;                                // the fighter / outfit whose Color row is shown (nil: the screen just opened)
 };
 Fsm& fsm = *new Fsm();
 
@@ -706,15 +707,56 @@ void fs_shown(int64_t k, const char* why) {
         if (engine::live::side_from_parents(c) == 3 && color_num(c) == kBaseColor) set_color(c, kBaseColor, why, true);
 }
 
+// ---- Fighter Settings' Random colour, per fighter (state.fs_random: { "<fighter>": <outfit> }) -------------------------
+// Battle Settings keeps an outfit and a colour per fighter: the Random value is kept so too (state.fs is one selection, the
+// last fighter shown: Random chosen for Ryu was lost once Ken was shown). Set when the spin shows Random on a fighter's Color
+// row; dropped when another value is picked there, or when Fighter Settings is left on another outfit of that fighter; shown
+// again (the walk to it) whenever that fighter's row comes back on that outfit. The decisions get it (push_fs_random) for the
+// Slots Loader (SF6ColorMod_FighterRandom).
+bool g_fs_random_dirty = true;                         // to push at the next decide_push
+json& fs_random_map() {
+    json& m = g_state["fs_random"];
+    if (!m.is_object()) m = json::object();
+    return m;
+}
+int64_t fs_random_of(const Opt& f) {                   // the outfit Random was chosen on for that fighter, -1 none
+    if (!f) return -1;
+    const json& m = fs_random_map();
+    const auto it = m.find(std::to_string(*f));
+    return it != m.end() && it->is_number() ? (int64_t)it->get<double>() : -1;
+}
+void fs_random_set(const Opt& f, const Opt& c, const char* why) {
+    if (!f || !c || fs_random_of(f) == *c) return;
+    fs_random_map()[std::to_string(*f)] = *c;
+    save_state();
+    g_fs_random_dirty = true;
+    cmn::journal("Fighter Settings: fighter %lld's colour is Random on outfit %lld (%s)", (long long)*f, (long long)*c, why);
+}
+void fs_random_drop(const Opt& f, const char* why) {
+    if (!f || !fs_random_map().erase(std::to_string(*f))) return;
+    save_state();
+    g_fs_random_dirty = true;
+    cmn::journal("Fighter Settings: fighter %lld's Random colour dropped (%s)", (long long)*f, why);
+}
+void fs_random_leave() {                               // Fighter Settings left: on another outfit of the fighter shown last, its Random goes
+    const int64_t rc = fs_random_of(fsm.pair_f);
+    if (rc >= 0 && fsm.pair_c && rc != *fsm.pair_c) fs_random_drop(fsm.pair_f, "Fighter Settings left on another outfit");
+    fsm.pair_f.reset();
+    fsm.pair_c.reset();
+}
+
 void tick_fighter_settings() {
     const bool slots_changed = nb("screens_guide") && slots_entry_poll();   // its entry came / went: refreshed now
     const auto ags = agents(kAgentFs);
     MO* agent = ags.empty() ? nullptr : ags[0];
-    if (!agent) { fsm.agent.set(nullptr); fsm.text.set(nullptr); fsm.spin.set(nullptr); fsm.last_k = 0; fsm.visible = false; return; }
+    if (!agent) {
+        if (fsm.visible) fs_random_leave();
+        fsm.agent.set(nullptr); fsm.text.set(nullptr); fsm.spin.set(nullptr); fsm.last_k = 0; fsm.visible = false; return;
+    }
     MO* cm = call_obj(agent, "get_ControlMain");
     const auto v = call_bool(cm, "get_ActualVisible");
     if (!(v && *v)) {
-        if (fsm.visible) { fsm.color_focused = false; fsm.hidden_now = true; set_bottom_hint(std::nullopt); fsm.hidden_now = false; }
+        if (fsm.visible) { fsm.color_focused = false; fsm.hidden_now = true; set_bottom_hint(std::nullopt); fsm.hidden_now = false; fs_random_leave(); }
         fsm.visible = false; fsm.text.set(nullptr); fsm.last_k = 0; return;
     }
     if (agent != fsm.agent.get() || !fsm.text || !fsm.visible) {
@@ -731,9 +773,33 @@ void tick_fighter_settings() {
         fsm.opened_at = g_F;
         const json& s = g_state["fs"];
         fsm.restore_steps = (rw_or0(s) > 0 && eq(lj::index(s, "fighter"), g_list_f) && eq(lj::index(s, "costume"), g_list_c) && reachable(rw_or0(s), g_list_f, g_list_c)) ? g_extra_count + 30 : 0;
+        fsm.pair_f.reset();                                         // the first row seen is no change of the player's
+        fsm.pair_c.reset();
     }
     if (!fsm.text || !fsm.rect0 || !fsm.rect1) return;
     if (!alive(fsm.text.get())) { fsm.agent.set(nullptr); fsm.text.set(nullptr); return; }
+    // Another fighter's or outfit's Color row (or the screen's first): Random comes back where that fighter has it on that outfit
+    // (state.fs becomes it and the spin walks there, as at the screen's opening)
+    const bool pair_changed = fsm.pair_f != g_list_f || fsm.pair_c != g_list_c;
+    if (pair_changed) {
+        fsm.pair_f = g_list_f;
+        fsm.pair_c = g_list_c;
+        if (const json& s = g_state["fs"]; fsm.restore_steps > 0 && (!eq(lj::index(s, "fighter"), g_list_f) || !eq(lj::index(s, "costume"), g_list_c)))
+            fsm.restore_steps = 0;                                  // a walk for another row (the list asked before this one's): stopped
+        if (g_list_c && fs_random_of(g_list_f) == *g_list_c && reachable(rv::kK, g_list_f, g_list_c)) {
+            json& s = g_state["fs"];
+            if (rw_or0(s) != rv::kK || !eq(lj::index(s, "fighter"), g_list_f) || !eq(lj::index(s, "costume"), g_list_c)) {
+                lj::set(s, "rw", (int64_t)rv::kK); lj::set(s, "fighter", jv(g_list_f)); lj::set(s, "costume", jv(g_list_c));
+                lj::set(s, "path", json(rv::kIdent));
+                save_state();
+            }
+            if (fs_entry() != rv::kK) {
+                fsm.opened_at = g_F;                                // (the walk lets the row settle first)
+                fsm.restore_steps = g_extra_count + 30;
+                cmn::journal("Fighter Settings: fighter %lld outfit %lld: back to its Random colour", (long long)*g_list_f, (long long)*g_list_c);
+            }
+        }
+    }
     const auto row = focused_row_name(agent);
     fsm.color_focused = row && *row == "p_Spin_color";
     if (g_F % 5 == 0 || slots_changed) {
@@ -757,6 +823,12 @@ void tick_fighter_settings() {
         const Entry* e = k > 0 ? entry_k(entries_for(num(lj::index(s, "fighter")), num(lj::index(s, "costume"))), k) : nullptr;
         lj::set(s, "path", path_of(k, e));
         save_state();
+        // per fighter: Random picked, or another value picked on the row Random was kept for (not at the first look at a row:
+        // its text may still be the last row's, the Random outfit's "Random" among them)
+        if (!pair_changed) {
+            if (k == rv::kK) fs_random_set(g_list_f, g_list_c, "picked");
+            else if (g_list_c && fs_random_of(g_list_f) == *g_list_c) fs_random_drop(g_list_f, "another colour picked");
+        }
     }
     if (k != fsm.last_k) fs_shown(k, "fighter settings");
     if (k <= 0) return;
@@ -1097,10 +1169,43 @@ void tick() {
 }
 
 // ---- late steps ----------------------------------------------------------------------------------------------------------
+// The popup confirmed on Random where the game reloads nothing (the value was on colour 02 already: Random rides on it): the
+// Slots Loader draws now (SF6Slots_RandomNow) and the side takes the colour drawn in place, as SetColor does for any change
+// of ours (a reload, when the game makes one, draws by itself: the Slots Loader's load hooks). Asked after the frame's lock is
+// let go (the draw calls the Color Mod back); without it, the plain refresh below.
+struct RandomNow { int side = 0; int64_t f = -1, c = -1; uintptr_t addr = 0; };
+std::optional<RandomNow> g_random_now;
+SF6Slots_RandomNowFn slots_random_now() {
+    static SF6Slots_RandomNowFn fn = nullptr;
+    static ULONGLONG tried_at = 0;
+    if (fn) return fn;
+    const ULONGLONG now = GetTickCount64();
+    if (tried_at && now - tried_at < 10000) return nullptr;
+    tried_at = now;
+    if (HMODULE h = GetModuleHandleW(L"SF6_CostumeSlotsNative.dll")) fn = reinterpret_cast<SF6Slots_RandomNowFn>(GetProcAddress(h, "SF6Slots_RandomNow"));
+    return fn;
+}
+void random_now(const RandomNow& rn) {                             // no lock held
+    SF6Slots_RandomNowFn fn = slots_random_now();
+    const int n = fn ? fn(rn.side, (int)rn.f, (int)rn.c) : -1;
+    std::lock_guard lk(engine::live::mx());
+    MO* ctrl = dd::battle_ctrl(rn.side);
+    if (!ctrl || (uintptr_t)ctrl != rn.addr) return;
+    if (n < 0) {
+        cmn::journal("training settings: P%d on Random, nothing drawn now (%s)", rn.side, fn ? "the Slots Loader drew nothing" : "no Slots Loader draw");
+        set_color(ctrl, std::nullopt, "popup refresh P" + std::to_string(rn.side), false);
+        return;
+    }
+    cmn::journal("training settings: P%d on Random: colour %d drawn by the Slots Loader, worn now", rn.side, n);
+    dd::recolour_side(rn.side, (uint32_t)n, "popup Random P" + std::to_string(rn.side));
+}
+
 void refresh_fn() {                                                // tcs.refresh_fn
     if (!tcs.live_refresh || g_F < tcs.live_refresh->at) return;
     const auto r = *tcs.live_refresh;
-    if (g_setups[r.side] != r.setups) { tcs.live_refresh.reset(); return; }
+    const bool random = rw_or0(sel_of(r.side)) == rv::kK;
+    // dressed again since (by the game): done, unless it is Random with no reload (the game's own SetColor wore 02 then)
+    if (g_setups[r.side] != r.setups && (r.reload != false || !random)) { tcs.live_refresh.reset(); return; }
     if (r.reload != false) {                                       // reload expected (or unknown): never touch the old model
         if (g_F < r.at + 600) return;
         tcs.live_refresh.reset(); return;
@@ -1108,6 +1213,11 @@ void refresh_fn() {                                                // tcs.refres
     tcs.live_refresh.reset();
     MO* ctrl = dd::battle_ctrl(r.side);
     if (!ctrl || (uintptr_t)ctrl != r.addr) return;
+    if (random) {                                                  // Random: a draw worn now (after the frame's lock)
+        const json& s = sel_of(r.side);
+        g_random_now = RandomNow{ r.side, num(lj::index(s, "fighter")).value_or(-1), num(lj::index(s, "costume")).value_or(-1), r.addr };
+        return;
+    }
     set_color(ctrl, std::nullopt, "popup refresh P" + std::to_string(r.side), false);
 }
 
@@ -1632,6 +1742,13 @@ void decide_push() {
         engine::decide::push_ui(a1, l1, a2, l2, at);
         g_sent.set = true; g_sent.a1 = a1; g_sent.l1 = l1; g_sent.a2 = a2; g_sent.l2 = l2; g_sent.at = at;
     }
+    if (g_fs_random_dirty) {                                           // Fighter Settings' Random colour per fighter
+        std::map<int, int> m;
+        for (auto& [key, val] : fs_random_map().items())
+            if (const int f = std::atoi(key.c_str()); f > 0 && val.is_number() && val.get<double>() >= 0) m[f] = (int)val.get<double>();
+        engine::decide::push_fs_random(m);
+        g_fs_random_dirty = false;
+    }
     if (!g_sent.sels.empty() && idle_in_fight()) return;               // nobody picks anything in a fight with our screens down
     const json& p1 = g_state["p1"]; const json& p2 = g_state["p2"]; const json& fs = g_state["fs"];
     const json* sels[3] = { &p1, &p2, &fs };
@@ -1675,6 +1792,10 @@ bool boot() {                                                      // the main c
     if (!st) return false;
     g_state = std::move(*st);
     resolve_state();
+    // 0.26.0 kept Fighter Settings' Random in state.fs only: it becomes that fighter's
+    if (const json& s = g_state["fs"]; rw_or0(s) == rv::kK && fs_random_of(num(lj::index(s, "fighter"))) < 0)
+        fs_random_set(num(lj::index(s, "fighter")), num(lj::index(s, "costume")), "kept from state.fs");
+    g_fs_random_dirty = true;
     engine::decide::set_rebuilt_callback(on_catalog_rebuilt);
     if (auto cc = colour::load_chip_cfg(kChipFile)) g_chip_cfg = std::move(*cc);
     g_state_ok = true;
@@ -1742,19 +1863,25 @@ void opponent_post() {
 }
 
 void frame(uint64_t lua_frame) {
-    std::lock_guard lk(engine::live::mx());
-    if (!boot()) return;
-    g_F = lua_frame;
-    { const int64_t t = perf::begin(); decide_pull(); perf::end(perf::ScreensDecidePull, t); }
-    { const int64_t t = perf::begin(); tick(); perf::end(perf::ScreensTick, t); }
-    { perf::Scope t(perf::ScrOpponent); tick_opponent(); }
-    { const int64_t t = perf::begin(); refresh_fn(); perf::end(perf::ScreensRefreshFn, t); }
-    { const int64_t t = perf::begin(); fs_refresh_step(); perf::end(perf::ScreensFsRefresh, t); }
-    { const int64_t t = perf::begin(); editor_tick(); perf::end(perf::ScreensEditorTick, t); }
-    { const int64_t t = perf::begin(); fs_restore_step(); perf::end(perf::ScreensFsRestore, t); }
-    { const int64_t t = perf::begin(); tcs_restore_step(); perf::end(perf::ScreensTcsRestore, t); }
-    { const int64_t t = perf::begin(); decide_push(); perf::end(perf::ScreensDecidePush, t); }
-    { const int64_t t = perf::begin(); dialogs::options::driver::apply(); perf::end(perf::ScreensOptApply, t); }
+    std::optional<RandomNow> now;
+    {
+        std::lock_guard lk(engine::live::mx());
+        if (!boot()) return;
+        g_F = lua_frame;
+        { const int64_t t = perf::begin(); decide_pull(); perf::end(perf::ScreensDecidePull, t); }
+        { const int64_t t = perf::begin(); tick(); perf::end(perf::ScreensTick, t); }
+        { perf::Scope t(perf::ScrOpponent); tick_opponent(); }
+        { const int64_t t = perf::begin(); refresh_fn(); perf::end(perf::ScreensRefreshFn, t); }
+        { const int64_t t = perf::begin(); fs_refresh_step(); perf::end(perf::ScreensFsRefresh, t); }
+        { const int64_t t = perf::begin(); editor_tick(); perf::end(perf::ScreensEditorTick, t); }
+        { const int64_t t = perf::begin(); fs_restore_step(); perf::end(perf::ScreensFsRestore, t); }
+        { const int64_t t = perf::begin(); tcs_restore_step(); perf::end(perf::ScreensTcsRestore, t); }
+        { const int64_t t = perf::begin(); decide_push(); perf::end(perf::ScreensDecidePush, t); }
+        { const int64_t t = perf::begin(); dialogs::options::driver::apply(); perf::end(perf::ScreensOptApply, t); }
+        now = g_random_now;
+        g_random_now.reset();
+    }
+    if (now) random_now(*now);                                         // the popup's Random, outside the lock (see random_now)
 }
 
 bool acting() { return true; }

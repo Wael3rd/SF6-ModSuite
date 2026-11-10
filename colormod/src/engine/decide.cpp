@@ -3,6 +3,7 @@
 #include <atomic>
 #include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -79,6 +80,7 @@ int g_faults = 0;
 // ---- what the Lua screens push (Lua: state.p1 / p2 / fs, menus[1..2], fsm.text) -----------------------------------
 struct Sel { int rw = 0, fighter = 0, costume = 0; };
 Sel g_sel[3];                                 // 0 = P1, 1 = P2 / CPU, 2 = Fighter Settings (state.fs)
+std::map<int, int> g_fs_random;               // Fighter Settings' Random colour per fighter: fighter -> outfit (state.fs_random)
 MO* g_param[2] = {};                          // colour menus' Param (held: add_ref while pushed)
 bool g_live[2] = {};                          // m.text and m.active and not m.restore_pending
 MO* g_fs_text = nullptr;                      // Fighter Settings colour spin text (held)
@@ -1196,6 +1198,10 @@ void load_state_file() {                              // state.json as the Lua r
         g_sel[0] = { rw, num(j, "fighter", 0), num(j, "costume", 0) };
         return;
     }
+    g_fs_random.clear();                              // { "<fighter>": <outfit> } (absent from older files)
+    if (auto fr = j.find("fs_random"); fr != j.end() && fr->is_object())
+        for (auto& [k, v] : fr->items())
+            if (const int f = std::atoi(k.c_str()); f > 0 && v.is_number() && v.get<double>() >= 0) g_fs_random[f] = (int)v.get<double>();
     const char* keys[3] = { "p1", "p2", "fs" };
     for (int i = 0; i < 3; ++i) {
         auto it = j.find(keys[i]);
@@ -1344,6 +1350,11 @@ void push_ui(uint64_t p1_param, bool p1_live, uint64_t p2_param, bool p2_live, u
 void push_sels(const int v[9]) {
     std::lock_guard lk(live::mx());
     for (int i = 0; i < 3; ++i) g_sel[i] = { v[i * 3], v[i * 3 + 1], v[i * 3 + 2] };
+}
+
+void push_fs_random(const std::map<int, int>& by_fighter) {
+    std::lock_guard lk(live::mx());
+    g_fs_random = by_fighter;
 }
 
 Pull pull() {
@@ -1798,6 +1809,13 @@ int random_choice(int side, int* fighter, int* costume) {
     return 1;
 }
 
+int fighter_random(int fighter) {
+    std::lock_guard lk(live::mx());
+    if (!active()) return -1;
+    auto it = g_fs_random.find(fighter);
+    return it == g_fs_random.end() ? -1 : it->second;
+}
+
 }  // namespace engine::decide
 
 // ---- for the colour screens (engine/decide_internal.hpp) ---------------------------------------------------------------
@@ -1810,4 +1828,16 @@ std::optional<chips::Pair> game_chips(int fighter, int costume, uint32_t num) { 
 MO* battle_ctrl(int side) { return engine::decide::battle_ctrl(side); }
 bool set_color(MO* ctrl, std::optional<uint32_t> num, const std::string& why, bool fresh) { return engine::decide::set_color(ctrl, num, why, fresh); }
 int ctrl_fighter(MO* ctrl) { return engine::decide::path_identity(ctrl).first; }
+bool recolour_side(int side, uint32_t num, const std::string& why) {
+    MO* ctrl = engine::decide::battle_ctrl(side);
+    if (!engine::decide::is_managed(ctrl)) return false;
+    std::optional<std::vector<MO*>> subs;
+    const auto list = engine::decide::side_list(side, ctrl, subs);
+    cmn::journal("%s: P%d takes colour %u in place on %zu controller(s)", why.c_str(), side, num, list.size());
+    for (MO* c : list) {
+        const bool marked = num == engine::decide::kBaseColor && engine::decide::g_p2_ctrls.count((uintptr_t)c);
+        engine::decide::set_color(c, marked ? std::optional<uint32_t>(engine::decide::kP2VirtualId) : std::optional<uint32_t>(num), why, c != ctrl);
+    }
+    return true;
+}
 }  // namespace engine::decide::internal

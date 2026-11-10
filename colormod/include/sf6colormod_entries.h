@@ -22,8 +22,10 @@
  *   - The Random value: while the Slots Loader (SF6_CostumeSlotsNative.dll) exports SF6Slots_RandomColour, the Color row of
  *     each outfit it names gets one more value after the entries, named with the word it gives (the game's own), on colour
  *     02 like them; never on Opponent Outfit Settings' page. The Color Mod remembers it where it remembers an entry (the
- *     character select's / training popup's P1 and P2, Fighter Settings) and dresses nothing of its own for it (the plain
- *     colour 02): the Slots Loader draws among the game's colours and the entries, and asks for an entry by scope 3 / 4.
+ *     character select's / training popup's P1 and P2) and, for Fighter Settings, per fighter (SF6ColorMod_FighterRandom);
+ *     it dresses nothing of its own for it (the plain colour 02): the Slots Loader draws among the game's colours and the
+ *     entries, and asks for an entry by scope 3 / 4. Confirmed in the training popup where the game reloads nothing, the
+ *     Color Mod asks the Slots Loader for a draw at once (SF6Slots_RandomNow) and recolours that side in place.
  * Any thread; no game call except the running flow map, read on the game thread by the Color Mod itself. */
 #ifndef SF6COLORMOD_ENTRIES_H
 #define SF6COLORMOD_ENTRIES_H
@@ -59,12 +61,22 @@ typedef int (*SF6ColorMod_OpponentTicksFn)(int fighter, int costume);
  * of `side` (1 = the character select's / training popup's P1, 2 = P2, 3 = Battle Settings' Fighter Settings) is the Random
  * value, its fighter and costume written to *fighter / *costume (either may be NULL); 0 otherwise. Any thread. */
 typedef int (*SF6ColorMod_RandomChoiceFn)(int side, int* fighter, int* costume);
+/* Added after it (absent from Color Mod 0.26.0, whose side 3 above is the last fighter shown only): Fighter Settings' Random
+ * colour of `fighter`, remembered per fighter (set when Random is picked on its Color row, dropped when another colour is
+ * picked there or Fighter Settings is left on another outfit of it): the outfit it was chosen on, -1 none. Any thread. */
+typedef int (*SF6ColorMod_FighterRandomFn)(int fighter);
 
 /* The other way, SF6_CostumeSlotsNative.dll's export, looked for by the Color Mod (absent = no Random value anywhere):
  * 1 when the Slots Loader draws a Random colour for that outfit (every outfit but a character's Random outfit, whose one
  * colour is Random already), the game's word for Random written to `word` (UTF-8, NUL-terminated) when cap > 0;
  * 0 otherwise. Any thread, no game call. */
 typedef int (*SF6Slots_RandomColourFn)(int fighter, int costume, char* word, int cap);
+/* SF6_CostumeSlotsNative.dll's too (absent from older ones): the Random value chosen where the game reloads nothing (the
+ * training popup confirmed on Random from a value already on colour 02): a draw now for battle side `side` (1 / 2) of that
+ * fighter / outfit. Returns the game's colour that side must wear now (an entry drawn: 1, the Slots Loader has asked for it
+ * by scope 3 / 4), -1 none (nothing drawn: what it wears stays). Any thread; call it without holding a lock the Slots
+ * Loader's own calls into the Color Mod would wait for. */
+typedef int (*SF6Slots_RandomNowFn)(int side, int fighter, int costume);
 
 #ifdef __cplusplus
 }

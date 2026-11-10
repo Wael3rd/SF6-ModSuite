@@ -40,6 +40,8 @@ void on_frame();                 // core frame callback (LateUpdateBehavior): P2
 void push_ui(uint64_t p1_param, bool p1_live, uint64_t p2_param, bool p2_live, uint64_t fs_text);
 // state.p1 / state.p2 / state.fs: { rw, fighter, costume } x 3 (fighter / costume < 0 = nil)
 void push_sels(const int v[9]);
+// state.fs_random: Fighter Settings' Random colour per fighter (fighter -> the outfit it was chosen on)
+void push_fs_random(const std::map<int, int>& by_fighter);
 struct Pull {
     bool list_known = false; uint32_t list_fighter = 0, list_costume = 0;   // list_args (nil until a GetColorList)
     int extra_first = -1; int extra_count = 0;                             // extra_first -1 = nil
@@ -70,6 +72,7 @@ int entries_export(int fighter, int costume, SF6CMEntry* out, int cap);   // the
 int request(int scope, int fighter, int costume, const char* id, void* battle);  // 1 taken
 void clear_requests(int scope);
 int random_choice(int side, int* fighter, int* costume);                  // 1: side's remembered choice is the Random value
+int fighter_random(int fighter);                                          // Fighter Settings' Random colour of that fighter: its outfit, -1 none
 
 // Opponent Outfit Settings' ticks of entries (opponent_ticks.hpp). Saved at each change, in reframework/data/SF6_ColorSpinExtra_data/opponent_colours.txt.
 bool opp_ticked(int fighter, int costume, const std::string& id);
