@@ -117,6 +117,7 @@ using words::trf;
 
 constexpr const char* kTop = "CFNReplayTop";
 constexpr int kSearch = 4;                        // app.UICFNReplayTop.TabType.SEARCH
+constexpr int kFirstTab = 0;                       // the game's first tab (Recommended Replays)
 constexpr uint32_t kPollEvery = 15;
 constexpr int kMaxRefused = 3;
 constexpr uint32_t kActFlags = 2 | 8;             // app.InputDigitalFlag Trigger | Repeat
@@ -249,6 +250,7 @@ std::atomic<int> g_refused{ 0 };
 std::atomic<int> g_copy_status{ 1000 };
 std::atomic<uint32_t> g_swallowed{ 0 };
 std::atomic<uint32_t> g_leave_frame{ 0 };
+std::atomic<uint32_t> g_wrap_frame{ 0xFFFFFFFFu };   // a press that wraps round the tabs: the game's own move, once (+1: the frame)
 thread_local bool tl_skipped = false;
 
 // ---- frame state ----
@@ -426,18 +428,38 @@ bool make_copies() {
 
 constexpr int kCall = REFRAMEWORK_HOOK_CALL_ORIGINAL, kSkip = REFRAMEWORK_HOOK_SKIP_ORIGINAL;
 
+// The tabs wrap round as the game's do (Wael 10/11): Settings is the last tab, after Search, before Recommended Replays.
+//   - Settings, tab next: ours gives way and the game's own next runs (its list is on Search: it goes to its first tab).
+//   - Recommended Replays, tab back: the game's own back runs (to Search, its list then where ours keeps it) and ours comes up.
+// One press reaches decide twice (InputTab, then InputTabNext / InputTabBack): the second of a wrapping press lets the game go on.
 int decide(void* self, int dir, uint32_t flag) {
     const uintptr_t top = g_top_addr.load(std::memory_order_acquire);
     if (!top || reinterpret_cast<uintptr_t>(self) != top || g_closing.load(std::memory_order_relaxed)) return kCall;
     const bool acts = (flag & kActFlags) != 0;
+    if (g_wrap_frame.load() == g_frame) return kCall;   // the same wrapping press seen again: the game's own move
     if (g_ours.load(std::memory_order_acquire)) {
         if (g_music_open.load()) return kSkip;          // the music screen has the keys: this tab stays
         // tab back leaves from the option row; in the grid and on the character's page the tab keys do nothing (the game's)
         if (acts && dir < 0 && g_level.load() == kLevelList) { g_ours.store(false); g_leave.store(true); g_leave_frame.store(g_frame); }
+        if (acts && dir > 0 && g_level.load() == kLevelList) {      // tab next: round to the game's first tab
+            g_ours.store(false);
+            g_leave.store(true);
+            g_wrap_frame.store(g_frame);
+            return kCall;
+        }
         g_swallowed.fetch_add(1);
         return kSkip;                                   // our tab: the game's list stays on Search
     }
     if (dir < 0 && g_leave_frame.load() == g_frame) return kSkip;   // the same press seen again (InputTab + InputTabBack)
+    if (dir < 0 && acts && g_tab.load(std::memory_order_acquire) == kFirstTab) {   // tab back on the first tab: round to ours
+        bool ok = false;
+        try { ok = make_copies(); } catch (...) { ++g_refused; g_copy_status.store(-2000); }
+        if (!ok) return kCall;                          // no page to show: the game does its own thing (Search)
+        g_ours.store(true);
+        g_enter.store(true);
+        g_wrap_frame.store(g_frame);
+        return kCall;                                   // the game goes to Search, where ours keeps its list
+    }
     if (dir > 0 && acts && g_tab.load(std::memory_order_acquire) == kSearch) {
         bool ok = false;
         try { ok = make_copies(); } catch (...) { ++g_refused; g_copy_status.store(-2000); }
