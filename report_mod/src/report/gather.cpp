@@ -273,15 +273,21 @@ Report gather(const Snapshot& snap, const fs::path& root, const Scrub& scrub) {
     if (!have_outfits) notes.push_back("outfits.json could not be read (no Slots Loader, or never run)");
     if (!have_registry) notes.push_back("registry.json could not be read");
 
-    const json* outfit = have_outfits ? find_outfit_number(outfits, snap.fighter, snap.costume_no) : nullptr;
-    if (!outfit && have_outfits) outfit = find_outfit(outfits, snap.fighter, r.outfit_row);
+    // Random chosen on the screen: no outfit is worn yet (a draw takes its place), so no outfit is reported, only the choice.
+    // (The "no record: a game outfit" note below is skipped for it by `else if (have_outfits && !random_chosen)`.)
+    const bool random_chosen = have_registry && is_random_outfit(registry, snap.fighter, snap.costume_no);
+
+    const json* outfit = !random_chosen && have_outfits ? find_outfit_number(outfits, snap.fighter, snap.costume_no) : nullptr;
+    if (!outfit && !random_chosen && have_outfits) outfit = find_outfit(outfits, snap.fighter, r.outfit_row);
     int number = snap.costume_no;
     if (outfit && outfit->contains("costume_no") && (*outfit)["costume_no"].is_number_integer()) number = (*outfit)["costume_no"].get<int>();
     const json* slot = have_registry && outfit ? find_slot(registry, snap.fighter, number) : nullptr;
-    r.costume_no = number;
+    r.costume_no = random_chosen ? -1 : number;
     r.outfit = outfit ? clean_paths(str_of(*outfit, "label"), scrub) : r.outfit_row;
-    if (r.outfit.empty()) r.outfit = r.outfit_row;
-    r.costume_key = costume_key(snap.fighter, r.outfit_row, outfit, slot, have_outfits && snap.fighter > 0, number);
+    if (r.outfit.empty()) r.outfit = random_chosen ? std::string("Random") : r.outfit_row;
+    r.costume_key = random_chosen ? random_key(snap.fighter)
+                                  : costume_key(snap.fighter, r.outfit_row, outfit, slot, have_outfits && snap.fighter > 0, number);
+    if (random_chosen) notes.push_back("the outfit chosen is Random: no outfit of its own (a draw picks one when a fight loads)");
 
     if (outfit || slot) {
         json rec = json::object();
@@ -289,7 +295,7 @@ Report gather(const Snapshot& snap, const fs::path& root, const Scrub& scrub) {
         if (slot) rec["slot"] = *slot;
         if (rec.dump(-1, ' ', false, json::error_handler_t::replace).size() > kRecordMaxBytes) { rec = json::object(); notes.push_back("the outfit's record was over its size cap"); }
         r.record = std::move(rec);
-    } else if (have_outfits) {
+    } else if (have_outfits && !random_chosen) {
         notes.push_back("no record: a game outfit, or the row names none");
     }
 

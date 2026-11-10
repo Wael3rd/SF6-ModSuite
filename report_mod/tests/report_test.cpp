@@ -901,6 +901,17 @@ static void test_gather(const fs::path& work) {
     check(has(mods, "C. Viper/Swimsuit 1.0.zip") && has(mods, "Ring/Ring.zip") && has(mods, "Ryu/Blue.zip"), "the mods' list: " + mods);
     check(r.mods.size() == 3, "one line for a mod with two outfits of the same label");
 
+    // the Random outfit chosen: reported as Random, no number, no outfit record, a key of its own
+    put(root / "reframework/data/SF6_Costumes_Data/registry.json", R"({"slots":[],"possession":[{"fighter":30,"costume_no":104,"random":true},{"fighter":30,"costume_no":5}]})");
+    rp::Snapshot rs = snap;
+    rs.costume_no = 104; rs.outfit_row = "Random";
+    const rp::Report rr = rp::gather(rs, root, scrub);
+    check(rr.costume_key == "game:30:random" && rp::costume_key_ok(rr.costume_key), "Random: its key: " + rr.costume_key);
+    check(rr.outfit == "Random" && rr.costume_no == -1 && rr.record.empty(), "Random: named, no number, no record");
+    rs.costume_no = 5; rs.outfit_row = "Outfit I";
+    check(rp::gather(rs, root, scrub).costume_key != "game:30:random", "another outfit of the same character is not Random");
+    check(rp::is_random_outfit(json::parse(R"({"possession":[{"fighter":30,"costume_no":104,"random":true}]})"), 30, 104) && !rp::is_random_outfit(json::parse(R"({"possession":[{"fighter":30,"costume_no":104}]})"), 30, 104), "the registry's marker, nothing else");
+
     // Manager mode: one row per variant, each its own mod_id, each its own key
     put(root / "reframework/data/SF6_Costumes_Data/outfits.json", R"({"outfits":[
        {"fighter":30,"costume_no":5,"name":"Outfit I","based_on":0,"label":"Main","source":"C. Viper/M.zip"},

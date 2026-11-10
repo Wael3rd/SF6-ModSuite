@@ -84,6 +84,10 @@ std::string costume_key(int fighter, const std::string& row, const json* outfit,
 // The row of outfits.json for that fighter and outfit number; nullptr = none (a game outfit)
 const json* find_outfit_number(const json& outfits, int fighter, int costume_no);
 bool costume_key_ok(const std::string& key);
+// The Random outfit the loader gives each character (registry.json's "possession" entry with "random": true): it is a choice, never an outfit
+// worn, and no outfits.json record. A report made with it chosen says Random and names no outfit number or mod; its key is game:<fighter>:random.
+bool is_random_outfit(const json& registry, int fighter, int costume_no);
+std::string random_key(int fighter);
 
 // ---- what goes out ---------------------------------------------------------------------------------------------------------------
 struct Report {

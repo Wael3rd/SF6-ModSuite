@@ -482,6 +482,20 @@ std::string costume_key(int fighter, const std::string& row, const json* outfit,
     return std::string(data_read ? "game:" : "unk:") + std::to_string(f) + ":" + (costume_no >= 0 ? "c" + std::to_string(costume_no) : word);
 }
 
+bool is_random_outfit(const json& registry, int fighter, int costume_no) {
+    if (!registry.is_object() || fighter <= 0 || costume_no < 0) return false;
+    auto it = registry.find("possession");
+    if (it == registry.end() || !it->is_array()) return false;
+    for (const json& p : *it) {
+        if (int_of(p, "fighter", -1) != fighter || int_of(p, "costume_no", -1) != costume_no) continue;
+        auto r = p.find("random");
+        return r != p.end() && r->is_boolean() && r->get<bool>();
+    }
+    return false;
+}
+
+std::string random_key(int fighter) { return "game:" + std::to_string(fighter > 0 ? fighter : 0) + ":random"; }
+
 bool costume_key_ok(const std::string& key) {
     const size_t c = key.find(':');
     if (c == std::string::npos) return false;

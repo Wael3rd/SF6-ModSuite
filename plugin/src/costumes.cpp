@@ -2032,6 +2032,7 @@ int pre_title_end(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long l
 } // namespace
 
 bool display_nsfw() { return g_show_nsfw; }
+int random_outfit(int fighter) { auto r = g_random_no.find(fighter); return r == g_random_no.end() ? -1 : r->second; }
 
 // The in-game row "Display NSFW Outfits" (nsfw_option.cpp) exists: settings.json is followed (read now) even when
 // no NSFW outfit or option is installed, so the row shows the file.

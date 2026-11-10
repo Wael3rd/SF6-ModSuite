@@ -169,6 +169,7 @@ namespace costumes {
     std::string slot_label(int fighter, int costume_no);   // one of our outfits: its label (outfits.json), else ""
     int slot_by_name(int fighter, const std::string& name); // one of our outfits by its game name ("Outfit II"), else -1
     bool display_nsfw();              // settings.json "display_nsfw": NSFW outfits and options shown
+    int random_outfit(int fighter);   // the fighter's Random outfit's costume number (registry "random": true), -1: none
     void nsfw_row_present(bool on);   // the in-game row exists: settings.json is followed even with no NSFW content
     void set_display_nsfw(bool on);   // the row changed: settings.json written, applied on the next tick
     bool online_drivetech();          // settings.json "online_outfit": "DriveTech" (else Outfit 1) is the carrier
