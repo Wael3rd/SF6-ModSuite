@@ -162,6 +162,9 @@ bool g_online_owned = true;
 constexpr int kRankedMatch = 14;       // app.EGameMode.RANKED_MATCH
 std::map<std::pair<int, int>, std::vector<int>> g_rand_colours;
 std::map<int, rnd::Fighter> g_rand;    // per character: its rounds and Battle Settings' next draw (state.json "random")
+// Replays' own rounds (Wael 10/11: "two separate rounds"): Replays > Settings' Random outfit and Random colours draw from them, the
+// battles from g_rand (state.json "random_replay"; no next draw)
+std::map<int, rnd::Fighter> g_rand_replay;
 // Online: what the player's fighter wears for the set against the current opponent (taken at the match's first load)
 struct RandSet { rnd::Draw set; bool bound = false, local = false; };   // local: worn on this PC only (the alias)
 std::map<int, RandSet> g_rand_set;
@@ -384,6 +387,12 @@ void load_state() {
         g_rand[fid] = f;
         if (!g_random_no.count(fid)) { g_rand[fid].outfits = rnd::Pool{}; g_rand[fid].next = rnd::Draw{}; }
     }
+    for (auto& [fid, f] : rnd::parse_state(j.get("random_replay"))) {
+        if (!g_slot_of.count(fid)) continue;
+        g_rand_replay[fid] = f;
+        g_rand_replay[fid].next = g_rand_replay[fid].next_colour = rnd::Draw{};
+        if (!g_random_no.count(fid)) g_rand_replay[fid].outfits = rnd::Pool{};
+    }
     const Json* fs = j.get("fighters");
     if (!fs || fs->kind != Json::Object) return;
     bool migrated = false;
@@ -438,6 +447,8 @@ void save_state() {
         std::lock_guard lk(g_alias_mx);            // the hooks draw (Random)
         const std::string r = rnd::state_json(g_rand, 4);
         if (r != "{}") o += ",\n    \"random\": " + r;
+        const std::string rr = rnd::state_json(g_rand_replay, 4);
+        if (rr != "{}") o += ",\n    \"random_replay\": " + rr;
         g_rand_dirty = false;
     }
     o += "\n}\n";
@@ -618,9 +629,10 @@ bool rand_intent(int fid) {
 
 // A draw from the character's pool (under g_alias_mx). `colour_ok(costume, colour)`: what the colour may be (a mirror's left
 // out; none: any). owned: only the outfits the player really has (ranked).
-rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr, bool owned = false) {
+rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)>& colour_ok = nullptr, bool owned = false,
+                    bool replay = false) {
     const rnd::Rng rng = [] { return static_cast<uint32_t>(g_rng()); };
-    rnd::Fighter& f = g_rand[fid];
+    rnd::Fighter& f = replay ? g_rand_replay[fid] : g_rand[fid];
     const rnd::Draw d = rnd::draw_outfit(f, rand_outfits_of(fid, owned), [fid](int c) { return rand_allowed(fid, c); },
                                          [fid](int c) { return rand_draw_colours_of(fid, c); }, rng, colour_ok);
     if (!d.valid()) { logf("[F%d] Random: nothing to draw (%s)", fid, why); return d; }
@@ -633,9 +645,9 @@ rnd::Draw rand_draw(int fid, const char* why, const std::function<bool(int, int)
 }
 // A Random colour of outfit `cos` (the Color Mod's Random value), from that outfit's round (under g_alias_mx). `ok`: what it may
 // be (a mirror's colour left out; none: any).
-int rand_draw_colour(int fid, int cos, const rnd::Allowed& ok, const char* why) {
+int rand_draw_colour(int fid, int cos, const rnd::Allowed& ok, const char* why, bool replay = false) {
     const rnd::Rng rng = [] { return static_cast<uint32_t>(g_rng()); };
-    rnd::Fighter& f = g_rand[fid];
+    rnd::Fighter& f = replay ? g_rand_replay[fid] : g_rand[fid];
     const std::vector<int> cs = rand_draw_colours_of(fid, cos);
     const int v = rnd::draw_colour(f, cos, cs, ok, rng);
     g_rand_dirty = true;
@@ -769,6 +781,7 @@ void rand_nsfw_changed() {
         if (f.next.valid() && !rand_allowed(fid, f.next.costume)) f.next = rnd::Draw{};
         g_rand_dirty = true;
     }
+    for (auto& [fid, f] : g_rand_replay) rnd::refill(f);
     for (auto& [fid, s] : g_rand_set)
         if (s.bound && !rand_allowed(fid, s.set.costume)) s.bound = false;
 }
@@ -2726,7 +2739,7 @@ bool load_fighters(std::vector<LoadFighter>& out, const char** why) {
 bool replay_random_colour(int fighter, int costume, int& out_color, std::string& entry) {
     if (fighter <= 0 || costume < 0 || is_random(fighter, costume)) return false;
     std::lock_guard lk(g_alias_mx);
-    const int v = rand_draw_colour(fighter, costume, nullptr, "a replay's colour set to Random in Replays > Settings");
+    const int v = rand_draw_colour(fighter, costume, nullptr, "a replay's colour set to Random in Replays > Settings", true);
     out_color = rnd::worn_colour(v);
     entry = rand_entry_id(fighter, costume, v);
     return true;
@@ -2734,7 +2747,7 @@ bool replay_random_colour(int fighter, int costume, int& out_color, std::string&
 bool replay_random(int fighter, int costume, int& out_costume, int& out_color, std::string& entry) {
     if (!is_random(fighter, costume)) return false;
     std::lock_guard lk(g_alias_mx);
-    const rnd::Draw d = rand_draw(fighter, "a replay set to Random in Replays > Settings");
+    const rnd::Draw d = rand_draw(fighter, "a replay set to Random in Replays > Settings", nullptr, false, true);
     if (!d.valid()) return false;
     out_costume = d.costume;
     out_color = rnd::worn_colour(d.color);
