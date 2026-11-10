@@ -11,7 +11,8 @@
 // whole: one too long for its place slides in it, and Confirm on the row shows the pack's picture (title_preview.cpp).
 //
 // One option-service callback set per client: when the runtime options menu (rto_menu.cpp) registered it, its
-// on_value hands the entries it does not know to on_value() here; otherwise this file registers its own.
+// on_value hands the entries it does not know to on_value() here; otherwise this file registers its own. on_value() hands the
+// interface packs' rows to ui_packs.cpp.
 // Without the core, or with a core that lacks opt_group_place: no row, one log line, the file setting keeps working.
 // Game rules (slots.hpp): the core calls on_value on the game thread; setup() and tick() run from LateUpdateBehavior.
 #include "slots.hpp"
@@ -206,8 +207,9 @@ bool make_row(const char** why) {
 
 } // namespace
 
-// The core's on_value (game thread). True when the entry is this row's.
+// The core's on_value (game thread). True when the entry is this row's, or an interface pack's row (ui_packs.cpp).
 bool on_value(int64_t entry, int64_t value) {
+    if (uipacks::on_value(entry, value)) return true;
     if (g_entry_skip >= 0 && entry == g_entry_skip) {     // choice: 1 = Off, 2 = On
         const bool on = value == 2;
         if (on != g_shown_skip) {

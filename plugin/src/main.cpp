@@ -11,6 +11,7 @@
 #include "wjournal.hpp"
 #include "replay_tab.hpp"
 #include "name_scroll.hpp"
+#include "ui_retexture.hpp"
 
 namespace slots {
 
@@ -70,8 +71,10 @@ void on_late_update() {
     language_tick();                        // the language of our words (words.hpp): at most every 60 frames
     namescroll::frame();                    // long names scroll in the Costume rows: its own gate (registry reads every 15 frames)
     titleprev::frame();                     // Options' Title Screen row: its value slides, Confirm shows the pack's picture: its own gate
+    uipacks::frame();                       // Options' Interface Packs section and its editor: its own gate (nothing before setup)
     oppsum::frame();                        // Opponent Outfit Settings: the summary's lines past the game's: its own gate
     replaytab::frame();                     // the Replays menu's "Replay Outfits" tab: its own gate (replay_tab.cpp)
+    ui_retexture::frame();                  // UI packs: the textures the game keeps follow the overrides: nothing without any (ui_retexture.cpp)
 
     uint32_t ev = g_events.exchange(0, std::memory_order_acq_rel);
     if (!ev && !g_costumes_busy && !g_stages_busy && !g_rto_busy && !g_name_busy && !g_opp_busy && !nsfwopt::retext_pending()) {
@@ -88,6 +91,7 @@ void on_late_update() {
             fsname::install_hooks();
             replay::install_hooks();
             nsfwopt::setup();
+            uipacks::setup();               // its section after the title one (both just above Other Settings)
         }
         if (ev & EV_DIAG) diag_flush();
         {

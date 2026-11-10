@@ -40,8 +40,12 @@
 // core's: its font slot, colour, raster), a dark band at the top with the background's name, a dark band at the bottom with the line's
 // numbers and the keys, the note when there is no picture, the confirmation box. Hidden and ForceInvisible until shown, found again by
 // name. Every write from LateUpdateBehavior, through the core (R1).
+//
+// The machinery its page shares with Interface Packs' (ui_packs.cpp): keys, icons, guide bar, the parts copied, their style, the
+// pictures and the game's box are options_page.cpp's.
 #include "slots.hpp"
 #include "slots_ui.hpp"
+#include "options_page.hpp"
 #include "name_scroll.hpp"
 #include "codecheck_rt.hpp"
 #include "words.hpp"
@@ -55,14 +59,24 @@
 #include <map>
 #include <set>
 
-#pragma comment(lib, "user32.lib")   // GetForegroundWindow / GetAsyncKeyState / MapVirtualKeyW
-
 namespace slots::titleprev {
 namespace {
 
-constexpr const char* kAgent = "OptionSettingMenu";
-constexpr const char* kGuideAgent = "InputGuide";
-constexpr const char* kGuideList = "p_InputGuideList_0_fit";
+using optpage::A; using optpage::C;
+using optpage::floats_of; using optpage::shown; using optpage::drawn; using optpage::message; using optpage::name_of; using optpage::options_agent;
+using optpage::g_cp_center; using optpage::g_cp_lefttop; using optpage::g_cp_leftcenter; using optpage::g_pa_right; using optpage::read_enums;
+using optpage::set_enum; using optpage::set_size_value; using optpage::s9_look; using optpage::show; using optpage::place;
+using optpage::style_text; using optpage::style_rect; using optpage::guide_key_text; using optpage::guide_mode_now;
+using optpage::kScreenW; using optpage::kScreenH; using optpage::kPX;
+using optpage::kLPanelX; using optpage::kLPanelY; using optpage::kLPanelW; using optpage::kLPanelH;
+using optpage::kLBanCX; using optpage::kLBanCY; using optpage::kLBanW; using optpage::kLBanH;
+using optpage::kLNameCX; using optpage::kLNameCY; using optpage::kLNameW; using optpage::kLNameH; using optpage::kLNameFont;
+using optpage::kLLineX; using optpage::kLLineY; using optpage::kLLineW; using optpage::kLLineH; using optpage::kLStripV0; using optpage::kLStripV1;
+using optpage::kColBg; using optpage::kColBand; using optpage::kColDlg; using optpage::kColText; using optpage::kColNote;
+using optpage::kColLDim; using optpage::kColLPanelBg; using optpage::kColLPanelTint; using optpage::kColLOutline;
+using optpage::kColLFocus; using optpage::kColLGlow; using optpage::kColLCellDim; using optpage::kColLTrack; using optpage::kColLName; using optpage::kColWhite;
+using optpage::kColLLine;
+
 constexpr const char* kSubList = "p_GroupScroll_sub_v";
 constexpr const char* kSpin = "p_Spin_spintext_h";
 constexpr const char* kCodecheckCache = "reframework/data/SF6_CostumeSlots_data/codecheck_title.txt";
@@ -110,7 +124,6 @@ constexpr uint32_t kFindEvery = 30;         // frames between searches of the ro
 constexpr uint32_t kCopyAskEvery = 120;     // frames between asks for the copies
 constexpr int kCopyRefusedMax = 3;
 // The layout, in screen units (1920 x 1080)
-constexpr float kScreenW = 1920, kScreenH = 1080;
 constexpr float kBandH = 90, kNameCY = 45, kNameW = 1700, kTextH = 60, kNameFont = 34, kNoteFont = 30;
 constexpr float kBand2Y = 958, kInfoCY = 985, kKeysCY = 1040, kInfoFont = 28, kKeysFont = 26, kBottomW = 1840;
 constexpr float kDlgW = 1100, kDlgH = 240, kDlgTextCY = 505, kDlgKeysCY = 580, kDlgTextW = 1040;
@@ -119,19 +132,12 @@ constexpr float kDlgW = 1100, kDlgH = 240, kDlgTextCY = 505, kDlgKeysCY = 580, k
 // 6 rows shown), the scroll bar on the right. A cell: its shadow (-8, -6, 271 x 82), the picture under the rounded mask, the thin
 // outline, the check box (box 30 at +17.5, tick 42 at +10.5, centres). Focused: the outline gives way to the blue glow.
 // On the Options screen the page sits in the right side's area (c_bg_right/e_bg: 912, 145, 910 x 833): the stage page's places
-// moved by kPX = 912 - 734 (its page starts at 734 on Battle Settings).
-constexpr float kPX = 178;
-constexpr float kLPanelX = 731 + kPX, kLPanelY = 150, kLPanelW = 960, kLPanelH = 710;
-constexpr float kLBanCX = 1148 + kPX, kLBanCY = 281, kLBanW = 776, kLBanH = 194;
-constexpr float kLNameCX = 1146 + kPX, kLNameCY = 359, kLNameW = 740, kLNameH = 46, kLNameFont = 30;   // the game's 361 wide at 1356: widened
+// moved by kPX = 912 - 734 (its page starts at 734 on Battle Settings): options_page.hpp's panel, banner, name (the game's 361
+// wide at 1356: widened) and left bar (the line turned 90 degrees), and here:
 constexpr float kLCellX = 760 + kPX, kLCellY = 404, kLCellW = 252, kLCellH = 63, kLPitchX = 262, kLPitchY = 73;
-constexpr float kLShadowDX = -8, kLShadowDY = -6, kLShadowW = 271, kLShadowH = 82;
 constexpr float kLBoxD = 17.5f, kLBox = 30, kLTickD = 10.5f, kLTick = 42;
-constexpr float kLOutW = 257, kLOutH = 68;
 constexpr float kLBarX = 1546 + kPX, kLBarY = 404, kLBarW = 6, kLBarH = 430;
-constexpr float kLStripV0 = 0.27778f, kLStripV1 = 0.72222f;
-constexpr float kLLineX = 739 + kPX, kLLineY = 150, kLLineW = 706, kLLineH = 5;   // turned 90 degrees: the page's left bar   // a 16:9 picture's middle 4:1 band (the game's cells and banner are 4:1)
-constexpr float kMosaicGap = 3;             // the loader's TITLE_MOSAIC_GAP
+constexpr float kMosaicGap = 3;            // the loader's TITLE_MOSAIC_GAP
 // The OVERDRIVE EDITION line, as the core's title.cpp draws it
 constexpr const char* kLineText = "OVERDRIVE EDITION";
 constexpr int64_t kLineFontSlot = 6;
@@ -145,40 +151,27 @@ constexpr float kPressX = 960, kPressY = 930, kPressFont = 40, kPressRaster = 80
 constexpr int64_t kPressFontSlot = 2;
 constexpr uint32_t kPressRgba = 0xB4FFFFFFu;
 constexpr float kMoveStep = 0.05f, kMoveMax = 0.6f, kSizeStep = 0.1f;
-constexpr uint32_t kColBg = 0xFF000000u;        // via.Color, AARRGGBB as the game's own (its e_darken 99000000)
-constexpr uint32_t kColBand = 0xB4000000u;
-constexpr uint32_t kColDlg = 0xF0101014u;
-constexpr uint32_t kColText = 0xFFF3F3F3u;      // the rows' text
-constexpr uint32_t kColNote = 0xFFA0A0A0u;
-// via.Color is 0xAABBGGRR (replay_tab.cpp's blue bar 0xFFD76407)
-// the stage grid's own (read 08/11): its panel 0x66000000 + 0x1CE98A31, the cells' outline 0x33FFFFFF, the scroll bar 0x0DCCCCCC + white,
-// the name 0xFFFFF3FA; the focus: the replay tab's stage focus blue
-constexpr uint32_t kColLDim = 0xB4000000u, kColLPanelBg = 0x66000000u, kColLPanelTint = 0x1CE98A31u, kColLOutline = 0x33FFFFFFu;
-constexpr uint32_t kColLFocus = 0xFFFF8D00u, kColLGlow = 0xFF811900u, kColLCellDim = 0xFF737373u, kColLTrack = 0x0DCCCCCCu, kColLName = 0xFFFFF3FAu, kColWhite = 0xFFFFFFFFu;
-constexpr uint32_t kColLLine = 0x80FFFFFFu;
+// The colours: options_page.hpp's (via.Color, 0xAABBGGRR: replay_tab.cpp's blue bar 0xFFD76407)
 // Over every sibling (theirs: 0), each layer over the one before: siblings of one priority are drawn in their order, and the copies
 // come in the reverse of their making (read 08/11)
 constexpr int64_t kPrioBg = 60000, kPrioPic = 60010, kPrioMosaic = 60011, kPrioLine = 60012, kPrioBand = 60015, kPrioText = 60020,
                   kPrioLDim = 60022, kPrioLPanel = 60023, kPrioLCursor = 60024, kPrioLCell = 60025, kPrioLOver = 60026, kPrioLTop = 60027,
                   kPrioDlg = 60030, kPrioDlgText = 60040;
 
-const SF6CoreAPI* A() { return ui::core(); }
-SF6CoreClient* C() { return ui::client(); }
-
 uint32_t g_frame = 0;
 bool g_seen = false;                        // the row was on screen at the last look
 bool g_value_driven = false;                // the row's value text is in the scroller's hands (name_scroll.cpp)
 std::string g_unit;                         // the row's unit, as last found
 uint32_t g_find_at = 0;
-std::map<std::string, void*> g_pics;        // resource -> TextureResourceHolder (one reference held; nullptr: not loadable)
-std::map<void*, std::string> g_tex_on;      // copy -> the resource it shows (set once each: a copy keeps the last texture given)
-std::map<void*, bool> g_vis;                // copy -> shown, for show_if (cleared whenever show() may have been called on them)
+// copy -> the resource it shows (set once each: a copy keeps the last texture given); copy -> shown, for show_if (cleared whenever
+// show() may have been called on them). The pictures: options_page.cpp's, loaded once for the session.
+optpage::Painter g_paint{ "title preview" };
 std::atomic<bool> g_open{ false };          // the preview is up (read by the cancel hook)
 std::atomic<bool> g_cancel{ false };        // the cancel hook took a cancel: close
-std::atomic<bool> g_box_up{ false };        // the game's Yes / No box is up (read by the cancel hook)
+optpage::GameBox g_box;                     // the game's Yes / No box (its `up` read by the cancel hook)
 bool g_ok_held = true;                      // Confirm was down at the last look (true at start: a key held acts once released)
 bool g_unblock = false;                     // the Options screen's input to give back once no key is down
-std::set<uintptr_t> g_guides_hidden;        // the guide bars we hid (agents' addresses, for comparison only)
+optpage::Guides g_guides;                   // the guide bars we hid
 uint8_t g_press_guid[16] = {};              // PRESS ANY BUTTON's message, read on the title screen
 bool g_press_known = false;
 uint32_t g_press_look = 0;
@@ -186,11 +179,6 @@ std::atomic<int> g_copy_status{ 1 };        // the last copy job: SF6CORE_OK, an
 uint32_t g_copy_asked = 0;
 int g_copy_refused = 0;
 bool g_copy_logged = false;
-int64_t g_cp_center = 5, g_cp_lefttop = 0;  // via.gui.ControlPoint / PageAlignment CenterCenter, LeftTop (read from the game)
-int64_t g_pa_right = 6;                     // via.gui.PageAlignment RightCenter (read from the game)
-int64_t g_cp_leftcenter = 3;                // via.gui.ControlPoint / PageAlignment LeftCenter (read from the game)
-bool g_enums = false;
-float g_gx = 0, g_gy = 0;                   // the copies' parent's place on the screen (taken off every place)
 
 // ---- the settings per background ----
 struct Line { bool show = false; float x = kDefX, y = kDefY, size = kDefSize; };
@@ -275,157 +263,35 @@ void save_lines(const char* why) {
 float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 float round2(float v) { return std::round(v * 100.0f) / 100.0f; }
 
-// ---- keys: the game's own bindings ----
+// ---- keys: the game's own bindings (options_page.cpp's reader, this page's own held counts) ----
+// The game's menu buttons as this page uses them (the order of optpage::Key)
 enum Act { kBack, kDecide, kBgPrev, kBgNext, kSizeDown, kSizeUp, kTitle, kAll, kCenterH, kCenterV, kUp, kDown, kLeft, kRight, kActs };
-struct BtnDef { int id; const char* pad[2]; int vk; };
-// the menu ids (app.InputAssign.Digital.Id, read 08/11), the pad's buttons (via.hid.GamePadButton), a key always taken
-const BtnDef kDefs[kActs] = {
-    { 64, { "RRight", nullptr }, VK_ESCAPE },          // UICancel
-    { 63, { "RDown", nullptr }, VK_RETURN },           // UIDecide
-    { 73, { "LTrigTop", nullptr }, 0 },                // UITabL
-    { 74, { "RTrigTop", nullptr }, 0 },                // UITabR
-    { 75, { "LTrigBottom", nullptr }, 0 },             // UIChildTabL
-    { 76, { "RTrigBottom", nullptr }, 0 },             // UIChildTabR
-    { 88, { "RLeft", nullptr }, 0 },                   // UIRemove (X)
-    { 306, { "RUp", nullptr }, 0 },                    // UIOptionExtraButton (Y)
-    { 86, { "LStickPush", nullptr }, 0 },              // UISort (L3)
-    { 87, { "RStickPush", nullptr }, 0 },              // UIToggle (R3)
-    { 65, { "LUp", "EmuLup" }, VK_UP },                // UISelectU
-    { 66, { "LDown", "EmuLdown" }, VK_DOWN },          // UISelectD
-    { 67, { "LLeft", "EmuLleft" }, VK_LEFT },          // UISelectL
-    { 68, { "LRight", "EmuLright" }, VK_RIGHT },       // UISelectR
-};
-struct BtnState { uint32_t pad = 0; std::vector<int> vks; bool down = false; uint32_t held = 0; };
-BtnState g_btn[kActs];
-bool g_pad_init = false;
-uint32_t g_vk_at = 0;
-Method* m_pad_merged = nullptr;
-Method* m_pad_button = nullptr;
-Method* m_symbol = nullptr;
-
-bool game_in_front() {
-    HWND w = GetForegroundWindow();
-    DWORD pid = 0;
-    if (w) GetWindowThreadProcessId(w, &pid);
-    return pid == GetCurrentProcessId();
-}
-// The game's symbol of a menu id: "<ICON KeyF>", "<ICON BtnD>"... (mode 1 the pad's, 2 the keyboard's)
-std::string symbol_of(int id, int mode) {
-    auto* gm = api().get_managed_singleton("app.InputGuideManager");
-    if (!gm) return {};
-    if (!m_symbol) m_symbol = method_of(gm->get_type_definition(), "GetSymbolText(app.InputAssign.Digital.Id, app.InputGuideMode, System.Int32, app.EConfigInputType)", 4);
-    return m_symbol ? str(call_obj(m_symbol, gm, { arg_i32(id), arg_i32(mode), arg_i32(0), arg_i32(0) })) : std::string();
-}
-int guide_mode_now() {
-    int mode = 2;
-    auto* gm = api().get_managed_singleton("app.InputGuideManager");
-    if (Obj* modes = gm ? get_obj(gm, "_Modes") : nullptr) {
-        const Ret r = call(modes, "get_Item", { arg_i32(0) });
-        if (!r.exception_thrown && static_cast<int32_t>(r.dword) > 0) mode = static_cast<int32_t>(r.dword);
-    }
-    return mode;
-}
-// The keys of a keyboard symbol: a letter or digit is the key that types it in this layout; the named ones by name
-std::vector<int> vks_of(const std::string& sym) {
-    static const struct { const char* name; int vk; } named[] = {
-        { "Esc", VK_ESCAPE }, { "Enter", VK_RETURN }, { "NumEnter", VK_RETURN }, { "Tab", VK_TAB }, { "BS", VK_BACK }, { "Space", VK_SPACE },
-        { "ArrowU", VK_UP }, { "ArrowD", VK_DOWN }, { "ArrowL", VK_LEFT }, { "ArrowR", VK_RIGHT }, { "Shift", VK_SHIFT }, { "Ctrl", VK_CONTROL },
-        { "Alt", VK_MENU }, { "Del", VK_DELETE }, { "Ins", VK_INSERT }, { "Home", VK_HOME }, { "End", VK_END }, { "PgUp", VK_PRIOR }, { "PgDn", VK_NEXT },
-    };
-    std::vector<int> out;
-    const std::string tag = "<ICON Key";
-    for (size_t at = sym.find(tag); at != std::string::npos; at = sym.find(tag, at + 1)) {
-        const size_t end = sym.find('>', at);
-        if (end == std::string::npos) break;
-        const std::string k = sym.substr(at + tag.size(), end - at - tag.size());
-        if (k.size() == 1 && isalnum(static_cast<unsigned char>(k[0]))) out.push_back(toupper(static_cast<unsigned char>(k[0])));
-        else for (const auto& n : named) if (k == n.name) out.push_back(n.vk);
-    }
-    return out;
-}
-void read_buttons() {
-    if (!g_pad_init) {
-        g_pad_init = true;
-        if (TD* t = api().tdb()->find_type("via.hid.GamePad")) m_pad_merged = method_of(t, "get_MergedDevice", 0);
-        TD* b = api().tdb()->find_type("via.hid.GamePadButton");
-        for (int i = 0; i < kActs; ++i)
-            for (const char* f : kDefs[i].pad)
-                if (f && b) if (auto* fld = b->find_field(f)) g_btn[i].pad |= static_cast<uint32_t>(fld->get_data<int32_t>(nullptr));
-    }
-    if (!g_vk_at || g_frame - g_vk_at >= 300) {                   // the game's bindings can change while it runs
-        g_vk_at = g_frame;
-        for (int i = 0; i < kActs; ++i) {
-            g_btn[i].vks = vks_of(symbol_of(kDefs[i].id, 2));
-            if (kDefs[i].vk) g_btn[i].vks.push_back(kDefs[i].vk);
-        }
-    }
-    uint32_t pad = 0;
-    void* s = api().get_native_singleton("via.hid.GamePad");
-    if (Obj* dev = (s && m_pad_merged) ? call_obj(m_pad_merged, reinterpret_cast<Obj*>(s)) : nullptr) {
-        if (!m_pad_button) m_pad_button = method_of(dev->get_type_definition(), "get_Button", 0);
-        const Ret r = m_pad_button ? call(m_pad_button, dev) : Ret{};
-        if (m_pad_button && !r.exception_thrown) pad = r.dword;
-    }
-    const bool front = game_in_front();
-    for (auto& b : g_btn) {
-        bool d = (pad & b.pad) != 0;
-        if (front) for (int vk : b.vks) d = d || (GetAsyncKeyState(vk) & 0x8000) != 0;
-        b.held = d ? b.held + 1 : 0;
-        b.down = d;
-    }
-}
-bool pressed(Act a) { return g_btn[a].held == 1; }
-bool any_down() { for (const auto& b : g_btn) if (b.down) return true; return false; }
+static_assert(+kActs == +optpage::kKeyCount && +kBgPrev == +optpage::kTabL && +kTitle == +optpage::kRemove && +kAll == +optpage::kExtra &&
+              +kCenterH == +optpage::kSort && +kUp == +optpage::kUp && +kRight == +optpage::kRight, "the page's keys are optpage::Key's");
+optpage::Keys g_keys;
+void read_buttons() { g_keys.read(); }
+bool pressed(Act a) { return g_keys.pressed(static_cast<optpage::Key>(a)); }
+bool any_down() { return g_keys.any_down(); }
 // A press, then again while held: after `wait` frames, every `every`
-bool repeat(Act a, uint32_t wait, uint32_t every) { const uint32_t h = g_btn[a].held; return h == 1 || (h > wait && (h - wait) % every == 0); }
+bool repeat(Act a, uint32_t wait, uint32_t every) { return g_keys.repeat(static_cast<optpage::Key>(a), wait, every); }
 // How far a held direction moves this frame (in %): a step at the press, faster the longer it is held
 float move_of(Act a) {
-    const uint32_t h = g_btn[a].held;
+    const uint32_t h = g_keys.held(static_cast<optpage::Key>(a));
     if (h == 0) return 0;
     if (h == 1) return kMoveStep;
     if (h < 12) return 0;
     return std::fmin(kMoveStep + 0.02f * static_cast<float>(h - 12), kMoveMax);
 }
 // The icons of a menu id for the device in use, asked to the game once a second at most
-std::map<std::pair<int, int>, std::string> g_icons;
-uint32_t g_icons_at = 0;
-std::string icons(int id, int mode) {
-    if (g_frame - g_icons_at >= 60) { g_icons.clear(); g_icons_at = g_frame; }
-    const auto k = std::make_pair(mode, id);
-    auto it = g_icons.find(k);
-    return it != g_icons.end() ? it->second : (g_icons[k] = symbol_of(id, mode));
-}
+std::string icons(int id, int mode) { return optpage::icons(id, mode); }
 
 bool confirm_down() {                                              // opening: the game's Confirm (keys or pad A), the input not blocked yet
     read_buttons();
-    return g_btn[kDecide].down;
+    return g_keys.down(optpage::kDecide);
 }
 
-// ---- the game's controls ----
-bool floats_of(Obj* o, const char* m, float* out, size_t n) {
-    const Ret r = call(o, m);
-    if (r.exception_thrown) return false;
-    std::memcpy(out, r.bytes.data(), sizeof(float) * n);
-    return true;
-}
-bool shown(void* c) {
-    bool ok = false;
-    const bool v = c && call_bool(static_cast<Obj*>(c), "get_ActualVisible", {}, &ok);
-    return ok && v;
-}
-bool drawn(Obj* agent) {
-    Obj* go = call_obj(agent, "get_GameObject");
-    bool ok = false;
-    const bool d = go && call_bool(go, "get_DrawSelf", {}, &ok);
-    return ok && d;
-}
-std::string message(void* text) { return text ? str(call_obj(static_cast<Obj*>(text), "get_Message")) : std::string(); }
+// ---- the game's controls (options_page.cpp's) ----
 std::string play_state(void* c) { return c ? str(call_obj(static_cast<Obj*>(c), "get_PlayState")) : std::string(); }
-std::string name_of(void* c) { return c ? str(call_obj(static_cast<Obj*>(c), "get_Name")) : std::string(); }
-Obj* options_agent() {
-    void* buf[1] = {};
-    return A()->ui_agents(kAgent, buf, 1) ? static_cast<Obj*>(buf[0]) : nullptr;
-}
 
 // The row's unit under the screen's main control: by its last name (checked), else searched among the sub list's units every kFindEvery
 // frames. `title`: the row's name.
@@ -483,68 +349,17 @@ void refresh_row(Obj* agent, void* unit, int value) {
 }
 
 // The game's description line and guide bar: hidden while the preview is up, put back after
-void hide_guides(bool hide) {
-    const SF6CoreAPI* a = A();
-    void* buf[4] = {};
-    const uint32_t n = a->ui_agents(kGuideAgent, buf, 4);
-    for (uint32_t i = 0; i < n && i < 4; ++i) {
-        const uintptr_t id = reinterpret_cast<uintptr_t>(buf[i]);
-        Obj* cm = call_obj(static_cast<Obj*>(buf[i]), "get_ControlMain");
-        void* list = cm ? a->ui_find_child(cm, kGuideList, 3) : nullptr;
-        if (!list) continue;
-        if (hide && !g_guides_hidden.count(id) && shown(list)) { a->ui_set_force_invisible(C(), list, 1); g_guides_hidden.insert(id); }
-        else if (!hide && g_guides_hidden.count(id)) a->ui_set_force_invisible(C(), list, 0);
-    }
-    if (!hide) g_guides_hidden.clear();
-}
-
-// ---- the copies ----
-void set_enum(void* c, const char* sig, int64_t v) {
-    SF6CoreArg a{}; a.type = SF6CORE_ARG_I64; a.v.i = v;
-    A()->obj_invoke(C(), c, sig, &a, 1, nullptr);
-}
-void set_size_value(void* c, const char* sig, float w, float h) {
-    float v[2] = { w, h };
-    SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = v;          // a value type goes by address
-    A()->obj_invoke(C(), c, sig, &a, 1, nullptr);
-}
-// A scale9 copy shows another of its UV sequence's looks: the sequence for its nine places (their patterns stay 0 - 8), its border
-void s9_look(void* c, int64_t seq, float l, float t, float r, float b) {
-    if (!c) return;
-    for (int64_t pos = 0; pos < 9; ++pos) {
-        SF6CoreArg args[2] = {};
-        args[0].type = SF6CORE_ARG_I64; args[0].v.i = pos;
-        args[1].type = SF6CORE_ARG_I64; args[1].v.i = seq;
-        A()->obj_invoke(C(), c, "setSequenceNo(via.gui.GridPos, System.UInt32)", args, 2, nullptr);
-    }
-    float rect[4] = { l, t, r, b };
-    SF6CoreArg a{}; a.type = SF6CORE_ARG_PTR; a.v.p = rect;
-    A()->obj_invoke(C(), c, "set_BorderRect(via.Rect)", &a, 1, nullptr);
-}
-void read_enums() {
-    if (g_enums) return;
-    g_enums = true;
-    if (TD* cp = api().tdb()->find_type("via.gui.ControlPoint")) {
-        if (auto* f = cp->find_field("CenterCenter")) g_cp_center = f->get_data<int32_t>(nullptr);
-        if (auto* f = cp->find_field("LeftTop")) g_cp_lefttop = f->get_data<int32_t>(nullptr);
-        if (auto* f = cp->find_field("LeftCenter")) g_cp_leftcenter = f->get_data<int32_t>(nullptr);
-    }
-    if (TD* pa = api().tdb()->find_type("via.gui.PageAlignment")) {
-        if (auto* f = pa->find_field("RightCenter")) g_pa_right = f->get_data<int32_t>(nullptr);
-    }
-}
+void hide_guides(bool hide) { g_guides.hide(hide); }
 
 struct CopyDef { std::string name; int tmpl; };                  // tmpl: 0 a Rect, 1 a Texture, 2 a Text, 3 a Text with icons
 std::vector<CopyDef> g_defs;                // every copy, in making order
 std::map<std::string, size_t> g_def_at;
 size_t g_m0 = 0, g_c0 = 0, g_b0 = 0, g_k0 = 0;   // the first mosaic cell, list cell, check box, tick
-// The templates (make_copies): 0 a Rect, 1 a Texture, 2 a Text, 3 a Text with icons (the row's own); 4 the row's cell shell (c_bg_s:
-// shadow, rounded mask, outline), 5 its rounded mask, 6 its outline (scale9, the game's hub parts); 7 / 8 the Options radio list's check
-// box and tick (e_texture_box / e_texture_check: the game's uvs_checkbutton); 9 / 10 the sub list's scroll bar (BG, Bar). One missing:
-// its fallback (kFallback): the list then draws with plainer parts.
+// The templates (make_copies): optpage::Tmpl's numbers, 0 a Rect, 1 a Texture, 2 a Text, 3 a Text with icons (the row's own); 4 the
+// row's cell shell (c_bg_s: shadow, rounded mask, outline), 5 its rounded mask, 6 its outline (scale9, the game's hub parts); 7 / 8 the
+// Options radio list's check box and tick (e_texture_box / e_texture_check: the game's uvs_checkbutton); 9 / 10 the sub list's scroll
+// bar (BG, Bar). One missing: its fallback (options_page.cpp): the list then draws with plainer parts.
 // 11 the guide bar's own key text (InputGuide, e_text_0_d_*: the page's keys line in its style)
-constexpr int kTmplCount = 12;
-const int kFallback[kTmplCount] = { 0, 1, 2, 3, 1, 0, 0, 1, 1, 0, 0, 3 };
 bool g_game_checks = false;                 // the check boxes are the game's (else the loader's check_off / check_on pictures)
 std::string numbered(const char* base, int i) { char b[64]; std::snprintf(b, sizeof b, "%s%02d", base, i); return b; }
 const std::vector<CopyDef>& defs() {
@@ -566,19 +381,6 @@ const std::vector<CopyDef>& defs() {
     return g_defs;
 }
 
-// The guide bar's first key text (InputGuide > p_InputGuideList_0_fit > c_guideBtn > e_text_0_d_<id>): the page's keys line's template
-void* guide_key_text() {
-    const SF6CoreAPI* a = A();
-    void* buf[4] = {};
-    const uint32_t n = a->ui_agents(kGuideAgent, buf, 4);
-    for (uint32_t i = 0; i < n && i < 4; ++i) {
-        Obj* gcm = call_obj(static_cast<Obj*>(buf[i]), "get_ControlMain");
-        void* btn = gcm ? a->ui_find_child(gcm, "c_guideBtn", 8) : nullptr;
-        for (Obj* t = btn ? call_obj(static_cast<Obj*>(btn), "get_Child") : nullptr; t; t = call_obj(t, "get_Next"))
-            if (name_of(t).rfind("e_text_0", 0) == 0) return t;
-    }
-    return nullptr;
-}
 // Inside the guide list's update (R19): the copies under the screen's main control, from the Options screen's own controls
 void make_copies() {
     const SF6CoreAPI* a = A();
@@ -587,49 +389,27 @@ void make_copies() {
     try {
         Obj* agent = options_agent();
         Obj* cm = agent ? call_obj(agent, "get_ControlMain") : nullptr;
-        void* sub = cm ? a->ui_find_cached(cm, kSubList) : nullptr;
-        // the sub list's first pooled row (always there, whatever section is shown)
-        void* unit = sub ? a->ui_find_child(sub, "p_OptionUnit_0_switch_show", 3) : nullptr;
-        if (!unit && sub && !g_unit.empty()) unit = a->ui_find_child(sub, g_unit.c_str(), 3);
-        void* spin = unit ? a->ui_find_child(unit, kSpin, 1) : nullptr;
-        void* shell = unit ? a->ui_find_child(unit, "c_bg_s", 6) : nullptr;
-        void* radio = cm ? a->ui_find_child(cm, "p_Group_radiobtn_switch", 5) : nullptr;
-        void* bar = sub ? a->ui_find_child(sub, "c_ScrollBar", 3) : nullptr;
-        void* tmpl[kTmplCount] = {
-            spin ? a->ui_find_child(spin, "e_rect_bar", 4) : nullptr, unit ? a->ui_find_child(unit, "e_flag", 5) : nullptr,
-            spin ? a->ui_find_child(spin, "e_text_title", 1) : nullptr, spin ? a->ui_find_child(spin, "e_text_0", 2) : nullptr,
-            shell, shell ? a->ui_find_child(shell, "e_scale9grid_mask", 2) : nullptr, shell ? a->ui_find_child(shell, "e_scale9grid_default", 1) : nullptr,
-            radio ? a->ui_find_child(radio, "e_texture_box", 5) : nullptr, radio ? a->ui_find_child(radio, "e_texture_check", 5) : nullptr,
-            bar ? a->ui_find_child(bar, "BG", 1) : nullptr, bar ? a->ui_find_child(bar, "Bar", 1) : nullptr, guide_key_text() };
-        if (cm && tmpl[0] && tmpl[1] && tmpl[2] && tmpl[3]) {
+        const optpage::Templates tm = optpage::templates(cm, g_unit);
+        if (cm && tm.basic()) {
             status = SF6CORE_OK;
-            g_game_checks = tmpl[7] && tmpl[8];
+            g_game_checks = tm.game_checks;
             static bool logged = false;
             if (!logged) {
                 logged = true;
-                logf("title preview: the list's game parts: cell shell %s, check box %s, scroll bar %s", shell ? "yes" : "NO (plain pictures)",
-                     g_game_checks ? "yes" : "NO (the loader's pictures)", tmpl[9] && tmpl[10] ? "yes" : "NO (plain rectangles)");
+                logf("title preview: the list's game parts: cell shell %s, check box %s, scroll bar %s", tm.t[optpage::kTShell] ? "yes" : "NO (plain pictures)",
+                     g_game_checks ? "yes" : "NO (the loader's pictures)", tm.t[optpage::kTBarBg] && tm.t[optpage::kTBar] ? "yes" : "NO (plain rectangles)");
             }
             for (const CopyDef& w : defs()) {
                 void* c = a->ui_find_child(cm, w.name.c_str(), 0);
                 if (!c) {
-                    int t = w.tmpl;
-                    if (!tmpl[t]) t = kFallback[t];
-                    if (t == 7 || t == 8) t = g_game_checks ? t : 1;
-                    const SF6CoreStatus st = a->ui_clone_control(cl, tmpl[t], cm, w.name.c_str(), &c);
+                    const SF6CoreStatus st = a->ui_clone_control(cl, tm.for_copy(w.tmpl, optpage::kTTexture), cm, w.name.c_str(), &c);
                     if (st != SF6CORE_OK || !c) { status = st != SF6CORE_OK ? st : -3001; break; }
                     a->ui_set_force_invisible(cl, c, 1);
                     a->ui_set_visible(cl, c, 0);
                 }
                 // the page's panel: in its shell's c_bg, the fading mask over the panel's two scale9 (made last: first among them)
                 if (w.name == kLPanel && c) {
-                    void* bg = a->ui_find_child(c, "c_bg", 1);
-                    const std::pair<const char*, int> parts[] = { { kLPTint, 5 }, { kLPBg, 5 }, { kLPMask, 0 } };
-                    for (const auto& [nm, t] : parts) {
-                        if (!bg || a->ui_find_child(bg, nm, 0) || !tmpl[t]) continue;
-                        void* x = nullptr;
-                        if (a->ui_clone_control(cl, tmpl[t], bg, nm, &x) == SF6CORE_OK && x) a->ui_set_visible(cl, x, 0);
-                    }
+                    optpage::make_panel_parts(c, tm, kLPMask, kLPBg, kLPTint);
                     continue;
                 }
                 // a cell shell gets its picture inside its rounded mask (c_bg), as the game's cell (c_bg / e_texture_thumb)
@@ -638,7 +418,7 @@ void make_copies() {
                     const std::string pic = w.name + "_pic";
                     if (inner_parent && !a->ui_find_child(inner_parent, pic.c_str(), 0)) {
                         void* t = nullptr;
-                        if (a->ui_clone_control(cl, tmpl[1], inner_parent, pic.c_str(), &t) == SF6CORE_OK && t) a->ui_set_visible(cl, t, 0);
+                        if (a->ui_clone_control(cl, tm.t[optpage::kTTexture], inner_parent, pic.c_str(), &t) == SF6CORE_OK && t) a->ui_set_visible(cl, t, 0);
                     }
                 }
             }
@@ -668,22 +448,12 @@ Copies copies(void* cm) {
     const auto& d = defs();
     if (cm == g_cache_cm && g_cache.all() && a->ui_find_cached(cm, kBg) == g_cache.c[0]) return g_cache;
     if (cm == g_cache_cm && !g_cache.c.empty() && !g_cache.all() && g_frame - g_cache_at < 30) return g_cache;   // not all made yet: looked again soon
-    if (cm != g_cache_cm) { g_tex_on.clear(); g_vis.clear(); }
+    if (cm != g_cache_cm) g_paint.forget();
     g_cache_cm = cm;
     g_cache_at = g_frame;
-    g_cache.c.assign(d.size(), nullptr);
-    if (SF6CORE_HAS(a, ui_find_many)) {
-        for (size_t at = 0; at < d.size(); at += 32) {
-            const char* names[32] = {};
-            void* out[32] = {};
-            const size_t n = std::min<size_t>(32, d.size() - at);
-            for (size_t i = 0; i < n; ++i) names[i] = d[at + i].name.c_str();
-            a->ui_find_many(cm, names, static_cast<uint32_t>(n), out);
-            for (size_t i = 0; i < n; ++i) g_cache.c[at + i] = out[i];
-        }
-    } else {
-        for (size_t i = 0; i < d.size(); ++i) g_cache.c[i] = a->ui_find_child(cm, d[i].name.c_str(), 0);
-    }
+    static std::vector<std::string> names;
+    if (names.size() != d.size()) { names.clear(); for (const CopyDef& w : d) names.push_back(w.name); }
+    optpage::find_all(cm, names, g_cache.c);
     g_cache.pic.assign(kLSlots, nullptr);
     for (int i = 0; i < kLSlots; ++i) {
         void* cell = g_cache.cell(i);
@@ -697,35 +467,9 @@ Copies copies(void* cm) {
     g_cache.ptint = pbg ? a->ui_find_child(pbg, kLPTint, 0) : nullptr;
     return g_cache;
 }
-void show(void* c, bool on) {
-    if (!c) return;
-    if (on) A()->ui_set_force_invisible(C(), c, 0);
-    A()->ui_set_visible(C(), c, on ? 1 : 0);
-    if (!on) A()->ui_set_force_invisible(C(), c, 1);
-}
-void place(void* c, float x, float y) { A()->ui_set_position(C(), c, x - g_gx, y - g_gy, 0); }
-void style_text(void* t, float font, float w, float h, int64_t prio) {
-    set_enum(t, "set_ControlPoint(via.gui.ControlPoint)", g_cp_center);
-    set_enum(t, "set_PageAlignment(via.gui.PageAlignment)", g_cp_center);
-    set_enum(t, "set_AutoRegionFit(via.gui.RegionFitType)", 0);   // never squeezed: a long line slides (name_scroll.cpp)
-    set_enum(t, "set_AutoWrap(System.Boolean)", 0);
-    A()->ui_set_region_size(C(), t, w, h);
-    A()->ui_set_font_size(C(), t, font, font);
-    set_enum(t, "set_Priority(System.UInt16)", prio);
-}
-void style_rect(void* r, float x, float y, float w, float h, uint32_t col, int64_t prio, bool centre = false) {
-    set_enum(r, "set_ControlPoint(via.gui.ControlPoint)", centre ? g_cp_center : g_cp_lefttop);
-    place(r, x, y);
-    A()->ui_set_size(C(), r, w, h);
-    A()->ui_set_color(C(), r, col);
-    set_enum(r, "set_Priority(System.UInt16)", prio);
-}
-
 // Once per opening: every copy's style and place
 void lay_out(void* cm, const Copies& c) {
-    float g[3] = {};
-    if (!floats_of(static_cast<Obj*>(cm), "get_GlobalPosition", g, 2)) g[0] = g[1] = 0;
-    g_gx = g[0]; g_gy = g[1];
+    optpage::set_origin(cm);
     const SF6CoreAPI* a = A();
     SF6CoreClient* cl = C();
     style_rect(c.get(kBg), -20, -20, kScreenW + 40, kScreenH + 40, kColBg, kPrioBg);
@@ -781,45 +525,8 @@ void lay_out(void* cm, const Copies& c) {
     a->ui_set_color(cl, c.get(kDlgKeys), kColText);
     a->ui_set_text(cl, c.get(kNote), words::tr(words::W::TitleNoPicture));
     // The page: the stage page's places (moved to the Options screen's right side)
-    if (void* panel = c.get(kLPanel)) {                              // a cell shell: its own parts hidden, ours in its c_bg
-        set_enum(panel, "set_Priority(System.UInt16)", kPrioLPanel);
-        place(panel, kLPanelX, kLPanelY);
-        for (const char* nm : { "e_scale9grid_shadow", "e_scale9grid_default" })
-            if (void* x = a->ui_find_child(panel, nm, 1)) a->ui_set_force_invisible(cl, x, 1);
-        if (void* bg = a->ui_find_child(panel, "c_bg", 1)) {
-            a->ui_set_position(cl, bg, 0, 0, 0);
-            for (const char* nm : { "e_scale9grid_mask", "e_mat_bg", "e_rect_bar", "e_focus_bar", "e_rect_bg", "e_tex_point_bg" })
-                if (void* x = a->ui_find_child(bg, nm, 0)) { set_enum(x, "set_MaskType(via.gui.MaskType)", 0); a->ui_set_force_invisible(cl, x, 1); }
-        }
-        if (void* m = c.pmask) {                                     // the fading mask: white, its right side (top right) clear
-            set_enum(m, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
-            a->ui_set_position(cl, m, 0, 0, 0);
-            a->ui_set_size(cl, m, kLPanelW, kLPanelH);
-            a->ui_set_color(cl, m, 0xFFFFFFFFu);
-            set_enum(m, "set_MaskType(via.gui.MaskType)", 2);
-            set_enum(m, "set_ColorType(via.gui.ColorType)", 2);
-            const std::pair<const char*, uint32_t> corners[] = {
-                { "set_ColorLeftTop(via.Color)", 0xFFFFFFFFu }, { "set_ColorTop(via.Color)", 0xFFFFFFFFu }, { "set_ColorRightTop(via.Color)", 0x00FFFFFFu },
-                { "set_ColorLeft(via.Color)", 0xFFFFFFFFu }, { "set_ColorRight(via.Color)", 0x00FFFFFFu },
-                { "set_ColorLeftBottom(via.Color)", 0xFFFFFFFFu }, { "set_ColorBottom(via.Color)", 0xFFFFFFFFu }, { "set_ColorRightBottom(via.Color)", 0xFFFFFFFFu } };
-            for (const auto& [sig, col] : corners) {
-                uint32_t v = col;
-                SF6CoreArg arg{}; arg.type = SF6CORE_ARG_PTR; arg.v.p = &v;
-                a->obj_invoke(cl, m, sig, &arg, 1, nullptr);
-            }
-            show(m, true);
-        }
-        for (void* x : { c.pbg, c.ptint }) {
-            if (!x) continue;
-            set_enum(x, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
-            set_enum(x, "set_MaskType(via.gui.MaskType)", 0);
-            a->ui_set_position(cl, x, 0, 0, 0);
-            a->ui_set_size(cl, x, kLPanelW, kLPanelH);
-            a->ui_set_color(cl, x, x == c.pbg ? kColLPanelBg : kColLPanelTint);
-            s9_look(x, 10, 12.5f, 12.5f, 12.5f, 12.5f);              // e_scale9grid_bg / _focus
-        }
-        show(c.pbg, true);
-    }
+    // a cell shell: its own parts hidden, ours in its c_bg
+    optpage::lay_out_panel(c.get(kLPanel), c.pmask, c.pbg, c.ptint, kLPanelX, kLPanelY, kLPanelW, kLPanelH, kColLPanelBg, kColLPanelTint, kPrioLPanel);
     for (const auto& [nm, font, x, y] : { std::tuple<const char*, float, float, float>{ kLRandQ, 50.0f, 0.0f, 0.0f },
                                           std::tuple<const char*, float, float, float>{ kLBanQ, 120.0f, kLBanCX, kLBanCY } }) {
         void* q = c.get(nm);                                         // Random's "?" (e_text_random: slot 6, its colour)
@@ -840,37 +547,16 @@ void lay_out(void* cm, const Copies& c) {
         A()->ui_set_region_size(cl, k, kBottomW, 60);
     }
     style_rect(c.get(kLBanner), kLBanCX, kLBanCY, kLBanW, kLBanH, kColWhite, kPrioLCell, true);
-    void* name = c.get(kLBanName);
-    style_text(name, kLNameFont, kLNameW, kLNameH, kPrioLTop);
-    set_enum(name, "set_PageAlignment(via.gui.PageAlignment)", g_pa_right);   // the whole banner's width, ending at its right as the game's
-    set_enum(name, "set_FontSlot(via.gui.FontSlot)", kLineFontSlot);   // the stage name's (e_text_stage: slot 6, glow 20 x 20, strength 3)
-    {
-        SF6CoreArg on{}; on.type = SF6CORE_ARG_BOOL; on.v.i = 1;
-        a->obj_invoke(cl, name, "set_GlowEnable(System.Boolean)", &on, 1, nullptr);
-        uint32_t black = 0xFF000000u;
-        SF6CoreArg col{}; col.type = SF6CORE_ARG_PTR; col.v.p = &black;
-        a->obj_invoke(cl, name, "set_GlowColor(via.Color)", &col, 1, nullptr);
-        set_size_value(name, "set_GlowBlurSize(via.Size)", 20, 20);
-        SF6CoreArg st{}; st.type = SF6CORE_ARG_F64; st.v.f = 3.0;
-        a->obj_invoke(cl, name, "set_GlowStrength(System.Single)", &st, 1, nullptr);
-    }
-    place(name, kLNameCX, kLNameCY);
-    a->ui_set_color(cl, name, kColLName);
+    // the stage name's (e_text_stage: slot 6, glow 20 x 20, strength 3), the whole banner's width, ending at its right as the game's
+    optpage::style_banner_name(c.get(kLBanName), kLNameFont, kLNameW, kLNameH, kLNameCX, kLNameCY, kColLName, kLineFontSlot, kPrioLTop);
     set_enum(c.get(kLGlow), "set_MaskType(via.gui.MaskType)", 0);
     style_rect(c.get(kLGlow), 0, 0, 277, 89, kColLGlow, kPrioLOver, true);
     s9_look(c.get(kLGlow), 20, 23.0f, 23.0f, 23.5f, 23.5f);
     {
-        const char* band[] = { kLOutline, kLHalo, kLOut3, kLOut4, kLOut5 };    // outer edges at -3, -2, -1, 0, +1 from the cell's
-        for (int i = 0; i < 5; ++i) style_rect(c.get(band[i]), 0, 0, kLCellW + 6 - 2 * i, kLCellH + 6 - 2 * i, kColLFocus, kPrioLOver, true);
+        void* const band[5] = { c.get(kLOutline), c.get(kLHalo), c.get(kLOut3), c.get(kLOut4), c.get(kLOut5) };   // outer edges at -3, -2, -1, 0, +1 from the cell's
+        optpage::style_band(band, kLCellW, kLCellH, kColLFocus, kPrioLOver);
     }
-    set_enum(c.get(kLLine), "set_MaskType(via.gui.MaskType)", 0);
-    style_rect(c.get(kLLine), kLLineX, kLLineY, kLLineW, kLLineH, kColLLine, kPrioLCell);
-    s9_look(c.get(kLLine), 8, 7.0f, 0.0f, 7.0f, 0.0f);               // c_tab / e_scale9grid_line_00, turned 90 degrees
-    {
-        float rot[3] = { 0.0f, 0.0f, 90.0f };
-        SF6CoreArg r{}; r.type = SF6CORE_ARG_PTR; r.v.p = rot;
-        a->obj_invoke(cl, c.get(kLLine), "set_Rotation(via.vec3)", &r, 1, nullptr);
-    }
+    optpage::style_left_line(c.get(kLLine), kLLineX, kLLineY, kLLineW, kLLineH, kColLLine, kPrioLCell);
     style_rect(c.get(kLTrack), kLBarX, kLBarY, kLBarW, kLBarH, kColLTrack, kPrioLCell);
     style_rect(c.get(kLThumb), kLBarX, kLBarY, kLBarW, kLBarH, kColWhite, kPrioLOver);
     for (int i = 0; i < kLSlots; ++i) {
@@ -878,21 +564,7 @@ void lay_out(void* cm, const Copies& c) {
         void* cell = c.cell(i);
         void* cpic = i < static_cast<int>(c.pic.size()) ? c.pic[static_cast<size_t>(i)] : nullptr;
         if (cell && cpic && cpic != cell) {                           // the game's cell shell: its parts resized to the stage cell's
-            set_enum(cell, "set_Priority(System.UInt16)", kPrioLCell);
-            place(cell, x, y);
-            if (void* sh = a->ui_find_child(cell, "e_scale9grid_shadow", 1)) {
-                a->ui_set_position(cl, sh, kLShadowDX, kLShadowDY, 0);
-                a->ui_set_size(cl, sh, kLShadowW, kLShadowH);
-            }
-            void* bg = a->ui_find_child(cell, "c_bg", 1);
-            if (void* m = bg ? a->ui_find_child(bg, "e_scale9grid_mask", 0) : nullptr) { a->ui_set_position(cl, m, 0, 0, 0); a->ui_set_size(cl, m, kLCellW, kLCellH); }
-            if (void* d = a->ui_find_child(cell, "e_scale9grid_default", 1)) {
-                a->ui_set_position(cl, d, 0, 0, 0);
-                a->ui_set_size(cl, d, kLCellW, kLCellH);
-                a->ui_set_color(cl, d, kColLOutline);
-            }
-            for (const char* other : { "e_mat_bg", "e_rect_bar", "e_focus_bar", "e_rect_bg", "e_tex_point_bg" })
-                if (void* o = bg ? a->ui_find_child(bg, other, 0) : nullptr) a->ui_set_force_invisible(cl, o, 1);
+            optpage::lay_out_shell(cell, x, y, kLCellW, kLCellH, kColLOutline, kPrioLCell);
             set_enum(cpic, "set_ControlPoint(via.gui.ControlPoint)", g_cp_lefttop);
             a->ui_set_position(cl, cpic, 0, 0, 0);
             a->ui_set_size(cl, cpic, kLCellW, kLCellH);
@@ -919,12 +591,7 @@ void lay_out(void* cm, const Copies& c) {
 
 
 void load_pictures(const nsfwopt::TitleRow& row) {
-    for (const std::string& p : row.pictures) {
-        if (p.empty() || g_pics.count(p)) continue;
-        void* h = nullptr;
-        g_pics[p] = A()->ui_texture_load(C(), p.c_str(), &h) == SF6CORE_OK ? h : nullptr;
-        if (!g_pics[p]) logf("title preview: picture %s not loadable", p.c_str());
-    }
+    for (const std::string& p : row.pictures) optpage::picture(p, "title preview");
 }
 
 // What the copies show now: written only when it changed
@@ -957,31 +624,10 @@ void set_text_if(void* t, std::string& last, const std::string& now, bool slide,
     if (slide) namescroll::drive(t, width);
 }
 
-// ---- textures on the copies: set once each (a copy keeps the last texture given) ----
-void show_if(void* c, bool on) {
-    auto it = g_vis.find(c);
-    if (it != g_vis.end() && it->second == on) return;
-    show(c, on);
-    g_vis[c] = on;
-}
+// ---- textures on the copies: set once each (a copy keeps the last texture given): options_page.cpp's Painter ----
+void show_if(void* c, bool on) { g_paint.show_if(c, on); }
 // The copy shows `res` (true) once loaded; "" or not loadable: false (the caller hides it)
-bool put_tex(void* ctrl, const std::string& res, float v0 = 0.0f, float v1 = 1.0f) {
-    if (!ctrl || res.empty()) return false;
-    if (auto t = g_tex_on.find(ctrl); t != g_tex_on.end() && t->second == res) return true;
-    auto it = g_pics.find(res);
-    if (it == g_pics.end()) {
-        void* h = nullptr;
-        it = g_pics.emplace(res, A()->ui_texture_load(C(), res.c_str(), &h) == SF6CORE_OK ? h : nullptr).first;
-        if (!it->second) logf("title preview: picture %s not loadable", res.c_str());
-    }
-    void* h = it->second;
-    if (!h || A()->ui_texture_ready(h) != 1) return false;
-    auto& on = g_tex_on[ctrl];
-    if (on == res) return true;
-    if (A()->ui_set_texture_rect(C(), ctrl, h, 0.0f, v0, 1.0f, v1 - v0) != SF6CORE_OK) return false;
-    on = res;
-    return true;
-}
+bool put_tex(void* ctrl, const std::string& res, float v0 = 0.0f, float v1 = 1.0f) { return g_paint.put_tex(ctrl, res, v0, v1); }
 
 // The loader's mosaic layout (preview_tex.cpp title_mosaic_layout): cols x rows places of 16:9, the largest that fit the screen;
 // between equals the fewest empty places, then the most columns. The block centred, a last row with fewer centred too.
@@ -1184,8 +830,7 @@ void paint(const Copies& c, const nsfwopt::TitleRow& row) {
     const size_t i = static_cast<size_t>(v - 1);
     const std::string& res = i < row.pictures.size() ? row.pictures[i] : std::string();
     const std::string key = i < row.keys.size() ? row.keys[i] : std::string();
-    auto it = g_pics.find(res);
-    void* h = res.empty() || it == g_pics.end() ? nullptr : it->second;
+    void* h = res.empty() ? nullptr : optpage::loaded_picture(res);
     const bool ready = h && A()->ui_texture_ready(h) == 1;
     if (v != g_shown.value) { g_shown.value = v; g_shown.pic_ready = false; }
     if (ready && !g_shown.pic_ready) g_shown.pic_ready = A()->ui_set_texture_rect(C(), c.get(kPic), h, 0.0f, 0.0f, 1.0f, 1.0f) == SF6CORE_OK;
@@ -1247,44 +892,15 @@ void paint(const Copies& c, const nsfwopt::TitleRow& row) {
         set_text_if(c.get(kDlgKeys), g_shown.dlg_keys, key_item(icons(63, mode), W::TitleYes) + "     " + key_item(icons(64, mode), W::TitleNo), false, 0);
 }
 
-// ---- the game's message box (crsm/src/ui/dialogs.cpp's confirm: app.UIFlowDialog.MessageBox.Start(text, title, 1, 1, YesNo 4, no icon
-// -1, FightingGround 1); polled with get_IsEnd, the answer GetSelectValue(box) == 0 for Yes) ----
-Obj* g_box = nullptr;
-bool box_open(const std::string& text, const std::string& title) {
-    TD* td = api().tdb()->find_type("app.UIFlowDialog.MessageBox");
-    Method* m = td ? method_of(td, "Start", 7) : nullptr;
-    if (!m) return false;
-    Obj* box = call_obj(m, nullptr, { arg_obj(new_string(text)), arg_obj(new_string(title)), arg_i32(1), arg_i32(1), arg_i32(4), arg_i32(-1), arg_i32(1) });
-    if (!box) return false;
-    box->add_ref();
-    g_box = box;
-    g_box_up.store(true, std::memory_order_release);
-    return true;
-}
-// -1 still up, 1 Yes, 0 No (or lost)
-int box_poll() {
-    if (!g_box) return 0;
-    bool ok = false;
-    const bool ended = call_bool(g_box, "get_IsEnd", {}, &ok);
-    if (ok && !ended) return -1;
-    int answer = 0;
-    if (ok) {
-        TD* td = api().tdb()->find_type("app.UIFlowDialog.MessageBox");
-        Method* g = td ? method_of(td, "GetSelectValue") : nullptr;
-        const Ret v = g ? call(g, nullptr, { arg_obj(g_box) }) : Ret{};
-        answer = g && !v.exception_thrown && static_cast<int32_t>(v.dword) == 0 ? 1 : 0;
-    }
-    g_box->release();
-    g_box = nullptr;
-    g_box_up.store(false, std::memory_order_release);
-    return answer;
-}
+// ---- the game's message box: options_page.cpp's GameBox ----
+bool box_open(const std::string& text, const std::string& title) { return g_box.open(text, title); }
+int box_poll() { return g_box.poll(); }                        // -1 still up, 1 Yes, 0 No (or lost)
 
 void close(void* cm, const char* why) {
     if (!g_open.exchange(false)) return;
     g_cancel.store(false);
     g_dialog = false;
-    if (g_box) { g_box->release(); g_box = nullptr; g_box_up.store(false); }
+    g_box.drop();
     save_lines("closed");
     if (cm) {
         const Copies c = copies(cm);
@@ -1293,8 +909,8 @@ void close(void* cm, const char* why) {
     }
     g_lshown = ListShown{};
     g_mosaic = MosaicShown{};
-    g_vis.clear();
-    for (auto& b : g_btn) b.held = b.down ? 2 : 0;                 // the key that closed acts on nothing on the page
+    g_paint.vis.clear();
+    g_keys.swallow();                                              // the key that closed acts on nothing on the page
     g_shown = Shown{};
     logf("title preview: closed (%s)", why);
 }
@@ -1303,11 +919,11 @@ void close(void* cm, const char* why) {
 void edit(void* cm, const nsfwopt::TitleRow& row) {
     const size_t i = static_cast<size_t>(row.value - 1);
     const std::string key = i < row.keys.size() ? row.keys[i] : std::string();
-    if (g_box) {                                                   // the game's Yes / No box: its answer
+    if (g_box.is_open()) {                                         // the game's Yes / No box: its answer
         const int r = box_poll();
         if (r < 0) return;
         g_cancel.store(false);
-        for (auto& b : g_btn) b.held = b.down ? 2 : 0;             // the key that answered acts on nothing here
+        g_keys.swallow();                                          // the key that answered acts on nothing here
         if (r == 1) {
             const auto it = g_lines.find(key);
             const Line src = it != g_lines.end() ? it->second : Line{};
@@ -1341,7 +957,7 @@ void edit(void* cm, const nsfwopt::TitleRow& row) {
     const int n = static_cast<int>(row.labels.size());
     if (n > 0 && (repeat(kBgPrev, 20, 8) || repeat(kBgNext, 20, 8))) {
         save_lines("the background changed");
-        const int step = g_btn[kBgNext].held ? 1 : -1;
+        const int step = g_keys.held(optpage::kTabR) ? 1 : -1;
         g_edit = ((row.value - 1 + step) % n + n) % n;              // the edited one only: the choice stays (Wael 08/11)
         return;
     }
@@ -1382,7 +998,7 @@ void editor_open(void* cm, const Copies& c, const nsfwopt::TitleRow& row, int id
     g_mosaic = MosaicShown{};
     page_hide(c);
     load_lines();
-    for (auto& b : g_btn) b.held = b.down ? 2 : 0;
+    g_keys.swallow();
     lay_out(cm, c);
     for (const char* nm : { kBg, kBand, kBand2, kName, kInfo, kKeys }) show(c.get(nm), true);
     logf("title preview: editor opened on \"%s\"", static_cast<size_t>(idx) < row.labels.size() ? row.labels[static_cast<size_t>(idx)].c_str() : "?");
@@ -1439,28 +1055,14 @@ void page_keys(void* cm, const Copies& c, const nsfwopt::TitleRow& row, int64_t 
     }
 }
 // Where the guide bar's first key sits (our keys line starts there)
-void read_guide_place() {
-    if (void* t = guide_key_text()) {
-        float g[3] = {};
-        if (floats_of(static_cast<Obj*>(t), "get_GlobalPosition", g, 2)) { g_keys_x = g[0]; g_keys_y = g[1]; }
-    }
-    void* buf[4] = {};
-    const uint32_t n = A()->ui_agents(kGuideAgent, buf, 4);
-    for (uint32_t i = 0; i < n && i < 4; ++i) {
-        Obj* gcm = call_obj(static_cast<Obj*>(buf[i]), "get_ControlMain");
-        void* sc = gcm ? A()->ui_find_child(gcm, "p_ScrollText_0", 8) : nullptr;
-        void* t = sc ? A()->ui_find_child(sc, "e_text", 3) : nullptr;
-        float g[3] = {};
-        if (t && shown(t) && floats_of(static_cast<Obj*>(t), "get_GlobalPosition", g, 2)) { g_desc_x = g[0]; g_desc_y = g[1]; break; }
-    }
-}
+void read_guide_place() { optpage::guide_place(g_keys_x, g_keys_y, g_desc_x, g_desc_y); }
 
 // ---- the cancel hook (the input is blocked while the preview is up: a safety, should the block not hold) ----
 codecheck::Batch g_check;
 bool g_check_started = false, g_hooks_done = false, g_hooked = false;
 int pre_cancel(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     if (g_closing.load(std::memory_order_relaxed) || !g_open.load(std::memory_order_acquire)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    if (g_box_up.load(std::memory_order_acquire)) return REFRAMEWORK_HOOK_SKIP_ORIGINAL;   // the game's box is up: its Back is its own
+    if (g_box.up.load(std::memory_order_acquire)) return REFRAMEWORK_HOOK_SKIP_ORIGINAL;   // the game's box is up: its Back is its own
     g_cancel.store(true, std::memory_order_release);
     return REFRAMEWORK_HOOK_SKIP_ORIGINAL;           // the preview closes, the list stays
 }
@@ -1567,6 +1169,19 @@ void frame() {
         SF6CoreOptSectionState st{};
         st.struct_size = sizeof st;
         const bool have = nsfwopt::title_row(row) && a->opt_section_state(C(), sec, &st) == SF6CORE_OK && st.shown && st.control_main;
+        {   // the game's "Restore Default Settings" confirmed on the section (core 0.9.10's SF6CoreOptSectionState.resets): the game's
+            // own title again (the OVERDRIVE EDITION lines and Random's selection are kept)
+            static int64_t s_sec = -1;
+            static uint32_t s_seen = 0;
+            if (have) {
+                if (s_sec == sec && st.resets != s_seen && row.value != 1) {
+                    nsfwopt::set_title_value(1);
+                    logf("title preview: the game's Restore Default Settings: the game's own title");
+                }
+                s_sec = sec;
+                s_seen = st.resets;
+            }
+        }
         void* cm = have ? st.control_main : nullptr;
         if (!have || (!st.focused && !g_page && !open)) {
             if (cm && (g_lshown.up || open)) {
@@ -1627,7 +1242,7 @@ void frame() {
                 g_ltop = std::max(0, g_lcur / kLCols - kLRows + 1);
                 load_selection(row);
                 read_guide_place();
-                for (auto& b : g_btn) b.held = b.down ? 2 : 0;     // the Confirm that opened acts once released
+                g_keys.swallow();                                  // the Confirm that opened acts once released
                 hide_guides(true);
                 logf("title preview: page opened (\"%s\" chosen)", static_cast<size_t>(row.value - 1) < row.labels.size() ? row.labels[row.value - 1].c_str() : "?");
             }

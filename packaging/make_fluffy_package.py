@@ -14,6 +14,7 @@ Contenu (chemins relatifs a la racine du jeu, modinfo.ini a la racine du zip) :
   reframework/costume_mods/<32 personnages>/, reframework/stage_mods/   (vides, avec leur mode d'emploi)
   reframework/costume_mods_nsfw/<32 personnages>/   (vide, avec son mode d'emploi ; le loader le cree aussi)
   reframework/title_mods/               (vide, avec son mode d'emploi : les packs d'ecran titre ; avec stages seulement)
+  reframework/ui_mods/                  (vide, avec son mode d'emploi : les mods d'interface ; avec stages seulement)
   reframework/data/SF6_TitleSlots_Data/game_title.jpg   (l'image de l'ecran titre du jeu, pour sa case ; prise dans le jeu --game)
 
 Usage : python make_fluffy_package.py [--version 1.0] [--game "<dossier du jeu>"] [--out "<chemin>.zip"] [--costumes-only]
@@ -156,14 +157,16 @@ README_TXT = CRLF.join([
     "  reframework/costume_mods_nsfw/  NSFW costume mods: shown in game only once display_nsfw is true",
     "  reframework/stage_mods/     drop your stage mods here, as downloaded",
     "  reframework/title_mods/     drop title screen mods here, as downloaded (Options > Interface > Title Screen Selection)",
+    "  reframework/ui_mods/        drop interface mods here, as downloaded (Options > Interface: one section per mod)",
     "",
     "INSTALL (Fluffy Mod Manager): install this zip as a mod, then install costume mods as usual.",
     "Updating from an older version: disable or remove the old one in Fluffy first.",
     "",
     "REQUIREMENTS: REFramework in dinput8.dll (official 1.5.8 or newer).",
-    "OPTIONAL: SF6 Native Core 0.9.9 or newer (SF6_NativeCore zip). Without it everything else works; the Replays",
+    "OPTIONAL: SF6 Native Core 0.9.10 or newer (SF6_NativeCore zip). Without it everything else works; the Replays",
     "Settings tab is not added, the stage menus have no Stage Variation hint in the guide bar, and Options > Interface",
-    "has no Title Screen Selection (with a core 0.8.2 - 0.9.8: no title screen page either).",
+    "has no Title Screen Selection (core 0.9.9 needed) and no section for the interface mods (core 0.9.10 needed: without",
+    "it the choices already in settings.json still apply at launch).",
     "",
     "CONFLICTS: this DLL loads nothing else. If another tool wants the same entry point",
     "(HARD READ, MatchScout, any amd_ags_x64.dll proxy), rename THAT one to amd_ags_x64_chain.dll",
@@ -240,6 +243,23 @@ def manager_contract():
     m = re.search(r"MANAGER_CONTRACT\s*=\s*(\d+)", src)
     if not m: sys.exit("MANAGER_CONTRACT introuvable dans loader_core.cpp")
     return int(m.group(1))
+
+UI_MODS_TXT = CRLF.join([
+    "Interface mods go here, as downloaded: the .zip, .7z or .rar file itself, or a folder.",
+    "(Fluffy-style interface mods: a modinfo.ini and a natives folder, e.g. Fighting Ground artwork, character select",
+    "portraits, battle HUD portraits, loading screens, round announcements.)",
+    "",
+    "Then, in game: Options > Interface. Each mod is a section above Other Settings, with the game's own rows:",
+    "  a set of alternatives is one row, Left / Right cycles the game's own files and each option;",
+    "  an option on its own is an Off / On row; the picture of the option shows under the rows.",
+    "A mod with a portrait per character (battle HUD portraits) is a grid of characters: Confirm on the section,",
+    "then X (R on a keyboard) shows the character's next portrait on its cell, A (Confirm) chooses it,",
+    "Y gives it to every character that has it, B goes back.",
+    "A choice applies at once: a screen shows it the next time it opens. Restore Default Settings puts the game's",
+    "own files back. Archives are unpacked once into .cache here.",
+    "Needs SF6 Native Core 0.9.10 or newer for the sections (without it, the choices in settings.json apply at launch).",
+    "",
+]) + CRLF
 
 TITLE_MODS_TXT = CRLF.join([
     "Title screen mods go here, as downloaded: the .zip, .7z or .rar file itself, or a folder.",
@@ -329,6 +349,9 @@ def main():
             # OVERDRIVE EDITION line at its default place) and the game's own title's picture for its cell
             z.writestr("reframework/title_mods/README.txt", TITLE_MODS_TXT)
             print("  %-70s %10s  %s" % ("reframework/title_mods/", "-", "structure"))
+            # interface mods: the folder (its presence turns the interface packs on; empty, nothing is changed)
+            z.writestr("reframework/ui_mods/README.txt", UI_MODS_TXT)
+            print("  %-70s %10s  %s" % ("reframework/ui_mods/", "-", "structure"))
             gt = os.path.join(REF, "data", "SF6_TitleSlots_Data", "game_title.jpg")
             if not os.path.exists(gt): sys.exit("manquant : " + gt)
             z.write(gt, "reframework/data/SF6_TitleSlots_Data/game_title.jpg")

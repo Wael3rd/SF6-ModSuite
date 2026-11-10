@@ -265,6 +265,38 @@
     "title.random_short": {
       "where": "Title screen page: the Random entry's name under its picture (the game's stage grid says RANDOM).",
       "max": 16
+    },
+    "ui.section_desc": {
+      "where": "Options > Interface: an interface pack's section (its name is the pack's), its description line when the pack names no author and has no description. reframework\\ui_mods is a folder name.",
+      "max": 90
+    },
+    "ui.by": {
+      "where": "Options > Interface: an interface pack's section (its name is the pack's), its description line: who made it. %s: the author's name (never translated).",
+      "max": 40
+    },
+    "ui.desc_group": {
+      "where": "Options > Interface, an interface pack's section: the description line of a row of choices (one option of a group, or the game's own files first), when the mod gives none.",
+      "max": 90
+    },
+    "ui.desc_box": {
+      "where": "Options > Interface, an interface pack's section: the description line of an Off / On row, when the mod gives none. %s: the game's own word On.",
+      "max": 90
+    },
+    "ui.key_portrait": {
+      "where": "Options > Interface, a pack of portraits per character (a grid of characters): key guide, R / pad X shows the focused character's next portrait (as Stage Settings' \"Stage Variation\").",
+      "max": 30
+    },
+    "ui.key_all": {
+      "where": "Same grid: key guide, Y gives the portrait shown on the focused character to every character (after the game's Yes / No box).",
+      "max": 30
+    },
+    "ui.confirm_all": {
+      "where": "Same grid: the game's Yes / No box after Y. %s: the portrait's name (the mod's own words, never translated).",
+      "max": 90
+    },
+    "ui.more_options": {
+      "where": "Options > Interface: the section of a portraits pack's other options (its name: \"<pack>: Other Options\").",
+      "max": 30
     }
   },
   "en": {
@@ -338,7 +370,15 @@
     "title.key_select": "Select",
     "title.key_edit": "Edit",
     "title.key_random_settings": "Random Intro Settings",
-    "title.random_short": "Random"
+    "title.random_short": "Random",
+    "ui.section_desc": "The options of this interface mod (reframework\\ui_mods).",
+    "ui.by": "by %s",
+    "ui.desc_group": "One of these options, or the game's own files.",
+    "ui.desc_box": "%s: this option's files are used instead of the game's.",
+    "ui.key_portrait": "Portrait Variation",
+    "ui.key_all": "Every Character",
+    "ui.confirm_all": "Give every character this portrait (%s)?",
+    "ui.more_options": "Other Options"
   },
   "fr": {
     "replay.tab": "Paramètres",
@@ -411,7 +451,15 @@
     "title.key_select": "Sélectionner",
     "title.key_edit": "Modifier",
     "title.key_random_settings": "Paramètres intro aléatoires",
-    "title.random_short": "Aléatoire"
+    "title.random_short": "Aléatoire",
+    "ui.section_desc": "Les options de ce mod d'interface (reframework\\ui_mods).",
+    "ui.by": "par %s",
+    "ui.desc_group": "Une de ces options, ou les fichiers du jeu.",
+    "ui.desc_box": "%s : les fichiers de cette option remplacent ceux du jeu.",
+    "ui.key_portrait": "Variante du portrait",
+    "ui.key_all": "Tous les personnages",
+    "ui.confirm_all": "Donner ce portrait (%s) à tous les personnages ?",
+    "ui.more_options": "Autres options"
   },
   "ja": {
     "replay.tab": "設定",
@@ -484,7 +532,15 @@
     "title.key_select": "選択",
     "title.key_edit": "編集",
     "title.key_random_settings": "ランダムイントロ設定",
-    "title.random_short": "ランダム"
+    "title.random_short": "ランダム",
+    "ui.section_desc": "このインターフェースMODのオプション (reframework\\ui_mods)。",
+    "ui.by": "作者：%s",
+    "ui.desc_group": "これらのオプションのどれか1つ、またはゲーム本来のファイル。",
+    "ui.desc_box": "%s：このオプションのファイルがゲームのファイルの代わりに使われます。",
+    "ui.key_portrait": "ポートレートバリエーション",
+    "ui.key_all": "全キャラクター",
+    "ui.confirm_all": "すべてのキャラクターにこのポートレート（%s）を設定しますか？",
+    "ui.more_options": "その他のオプション"
   },
   "zh-Hans": {
     "replay.tab": "设置",
@@ -557,7 +613,15 @@
     "title.key_select": "选择",
     "title.key_edit": "编辑",
     "title.key_random_settings": "随机开场设置",
-    "title.random_short": "随机"
+    "title.random_short": "随机",
+    "ui.section_desc": "此界面模组的选项 (reframework\\ui_mods)。",
+    "ui.by": "作者：%s",
+    "ui.desc_group": "这些选项之一，或游戏自带的文件。",
+    "ui.desc_box": "%s：使用此选项的文件代替游戏的文件。",
+    "ui.key_portrait": "头像变体",
+    "ui.key_all": "所有角色",
+    "ui.confirm_all": "将此头像（%s）应用到所有角色？",
+    "ui.more_options": "其他选项"
   },
   "it": {
     "replay.tab": "Impostazioni",
@@ -630,7 +694,15 @@
     "title.key_select": "Seleziona",
     "title.key_edit": "Modifica",
     "title.key_random_settings": "Impostazioni intro casuale",
-    "title.random_short": "Casuale"
+    "title.random_short": "Casuale",
+    "ui.section_desc": "Le opzioni di questa mod dell'interfaccia (reframework\\ui_mods).",
+    "ui.by": "di %s",
+    "ui.desc_group": "Una di queste opzioni, o i file del gioco.",
+    "ui.desc_box": "%s: i file di questa opzione sostituiscono quelli del gioco.",
+    "ui.key_portrait": "Variante ritratto",
+    "ui.key_all": "Tutti i personaggi",
+    "ui.confirm_all": "Dare questo ritratto (%s) a tutti i personaggi?",
+    "ui.more_options": "Altre opzioni"
   },
   "de": {
     "replay.tab": "Einstellungen",
@@ -703,7 +775,15 @@
     "title.key_select": "Auswählen",
     "title.key_edit": "Bearbeiten",
     "title.key_random_settings": "Zufalls-Intro-Einstellungen",
-    "title.random_short": "Zufällig"
+    "title.random_short": "Zufällig",
+    "ui.section_desc": "Die Optionen dieses Interface-Mods (reframework\\ui_mods).",
+    "ui.by": "von %s",
+    "ui.desc_group": "Eine dieser Optionen oder die Dateien des Spiels.",
+    "ui.desc_box": "%s: Die Dateien dieser Option ersetzen die des Spiels.",
+    "ui.key_portrait": "Porträt-Variante",
+    "ui.key_all": "Alle Charaktere",
+    "ui.confirm_all": "Allen Charakteren dieses Porträt (%s) geben?",
+    "ui.more_options": "Weitere Optionen"
   },
   "es": {
     "replay.tab": "Ajustes",
@@ -776,7 +856,15 @@
     "title.key_select": "Seleccionar",
     "title.key_edit": "Editar",
     "title.key_random_settings": "Ajustes de intro aleatoria",
-    "title.random_short": "Aleatorio"
+    "title.random_short": "Aleatorio",
+    "ui.section_desc": "Las opciones de este mod de interfaz (reframework\\ui_mods).",
+    "ui.by": "de %s",
+    "ui.desc_group": "Una de estas opciones, o los archivos del juego.",
+    "ui.desc_box": "%s: los archivos de esta opción sustituyen a los del juego.",
+    "ui.key_portrait": "Variante de retrato",
+    "ui.key_all": "Todos los personajes",
+    "ui.confirm_all": "¿Dar este retrato (%s) a todos los personajes?",
+    "ui.more_options": "Otras opciones"
   },
   "es-419": {
     "replay.tab": "Ajustes",
@@ -849,7 +937,15 @@
     "title.key_select": "Seleccionar",
     "title.key_edit": "Editar",
     "title.key_random_settings": "Ajustes de intro aleatoria",
-    "title.random_short": "Aleatorio"
+    "title.random_short": "Aleatorio",
+    "ui.section_desc": "Las opciones de este mod de interfaz (reframework\\ui_mods).",
+    "ui.by": "de %s",
+    "ui.desc_group": "Una de estas opciones, o los archivos del juego.",
+    "ui.desc_box": "%s: los archivos de esta opción sustituyen a los del juego.",
+    "ui.key_portrait": "Variante de retrato",
+    "ui.key_all": "Todos los personajes",
+    "ui.confirm_all": "¿Dar este retrato (%s) a todos los personajes?",
+    "ui.more_options": "Otras opciones"
   },
   "ru": {
     "replay.tab": "Настройки",
@@ -922,7 +1018,15 @@
     "title.key_select": "Выбрать",
     "title.key_edit": "Изменить",
     "title.key_random_settings": "Настройки случайного интро",
-    "title.random_short": "Случайно"
+    "title.random_short": "Случайно",
+    "ui.section_desc": "Параметры этого мода интерфейса (reframework\\ui_mods).",
+    "ui.by": "автор: %s",
+    "ui.desc_group": "Один из этих вариантов или файлы самой игры.",
+    "ui.desc_box": "%s: файлы этого параметра заменяют файлы игры.",
+    "ui.key_portrait": "Вариант портрета",
+    "ui.key_all": "Все персонажи",
+    "ui.confirm_all": "Назначить этот портрет (%s) всем персонажам?",
+    "ui.more_options": "Другие параметры"
   },
   "pl": {
     "replay.tab": "Ustawienia",
@@ -995,7 +1099,15 @@
     "title.key_select": "Wybierz",
     "title.key_edit": "Edytuj",
     "title.key_random_settings": "Ustawienia losowego intra",
-    "title.random_short": "Losowo"
+    "title.random_short": "Losowo",
+    "ui.section_desc": "Opcje tego modu interfejsu (reframework\\ui_mods).",
+    "ui.by": "autor: %s",
+    "ui.desc_group": "Jedna z tych opcji albo pliki gry.",
+    "ui.desc_box": "%s: pliki tej opcji zastępują pliki gry.",
+    "ui.key_portrait": "Wariant portretu",
+    "ui.key_all": "Wszystkie postacie",
+    "ui.confirm_all": "Ustawić ten portret (%s) wszystkim postaciom?",
+    "ui.more_options": "Inne opcje"
   },
   "pt": {
     "replay.tab": "Configurações",
@@ -1068,7 +1180,15 @@
     "title.key_select": "Selecionar",
     "title.key_edit": "Editar",
     "title.key_random_settings": "Configurações de intro aleatória",
-    "title.random_short": "Aleatório"
+    "title.random_short": "Aleatório",
+    "ui.section_desc": "As opções deste mod de interface (reframework\\ui_mods).",
+    "ui.by": "por %s",
+    "ui.desc_group": "Uma destas opções, ou os arquivos do jogo.",
+    "ui.desc_box": "%s: os arquivos desta opção substituem os do jogo.",
+    "ui.key_portrait": "Variação de retrato",
+    "ui.key_all": "Todos os personagens",
+    "ui.confirm_all": "Dar este retrato (%s) a todos os personagens?",
+    "ui.more_options": "Outras opções"
   },
   "ko": {
     "replay.tab": "설정",
@@ -1141,7 +1261,15 @@
     "title.key_select": "선택",
     "title.key_edit": "편집",
     "title.key_random_settings": "무작위 인트로 설정",
-    "title.random_short": "무작위"
+    "title.random_short": "무작위",
+    "ui.section_desc": "이 인터페이스 모드의 옵션 (reframework\\ui_mods).",
+    "ui.by": "제작: %s",
+    "ui.desc_group": "이 옵션 중 하나 또는 게임 원래 파일.",
+    "ui.desc_box": "%s: 이 옵션의 파일이 게임 파일을 대신합니다.",
+    "ui.key_portrait": "초상화 베리에이션",
+    "ui.key_all": "모든 캐릭터",
+    "ui.confirm_all": "모든 캐릭터에 이 초상화(%s)를 적용할까요?",
+    "ui.more_options": "기타 옵션"
   },
   "zh-Hant": {
     "replay.tab": "設定",
@@ -1214,7 +1342,15 @@
     "title.key_select": "選擇",
     "title.key_edit": "編輯",
     "title.key_random_settings": "隨機開場設定",
-    "title.random_short": "隨機"
+    "title.random_short": "隨機",
+    "ui.section_desc": "此介面模組的選項 (reframework\\ui_mods)。",
+    "ui.by": "作者：%s",
+    "ui.desc_group": "這些選項之一，或遊戲本身的檔案。",
+    "ui.desc_box": "%s：使用此選項的檔案代替遊戲的檔案。",
+    "ui.key_portrait": "頭像變體",
+    "ui.key_all": "所有角色",
+    "ui.confirm_all": "將此頭像（%s）套用到所有角色？",
+    "ui.more_options": "其他選項"
   },
   "ar": {
     "replay.tab": "الإعدادات",
@@ -1287,6 +1423,14 @@
     "title.key_select": "تحديد",
     "title.key_edit": "تعديل",
     "title.key_random_settings": "إعدادات المقدمة العشوائية",
-    "title.random_short": "عشوائي"
+    "title.random_short": "عشوائي",
+    "ui.section_desc": "خيارات تعديل الواجهة هذا (reframework\\ui_mods).",
+    "ui.by": "بواسطة %s",
+    "ui.desc_group": "أحد هذه الخيارات، أو ملفات اللعبة الأصلية.",
+    "ui.desc_box": "%s: تحل ملفات هذا الخيار محل ملفات اللعبة.",
+    "ui.key_portrait": "نوع الصورة",
+    "ui.key_all": "كل الشخصيات",
+    "ui.confirm_all": "هل تريد إعطاء هذه الصورة (%s) لكل الشخصيات؟",
+    "ui.more_options": "خيارات أخرى"
   }
 }

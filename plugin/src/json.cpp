@@ -146,4 +146,16 @@ std::string json_write(const Json& j, int indent) {
     }
 }
 
+std::string json_with_key(const std::string& text, const char* key, const Json& v, const char* fallback) {
+    std::string t = text;
+    if (t.compare(0, 3, "\xEF\xBB\xBF") == 0) t.erase(0, 3);
+    Json j;
+    if (t.empty() || !json_parse(t, j) || j.kind != Json::Object) json_parse(fallback ? fallback : "{}", j);
+    if (j.kind != Json::Object) { j = Json{}; j.kind = Json::Object; }
+    bool set = false;
+    for (auto& kv : j.obj) if (kv.first == key) { kv.second = v; set = true; }
+    if (!set) j.obj.insert(j.obj.begin(), { key, v });
+    return json_write(j) + "\n";
+}
+
 } // namespace slots

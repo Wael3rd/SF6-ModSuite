@@ -275,17 +275,8 @@ void load_registry() {
 // character select)
 const char* kSettingsDefault = "{\n    \"display_nsfw\": false,\n    \"online_outfit\": \"Outfit 1\",\n"
                                "    \"select_options_button\": \"R1\",\n    \"select_options_key\": \"C\"\n}\n";
-// settings.json with one key set, the other keys kept as they are
-std::string settings_with(const char* key, const Json& v) {
-    Json j;
-    std::string text = read_file(kSettings);
-    if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);
-    if (text.empty() || !json_parse(text, j) || j.kind != Json::Object) json_parse(kSettingsDefault, j);
-    bool set = false;
-    for (auto& kv : j.obj) if (kv.first == key) { kv.second = v; set = true; }
-    if (!set) j.obj.insert(j.obj.begin(), { key, v });
-    return json_write(j) + "\n";
-}
+// settings.json with one key set, the other keys kept as they are (json.cpp's json_with_key)
+std::string settings_with(const char* key, const Json& v) { return json_with_key(read_file(kSettings), key, v, kSettingsDefault); }
 std::string settings_with_nsfw(bool on) {
     Json v;
     v.kind = Json::Bool;
@@ -1692,6 +1683,24 @@ void set_skip_intro(bool on) {
     v.kind = Json::Bool;
     v.b = on;
     write_title_setting("skip_intro", v);
+}
+// "ui_choices" (the interface packs' ticks, ui_packs.cpp): read whenever asked (the editor opens, a tick changes), written whole
+Json ui_choices() {
+    std::string text = read_file(kSettings);
+    if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) text.erase(0, 3);
+    Json j, out;
+    out.kind = Json::Object;
+    if (json_parse(text, j) && j.kind == Json::Object)
+        if (const Json* c = j.get("ui_choices"); c && c->kind == Json::Object) out = *c;
+    return out;
+}
+bool set_ui_choices(const Json& v) {
+    CreateDirectoryA("reframework/data/SF6_CostumeSlots_data", nullptr);
+    const bool ok = write_file(kSettings, settings_with("ui_choices", v));
+    if (ok) g_settings_stamp = settings_stamp();
+    g_title_stamp = 0;
+    logf("costumes: ui_choices changed (%zu pack(s) with a choice)%s", v.obj.size(), ok ? "" : ": settings.json NOT written");
+    return ok;
 }
 
 // ---------------------------------------------------------------------------------------------

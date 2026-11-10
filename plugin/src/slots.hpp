@@ -181,6 +181,10 @@ namespace costumes {
     // (Random draws from every pack).
     bool random_pool(std::vector<std::string>& keys);
     void set_random_pool(const std::vector<std::string>& keys);
+    // settings.json "ui_choices": the interface packs' ticks ({ "u<pack>": [ "n<option>", ... ] }, ui_packs_logic.hpp), an
+    // object (empty when not set); set_ui_choices writes it whole, every other key kept. False: not written.
+    Json ui_choices();
+    bool set_ui_choices(const Json& v);
     // The slot the online alias dressed the player's fighter in: that FighterDesc's, else the last one dressed for `fid` still
     // alive (any thread); false: none
     bool dressed_slot(Obj* fd, int fid, int& slot, int& color);
@@ -219,6 +223,13 @@ namespace nsfwopt {
 // title_preview.cpp: the "Title screen" row of Options > Interface: its value slides when long, and Confirm shows the pack's picture
 namespace titleprev {
     void frame();                     // every LateUpdateBehavior: its own gate (a look every 15 frames while the Options screen is not up)
+}
+// ui_packs.cpp: the interface mods (reframework\ui_mods, the loader's registry) in Options > Interface, one section per pack whose
+// rows are the game's own (core 0.9.10); settings.json's "ui_choices" and the loader's SF6UISlots_Apply
+namespace uipacks {
+    void setup();                     // first frame, after nsfwopt::setup (the option service; once)
+    void frame();                     // every LateUpdateBehavior: its own gate (a look every 15 frames while no pack is made)
+    bool on_value(int64_t entry, int64_t value);   // the core's on_value (nsfwopt::on_value hands it on): true when the entry is a pack's
 }
 // fs_name.cpp: the outfit's name on Fighter Settings, at the right end of the bottom input guide bar
 namespace fsname {
