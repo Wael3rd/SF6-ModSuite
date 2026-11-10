@@ -148,6 +148,8 @@ README_TXT = CRLF.join([
     "Since 1.25: every character has a Random outfit (the last one, previewed as Outfit 1): each battle (each",
     "opponent online) wears an outfit drawn from the character's outfits, never twice before all were drawn, never an",
     "NSFW outfit while they are hidden. Colours made with the Color Mod stay on their outfit when its number changes.",
+    "Since 1.26: a Random colour at the end of every Color row, Random in Replays > Settings, and in ranked matches",
+    "Random draws only the outfits the player really owns (an unlock-all script or not).",
     "",
     "INSTALL (manual): copy the contents of this archive into the Street Fighter 6 folder,",
     "keeping the directory structure:",

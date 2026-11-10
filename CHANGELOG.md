@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.30.0 (2026-11-10) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.26.0 | a Random colour on every outfit, Random in Replays, Random in ranked matches only with the outfits you own, the Replays tabs wrap round |
+| SF6 Color Mod | 0.26.0 | the Random value in every Color row, RW / MC colours in the Random draws |
+| SF6 Native Core | 0.9.10 | unchanged |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+| SF6 Profile Mod | 1.0.0 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Slots Loader 1.25.0 and SF6 Color Mod 0.25.0, then install Slots Loader 1.26.0
+and Color Mod 0.26.0. Native Core 0.9.10, Recording Manager 2.2.9 and Profile Mod 1.0.0 are the same files as in 1.29.0: keep them.
+With the all-in-one package, replace 1.29.0 with 1.30.0. The loader itself is 1.25.0's: no pak is rebuilt at the first launch.
+
+### SF6 Slots Loader 1.26.0
+- **Random colour** (new): every outfit's Color row ends with "Random" (Battle Settings, the character select of the local modes, the
+  Training popup). Each battle wears one of that outfit's colours, never the same one twice before every one was worn, the Color Mod's
+  RW / MC colours included. Online: one draw per opponent, kept for the rematches; the opponent sees a game colour (colour 02 when an
+  RW / MC colour is drawn, worn on this PC).
+- **The Random outfit draws RW / MC colours too.**
+- **Random in Replays > Settings**: the Random outfit, and a Random colour on any outfit, in Replay Outfit Settings. Each playback
+  draws, from rounds of their own (the battles keep theirs).
+- **Ranked matches: only the outfits you really own.** With an unlock-all script the game counts every DLC outfit as yours. In ranked
+  matches Random now draws only the outfits you own: the default ones, the ones you bought, and the ones a DLC you own on Steam gives.
+  Everywhere else (local modes, replays, the other online modes) it draws from the whole Costume row. The draw made before matchmaking
+  follows the last online match's mode (ranked until another online mode is played).
+- Random is no longer offered in Battle Settings > Other > Opponent Outfit Settings; a bug report made with Random chosen says Random.
+- **Replays tabs**: Settings is part of the tab loop. Tab back (A / LB) on Recommended Replays opens Settings, tab next (E / RB) on
+  Settings goes to Recommended Replays, and no other page's parts are left on screen when switching.
+- Known limits: Battle Settings keeps the Random colour of the last character shown in Fighter Settings (another character's Random
+  colour wears colour 02); in Training, switching to Random from colour 02 takes effect at the next load.
+
+### SF6 Color Mod 0.26.0
+- **The Random value** at the end of every Color row (its word and its draws come from the Slots Loader 1.26.0; without it the row is
+  as before).
+- RW / MC colours drawn by the Slots Loader's Random are dressed on this PC for that battle (one request per side: a mirror match keeps
+  both).
+
 ## 1.29.0 (2026-11-10) — SF6 Mod Suite
 
 | Package | Version | |
