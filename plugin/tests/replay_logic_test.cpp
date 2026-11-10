@@ -101,9 +101,30 @@ int main() {
     check(z.color == 1, "colour key: next colour");
     z = cycle_color(f, z, +1);
     z = cycle_color(f, z, +1);
-    check(z.color == 0, "colour key wraps to the first colour");
+    check(z.random_color && z.color == 0 && z.colormod.empty() && choice_color_label(f.outfits[4], z) == slots::words::game(slots::words::G::Random),
+          "after the last colour: Random (colour 0 for the preview), named with the game's word");
+    z = cycle_color(f, z, +1);
+    check(z.color == 0 && !z.random_color, "colour key wraps to the first colour");
     z = cycle_color(f, z, -1);
-    check(z.color == 2, "colour key backwards wraps to the last colour");
+    check(z.random_color, "colour key backwards from the first: Random, the last value");
+    z = cycle_color(f, z, -1);
+    check(z.color == 2 && !z.random_color, "then the last colour");
+    {   // Random as a colour: kept by an outfit change that keeps the colour, never by a costume change on the page
+        Choice rz = z;
+        rz.random_color = true; rz.color = 0;
+        check(cycle_outfit(f, rz, -1, true).random_color, "an outfit change keeping the colour keeps Random");
+        check(!cycle_outfit(f, rz, -1, false).random_color, "a costume change: back to 01");
+        Choice rr = z; rr.random_color = true; rr.color = 0;
+        Choice r2 = rr; r2.random_color = false;
+        check(!(rr == r2), "Random is another choice than colour 01");
+        Choices rc;
+        rc[1] = rr;
+        const std::string rt = to_json(rc);
+        Choices rb;
+        check(rt.find("\"color_random\": true") != std::string::npos && from_json(rt, rb) && rb[1] == rr, "Random survives the file");
+        check(from_json("{\"version\":1,\"fighters\":{\"1\":{\"mode\":\"forced\",\"costume\":0,\"color\":3}}}", rb) && !rb[1].random_color && rb[1].color == 3,
+              "an older file (no color_random): its colour as written");
+    }
     Choice o1 = cycle_outfit(f, Choice{}, +1);
     o1.color = 9;
     o1 = cycle_color(f, o1, +1);
@@ -129,9 +150,11 @@ int main() {
     v = cycle_color(g, v, +1);
     check(v.colormod == vag.cm[1].id && choice_color_label(g.outfits[0], v) == "MC 1", "then the next entry (MC 1)");
     v = cycle_color(g, v, +1);
-    check(v.color == 0 && v.colormod.empty(), "then back to the first game colour");
-    v = cycle_color(g, v, -1);
-    check(v.colormod == vag.cm[1].id, "backwards from the first game colour: the last entry");
+    check(v.random_color && v.colormod.empty(), "after the entries: Random, the last value");
+    v = cycle_color(g, v, +1);
+    check(v.color == 0 && v.colormod.empty() && !v.random_color, "then back to the first game colour");
+    v = cycle_color(g, cycle_color(g, v, -1), -1);
+    check(v.colormod == vag.cm[1].id && !v.random_color, "backwards from the first game colour: Random, then the last entry");
     Choice v1 = v; v1.colormod.clear();
     check(!(v1 == v), "an entry is another choice than the game colour 02");
     Choice gone_cm = v; gone_cm.colormod = "removed";
@@ -141,7 +164,9 @@ int main() {
     h.outfits[0].colors = { 0, 2 };
     Choice w = cycle_outfit(h, Choice{}, +1);
     w = cycle_color(h, cycle_color(h, w, +1), +1);
-    check(w.color == 0 && w.colormod.empty(), "an outfit without colour 1 offers no entry (it is their carrier)");
+    check(w.random_color && w.colormod.empty(), "an outfit without colour 1 offers no entry (it is their carrier): 02 then Random");
+    w = cycle_color(h, w, +1);
+    check(w.color == 0 && !w.random_color, "and back to 01");
     Choices cmf;
     cmf[1] = v;
     Choices cmb;

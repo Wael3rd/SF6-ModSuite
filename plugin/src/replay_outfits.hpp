@@ -107,7 +107,8 @@ inline const RegSlot* slot_of(const std::vector<RegSlot>& reg, int fid, int cost
 // {"version":1,"fighters":{"<fighter id>":{"mode":"forced","costume":<n>,"mod_id":"<mod>"(extra outfit),"color":<n>}}}
 // colormod: a Color Mod entry's id (its file path) on colour 1, the entries' carrier (colormod/include/sf6colormod_entries.h)
 // options: the costume options saved per outfit (replay_options.hpp)
-struct Forced { int costume = -1, color = 0; std::string mod_id, colormod; OutfitOptions options; };
+// color_random: the colour is Random, a draw of that outfit's colours at each playback (absent in older files: false)
+struct Forced { int costume = -1, color = 0; std::string mod_id, colormod; OutfitOptions options; bool random_color = false; };
 
 // false: not a file of this format (the caller keeps what it had)
 // `stage` (when given): "stage":{"mode":"forced","id":N} -> N (StageDesc.StageId), -1 = the replay's own stage
@@ -141,6 +142,7 @@ inline bool parse_outfits(const std::string& text, std::map<int, Forced>& out, i
         if (const Json* col = v.get("color"); col && col->kind == Json::Number && col->num >= 0) f.color = static_cast<int>(col->num);
         if (const Json* m = v.get("mod_id"); m && m->kind == Json::String) f.mod_id = m->s;
         if (const Json* cm = v.get("colormod"); cm && cm->kind == Json::String && !cm->s.empty()) { f.colormod = cm->s; f.color = 1; }
+        if (const Json* rc = v.get("color_random"); rc && rc->kind == Json::Bool && rc->b) { f.random_color = true; f.color = 0; f.colormod.clear(); }
         parse_outfit_options(v, f.options);
         out[fid] = f;
     }
@@ -226,6 +228,7 @@ struct Wear {
     const char* why = "recorded";         // for the log
     bool forced = false;                  // a forced outfit: the Color Mod is asked to dress it exactly (colormod or "")
     std::string colormod;                 // the forced Color Mod entry ("" = the game's own colours)
+    bool random_color = false;            // the forced colour is Random: the playback draws it (replay_outfits.cpp)
 };
 
 // `recorded`: the replay's sides (fighter, outfit, colour, in team order). `entry`: the journal's line of this replay,
@@ -243,6 +246,7 @@ inline std::vector<Wear> plan(const std::vector<Side>& recorded, const Entry* en
                 w.costume = cos; w.color = f->second.color; w.why = "forced";
                 w.forced = true;
                 w.colormod = f->second.colormod;
+                w.random_color = f->second.random_color;
                 w.change = cos != r.costume || w.color != r.color;
                 continue;
             }

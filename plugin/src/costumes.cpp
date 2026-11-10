@@ -2708,6 +2708,14 @@ bool load_fighters(std::vector<LoadFighter>& out, const char** why) {
     }
     return !out.empty();
 }
+bool replay_random_colour(int fighter, int costume, int& out_color, std::string& entry) {
+    if (fighter <= 0 || costume < 0 || is_random(fighter, costume)) return false;
+    std::lock_guard lk(g_alias_mx);
+    const int v = rand_draw_colour(fighter, costume, nullptr, "a replay's colour set to Random in Replays > Settings");
+    out_color = rnd::worn_colour(v);
+    entry = rand_entry_id(fighter, costume, v);
+    return true;
+}
 bool replay_random(int fighter, int costume, int& out_costume, int& out_color, std::string& entry) {
     if (!is_random(fighter, costume)) return false;
     std::lock_guard lk(g_alias_mx);

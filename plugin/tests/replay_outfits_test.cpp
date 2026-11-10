@@ -96,6 +96,14 @@ int main() {
                         "\"colormod\":\"..\\\\color_mods\\\\Ryu\\\\MANUALCOLORS_01\\\\esf001_009_cmd_001.user.2\"}}}", cmf) &&
           cmf[1].colormod == "..\\color_mods\\Ryu\\MANUALCOLORS_01\\esf001_009_cmd_001.user.2" && cmf[1].color == 1,
           "a Color Mod entry is read (its id; worn on colour 1, its carrier)");
+    {   // a Random colour: read, carried to the plan (the playback draws it); older files: none
+        std::map<int, Forced> rf;
+        check(parse_outfits("{\"version\":1,\"fighters\":{\"1\":{\"mode\":\"forced\",\"costume\":2,\"color\":0,\"color_random\":true},"
+                            "\"2\":{\"mode\":\"forced\",\"costume\":1,\"color\":4}}}", rf) &&
+              rf[1].random_color && rf[1].color == 0 && !rf[2].random_color && rf[2].color == 4, "color_random read, absent: false");
+        const auto w = plan({ Side{ 1, 0, 3 }, Side{ 2, 1, 4 } }, nullptr, rf, {});
+        check(w[0].forced && w[0].random_color && w[0].costume == 2 && !w[1].random_color, "the plan says which side's colour is Random");
+    }
     int stage = 7;
     {
         std::map<int, Forced> fo;

@@ -5,7 +5,8 @@
 //   reframework/data/SF6_CostumeSlots_data/replay_outfits.json
 //   {"version":1,"fighters":{"<fighter id>":{"mode":"forced","costume":<FighterDesc.Costume>,
 //                                            "mod_id":"<registry mod_id, extra outfits only>","color":<FighterDesc.Color>,
-//                                            "colormod":"<a Color Mod entry's id: its file path; colour 1 then>"}},
+//                                            "colormod":"<a Color Mod entry's id: its file path; colour 1 then>",
+//                                            "color_random":true (the Color row's Random: a draw at each playback; colour 0 then)}},
 //    "stage":{"mode":"forced","id":<StageDesc.StageId: a vanilla stage>,"entry":"<a stage slot's key: tile / variation>"},
 //    "bgm":{"mode":"character"}}
 // No entry = Default (the replay's own outfit); no "stage" = the replay's own stage. A fighter's costume options:
@@ -62,9 +63,12 @@ struct Choice {
     std::string mod_id;
     int color = 0;
     std::string colormod;             // a Color Mod entry's id (color is then kColorModCarrier); "" = the game colour
+    // The Color row's last value, Random: each playback draws one of the outfit's colours (costumes::replay_random_colour);
+    // color is then 0 (the preview's 01), colormod "". File: "color_random": true (absent in older files: false)
+    bool random_color = false;
     bool operator==(const Choice& o) const {
-        return forced == o.forced &&
-               (!forced || (costume == o.costume && mod_id == o.mod_id && color == o.color && colormod == o.colormod));
+        return forced == o.forced && (!forced || (costume == o.costume && mod_id == o.mod_id && color == o.color &&
+                                                  colormod == o.colormod && random_color == o.random_color));
     }
 };
 
@@ -128,26 +132,32 @@ inline Choice cycle_outfit(const Fighter& f, const Choice& c, int dir, bool keep
     if (c.forced && keep_color && !c.colormod.empty())        // a Color Mod entry: kept only when this outfit has it too
         for (const ColorEntry& e : o.cm)
             if (e.id == c.colormod && color_on(o, kColorModCarrier) == kColorModCarrier) { r.color = kColorModCarrier; r.colormod = e.id; }
+    if (c.forced && keep_color && c.random_color && !o.random) { r.color = 0; r.colormod.clear(); r.random_color = true; }
     return r;
 }
 
 // The colour key: the next (dir +1) or previous colour of the chosen outfit, wrapping: its game colours, then the
-// Color Mod's entries (each one rides on colour 1, the carrier, so only when the outfit has colour 1). Default stays.
+// Color Mod's entries (each one rides on colour 1, the carrier, so only when the outfit has colour 1), then Random (a draw
+// at each playback; not on the Random outfit, whose one colour is Random already). Default stays.
 inline Choice cycle_color(const Fighter& f, const Choice& c, int dir) {
     const int i = outfit_index(f, c);
     if (i < 0) return c;
     const Outfit& o = f.outfits[static_cast<size_t>(i)];
     if (o.colors.empty()) return c;
     const bool carrier = color_on(o, kColorModCarrier) == kColorModCarrier;
-    const int ng = static_cast<int>(o.colors.size()), nm = carrier ? static_cast<int>(o.cm.size()) : 0, n = ng + nm;
+    const int ng = static_cast<int>(o.colors.size()), nm = carrier ? static_cast<int>(o.cm.size()) : 0;
+    const int nr = o.random ? 0 : 1, n = ng + nm + nr;
     int at = -1;
-    if (!c.colormod.empty()) { for (int k = 0; k < nm; ++k) if (o.cm[static_cast<size_t>(k)].id == c.colormod) at = ng + k; }
+    if (c.random_color && nr) at = ng + nm;
+    else if (!c.colormod.empty()) { for (int k = 0; k < nm; ++k) if (o.cm[static_cast<size_t>(k)].id == c.colormod) at = ng + k; }
     else for (int k = 0; k < ng; ++k) if (o.colors[static_cast<size_t>(k)] == c.color) at = k;
     Choice r = c;
     r.colormod.clear();
+    r.random_color = false;
     const int next = at < 0 ? 0 : ((at + (dir >= 0 ? 1 : -1)) % n + n) % n;
     if (next < ng) r.color = o.colors[static_cast<size_t>(next)];
-    else { r.color = kColorModCarrier; r.colormod = o.cm[static_cast<size_t>(next - ng)].id; }
+    else if (next < ng + nm) { r.color = kColorModCarrier; r.colormod = o.cm[static_cast<size_t>(next - ng)].id; }
+    else { r.color = 0; r.random_color = true; }
     return r;
 }
 
@@ -167,7 +177,7 @@ inline std::string color_label(int color) {
 // ("RW 3", "MC 1"); an entry the Color Mod no longer lists (or no Color Mod): what is worn then, the game's colour 1. The
 // Random outfit's one colour: Random (the game's word), as its Color row reads in the game.
 inline std::string choice_color_label(const Outfit& o, const Choice& c) {
-    if (o.random) return words::game(words::G::Random);
+    if (o.random || c.random_color) return words::game(words::G::Random);
     if (!c.colormod.empty())
         for (const ColorEntry& e : o.cm) if (e.id == c.colormod) return e.label;
     return color_label(c.color);
@@ -282,6 +292,7 @@ inline std::string to_json(const Choices& cs, const StageChoice& stage = {}, con
             if (!c.mod_id.empty()) o += ", \"mod_id\": \"" + json_escape(c.mod_id) + "\"";
             o += ", \"color\": " + std::to_string(c.color);
             if (!c.colormod.empty()) o += ", \"colormod\": \"" + json_escape(c.colormod) + "\"";
+            if (c.random_color) o += ", \"color_random\": true";
         } else {
             o += "\"mode\": \"off\"";                  // Off: only its options, kept for when it is On again
         }
@@ -343,6 +354,7 @@ inline bool from_json(const std::string& text, Choices& out, StageChoice* stage 
         if (const Json* m = e.get("mod_id")) c.mod_id = m->as_str();
         if (const Json* col = e.get("color")) c.color = static_cast<int>(col->as_int(0));
         if (const Json* cm = e.get("colormod"); cm && !cm->as_str().empty()) { c.colormod = cm->as_str(); c.color = kColorModCarrier; }
+        if (const Json* rc = e.get("color_random"); rc && rc->kind == Json::Bool && rc->b) { c.random_color = true; c.color = 0; c.colormod.clear(); }
         out[static_cast<int>(fid)] = c;
     }
     return true;

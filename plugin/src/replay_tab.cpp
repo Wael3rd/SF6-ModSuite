@@ -14,7 +14,8 @@
 //       back to 01) and the fighter in 3D at the game's place (a colour change recolours it in place, as the game's page
 //       does). The colours: the outfit's game colours, then the Color Mod's RW / MC entries with its own labels
 //       (colormod_link.hpp: each rides on colour 02; the preview and the replay ask the Color Mod for exactly that
-//       entry, or for the game's own colours). The character's Random outfit is the Costume row's last value, its Color row
+//       entry, or for the game's own colours), then Random (the game's word: each playback draws one of the outfit's colours,
+//       as a Random colour does in a battle; previewed in 01). The character's Random outfit is the Costume row's last value, its Color row
 //       reading Random, previewed as Outfit 1: a replay set to it wears a draw of the character's pool at each playback (the
 //       Random outfit's rules, replay_outfits.cpp). For an outfit with costume options, R / pad X opens the same Costume
 //       options menu as Edit Character (without its Player side row; the guide bar says "Costume options"), the choices

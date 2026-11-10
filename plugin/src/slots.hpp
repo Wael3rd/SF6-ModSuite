@@ -194,6 +194,9 @@ namespace costumes {
     // Color Mod's entries). Any thread. The outfit and the game's colour drawn, the Color Mod's entry ("" a game colour);
     // false: not the Random outfit, or nothing to draw
     bool replay_random(int fighter, int costume, int& out_costume, int& out_color, std::string& entry);
+    // The same for a replay fighter whose colour is Random (any outfit but the Random outfit): a colour of that outfit's round,
+    // the one a Random colour draws in a battle (the game's colours the player has and the Color Mod's entries). Any thread.
+    bool replay_random_colour(int fighter, int costume, int& out_color, std::string& entry);
 }
 // replay_outfits.cpp: Replay Outfits, what each fighter wears in a replay (rules: replay_outfits.hpp)
 namespace replay {
