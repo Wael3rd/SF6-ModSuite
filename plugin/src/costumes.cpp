@@ -22,6 +22,7 @@
 #include "slots_ui.hpp"
 #include "rto.hpp"
 #include "ownership.hpp"
+#include "true_owner.hpp"
 #include "manager_marker.hpp"
 #include "../../common/manager_mode.hpp"
 #include "../../common/outfit_display.hpp"
@@ -635,7 +636,9 @@ void rand_nsfw_changed() {
 }
 
 // The Costume row of every character that has a Random outfit, and the colours of its game outfits (once a session each). Game
-// thread, offline: the game answers with what the player owns then.
+// thread, offline: the game answers with what the player owns then, its DLC answer Steam's (true_owner.hpp: an unlock-all script
+// makes the game's own DLC answer yes for everything; Wael 10/11, Random never draws an outfit the player does not have). When the
+// game cannot be asked that way, every game outfit given only by DLCs Steam does not count as the player's is left out.
 void rand_read_lists(const char* why) {
     if (g_random_no.empty() || online_now()) return;
     Obj* ci = costume_inventory();
@@ -648,14 +651,22 @@ void rand_read_lists(const char* why) {
     Obj* col_inv = im ? get_obj(im, "_Color") : nullptr;
     std::map<int, std::vector<int>> outs;
     std::map<std::pair<int, int>, std::vector<int>> cols;
+    int not_owned = 0;
     for (auto& [fid, rno] : g_random_no) {
         bool ok = false;
-        const std::vector<uint32_t> listed = listed_outfits(m_list, ci, fid, &ok);
+        std::vector<uint32_t> listed;
+        bool honest = false;
+        {
+            const trueown::Honest h;                   // the game's list with Steam's DLC answer, on this thread only
+            honest = h.ok();
+            listed = listed_outfits(m_list, ci, fid, &ok);
+        }
         if (!ok) continue;
         std::vector<int>& v = outs[fid];
         for (uint32_t c : listed) {
             const int cos = static_cast<int>(c);
             if (cos == rno || (is_slot(fid, cos) && !shown(fid, cos)) || std::find(v.begin(), v.end(), cos) != v.end()) continue;
+            if (!honest && !is_slot(fid, cos) && trueown::dlc_only_unowned(fid, cos)) { ++not_owned; continue; }
             v.push_back(cos);
         }
         for (int cos : v) {
@@ -683,6 +694,7 @@ void rand_read_lists(const char* why) {
             }
         }
     }
+    if (not_owned) logf("Random: %d game outfits given only by DLCs Steam does not count as the player's left out (%s)", not_owned, why);
     std::lock_guard lk(g_alias_mx);
     for (auto& [k, v] : cols) g_rand_colours[k] = std::move(v);
     for (auto& [fid, v] : outs) {
