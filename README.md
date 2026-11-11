@@ -65,8 +65,12 @@ folder's name. A mod it does not recognise is not placed and the reason is shown
 - **Options** tab: the language (the game's 14) and **SF6 Mod Suite updates**. When the tool starts it reads the latest release's
   `manifest.json` on GitHub and compares it with the packages in the game folder, so you can know a release is out before starting
   the game. A newer release is listed `old -> new`; F installs it, **with the game closed**, with the same code as the update in
-  game (same checks, same all-or-nothing swap, same `state.json` and `update.log`). Packages installed before suite 1.32.0 report no
-  version: update those by hand once. With Fluffy Mod Manager, replace the zip there too.
+  game (same checks, same all-or-nothing swap, same `state.json` and `update.log`); the row shows the download's percentage.
+  Packages installed before suite 1.32.0 report no version: update those by hand once. With Fluffy Mod Manager, replace the zip
+  there too.
+- **This tool's updates** (Options tab, since Mod Sorter 1.1.0): the same look at the latest release says when a newer Mod Sorter
+  is out. F downloads its zip (the percentage is shown), checks its size and sha256, replaces `SF6_ModSorter.exe` and starts it
+  again. Version 1.0.0 cannot do it: replace that one by hand once.
 - It finds the game through Steam (G chooses another folder) and can start it (L). It needs the SF6 Slots Loader installed in that
   game folder: costumes and stages are recognised with its indexes.
 - Install: unzip anywhere and run it, or install its zip with Fluffy Mod Manager (the exe lands in the game folder). Its settings
@@ -74,7 +78,7 @@ folder's name. A mod it does not recognise is not placed and the reason is shown
 - **Network**: `github.com` and its download servers only, over HTTPS, for the update check; nothing about you or your PC is sent.
   Off with `"check_for_updates": false` in `reframework\data\SF6_Update_data\state.json` (F still checks when you ask).
 - The program is not signed: Windows SmartScreen may ask before the first run (More info, Run anyway), and Windows may refuse it with
-  Smart App Control on. The in-game updater does not update the Mod Sorter itself: a new version is downloaded by hand.
+  Smart App Control on. The in-game updater does not update the Mod Sorter: it updates itself (Options tab).
 
 ## Profile Mod
 

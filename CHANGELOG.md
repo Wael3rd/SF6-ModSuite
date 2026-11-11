@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.34.0 (2026-11-11) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Native Core | 0.9.12 | the update in game shows its download percentage |
+| SF6 Slots Loader | 1.27.1 | the update in game shows its download percentage |
+| SF6 Mod Sorter | 1.1.0 | updates itself; shows the download percentage of an update |
+| SF6 Color Mod | 0.26.2 | unchanged |
+| SF6 Recording Manager | 2.2.10 | unchanged |
+| SF6 Profile Mod | 1.1.1 | unchanged |
+
+Updating: with suite 1.32.0 or 1.33.0 installed, the game offers this release at the main menu (Yes / No / Ignore): it is the
+first release offered in game. This update itself is run by the updater you already have, so it shows no percentage yet: the
+percentage shows from the next update on. The Mod Sorter 1.0.0 cannot update itself: download `SF6_ModSorter_1.1.0.zip` and
+replace the exe by hand once; from 1.1.0 it does it alone.
+
+### The update in game (Native Core 0.9.12, Slots Loader 1.27.1)
+- While an update downloads, the game's own side message (the strip on the left of the screen, the one of the drill downloads)
+  says `Downloading SF6 Mod Suite <version>: 42%`. One message that stays for the whole download, its number going up as it
+  goes; then the install's line; it leaves by itself a few seconds after.
+- A message the game cannot show is written in `update.log` and the update goes on without it.
+- `manifest.json` lists the tools of a release apart (`"tools"`): the game installs nothing from it.
+
+### SF6 Mod Sorter 1.1.0
+- **This tool's updates** (Options tab): when the tool starts, the look at the latest release also says whether a newer Mod
+  Sorter is out. F downloads it, checks it (size, sha256, Smart App Control), replaces `SF6_ModSorter.exe` and starts it again.
+- The download percentage on the row of an update on its way (the suite's and the tool's own), with a thin bar.
+- `SF6_ModSorter.exe --version` prints its version.
+
 ## 1.33.0 (2026-11-11) — SF6 Mod Suite
 
 | Package | Version | |
