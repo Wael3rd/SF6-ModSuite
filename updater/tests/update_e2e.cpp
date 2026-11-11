@@ -1,0 +1,131 @@
+// update_e2e - the updater's own steps (update_install.cpp) on a fake game folder, outside the game. Not shipped.
+//
+//   update_e2e.exe update --game <fake game folder> --manifest <the new release's manifest.json> --reports <a manifest whose versions the
+//                  installed DLLs "report"> --assets <folder holding the new release's zips>
+//       The check (installed packages against the manifest), the install from local copies of the zips (sizes and sha256 checked, every
+//       entry checked, Smart App Control on every program, the swap), then the next start (journal, clean-up of the old copies) and a
+//       second check that must offer nothing. The versions come from --reports because the DLLs of a release made before the updater
+//       carry no sf6suite_package_version export (in game the loaded DLLs answer).
+//   update_e2e.exe fetch --url <https address> --size <bytes> --sha256 <hex> --out <file>
+//       One real download through the updater's HTTPS code (redirects checked against its host list), then its size and sha256.
+//   update_e2e.exe manifest
+//       The latest release's manifest.json, as the game asks for it (prints the outcome).
+//   Exit 0: all as expected.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <cstdio>
+#include <cstring>
+#include <map>
+#include <string>
+
+#include "../src/update_fs.hpp"
+#include "../src/update_install.hpp"
+#include "../src/update_logic.hpp"
+#include "../src/update_net.hpp"
+
+using namespace sf6up;
+
+static std::map<std::string, std::string> args(int argc, char** argv) {
+    std::map<std::string, std::string> a;
+    for (int i = 2; i + 1 < argc; i += 2) a[argv[i]] = argv[i + 1];
+    return a;
+}
+
+static void out(const std::string& s) { printf("%s\n", s.c_str()); fflush(stdout); }
+
+static bool read_manifest(const std::string& path, Manifest* m) {
+    std::string text, why;
+    if (!read_file(widen(path), &text, kManifestMaxBytes + 1) || !parse_manifest(text, m, &why)) { out("cannot read " + path + ": " + why); return false; }
+    return true;
+}
+
+static int cmd_update(std::map<std::string, std::string> a) {
+    const Paths p(widen(a["--game"]));
+    std::string text;
+    if (!read_file(widen(a["--manifest"]), &text, kManifestMaxBytes + 1)) { out("no manifest"); return 1; }
+    Manifest reports;
+    if (!read_manifest(a["--reports"], &reports)) return 1;
+    auto reader_of = [](const Manifest& m) {
+        return [m](const KnownPackage& k) {
+            for (auto& pk : m.packages)
+                if (pk.id == k.id) return pk.version;
+            return std::string();
+        };
+    };
+    auto log = [](const std::string& l) { out("  log: " + l); };
+    recover(p, log);
+    const State st = load_state(p);
+    CheckResult c = run_check(p, reader_of(reports), text, st.ignored);
+    if (!c.ok) { out("check refused the manifest: " + c.why); return 1; }
+    for (auto& n : c.plan.notes) out("  note: " + n);
+    out("offered by " + c.plan.suite + ": " + std::to_string(c.plan.items.size()) + " package(s)");
+    for (auto& it : c.plan.items) out("  " + it.pkg.name + " " + it.from + " -> " + it.pkg.version + " (" + it.pkg.asset + ")");
+    const std::wstring assets = widen(a["--assets"]);
+    const Fetch local = [&](const PlanItem& it, const std::wstring& dest, std::string* why) {
+        const std::wstring src = join(assets, it.pkg.asset);
+        if (!CopyFileW(src.c_str(), dest.c_str(), FALSE)) { *why = "no local copy of " + it.pkg.asset; return false; }
+        return true;
+    };
+    const InstallResult r = run_install(p, c.plan, local, log);
+    out(std::string("install: ") + (r.ok ? "ok" : "FAILED: " + r.why));
+    if (!r.ok) return 1;
+    out("old copies kept: " + std::to_string(r.swap.backups.size()));
+    for (auto& b : r.swap.backups) out("  " + b);
+    // the next start: the new DLLs report the new versions
+    Manifest now;
+    parse_manifest(text, &now, nullptr);
+    recover(p, log);
+    cleanup(p, log);
+    const State after = load_state(p);
+    out("pending clean-up after the next start: " + std::to_string(after.cleanup.size()));
+    CheckResult again = run_check(p, reader_of(now), text, after.ignored);
+    out("offered at the next start: " + std::to_string(again.plan.items.size()));
+    return c.plan.items.empty() || !again.plan.items.empty() || !after.cleanup.empty() ? 1 : 0;
+}
+
+static int cmd_fetch(std::map<std::string, std::string> a) {
+    const std::wstring dest = widen(a["--out"]);
+    DeleteFileW(dest.c_str());
+    const int64_t size = _strtoi64(a["--size"].c_str(), nullptr, 10);
+    const ULONGLONG t0 = GetTickCount64();
+    const HttpResult h = http_get_file(a["--url"], size, dest);
+    out("fetch " + a["--url"] + ": " + (h.ok ? "200" : "FAILED: " + h.why) + ", last host " + h.final_host + ", " + std::to_string(GetTickCount64() - t0) + " ms");
+    if (!h.ok) return 1;
+    std::string why;
+    const bool ok = verify_file(dest, size, a["--sha256"], &why);
+    out(std::string("size and sha256: ") + (ok ? "as the GitHub API says" : "MISMATCH: " + why));
+    // the guards: a host outside the list, plain http, never reached
+    std::string body;
+    const HttpResult other = http_get("https://example.com/", 1000, &body);
+    const HttpResult plain = http_get("http://github.com/", 1000, &body);
+    out("another host refused: " + std::string(!other.ok ? "yes (" + other.why + ")" : "NO"));
+    out("plain http refused: " + std::string(!plain.ok ? "yes (" + plain.why + ")" : "NO"));
+    return ok && !other.ok && !plain.ok ? 0 : 1;
+}
+
+static int cmd_manifest() {
+    std::string text, why;
+    const bool ok = fetch_manifest(&text, &why);
+    out(std::string("latest release's manifest.json: ") + (ok ? "found, " + std::to_string(text.size()) + " bytes" : "not found: " + why));
+    if (ok) {
+        Manifest m;
+        out(parse_manifest(text, &m, &why) ? "  valid, suite " + m.suite : "  refused: " + why);
+    }
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc < 2) { out("usage: update_e2e.exe update|fetch|manifest ..."); return 2; }
+    const std::string c = argv[1];
+    if (c == "update") return cmd_update(args(argc, argv));
+    if (c == "fetch") return cmd_fetch(args(argc, argv));
+    if (c == "manifest") return cmd_manifest();
+    out("unknown command");
+    return 2;
+}

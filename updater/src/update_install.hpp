@@ -1,0 +1,65 @@
+// SF6 Mod Suite updater: the steps, without the game. What the in-game host runs off the game thread, and what the end-to-end driver
+// (updater/tests) runs on a fake game folder, the same code: the check (installed packages against the manifest) and the install
+// (download, sizes and sha256, extraction into a staging tree, Smart App Control, the swap).
+//
+// Files (reframework/data/SF6_Update_data/ of the game folder):
+//   state.json         the module's state and its one setting (update_logic.hpp, State)
+//   swap_journal.json  only during a swap (update_fs.hpp)
+//   staging/           only during an install: zips/ (the downloads), tree/ (their files)
+//   update.log         what it did, the last lines
+#pragma once
+
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "update_fs.hpp"
+#include "update_logic.hpp"
+
+namespace sf6up {
+
+constexpr const char* kDataDir = "reframework/data/SF6_Update_data";
+
+struct Paths {
+    std::wstring root, data, state, journal, staging, log;
+    explicit Paths(const std::wstring& game_root);
+};
+
+using LogFn = std::function<void(const std::string&)>;
+
+// The state file, read and written under one lock (the check, the answers and the clean-up may run on different threads)
+State load_state(const Paths& p);
+bool update_state(const Paths& p, const std::function<void(State&)>& change);
+
+// At start, before anything: a swap that stopped in the middle undone
+void recover(const Paths& p, const LogFn& log);
+// Once the new version has run: the old copies of the last update deleted
+void cleanup(const Paths& p, const LogFn& log);
+
+// ---- the check ----
+struct CheckResult {
+    bool ok = false;              // the manifest was read
+    std::string why;
+    Plan plan;                    // plan.items empty: nothing to offer
+};
+// manifest_text: the manifest's text, as fetched (http in game, a file in the tests)
+CheckResult run_check(const Paths& p, const VersionReader& version_of, const std::string& manifest_text, const std::string& ignored);
+
+// ---- the install ----
+enum class Fail { None, Download, Check, Package, Blocked, Files };
+struct InstallResult {
+    bool ok = false;
+    Fail fail = Fail::None;
+    std::string why;              // for the log
+    std::string what;             // for the player: the file Smart App Control blocks
+    SwapResult swap;
+};
+// Fetch one package's zip to `dest` (in game: https from the release; the tests: a local copy). Its size and sha256 are checked after.
+using Fetch = std::function<bool(const PlanItem&, const std::wstring& dest, std::string* why)>;
+InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, const LogFn& log, int fail_at = -1);
+// The fetch the game uses: the asset of the manifest's release on GitHub
+bool fetch_from_github(const std::string& tag, const PlanItem& item, const std::wstring& dest, std::string* why);
+// The manifest of the latest release
+bool fetch_manifest(std::string* text, std::string* why);
+
+}  // namespace sf6up

@@ -1,0 +1,123 @@
+// SF6 Mod Suite updater: the pure part (no game, no network, no file). Versions, the release manifest, what to offer, which zip
+// entries may be written where, the module's own state. Compiled into its two hosts (the Native Core and the Slots Loader's plugin)
+// and into its tests (updater/tests).
+//
+// The manifest (manifest.json, an asset of every GitHub release since the updater, written by packaging/make_manifest.py):
+//   { "format": "sf6suite-manifest-1", "suite": "1.30.1", "tag": "v1.30.1",
+//     "packages": [ { "id": "color_mod", "name": "SF6 Color Mod", "version": "0.26.1", "asset": "SF6_ColorMod_0.26.1.zip",
+//                     "size": 1418590, "sha256": "<64 hex>", "proof": "reframework/plugins/SF6_ColorModNative.dll" }, ... ] }
+// Read as hostile: 64 KiB at most, nesting 8 at most, every field of the expected type, a known id's proof must be the one this code
+// knows (the manifest cannot point the updater at another file), an unknown id is skipped (a later package an older updater does not
+// know), an asset is a bare file name, its size 64 MiB at most. Anything else: the whole manifest is refused.
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace sf6up {
+
+// ---- versions: "1.26.1", "0.9.10", "2.2.9-beta" (1 to 4 numbers, an optional -suffix that sorts before the release) ----
+struct Version {
+    std::vector<uint32_t> n;
+    std::string pre;              // "" = a release
+};
+std::optional<Version> parse_version(const std::string& s);
+// -1 a < b, 0 equal, 1 a > b; nullopt when either is not a version
+std::optional<int> compare_versions(const std::string& a, const std::string& b);
+// a strictly newer than b (false when either is not a version: never offered on a doubt)
+bool newer(const std::string& a, const std::string& b);
+
+// ---- the packages this code knows: their id, their name, the file that proves one is installed (its main DLL) ----
+struct KnownPackage {
+    const char* id;
+    const char* name;
+    const char* proof;            // relative to the game folder, '/' separated
+};
+const std::vector<KnownPackage>& known_packages();
+const KnownPackage* find_known(const std::string& id);
+
+// ---- the manifest ----
+constexpr const char* kManifestFormat = "sf6suite-manifest-1";
+constexpr size_t kManifestMaxBytes = 64 * 1024;
+constexpr int64_t kAssetMaxBytes = 64ll * 1024 * 1024;
+constexpr size_t kMaxPackages = 16;
+
+struct ManifestPackage {
+    std::string id, name, version, asset, sha256, proof;
+    int64_t size = 0;
+};
+struct Manifest {
+    std::string format, suite, tag;
+    std::vector<ManifestPackage> packages;   // the known ids only
+    std::vector<std::string> skipped;        // ids it does not know (logged)
+};
+bool parse_manifest(const std::string& text, Manifest* out, std::string* why);
+// The text make_manifest.py writes, for the tests' round trip
+std::string manifest_json(const Manifest& m);
+
+// ---- what to offer ----
+struct Installed {
+    std::string id;
+    bool present = false;         // its proof file is in the game folder
+    std::string version;          // what its main DLL reports ("" = it reports none)
+};
+struct PlanItem {
+    ManifestPackage pkg;
+    std::string from;             // the installed version
+};
+struct Plan {
+    std::string suite, tag;
+    std::vector<PlanItem> items;
+    std::vector<std::string> notes;          // why a package is not offered, for the log
+};
+// A package installed whose manifest version is strictly newer than what its DLL reports. The Slots Loader is left out when the
+// Slotsloader Manager installed it (manager_mode): the Manager owns those files. Nothing when `ignored` is the manifest's suite.
+Plan make_plan(const Manifest& m, const std::vector<Installed>& installed, bool manager_mode, const std::string& ignored);
+
+// ---- zip entries: where a package file may go ----
+enum class Entry {
+    Refuse,          // outside the known install roots, or an unsafe path: the whole update stops
+    Skip,            // the package's own metadata (modinfo.ini, README.txt at the zip's root): Fluffy Mod Manager's, not the game's
+    Dir,             // a folder the package creates (costume_mods/<Character>/): made when missing, its content never touched
+    File,            // a package file: replaced
+    KeepIfPresent,   // a file the player's settings live in: written only when the game folder has none
+};
+struct EntryRule {
+    Entry kind = Entry::Refuse;
+    std::string path;             // normalised: '/' separated, no leading '/', no trailing '/' (folders too)
+    std::string why;              // for Refuse
+};
+// `raw`: the name in the zip. Safe paths only: no drive, no root, no "..", ".", empty or reserved segment (CON, NUL...), no ':' (alternate
+// streams), no character Windows refuses, no trailing dot or space, 8 levels and 200 characters at most.
+EntryRule classify_entry(const std::string& raw);
+// The files of the packages that hold a player's settings (protected: never replaced)
+const std::vector<std::string>& keep_if_present();
+
+// ---- the module's own state: reframework/data/SF6_Update_data/state.json ----
+struct State {
+    bool check = true;                       // "check_for_updates": false turns the whole updater off (README)
+    std::string ignored;                     // "ignored_suite_version": Ignore was answered for that version
+    std::vector<std::string> cleanup;        // "pending_cleanup": the .old-<version> files of the last update, deleted at the next start
+    std::string raw;                         // the text it was read from: unknown keys are kept when written back
+};
+State parse_state(const std::string& text);
+std::string state_json(const State& s);
+
+// ---- the old copies kept by a swap: <name>.old-<version> ----
+std::string backup_name(const std::string& file_name, const std::string& version, int n);   // n > 0: ".1", ".2"... when taken
+bool is_backup_name(const std::string& file_name);
+
+// ---- the GitHub addresses: fixed, nothing in a file changes them ----
+constexpr const char* kRepo = "Wael3rd/SF6-ModSuite";
+constexpr const char* kManifestUrl = "https://github.com/Wael3rd/SF6-ModSuite/releases/latest/download/manifest.json";
+std::string asset_url(const std::string& tag, const std::string& asset);
+// The hosts a request may reach, the redirects included (exact names, https only)
+bool host_allowed(const std::string& host);
+
+// ---- text helpers ----
+bool is_sha256_hex(const std::string& s);
+std::string lower(std::string s);
+
+}  // namespace sf6up
