@@ -59,15 +59,23 @@ if errorlevel 1 (
 )
 
 :lua_done
-:: ---- Build sf6core_native.dll (core + display + lua_bridge + lua.lib) ----
+:: ---- The SF6 Mod Suite updater's zip reader (miniz, third-party C): its own object ----
+cl /nologo /c /O2 /MT /W0 /TC ..\common\third_party\miniz.c /Fo:..\build\core\miniz.obj >nul
+if errorlevel 1 (
+    echo ERROR: miniz.c failed
+    set ERRORS=1
+)
+:: ---- Build sf6core_native.dll (core + display + lua_bridge + lua.lib + the updater, ..\updater\src) ----
 echo.
 echo === Building sf6core_native.dll ===
-cl %CFLAGS% /DSF6CORE_EXPORTS /I third_party\lua /Fe:..\build\core\sf6core_native.dll ^
+cl %CFLAGS% /DSF6CORE_EXPORTS /I third_party\lua /external:I ..\colormod\third_party /external:W0 /Fe:..\build\core\sf6core_native.dll ^
     src\sf6core.cpp src\display.cpp src\lua_bridge.cpp src\discovery.cpp src\perf.cpp ^
     src\options\options_service.cpp src\options\options.cpp src\options\options_core.cpp ^
     src\options\guid_text.cpp src\options\guid_table.cpp src\selection.cpp src\title.cpp ^
     src\pausemenu\pm_service.cpp src\pausemenu\pausemenu.cpp src\pausemenu\pm_core.cpp ^
-    /link /DLL ..\build\core\lua.lib rpcrt4.lib winmm.lib
+    ..\updater\src\update_host.cpp ..\updater\src\update_game.cpp ..\updater\src\update_install.cpp ..\updater\src\update_logic.cpp ^
+    ..\updater\src\update_fs.cpp ..\updater\src\update_net.cpp ..\updater\src\update_sys.cpp ^
+    /link /DLL ..\build\core\lua.lib ..\build\core\miniz.obj rpcrt4.lib winmm.lib winhttp.lib bcrypt.lib user32.lib
 if errorlevel 1 (
     echo ERROR: sf6core_native.dll build failed
     set ERRORS=1

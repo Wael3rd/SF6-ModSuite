@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "perf.hpp"
+#include "../../updater/src/update_host.hpp"
 
 // ========================================================================
 // Constants
@@ -2174,6 +2175,7 @@ static void on_late_update() {
     //        state (training, pause, menu close) and the install pass --
     pausemenu_frame();
     title_frame();                                  // the title screen line (title.cpp)
+    sf6up::host::frame();                           // the SF6 Mod Suite updater, when this copy runs it (updater/src/update_host.hpp)
 
     // -- 4. Frame callbacks --
     {
@@ -2707,6 +2709,11 @@ const SF6CoreAPI* SF6CORE_CALL sf6core_get_api(uint32_t abi_version) {
     return &s_api;
 }
 
+// The version the SF6 Mod Suite updater reads (updater/src/update_game.cpp); older cores answer through get_version
+extern "C" __declspec(dllexport) const char* sf6suite_package_version(void) { return CORE_VERSION; }
+
+static void update_log(const char* line) { core_log(SF6CORE_LOG_INFO, nullptr, "[update] %s", line); }
+
 // ========================================================================
 // REFramework plugin entry points
 // ========================================================================
@@ -2900,6 +2907,9 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     // Option dialogs (increment 6): the event pump before the frame is drawn
     // (the hooks are installed later, on the first frame after a client asks)
     param->functions->on_pre_application_entry("BeginRendering", options_pump);
+
+    // The SF6 Mod Suite updater (updater/): this copy or the Slots Loader's plugin runs it, decided at the first frame
+    sf6up::host::init({ sf6up::host::kRoleCore, update_log });
 
     push_breadcrumb(BC_INIT, nullptr, "core initialized");
 

@@ -12,6 +12,8 @@
 #include "replay_tab.hpp"
 #include "name_scroll.hpp"
 #include "ui_retexture.hpp"
+#include "version.hpp"
+#include "../../updater/src/update_host.hpp"
 
 namespace slots {
 
@@ -69,6 +71,7 @@ void on_late_update() {
     }
 
     language_tick();                        // the language of our words (words.hpp): at most every 60 frames
+    sf6up::host::frame();                   // the SF6 Mod Suite updater, when this copy runs it (updater/src/update_host.hpp)
     namescroll::frame();                    // long names scroll in the Costume rows: its own gate (registry reads every 15 frames)
     titleprev::frame();                     // Options' Title Screen row: its value slides, Confirm shows the pack's picture: its own gate
     uipacks::frame();                       // Options' Interface Packs section and its editor: its own gate (nothing before setup)
@@ -140,8 +143,13 @@ void on_post_late_update() {
     }
 }
 
+void update_log(const char* line) { logf("update: %s", line); }
+
 } // namespace
 } // namespace slots
+
+// The version the SF6 Mod Suite updater reads (updater/src/update_game.cpp): the Slots Loader package's
+extern "C" __declspec(dllexport) const char* sf6suite_package_version(void) { return slots::kPackageVersion; }
 
 extern "C" __declspec(dllexport)
 void reframework_plugin_required_version(REFrameworkPluginVersion* v) {
@@ -157,7 +165,9 @@ bool reframework_plugin_initialize(const REFrameworkPluginInitializeParam* param
     if (!param || !param->functions || !param->functions->on_pre_application_entry) return false;
     try { reframework::API::initialize(param); } catch (...) { return false; }
     slots::log_open();
-    slots::logf("SF6 Slots native plugin loaded");
+    slots::logf("SF6 Slots native plugin loaded (Slots Loader %s)", slots::kPackageVersion);
+    // The SF6 Mod Suite updater (updater/): this copy or the Native Core runs it, decided at the first frame
+    sf6up::host::init({ sf6up::host::kRolePlugin, slots::update_log });
     slots::ui::init();
     // The Lua scripts this plugin replaces, left by an update made by hand: both would handle the
     // same menus. Renamed, not deleted.
