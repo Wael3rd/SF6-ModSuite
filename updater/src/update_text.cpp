@@ -39,6 +39,8 @@ std::string offer(const std::string& lang, const Plan& plan) {
     return format(tr(lang, Word::Offer), { plan.suite, lines, plan.suite });
 }
 
+std::string ignore(const std::string& lang) { return tr(lang, Word::Ignore); }
+
 std::string done(const std::string& lang) { return tr(lang, Word::Done); }
 
 std::string failed(const std::string& lang, Fail why, const std::string& what) {

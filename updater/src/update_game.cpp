@@ -81,6 +81,38 @@ Obj* new_string(const std::string& s) {
 }
 
 Obj* g_box = nullptr;
+std::string g_third;                // the third button's word, still to be written on the box (empty: nothing to write)
+int g_third_tries = 0;
+
+// The third button of the game's three-button box reads the game's "Cancel": our word instead. The box's handle holds its Param, whose
+// SimpleList_3 has one item per button, each with a text that carries a message id; the id is emptied and the word written, once.
+// False while the buttons are not built yet.
+bool label_third(Obj* box, const std::string& word) {
+    Obj* param = field_obj(box, "<Param>k__BackingField");
+    Obj* list = param ? field_obj(param, "SimpleList_3") : nullptr;
+    if (!list) return false;
+    reframework::InvokeRet r{};
+    if (!call_named(list, "get_Items", 0, {}, &r)) return false;
+    Obj* items = static_cast<Obj*>(r.ptr);
+    if (!call_named(items, "get_Count", 0, {}, &r) || (int32_t)r.dword < 3) return false;
+    if (!call_named(items, "get_Item", 1, { arg_i32(2) }, &r)) return false;
+    Obj* node = static_cast<Obj*>(r.ptr);
+    if (!call_named(node, "get_Child", 0, {}, &r)) return false;
+    node = static_cast<Obj*>(r.ptr);
+    for (int i = 0; i < 16 && is_managed(node); ++i) {
+        if (node->get_type_definition()->get_full_name() == "via.gui.Text") {
+            static const uint8_t kNoId[16] = {};
+            Obj* str = new_string(word);
+            if (!str) return false;
+            reframework::InvokeRet v{};
+            if (!call_named(node, "set_MessageId", 1, { const_cast<uint8_t*>(kNoId) }, &v)) return false;
+            return call_named(node, "set_Message", 1, { str }, &v);
+        }
+        if (!call_named(node, "get_Next", 0, {}, &r)) return false;
+        node = static_cast<Obj*>(r.ptr);
+    }
+    return false;
+}
 
 Obj* flow_map() {
     auto& a = API::get();
@@ -91,7 +123,7 @@ Obj* flow_map() {
 
 }  // namespace
 
-bool box_open(const std::string& text, const std::string& title) {
+bool box_open(const std::string& text, const std::string& title, Buttons buttons, const std::string& third) {
     try {
         if (g_box) return false;
         Method* m = method_of(type("app.UIFlowDialog.MessageBox"), "Start", 7);
@@ -99,12 +131,17 @@ bool box_open(const std::string& text, const std::string& title) {
         Obj* msg = new_string(text);
         Obj* ttl = new_string(title);
         if (!msg || !ttl) return false;
+        // app.DialogButtonStyle: OK 1, YesNo 4, YesNoCancel 5. The cursor starts on No, Back answers No (OK: the only button).
+        const int32_t style = buttons == Buttons::Ok ? 1 : buttons == Buttons::YesNoThird ? 5 : 4;
+        const int32_t no = buttons == Buttons::Ok ? 0 : 1;
         reframework::InvokeRet r{};
-        if (!call(m, nullptr, { msg, ttl, arg_i32(1), arg_i32(1), arg_i32(4), arg_i32(-1), arg_i32(1) }, &r)) return false;
+        if (!call(m, nullptr, { msg, ttl, arg_i32(no), arg_i32(no), arg_i32(style), arg_i32(-1), arg_i32(1) }, &r)) return false;
         Obj* box = static_cast<Obj*>(r.ptr);
         if (!is_managed(box)) return false;
         box->add_ref();
         g_box = box;
+        g_third = buttons == Buttons::YesNoThird ? third : std::string();
+        g_third_tries = 0;
         return true;
     } catch (...) {
         return false;
@@ -116,17 +153,29 @@ int box_poll() {
     try {
         reframework::InvokeRet r{};
         const bool read = call_named(g_box, "get_IsEnd", 0, {}, &r);
-        if (read && !(r.byte & 1)) return -1;
+        if (read && !(r.byte & 1)) {
+            if (!g_third.empty()) {                 // the buttons are built a frame or two after Start
+                bool done = false;
+                try { done = label_third(g_box, g_third); } catch (...) {}
+                if (done || ++g_third_tries >= 120) g_third.clear();
+            }
+            return -1;
+        }
         int answer = -2;                // unreadable: the box is lost, no answer
         if (read) {
             reframework::InvokeRet v{};
-            if (call(method_of(type("app.UIFlowDialog.MessageBox"), "GetSelectValue", 1), nullptr, { g_box }, &v)) answer = (int32_t)v.dword == 0 ? 1 : 0;
+            if (call(method_of(type("app.UIFlowDialog.MessageBox"), "GetSelectValue", 1), nullptr, { g_box }, &v)) {
+                const int32_t sel = (int32_t)v.dword;        // the button's place: 0 Yes (OK), 1 No, 2 the third
+                answer = sel == 0 ? 1 : sel == 2 ? 2 : 0;
+            }
         }
         g_box->release();
         g_box = nullptr;
+        g_third.clear();
         return answer;
     } catch (...) {
         g_box = nullptr;            // not released: the object may be gone
+        g_third.clear();
         return -2;
     }
 }
@@ -134,6 +183,7 @@ int box_poll() {
 void box_drop() {
     try { if (g_box) g_box->release(); } catch (...) {}
     g_box = nullptr;
+    g_third.clear();
 }
 
 bool box_is_open() { return g_box != nullptr; }

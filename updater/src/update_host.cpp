@@ -225,8 +225,9 @@ std::string failure_text(const std::string& lang) {
     return text::failed(lang, g_result.fail, g_result.what);
 }
 
-bool open_box(const std::string& body, const std::string& lang, const char* what) {
-    if (game::box_open(body, text::title(lang))) { log(std::string("box shown: ") + what); return true; }
+bool open_box(const std::string& body, const std::string& lang, const char* what, game::Buttons buttons = game::Buttons::YesNo) {
+    const std::string third = buttons == game::Buttons::YesNoThird ? text::ignore(lang) : std::string();
+    if (game::box_open(body, text::title(lang), buttons, third)) { log(std::string("box shown: ") + what); return true; }
     log(std::string("the game's message box could not be opened (") + what + "): nothing done");
     return false;
 }
@@ -273,14 +274,15 @@ void frame() {
         case St::Offer: {
             if (!g_menu_idle) break;
             const std::string lang = game::language();
-            set_state(open_box(offer_text(lang), lang, "offer") ? St::AskInstall : St::Done);
+            set_state(open_box(offer_text(lang), lang, "offer", game::Buttons::YesNoThird) ? St::AskInstall : St::Done);
             break;
         }
         case St::AskInstall: {
             const int a = game::box_poll();
             if (a == -1) break;
             if (a == 1) { log("Install chosen"); set_state(St::Installing); spawn(install_worker); }
-            else if (a == 0) { log("Ignore chosen"); set_state(St::Done); spawn(ignore_worker); }
+            else if (a == 2) { log("Ignore chosen"); set_state(St::Done); spawn(ignore_worker); }
+            else if (a == 0) { log("No chosen: asked again at the next start"); set_state(St::Done); }
             else { log("the box went away without an answer: asked again at the next start"); set_state(St::Done); }
             break;
         }
@@ -298,14 +300,13 @@ void frame() {
         }
         case St::AskFailed:
             if (!g_menu_idle) break;
-            set_state(open_box(failure_text(game::language()), game::language(), "failed") ? St::WaitFailed : St::Done);
+            set_state(open_box(failure_text(game::language()), game::language(), "failed", game::Buttons::Ok) ? St::WaitFailed : St::Done);
             break;
         case St::WaitFailed: {
             const int a = game::box_poll();
             if (a == -1) break;
             set_state(St::Done);
-            if (a != 0) log("failure: asked again at the next start");
-            else spawn(ignore_worker);
+            log("failure: asked again at the next start");
             break;
         }
         default:

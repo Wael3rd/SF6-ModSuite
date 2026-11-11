@@ -1,23 +1,55 @@
 {
   "_readme": "Words of the SF6 Mod Suite updater (the popup that offers a new release, shown by the Native Core or the Slots Loader's plugin): the source of truth, compiled into both DLLs by tools/localisation/gen_updater_words.py. Same shape as the other modules' locale.json. The language follows the game's text language; a missing word or language: English. %s are format slots, in order. Every text is shown in the game's own message box (app.UIFlowDialog.MessageBox, Yes / No buttons): \\n is a line break. English and French written by hand; the other languages machine-translated, to be reviewed by a native speaker.",
   "_context": {
-    "update.title": { "where": "Title of every updater message box.", "max": 40 },
-    "update.offer": { "where": "The message box offering a new release, once per launch at the main menu. Slots: the release (1.31.0), the lines of update.line (one per package, line breaks between them), the release again. Yes installs, No never asks again for that release." },
-    "update.line": { "where": "One line of update.offer: a package and its versions, installed -> new. Slots: the package's name (SF6 Color Mod), the installed version, the new version.", "max": 60 },
-    "update.done": { "where": "The message box after a successful install. Yes closes the game and starts it again through Steam, No leaves it running (the new version applies at the next start)." },
-    "update.failed": { "where": "The message box after a failed install. Slot: one of the update.why_* texts. Nothing was changed. Yes asks again at the next start, No never asks again for that release." },
-    "update.why_download": { "where": "Slot of update.failed: a download did not complete.", "max": 60 },
-    "update.why_check": { "where": "Slot of update.failed: a downloaded zip's size or SHA-256 is not what the release says.", "max": 70 },
-    "update.why_package": { "where": "Slot of update.failed: a zip holds something the updater refuses (a file outside the mods' folders, a broken entry).", "max": 60 },
-    "update.why_blocked": { "where": "Slot of update.failed: Windows Smart App Control refuses one of the new programs. Slot: its file name (SF6_ColorModNative.dll). Smart App Control is Windows' own name: use Windows' name of the feature in that language.", "max": 90 },
-    "update.why_files": { "where": "Slot of update.failed: a file of the game folder could not be replaced (everything was put back).", "max": 60 }
+    "update.title": {
+      "where": "Title of every updater message box.",
+      "max": 40
+    },
+    "update.offer": {
+      "where": "The message box offering a new release, once per launch at the main menu, with three buttons: the game's Yes and No, and update.ignore. Slots: the release (1.31.0), the lines of update.line (one per package, line breaks between them), the release again. Yes installs, No asks again at the next start, the third button never asks again for that release: the last line says so and holds that button's word (the same as update.ignore)."
+    },
+    "update.ignore": {
+      "where": "The third button of the update.offer box (after the game's Yes and No): never ask again for this release. One short word, the same as in update.offer's last line.",
+      "max": 12
+    },
+    "update.line": {
+      "where": "One line of update.offer: a package and its versions, installed -> new. Slots: the package's name (SF6 Color Mod), the installed version, the new version.",
+      "max": 60
+    },
+    "update.done": {
+      "where": "The message box after a successful install. Yes closes the game and starts it again through Steam, No leaves it running (the new version applies at the next start)."
+    },
+    "update.failed": {
+      "where": "The message box after a failed install (one OK button). Slot: one of the update.why_* texts. Nothing was changed; the release is offered again at the next start."
+    },
+    "update.why_download": {
+      "where": "Slot of update.failed: a download did not complete.",
+      "max": 60
+    },
+    "update.why_check": {
+      "where": "Slot of update.failed: a downloaded zip's size or SHA-256 is not what the release says.",
+      "max": 70
+    },
+    "update.why_package": {
+      "where": "Slot of update.failed: a zip holds something the updater refuses (a file outside the mods' folders, a broken entry).",
+      "max": 60
+    },
+    "update.why_blocked": {
+      "where": "Slot of update.failed: Windows Smart App Control refuses one of the new programs. Slot: its file name (SF6_ColorModNative.dll). Smart App Control is Windows' own name: use Windows' name of the feature in that language.",
+      "max": 90
+    },
+    "update.why_files": {
+      "where": "Slot of update.failed: a file of the game folder could not be replaced (everything was put back).",
+      "max": 60
+    }
   },
   "en": {
     "update.title": "SF6 Mod Suite update",
-    "update.offer": "SF6 Mod Suite %s is out:\n%s\nInstall it now? The game restarts once it is done.\n(No: never ask again for %s.)",
+    "update.offer": "SF6 Mod Suite %s is out:\n%s\nInstall it now? The game restarts once it is done.\n(Ignore: never ask again for %s.)",
+    "update.ignore": "Ignore",
     "update.line": "%s %s -> %s",
     "update.done": "The update is installed. Restart the game now?\n(No: it applies at the next start.)\nIf you use Fluffy Mod Manager, replace the zip there too.",
-    "update.failed": "The update was not installed: %s.\nYour mods are unchanged. Ask again at the next start?\n(No: never ask again for this version.)",
+    "update.failed": "The update was not installed: %s.\nYour mods are unchanged. It will be offered again at the next start.",
     "update.why_download": "a download failed",
     "update.why_check": "a downloaded file is not the release's",
     "update.why_package": "a package is not as expected",
@@ -26,10 +58,11 @@
   },
   "fr": {
     "update.title": "Mise à jour de SF6 Mod Suite",
-    "update.offer": "SF6 Mod Suite %s est sortie :\n%s\nL'installer maintenant ? Le jeu redémarre une fois l'installation finie.\n(Non : ne plus demander pour la %s.)",
+    "update.offer": "SF6 Mod Suite %s est sortie :\n%s\nL'installer maintenant ? Le jeu redémarre une fois l'installation finie.\n(Ignorer : ne plus demander pour la %s.)",
+    "update.ignore": "Ignorer",
     "update.line": "%s %s -> %s",
     "update.done": "La mise à jour est installée. Redémarrer le jeu maintenant ?\n(Non : elle s'appliquera au prochain lancement.)\nSi vous utilisez Fluffy Mod Manager, remplacez-y aussi le zip.",
-    "update.failed": "La mise à jour n'a pas été installée : %s.\nVos mods n'ont pas changé. Redemander au prochain lancement ?\n(Non : ne plus demander pour cette version.)",
+    "update.failed": "La mise à jour n'a pas été installée : %s.\nVos mods n'ont pas changé. Elle sera proposée de nouveau au prochain lancement.",
     "update.why_download": "un téléchargement a échoué",
     "update.why_check": "un fichier téléchargé n'est pas celui de la version publiée",
     "update.why_package": "un paquet n'est pas comme prévu",
@@ -38,10 +71,11 @@
   },
   "ja": {
     "update.title": "SF6 Mod Suite のアップデート",
-    "update.offer": "SF6 Mod Suite %s が公開されました:\n%s\n今すぐインストールしますか？完了後にゲームが再起動します。\n（いいえ：%s については今後確認しません。）",
+    "update.offer": "SF6 Mod Suite %s が公開されました:\n%s\n今すぐインストールしますか？完了後にゲームが再起動します。\n（無視：%s については今後確認しません。）",
+    "update.ignore": "無視",
     "update.line": "%s %s -> %s",
     "update.done": "アップデートをインストールしました。今すぐゲームを再起動しますか？\n（いいえ：次回起動時に適用されます。）\nFluffy Mod Manager を使っている場合は、そちらの zip も差し替えてください。",
-    "update.failed": "アップデートはインストールされませんでした：%s。\nMODは変更されていません。次回起動時にもう一度確認しますか？\n（いいえ：このバージョンについては今後確認しません。）",
+    "update.failed": "アップデートはインストールされませんでした：%s。\nMODは変更されていません。次回起動時にもう一度確認します。",
     "update.why_download": "ダウンロードに失敗しました",
     "update.why_check": "ダウンロードしたファイルが公開版と一致しません",
     "update.why_package": "パッケージの内容が想定と異なります",
@@ -50,10 +84,11 @@
   },
   "zh-Hans": {
     "update.title": "SF6 Mod Suite 更新",
-    "update.offer": "SF6 Mod Suite %s 已发布：\n%s\n现在安装吗？完成后游戏将重新启动。\n（否：不再询问 %s。）",
+    "update.offer": "SF6 Mod Suite %s 已发布：\n%s\n现在安装吗？完成后游戏将重新启动。\n（忽略：不再询问 %s。）",
+    "update.ignore": "忽略",
     "update.line": "%s %s -> %s",
     "update.done": "更新已安装。现在重新启动游戏吗？\n（否：将在下次启动时生效。）\n如果你使用 Fluffy Mod Manager，也请替换其中的 zip。",
-    "update.failed": "更新未安装：%s。\n你的模组没有变化。下次启动时再询问吗？\n（否：不再询问此版本。）",
+    "update.failed": "更新未安装：%s。\n你的模组没有变化。下次启动时会再次询问。",
     "update.why_download": "下载失败",
     "update.why_check": "下载的文件与发布版本不符",
     "update.why_package": "软件包内容与预期不符",
@@ -62,10 +97,11 @@
   },
   "it": {
     "update.title": "Aggiornamento di SF6 Mod Suite",
-    "update.offer": "È uscita SF6 Mod Suite %s:\n%s\nInstallarla ora? Il gioco si riavvia a installazione finita.\n(No: non chiedere più per la %s.)",
+    "update.offer": "È uscita SF6 Mod Suite %s:\n%s\nInstallarla ora? Il gioco si riavvia a installazione finita.\n(Ignora: non chiedere più per la %s.)",
+    "update.ignore": "Ignora",
     "update.line": "%s %s -> %s",
     "update.done": "L'aggiornamento è installato. Riavviare il gioco ora?\n(No: verrà applicato al prossimo avvio.)\nSe usi Fluffy Mod Manager, sostituisci anche lì lo zip.",
-    "update.failed": "L'aggiornamento non è stato installato: %s.\nLe tue mod non sono cambiate. Chiedere di nuovo al prossimo avvio?\n(No: non chiedere più per questa versione.)",
+    "update.failed": "L'aggiornamento non è stato installato: %s.\nLe tue mod non sono cambiate. Verrà proposto di nuovo al prossimo avvio.",
     "update.why_download": "un download non è riuscito",
     "update.why_check": "un file scaricato non è quello della versione pubblicata",
     "update.why_package": "un pacchetto non è come previsto",
@@ -74,10 +110,11 @@
   },
   "de": {
     "update.title": "SF6 Mod Suite-Update",
-    "update.offer": "SF6 Mod Suite %s ist erschienen:\n%s\nJetzt installieren? Das Spiel startet danach neu.\n(Nein: für %s nicht mehr fragen.)",
+    "update.offer": "SF6 Mod Suite %s ist erschienen:\n%s\nJetzt installieren? Das Spiel startet danach neu.\n(Ignorieren: für %s nicht mehr fragen.)",
+    "update.ignore": "Ignorieren",
     "update.line": "%s %s -> %s",
     "update.done": "Das Update ist installiert. Spiel jetzt neu starten?\n(Nein: Es gilt ab dem nächsten Start.)\nWenn du Fluffy Mod Manager nutzt, ersetze dort auch die Zip-Datei.",
-    "update.failed": "Das Update wurde nicht installiert: %s.\nDeine Mods sind unverändert. Beim nächsten Start erneut fragen?\n(Nein: für diese Version nicht mehr fragen.)",
+    "update.failed": "Das Update wurde nicht installiert: %s.\nDeine Mods sind unverändert. Es wird beim nächsten Start erneut angeboten.",
     "update.why_download": "ein Download ist fehlgeschlagen",
     "update.why_check": "eine heruntergeladene Datei entspricht nicht der Veröffentlichung",
     "update.why_package": "ein Paket ist nicht wie erwartet",
@@ -86,10 +123,11 @@
   },
   "es": {
     "update.title": "Actualización de SF6 Mod Suite",
-    "update.offer": "Ya ha salido SF6 Mod Suite %s:\n%s\n¿Instalarla ahora? El juego se reiniciará al terminar.\n(No: no volver a preguntar por la %s.)",
+    "update.offer": "Ya ha salido SF6 Mod Suite %s:\n%s\n¿Instalarla ahora? El juego se reiniciará al terminar.\n(Ignorar: no volver a preguntar por la %s.)",
+    "update.ignore": "Ignorar",
     "update.line": "%s %s -> %s",
     "update.done": "La actualización está instalada. ¿Reiniciar el juego ahora?\n(No: se aplicará en el próximo inicio.)\nSi usas Fluffy Mod Manager, sustituye también allí el zip.",
-    "update.failed": "La actualización no se ha instalado: %s.\nTus mods no han cambiado. ¿Volver a preguntar en el próximo inicio?\n(No: no volver a preguntar por esta versión.)",
+    "update.failed": "La actualización no se ha instalado: %s.\nTus mods no han cambiado. Se volverá a ofrecer en el próximo inicio.",
     "update.why_download": "ha fallado una descarga",
     "update.why_check": "un archivo descargado no es el de la versión publicada",
     "update.why_package": "un paquete no es como se esperaba",
@@ -98,10 +136,11 @@
   },
   "es-419": {
     "update.title": "Actualización de SF6 Mod Suite",
-    "update.offer": "Ya salió SF6 Mod Suite %s:\n%s\n¿Instalarla ahora? El juego se reiniciará al terminar.\n(No: no volver a preguntar por la %s.)",
+    "update.offer": "Ya salió SF6 Mod Suite %s:\n%s\n¿Instalarla ahora? El juego se reiniciará al terminar.\n(Ignorar: no volver a preguntar por la %s.)",
+    "update.ignore": "Ignorar",
     "update.line": "%s %s -> %s",
     "update.done": "La actualización está instalada. ¿Reiniciar el juego ahora?\n(No: se aplicará en el próximo inicio.)\nSi usas Fluffy Mod Manager, reemplaza también allí el zip.",
-    "update.failed": "La actualización no se instaló: %s.\nTus mods no cambiaron. ¿Volver a preguntar en el próximo inicio?\n(No: no volver a preguntar por esta versión.)",
+    "update.failed": "La actualización no se instaló: %s.\nTus mods no cambiaron. Se volverá a ofrecer en el próximo inicio.",
     "update.why_download": "falló una descarga",
     "update.why_check": "un archivo descargado no es el de la versión publicada",
     "update.why_package": "un paquete no es como se esperaba",
@@ -110,10 +149,11 @@
   },
   "ru": {
     "update.title": "Обновление SF6 Mod Suite",
-    "update.offer": "Вышла SF6 Mod Suite %s:\n%s\nУстановить сейчас? После установки игра перезапустится.\n(Нет: больше не спрашивать о %s.)",
+    "update.offer": "Вышла SF6 Mod Suite %s:\n%s\nУстановить сейчас? После установки игра перезапустится.\n(Пропустить: больше не спрашивать о %s.)",
+    "update.ignore": "Пропустить",
     "update.line": "%s %s -> %s",
     "update.done": "Обновление установлено. Перезапустить игру сейчас?\n(Нет: оно применится при следующем запуске.)\nЕсли вы пользуетесь Fluffy Mod Manager, замените zip и там.",
-    "update.failed": "Обновление не установлено: %s.\nВаши моды не изменились. Спросить снова при следующем запуске?\n(Нет: больше не спрашивать об этой версии.)",
+    "update.failed": "Обновление не установлено: %s.\nВаши моды не изменились. Оно будет предложено снова при следующем запуске.",
     "update.why_download": "не удалась загрузка",
     "update.why_check": "загруженный файл не совпадает с выпуском",
     "update.why_package": "пакет не такой, как ожидалось",
@@ -122,10 +162,11 @@
   },
   "pl": {
     "update.title": "Aktualizacja SF6 Mod Suite",
-    "update.offer": "Wyszła SF6 Mod Suite %s:\n%s\nZainstalować teraz? Po instalacji gra uruchomi się ponownie.\n(Nie: nie pytaj więcej o %s.)",
+    "update.offer": "Wyszła SF6 Mod Suite %s:\n%s\nZainstalować teraz? Po instalacji gra uruchomi się ponownie.\n(Ignoruj: nie pytaj więcej o %s.)",
+    "update.ignore": "Ignoruj",
     "update.line": "%s %s -> %s",
     "update.done": "Aktualizacja jest zainstalowana. Uruchomić grę ponownie teraz?\n(Nie: zadziała przy następnym uruchomieniu.)\nJeśli używasz Fluffy Mod Manager, podmień tam również plik zip.",
-    "update.failed": "Aktualizacja nie została zainstalowana: %s.\nTwoje mody się nie zmieniły. Zapytać ponownie przy następnym uruchomieniu?\n(Nie: nie pytaj więcej o tę wersję.)",
+    "update.failed": "Aktualizacja nie została zainstalowana: %s.\nTwoje mody się nie zmieniły. Zostanie zaproponowana ponownie przy następnym uruchomieniu.",
     "update.why_download": "pobieranie nie powiodło się",
     "update.why_check": "pobrany plik nie jest plikiem z wydania",
     "update.why_package": "pakiet nie jest taki, jak oczekiwano",
@@ -134,10 +175,11 @@
   },
   "pt": {
     "update.title": "Atualização do SF6 Mod Suite",
-    "update.offer": "Saiu o SF6 Mod Suite %s:\n%s\nInstalar agora? O jogo reinicia quando terminar.\n(Não: não perguntar mais pela %s.)",
+    "update.offer": "Saiu o SF6 Mod Suite %s:\n%s\nInstalar agora? O jogo reinicia quando terminar.\n(Ignorar: não perguntar mais pela %s.)",
+    "update.ignore": "Ignorar",
     "update.line": "%s %s -> %s",
     "update.done": "A atualização foi instalada. Reiniciar o jogo agora?\n(Não: ela será aplicada na próxima inicialização.)\nSe você usa o Fluffy Mod Manager, substitua o zip lá também.",
-    "update.failed": "A atualização não foi instalada: %s.\nSeus mods não mudaram. Perguntar de novo na próxima inicialização?\n(Não: não perguntar mais por esta versão.)",
+    "update.failed": "A atualização não foi instalada: %s.\nSeus mods não mudaram. Ela será oferecida de novo na próxima inicialização.",
     "update.why_download": "um download falhou",
     "update.why_check": "um arquivo baixado não é o da versão publicada",
     "update.why_package": "um pacote não está como esperado",
@@ -146,10 +188,11 @@
   },
   "ko": {
     "update.title": "SF6 Mod Suite 업데이트",
-    "update.offer": "SF6 Mod Suite %s 버전이 나왔습니다:\n%s\n지금 설치할까요? 설치가 끝나면 게임이 다시 시작됩니다.\n(아니요: %s 버전은 다시 묻지 않습니다.)",
+    "update.offer": "SF6 Mod Suite %s 버전이 나왔습니다:\n%s\n지금 설치할까요? 설치가 끝나면 게임이 다시 시작됩니다.\n(무시: %s 버전은 다시 묻지 않습니다.)",
+    "update.ignore": "무시",
     "update.line": "%s %s -> %s",
     "update.done": "업데이트가 설치되었습니다. 지금 게임을 다시 시작할까요?\n(아니요: 다음 실행 때 적용됩니다.)\nFluffy Mod Manager를 사용한다면 그쪽의 zip도 바꿔 주세요.",
-    "update.failed": "업데이트가 설치되지 않았습니다: %s.\n모드는 바뀌지 않았습니다. 다음 실행 때 다시 물어볼까요?\n(아니요: 이 버전은 다시 묻지 않습니다.)",
+    "update.failed": "업데이트가 설치되지 않았습니다: %s.\n모드는 바뀌지 않았습니다. 다음 실행 때 다시 물어봅니다.",
     "update.why_download": "다운로드에 실패했습니다",
     "update.why_check": "다운로드한 파일이 배포된 파일과 다릅니다",
     "update.why_package": "패키지가 예상과 다릅니다",
@@ -158,10 +201,11 @@
   },
   "zh-Hant": {
     "update.title": "SF6 Mod Suite 更新",
-    "update.offer": "SF6 Mod Suite %s 已發布：\n%s\n現在安裝嗎？完成後遊戲將重新啟動。\n（否：不再詢問 %s。）",
+    "update.offer": "SF6 Mod Suite %s 已發布：\n%s\n現在安裝嗎？完成後遊戲將重新啟動。\n（忽略：不再詢問 %s。）",
+    "update.ignore": "忽略",
     "update.line": "%s %s -> %s",
     "update.done": "更新已安裝。現在重新啟動遊戲嗎？\n（否：將在下次啟動時生效。）\n如果你使用 Fluffy Mod Manager，也請替換其中的 zip。",
-    "update.failed": "更新未安裝：%s。\n你的模組沒有變更。下次啟動時再詢問嗎？\n（否：不再詢問此版本。）",
+    "update.failed": "更新未安裝：%s。\n你的模組沒有變更。下次啟動時會再次詢問。",
     "update.why_download": "下載失敗",
     "update.why_check": "下載的檔案與發布版本不符",
     "update.why_package": "套件內容與預期不符",
@@ -170,10 +214,11 @@
   },
   "ar": {
     "update.title": "تحديث SF6 Mod Suite",
-    "update.offer": "صدر SF6 Mod Suite %s:\n%s\nهل تريد تثبيته الآن؟ ستُعاد تشغيل اللعبة بعد الانتهاء.\n(لا: عدم السؤال مجددًا عن %s.)",
+    "update.offer": "صدر SF6 Mod Suite %s:\n%s\nهل تريد تثبيته الآن؟ ستُعاد تشغيل اللعبة بعد الانتهاء.\n(تجاهل: عدم السؤال مجددًا عن %s.)",
+    "update.ignore": "تجاهل",
     "update.line": "%s %s -> %s",
     "update.done": "تم تثبيت التحديث. هل تريد إعادة تشغيل اللعبة الآن؟\n(لا: سيُطبَّق عند التشغيل التالي.)\nإذا كنت تستخدم Fluffy Mod Manager، فاستبدل ملف zip هناك أيضًا.",
-    "update.failed": "لم يُثبَّت التحديث: %s.\nلم تتغير تعديلاتك. هل تريد السؤال مجددًا عند التشغيل التالي؟\n(لا: عدم السؤال مجددًا عن هذا الإصدار.)",
+    "update.failed": "لم يُثبَّت التحديث: %s.\nلم تتغير تعديلاتك. سيُعرض مجددًا عند التشغيل التالي.",
     "update.why_download": "فشل أحد التنزيلات",
     "update.why_check": "ملف تم تنزيله لا يطابق ملف الإصدار",
     "update.why_package": "إحدى الحزم ليست كما هو متوقع",

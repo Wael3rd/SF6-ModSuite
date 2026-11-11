@@ -19,7 +19,8 @@ std::string format(const char* tmpl, std::initializer_list<std::string> args);
 
 std::string title(const std::string& lang);
 std::string offer(const std::string& lang, const Plan& plan);            // the release, one line per package (old -> new)
+std::string ignore(const std::string& lang);                             // the offer's third button: never ask again for this release
 std::string done(const std::string& lang);                               // installed: restart now?
-std::string failed(const std::string& lang, Fail why, const std::string& what);   // what: the file Smart App Control blocks
+std::string failed(const std::string& lang, Fail why, const std::string& what);   // an OK box; what: the file Smart App Control blocks
 
 }  // namespace sf6up::text

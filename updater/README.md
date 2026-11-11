@@ -47,8 +47,10 @@ the manifest.
    packages (their main DLL in the game folder) are compared with it. The Slots Loader is left out when ZZtaii's Slotsloader Manager
    installed it (`common/manager_mode.hpp`: the Manager owns those files, and a plugin of another size would end its Manager mode).
 2. Something newer, at the main menu (a screen held 5 s, no battle, replay or training loaded, no message box of the game's up): the box
-   lists the release and each package `old -> new`. **Yes** installs; **No** never offers that release again (`ignored_suite_version`);
-   a later release asks again.
+   lists the release and each package `old -> new`, with three buttons (the game's Yes / No / Cancel box, the third button's word
+   replaced by ours). **Yes** installs; **No** (Back too) does nothing, the next launch asks again; **Ignore** never offers that
+   release again (`ignored_suite_version`); a later release asks again. A failed install says why in a box with one OK button and
+   is offered again at the next launch.
 3. The install, off the game thread: each zip downloaded to `staging/zips`, its size and sha256 checked (a mismatch stops everything,
    nothing changed); extracted to `staging/tree`, every entry checked first (`classify_entry`: one refused entry and nothing is
    written); every `.dll` / `.exe` checked against Smart App Control (`LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` on the staged file,
@@ -96,16 +98,18 @@ Fluffy uninstalls the mod.
 
 The address is fixed: no file points the updater elsewhere, so the test uses the real latest release.
 
-1. Give the latest release a manifest: `python packaging\make_manifest.py --release build\release_1.30.1 --version 1.30.1`
-   and upload that `manifest.json` to the v1.30.1 release (with its zips already there). Players' current DLLs never read it.
+1. Give the latest release a manifest: `python packaging\make_manifest.py --release build\release_1.31.0 --version 1.31.0`
+   and upload that `manifest.json` to the v1.31.0 release (with its zips already there). Players' current DLLs never read it.
 2. Build the core and, with `kPackageVersion` set to `1.26.0` in `plugin/src/version.hpp` (a local change, not committed), the plugin:
    `build.bat core`, `build.bat plugin`; check both against Smart App Control.
 3. Game closed: put `build\core\sf6core_native.dll` and `build\SF6_CostumeSlotsNative.dll` in `reframework\plugins\` (keep the
    current ones aside).
 4. Start the game; 5 s after the main menu shows, the game's box offers `SF6 Slots Loader 1.26.0 -> 1.26.1` (the core runs the
    updater: `[update]` lines in `reframework\data\sf6core\sf6core.log`, and `reframework\data\SF6_Update_data\update.log`).
-5. **No**: `state.json` gets `"ignored_suite_version": "1.30.1"`; the next launch offers nothing. Delete that key to be asked again.
+5. **No**: nothing is written, the next launch asks again. **Ignore**: `state.json` gets `"ignored_suite_version": "1.31.0"`; the
+   next launch offers nothing. Empty that key to be asked again.
 6. **Yes**: the release's `SF6_SlotsLoader_v1.26.1.zip` is downloaded and installed (`SF6_CostumeSlotsNative.dll.old-1.26.0` kept),
    then the restart box: Yes closes the game and Steam starts it again about 8 s after it is gone. At the main menu of that launch the
    `.old-1.26.0` copy is deleted, and nothing is offered (the released 1.26.1 plugin reports no version, the core 0.9.10 is current).
+   Done on 2026-11-11 with the v1.31.0 release (Yes, the restart, the clean-up, Ignore).
 7. The plugin as the host: the same with the test plugin and no `sf6core_native.dll` (`update:` lines in `reframework\data\SF6_CostumeSlots_data\native_log.txt`).

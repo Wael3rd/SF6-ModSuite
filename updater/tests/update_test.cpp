@@ -511,7 +511,7 @@ static void test_texts() {
     const std::string en = text::offer("en", plan), fr = text::offer("fr", plan);
     check(en.find("SF6 Mod Suite 1.31.0 is out") == 0, "English offer: " + en);
     check(en.find("SF6 Slots Loader 1.26.1 -> 1.27.0\nSF6 Color Mod 0.26.1 -> 0.27.0") != std::string::npos, "one line per package: " + en);
-    check(en.find("never ask again for 1.31.0") != std::string::npos, "the release ignored is named");
+    check(en.find("(Ignore: never ask again for 1.31.0.)") != std::string::npos, "the release ignored is named, with the button that ignores it");
     check(fr.find("SF6 Mod Suite 1.31.0 est sortie") == 0 && fr.find("SF6 Color Mod 0.26.1 -> 0.27.0") != std::string::npos, "French offer: " + fr);
     check(text::offer("xx", plan) == en, "an unknown language: English");
     check(text::title("ja") != text::title("en") && !text::title("ja").empty(), "Japanese title");
@@ -524,6 +524,8 @@ static void test_texts() {
         const std::string t = text::offer(l, plan);
         check(t.find("1.31.0") != std::string::npos && t.find("0.26.1 -> 0.27.0") != std::string::npos && t.find("%s") == std::string::npos,
               std::string("offer in ") + l + ": every slot filled");
+        const std::string ign = text::ignore(l);
+        check(!ign.empty() && t.find(ign) != std::string::npos, std::string("offer in ") + l + ": its last line names the third button's word");
     }
 }
 
