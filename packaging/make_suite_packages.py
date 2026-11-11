@@ -180,6 +180,18 @@ PROFILE_README = CRLF.join([
     "profile). Names are kept in memory for the session, never written to disk or to the log. On tabs where the game uses",
     "that key itself, the mod does nothing.",
     "",
+    "Zen Mode (since 1.1.0): hides ranks (icons, gauges, rank-up notices), League Points and Master Rate, win streaks,",
+    "player names, titles and clubs, and player details (country flags, platform icons, control types), to play with a",
+    "clear mind: in matches, on the versus and result screens, in the menus, profiles, rankings, custom rooms and replays.",
+    "Battle Settings has a new tab, Zen Mode: the first row turns it On / Off (Off when installed), five rows choose",
+    "Hidden / Shown for each group. A change applies at once and is kept in reframework/data/zen_mode.json. It only",
+    "changes what your own game draws: nothing is sent, nothing changes for the other player. During the fight itself",
+    "it does no work on the game's thread: the fight's HUD is looked at around it only (a round's start and end, a pause).",
+    "Zen Mode NEEDS A REFRAMEWORK NIGHTLY BUILD (plugin API 1.14 or newer; the stable 1.5.9.1 has 1.10). With an older",
+    "REFramework the tab does not appear, REFramework's log says \"Zen Mode off\", and the rest of this mod works.",
+    "If you used the ZenMode.lua script: its settings are taken at the first start (Zen Mode then starts On); remove",
+    "reframework/autorun/ZenMode.lua, the two together do the same work twice.",
+    "",
     "Switches (reframework/data/profile_mod.ini, read at start; the file is not shipped, create it to use them):",
     "  full_profile=0   keeps the game's limited profile",
     "  steam_name=0     no Steam name key, no request",
@@ -366,7 +378,7 @@ def main():
     print("== SF6 Profile Mod %s" % pm_v)
     pm_zip = os.path.join(a.out, "SF6_ProfileMod_%s.zip" % pm_v)
     write_zip(pm_zip,
-              "name=SF6 Profile Mod\nversion=%s\ndescription=Opens the full Fighter Profile where the game opens the limited one (only what the server sent), and swaps a shown Steam ID for the player's Steam name on a key press. Requires SF6 Native Core %s or newer.\nauthor=Wael\nNameAsBundle=SF6 Profile Mod\n" % (pm_v, PROFILE_MIN_CORE),
+              "name=SF6 Profile Mod\nversion=%s\ndescription=Opens the full Fighter Profile where the game opens the limited one (only what the server sent), swaps a shown Steam ID for the player's Steam name on a key press, and adds Zen Mode (a Battle Settings tab hiding ranks, points, win streaks and player details; needs a REFramework nightly build). Requires SF6 Native Core %s or newer.\nauthor=Wael\nNameAsBundle=SF6 Profile Mod\n" % (pm_v, PROFILE_MIN_CORE),
               PROFILE_README % (pm_v, PROFILE_MIN_CORE),
               [(os.path.join(REPO, "build", "profile_mod", "profile_mod.dll"), "reframework/plugins/profile_mod.dll")])
 

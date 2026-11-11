@@ -1,4 +1,5 @@
-// SF6 Profile Mod (profile_mod.dll): two things on the Fighter Profile.
+// SF6 Profile Mod (profile_mod.dll): two things on the Fighter Profile, and Zen Mode (zen_engine.inl, zen_tab.inl: ranks, points,
+// win streaks and player details hidden, from a tab of Battle Settings).
 //   - full_profile: another player's limited profile gives way to the full one.
 //   - steam_name: R / pad X swaps the SteamID64 of the platform line for the player's Steam name, and back.
 // reframework\data\profile_mod.ini, read at start: full_profile=1, steam_name=1 (only a 0 turns one off).
@@ -39,6 +40,7 @@
 #include "steamname_logic.hpp"
 #include "steamname_net.hpp"
 #include "swap_logic.hpp"
+#include "zen_logic.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -47,6 +49,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -58,7 +61,7 @@ using Obj = API::ManagedObject;
 using TD = API::TypeDefinition;
 using Method = API::Method;
 
-constexpr const char* kVersion = "1.0.0";
+constexpr const char* kVersion = "1.1.0";
 constexpr const char* kAgentTop = "CFNFighterProfileTop";
 constexpr const char* kAgentSimple = "CFNFighterProfileSimpleTop";
 const char* const kScreens[] = { kAgentTop, kAgentSimple };
@@ -763,6 +766,9 @@ void on_update() {
         if (!once) { once = true; logi("profile_mod: an exception at the swap"); }
     }
 }
+#include "zen_engine.inl"
+#include "zen_tab.inl"
+
 psn::Settings read_settings() {
     FILE* f = fopen(kSettingsFile, "rb");
     if (!f) return {};
@@ -796,7 +802,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
     SF6CoreClientDesc desc{};
     desc.struct_size = sizeof(desc);
     desc.client_id = "profile_mod";
-    desc.client_version = nullptr;
+    desc.client_version = kVersion;
     desc.priority = 100;
     if (a->register_client(&desc, &g_client) != SF6CORE_OK) { logi("profile_mod: off (the core refused it)"); return true; }
     g_core = a;
@@ -812,6 +818,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
     if (full) param->functions->on_pre_application_entry("UpdateBehavior", on_update);
     if (set.steam_name) param->functions->on_pre_application_entry("LateUpdateBehavior", on_late_update);
     logi("profile_mod: on (full profile %d, Steam name %d)", full ? 1 : 0, set.steam_name ? 1 : 0);
+    try { zen_init(param); } catch (...) { logi("profile_mod: Zen Mode off (an exception at start)"); }
     return true;
 }
 

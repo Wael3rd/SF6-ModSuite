@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.31.0 (2026-11-11) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Profile Mod | 1.1.0 | Zen Mode: a tab in Battle Settings that hides ranks, points, win streaks and player details |
+| SF6 Slots Loader | 1.26.1 | unchanged |
+| SF6 Color Mod | 0.26.1 | unchanged |
+| SF6 Native Core | 0.9.10 | unchanged |
+| SF6 Recording Manager | 2.2.9 | unchanged |
+
+Updating in Fluffy Mod Manager: disable or remove SF6 Profile Mod 1.0.0, then install Profile Mod 1.1.0. Slots Loader 1.26.1,
+Color Mod 0.26.1, Native Core 0.9.10 and Recording Manager 2.2.9 are the same files as in 1.30.1: keep them. With the all-in-one
+package, replace 1.30.1 with 1.31.0. The loader itself is 1.25.0's: no pak is rebuilt at the first launch.
+
+### SF6 Profile Mod 1.1.0
+- **Zen Mode**: ranks, points, win streaks and player details hidden, to play with a clear mind. Battle Settings has a new tab,
+  **Zen Mode**: the first row turns it On / Off (Off when installed), five rows choose Hidden / Shown for each group: Ranks (rank
+  icons, rank gauges, rank-up notices), League Points / MR, Win Streaks, Player Names (names, titles and clubs, during matches),
+  Player Details (country flags, platform icons and control types, during matches). A change applies at once and is kept in
+  `reframework\data\zen_mode.json`.
+- Where: the fight's HUD, the versus and result screens, the Fighting Ground's banner, Battle Settings, fighter profiles and
+  lists, clubs, rankings, custom rooms, the replay list and replays themselves. It only changes what your own game draws:
+  nothing is sent, nothing changes for the other player.
+- Native, and next to free: during the fight itself Zen Mode does no work on the game's thread. The fight's HUD is looked at
+  around it only (the intro, a round's start and end, a pause: about 0.03 ms a frame then). What is left during the fight is
+  a table lookup per drawn element, about 0.015 ms a frame (the ZenMode.lua script it replaces: about 0.7 ms a frame, all
+  match long).
+- **Zen Mode needs a REFramework nightly build** (plugin API 1.14 or newer; the stable 1.5.9.1 has 1.10). With an older
+  REFramework the tab does not appear, REFramework's log says `Zen Mode off`, and the rest of the Profile Mod works as before.
+- If you used `ZenMode.lua`: its settings are taken at the first start (Zen Mode then starts On). Remove
+  `reframework\autorun\ZenMode.lua`: the two together do the same work twice (the log says so while it is there).
+- Against the Lua: each group hides what its name says (the containers that held an icon and points together are split), the
+  club of the fight's HUD, the title shown under the round counter during the fight and the rank icons of a custom room's
+  tag tables are added, nothing shows for a frame when a round starts, and what the game hides itself stays hidden: with Zen Mode off, or a group on Shown, the display is the game's own
+  (the Lua showed everything it knew again, the rank-up notice of a player who has none included).
+- Known limits: the guide bar shows no Back entry on the Zen Mode tab (Esc / the pad's back button work); the summary panel on
+  the right keeps the previous tab's content; the tab's texts are machine translations in every language but English and
+  French.
+
 ## 1.30.1 (2026-11-10) — SF6 Mod Suite
 
 | Package | Version | |
