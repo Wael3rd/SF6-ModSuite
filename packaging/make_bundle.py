@@ -5,7 +5,8 @@
                                          package's notice, then each package's README)
 
 Run it after make_suite_packages.py, once every package of the release is in the folder. Two packages shipping the
-same path with different contents stop the build.
+same path with different contents stop the build. It then writes the folder's manifest.json (make_manifest.py): upload it
+to the GitHub release with the zips, the in-game updater reads it.
 
 Usage: python make_bundle.py --version <release version> [--release "<folder>"]
 """
@@ -13,6 +14,8 @@ import argparse, hashlib, os, re, sys, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+from make_manifest import write_manifest  # noqa: E402
 CRLF = chr(13) + chr(10)
 BUNDLE_PREFIX = "SF6_ModSuite_AllInOne_"
 
@@ -98,6 +101,7 @@ def main():
     for p in packages:
         print("  " + p)
     print("zip: %s %d bytes md5 %s" % (out, os.path.getsize(out), hashlib.md5(open(out, "rb").read()).hexdigest()))
+    write_manifest(a.release, a.version)
 
 
 if __name__ == "__main__":

@@ -139,6 +139,9 @@ CORE_README = CRLF.join([
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
     "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
     "LOG: reframework/data/sf6core/sf6core.log",
+    "UPDATES: once per launch the game asks GitHub (github.com) whether a newer SF6 Mod Suite release exists (nothing about",
+    "you is sent) and, if so, offers it at the main menu. \"check_for_updates\": false in",
+    "reframework/data/SF6_Update_data/state.json turns this off.",
     "",
 ])
 
@@ -154,6 +157,10 @@ COLORMOD_README = CRLF.join([
     "",
     "REQUIRES the SF6 Native Core package (%s or newer) from the same release.",
     "Without it the mod stays inert; REFramework's log says: [ColorModNative] sf6core_native.dll not loaded: inert",
+    "",
+    "UPDATES: once per launch the game asks GitHub (github.com) whether a newer SF6 Mod Suite release exists (nothing about",
+    "you is sent) and, if so, offers it at the main menu. \"check_for_updates\": false in",
+    "reframework/data/SF6_Update_data/state.json turns this off.",
     "",
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
     "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
@@ -179,6 +186,10 @@ PROFILE_README = CRLF.join([
     "",
     "REQUIRES the SF6 Native Core package (%s or newer) from the same release. Without it the mod does nothing",
     "(REFramework's log says: profile_mod: off).",
+    "",
+    "UPDATES: once per launch the game asks GitHub (github.com) whether a newer SF6 Mod Suite release exists (nothing about",
+    "you is sent) and, if so, offers it at the main menu. \"check_for_updates\": false in",
+    "reframework/data/SF6_Update_data/state.json turns this off.",
     "",
     "INSTALL: Fluffy Mod Manager (install this zip as a mod), or copy reframework/ into the game folder.",
     "REQUIREMENTS: REFramework in dinput8.dll, official build 1.5.8 or newer (plugin API 1.10).",
@@ -316,13 +327,18 @@ def main():
     core_v = version_in(os.path.join(REPO, "core", "src", "sf6core.cpp"), r'CORE_VERSION\s*=\s*"([^"]+)"')
     cm_v = version_in(os.path.join(REPO, "colormod", "src", "common.cpp"), r'kVersion\s*=\s*"([^"]+)"')
     pm_v = version_in(os.path.join(REPO, "profile_mod", "profile_mod.cpp"), r'kVersion\s*=\s*"([^"]+)"')
+    # the Slots Loader's version is what its plugin reports to the in-game updater (sf6suite_package_version)
+    sl_v = version_in(os.path.join(REPO, "plugin", "src", "version.hpp"), r'kPackageVersion\s*=\s*"([^"]+)"')
+    if sl_v != a.version:
+        sys.exit("Slots Loader: plugin/src/version.hpp says %s, --version %s: set kPackageVersion to the release's version" % (sl_v, a.version))
 
     # what build.bat compiles for each DLL: nothing stale goes into a zip
     common = ("common", CODE)
     core_api = ("core/include", HEADERS)
-    check_fresh("Native Core", "build/core/sf6core_native.dll", [("core/src", CODE), core_api], core_v)
+    check_fresh("Native Core", "build/core/sf6core_native.dll", [("core/src", CODE), core_api, ("updater/src", CODE)], core_v)
     check_fresh("Slots Loader (proxy)", "build/amd_ags_x64.dll", [("costumes/loader", CODE), ("stages/loader", CODE), ("proxy", CODE), common])
-    check_fresh("Slots Loader (plugin)", "build/SF6_CostumeSlotsNative.dll", [("plugin/src", CODE), ("plugin/include", HEADERS), core_api])
+    updater = ("updater/src", CODE)        # the in-game updater, in the core and the plugin
+    check_fresh("Slots Loader (plugin)", "build/SF6_CostumeSlotsNative.dll", [("plugin/src", CODE), ("plugin/include", HEADERS), core_api, updater], sl_v)
     check_fresh("Color Mod", "build/colormod/SF6_ColorModNative.dll", [("colormod/src", CODE), common, core_api, ("costumes/loader", HEADERS)], cm_v)
     check_fresh("Profile Mod", "build/profile_mod/profile_mod.dll", [("profile_mod", CODE), core_api])
     if not a.without_report:
