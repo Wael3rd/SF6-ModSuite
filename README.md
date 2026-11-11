@@ -26,11 +26,12 @@ links lead here.
 
 The Native Core or the Slots Loader's plugin (whichever is installed; one of them per launch) reads the latest release's
 `manifest.json` on GitHub once per launch. When a package you have is older than that release's, the game's own message box
-offers it at the main menu, listing each package `old -> new`. **Yes**: the zips are downloaded, checked (size, SHA-256, every
+offers it at the main menu, listing each package `old -> new`, with three answers. **Yes**: the zips are downloaded, checked (size, SHA-256, every
 file's path, Windows Smart App Control), and swapped in all at once (the old files are kept as `<name>.old-<version>` until the
 new version has started once); then the game closes and Steam starts it again (or at your next start, if you say No to the
-restart). **No**: that release is never offered again; a later one is. Your mods, your settings and anything a package does not
-ship are never touched. Packages installed by ZZtaii's Slotsloader Manager are left to it. With Fluffy Mod Manager, replace the
+restart). **No**: nothing is done, the next launch asks again. **Ignore**: that release is never offered again; a later one is.
+Since suite 1.32.0; a package of an older release is not seen by the updater. Your mods, your settings and anything a package
+does not ship are never touched. Packages installed by ZZtaii's Slotsloader Manager are left to it. With Fluffy Mod Manager, replace the
 zip there too, or Fluffy puts the old version back when the mod is re-enabled.
 
 - **Network**: `github.com` and its download servers only, over HTTPS; nothing about you or your PC is sent.

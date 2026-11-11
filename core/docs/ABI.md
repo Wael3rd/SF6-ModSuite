@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | ABI version | 1 |
-| Core version | 0.9.10 |
+| Core version | 0.9.11 |
 | Header | `include/sf6core/sf6core_api.h` |
 
 ## Versioning and the append-only rule

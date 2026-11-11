@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.32.0 (2026-11-11) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Native Core | 0.9.11 | updates in game: a newer release is offered at the main menu and installed from there |
+| SF6 Slots Loader | 1.27.0 | updates in game (its plugin does it when the Native Core is not installed) |
+| SF6 Color Mod | 0.26.2 | reports its version to the updater |
+| SF6 Recording Manager | 2.2.10 | reports its version to the updater |
+| SF6 Profile Mod | 1.1.1 | reports its version to the updater |
+
+Updating in Fluffy Mod Manager: every package is new this time. Disable or remove the previous version of each package you use
+(Native Core 0.9.10, Slots Loader 1.26.1, Color Mod 0.26.1, Recording Manager 2.2.9, Profile Mod 1.1.0), then install the new ones.
+With the all-in-one package, replace 1.31.0 with 1.32.0. The loader itself is 1.25.0's: no pak is rebuilt at the first launch.
+**This is the last update to do by hand**: from the next release on, the game offers it and installs it.
+
+### Updates in game (new)
+- Once per launch the game reads the latest release's `manifest.json` on GitHub. When a package you have is older than that
+  release's, the game's own message box offers it at the main menu, listing each package `old -> new`, with three answers:
+  **Yes** installs it, **No** does nothing (the next launch asks again), **Ignore** never offers that release again (a later
+  release is offered).
+- **Yes**: the zips are downloaded from the GitHub release, checked (size, SHA-256, every file's path, Windows Smart App Control)
+  and swapped in all at once. If anything fails, nothing is changed and a box says why. Then the game offers to restart: it
+  closes and Steam starts it again (or the new version applies at your next start).
+- Your costume mods, your settings and anything a package does not ship are never touched. A Slots Loader installed by ZZtaii's
+  Slotsloader Manager is left to the Manager.
+- With Fluffy Mod Manager, replace the zip there too after an update in game, or Fluffy puts the old version back when the mod
+  is re-enabled.
+- **Network**: `github.com` and its download servers only, over HTTPS; nothing about you or your PC is sent. **Off**:
+  `"check_for_updates": false` in `reframework\data\SF6_Update_data\state.json` (create the file with
+  `{ "check_for_updates": false }`). Its log: `update.log` in the same folder.
+- Nothing is offered with this release itself: the first offer comes with the next one. Only packages of this release or later
+  are seen by the updater: a package left at an older version is not offered an update.
+- The Native Core runs the updater; without it, the Slots Loader's plugin does. Never both in one launch.
+- Known limits: the box's texts are machine translations in every language but English and French.
+
+### SF6 Native Core 0.9.11, SF6 Slots Loader 1.27.0
+- The in-game updater. Nothing else changes.
+
+### SF6 Color Mod 0.26.2, SF6 Recording Manager 2.2.10, SF6 Profile Mod 1.1.1
+- Each reports its version to the updater. Nothing else changes.
+
 ## 1.31.0 (2026-11-11) — SF6 Mod Suite
 
 | Package | Version | |
