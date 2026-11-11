@@ -1,6 +1,15 @@
 // SF6 Mod Suite updater: the steps, without the game (update_install.hpp).
 #include "update_install.hpp"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <ctime>
 #include <mutex>
 #include <set>
 
@@ -19,6 +28,29 @@ Paths::Paths(const std::wstring& game_root) : root(game_root) {
 
 namespace {
 std::mutex g_state_mx;
+}
+
+void append_log(const Paths& p, const std::string& line) {
+    static std::mutex mx;
+    static bool started = false;
+    std::lock_guard lk(mx);
+    if (!started) {
+        started = true;
+        if (file_size(p.log) > 256 * 1024) DeleteFileW(p.log.c_str());
+        make_dirs(p.data);
+    }
+    char stamp[32];
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+    std::strftime(stamp, sizeof stamp, "[%Y-%m-%d %H:%M:%S] ", &tm);
+    // shared for writing: the game and the mod sorter may both be there, each line is one append
+    HANDLE h = CreateFileW(p.log.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    const std::string text = stamp + line + "\r\n";
+    DWORD put = 0;
+    WriteFile(h, text.data(), (DWORD)text.size(), &put, nullptr);
+    CloseHandle(h);
 }
 
 State load_state(const Paths& p) {

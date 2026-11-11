@@ -26,6 +26,9 @@ struct Paths {
 };
 
 using LogFn = std::function<void(const std::string&)>;
+// One dated line at the end of update.log (any thread; the file starts again once it is over 256 KiB, at a process's first line).
+// The game's host and the mod sorter both write there.
+void append_log(const Paths& p, const std::string& line);
 
 // The state file, read and written under one lock (the check, the answers and the clean-up may run on different threads)
 State load_state(const Paths& p);

@@ -42,8 +42,6 @@ Plan g_plan;
 InstallResult g_result;
 std::deque<std::string> g_lines;                 // for the host's log, written on the game thread
 std::atomic<int> g_pending{0};                   // lines waiting in g_lines
-std::mutex g_file_mx;
-bool g_file_started = false;
 
 uint64_t g_frames = 0;
 int32_t g_flow = -2;
@@ -60,24 +58,7 @@ void log(const std::string& line) {
         std::lock_guard lk(g_mx);
         if (g_lines.size() < 200) { g_lines.push_back(line); g_pending.store((int)g_lines.size()); }
     }
-    if (!g_paths) return;
-    std::lock_guard lk(g_file_mx);
-    if (!g_file_started) {
-        g_file_started = true;
-        if (file_size(g_paths->log) > 256 * 1024) DeleteFileW(g_paths->log.c_str());
-        make_dirs(g_paths->data);
-    }
-    char stamp[32];
-    const std::time_t t = std::time(nullptr);
-    std::tm tm{};
-    localtime_s(&tm, &t);
-    std::strftime(stamp, sizeof stamp, "[%Y-%m-%d %H:%M:%S] ", &tm);
-    HANDLE h = CreateFileW(g_paths->log.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    const std::string text = stamp + line + "\r\n";
-    DWORD put = 0;
-    WriteFile(h, text.data(), (DWORD)text.size(), &put, nullptr);
-    CloseHandle(h);
+    if (g_paths) append_log(*g_paths, line);
 }
 
 void flush_log() {

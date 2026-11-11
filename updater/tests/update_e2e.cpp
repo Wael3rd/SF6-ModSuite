@@ -32,6 +32,7 @@
 #include "../src/update_install.hpp"
 #include "../src/update_logic.hpp"
 #include "../src/update_net.hpp"
+#include "../src/update_pe.hpp"
 
 using namespace sf6up;
 
@@ -126,6 +127,7 @@ static int cmd_manifest() {
 
 static int cmd_versions(std::map<std::string, std::string> a) {
     const std::wstring root = widen(a["--game"]);
+    int bad = 0;
     for (auto& k : known_packages()) {
         const std::wstring dll = join(root, k.proof);
         if (!exists(dll)) continue;
@@ -134,8 +136,11 @@ static int cmd_versions(std::map<std::string, std::string> a) {
         if (!h) { out(std::string(k.id) + ": not loaded (error " + std::to_string(GetLastError()) + ")"); continue; }
         const std::string v = game::package_version(k, root);
         out(std::string(k.id) + ": " + (v.empty() ? "reports no version" : "reports " + v));
+        const std::string f = file_package_version(dll);            // what the mod sorter reads, the game closed: the same
+        out(std::string(k.id) + ": its file says " + (f.empty() ? "nothing" : f) + (f == v ? "" : " (NOT THE SAME)"));
+        if (f != v) bad = 1;
     }
-    return 0;
+    return bad;
 }
 
 int main(int argc, char** argv) {

@@ -19,6 +19,7 @@
 
 #include "archive.hpp"
 #include "catalog.hpp"
+#include "colour_files.hpp"
 
 namespace engine::color_mods {
 namespace fs = std::filesystem;
@@ -28,15 +29,10 @@ namespace {
 constexpr const char* kCacheDir = ".cache";
 constexpr const char* kComplete = ".complete";
 
-// Same list and spelling as the costume_mods folders (Windows drops a trailing dot: "A.K.I"), with the esf number.
-struct Character { int id; const char* name; };
-const Character kCharacters[] = {
-    { 1, "Ryu" }, { 2, "Luke" }, { 3, "Kimberly" }, { 4, "Chun-Li" }, { 5, "Manon" }, { 6, "Zangief" }, { 7, "JP" },
-    { 8, "Dhalsim" }, { 9, "Cammy" }, { 10, "Ken" }, { 11, "Dee Jay" }, { 12, "Lily" }, { 13, "A.K.I" }, { 14, "Rashid" },
-    { 15, "Blanka" }, { 16, "Juri" }, { 17, "Marisa" }, { 18, "Guile" }, { 19, "Ed" }, { 20, "E. Honda" }, { 21, "Jamie" },
-    { 22, "Akuma" }, { 25, "Sagat" }, { 26, "M. Bison" }, { 27, "Terry" }, { 28, "Mai" }, { 29, "Elena" },
-    { 30, "C. Viper" }, { 31, "Alex" }, { 32, "Ingrid" }, { 33, "Yasmine" }, { 34, "Arjun" },
-};
+// Same list and spelling as the costume_mods folders (Windows drops a trailing dot: "A.K.I"), with the esf number:
+// common/colour_files.hpp, shared with SF6_ModSorter.
+using colour_files::Character;
+using colour_files::kCharacters;
 
 bool is_dot(const fs::path& p) {
     const std::wstring n = p.filename().wstring();
@@ -59,15 +55,8 @@ uint32_t fnv1a32(const std::string& s) {
     return h;
 }
 
-// esfFFF_CCC_cmd_KKK.user.2 (letters of any case)
-bool is_colour_name(const std::string& n_in) {
-    const std::string n = lower(n_in);
-    static const char* tail = ".user.2";
-    if (n.size() != 3 + 3 + 1 + 3 + 1 + 3 + 1 + 3 + 7) return false;
-    auto dig = [&](size_t a, size_t b) { for (size_t i = a; i < b; ++i) if (n[i] < '0' || n[i] > '9') return false; return true; };
-    return n.compare(0, 3, "esf") == 0 && dig(3, 6) && n[6] == '_' && dig(7, 10) && n[10] == '_' &&
-           n.compare(11, 4, "cmd_") == 0 && dig(15, 18) && n.compare(18, 7, tail) == 0;
-}
+// esfFFF_CCC_cmd_KKK.user.2 (letters of any case): common/colour_files.hpp, shared with SF6_ModSorter
+using colour_files::is_colour_name;
 
 bool keep_entry(const std::wstring& entry) {
     const size_t i = entry.find_last_of(L'/');

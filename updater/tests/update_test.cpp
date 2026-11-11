@@ -22,6 +22,7 @@
 #include "../src/update_fs.hpp"
 #include "../src/update_install.hpp"
 #include "../src/update_logic.hpp"
+#include "../src/update_pe.hpp"
 #include "../src/update_sys.hpp"
 #include "../src/update_text.hpp"
 #include "../../common/third_party/miniz.h"
@@ -500,6 +501,63 @@ static void test_waiter() {
     CloseHandle(pi.hProcess);
 }
 
+// ---- a package's version read from its DLL's file (the mod sorter: the game closed, nothing loaded) ----
+// A small PE32+ image: one section at 0x1000 (file 0x200) with the export directory, the export's code and its string
+static std::string pe_image(const std::string& export_name, const std::string& version, int shape) {
+    std::string b(0x400, '\0');
+    auto u16 = [&](size_t o, uint16_t v) { std::memcpy(&b[o], &v, 2); };
+    auto u32 = [&](size_t o, uint32_t v) { std::memcpy(&b[o], &v, 4); };
+    auto raw = [](uint32_t rva) { return size_t(rva - 0x1000 + 0x200); };
+    u16(0, 0x5A4D); u32(0x3C, 0x40); u32(0x40, 0x00004550);
+    u16(0x44, 0x8664); u16(0x46, 1); u16(0x54, 240);                    // machine, one section, the optional header's size
+    u16(0x58, 0x20B); u32(0x58 + 108, 16); u32(0x58 + 112, 0x1000); u32(0x58 + 116, 40);
+    const size_t row = 0x58 + 240;
+    u32(row + 8, 0x200); u32(row + 12, 0x1000); u32(row + 16, 0x200); u32(row + 20, 0x200);
+    u32(raw(0x1000) + 20, 1); u32(raw(0x1000) + 24, 1); u32(raw(0x1000) + 28, 0x1040); u32(raw(0x1000) + 32, 0x1044); u32(raw(0x1000) + 36, 0x1048);
+    u32(raw(0x1040), shape == 1 ? 0x1070 : 0x1080);                     // shape 1: the export is a jmp to the code
+    u32(raw(0x1044), 0x1050);
+    std::memcpy(&b[raw(0x1050)], export_name.c_str(), export_name.size() + 1);
+    const unsigned char jmp[5] = { 0xE9, 0x0B, 0, 0, 0 };               // 0x1070 + 5 + 0x0B = 0x1080
+    std::memcpy(&b[raw(0x1070)], jmp, 5);
+    const unsigned char lea[8] = { 0x48, 0x8D, 0x05, 0x19, 0, 0, 0, 0xC3 };   // 0x1080 + 7 + 0x19 = 0x10A0
+    std::memcpy(&b[raw(0x1080)], lea, 8);
+    if (shape == 2) b[raw(0x1080) + 1] = char(0x8B);                    // shape 2: a mov, not the lea
+    std::memcpy(&b[raw(0x10A0)], version.data(), version.size());       // shape 3: no end within 32 characters
+    if (shape == 3) std::memset(&b[raw(0x10A0)], '1', 0x60);
+    return b;
+}
+
+static void test_pe() {
+    const std::string name = "sf6suite_package_version";
+    const std::string good = pe_image(name, "1.27.0", 0);
+    check(image_package_version(good) == "1.27.0", "the version of a DLL's file: " + image_package_version(good));
+    check(image_package_version(pe_image(name, "0.9.11", 1)) == "0.9.11", "the export a jmp to its code");
+    check(image_package_version(pe_image(name, "2.2.10-beta", 0)) == "2.2.10-beta", "a suffix");
+    check(image_package_version(pe_image("sf6suite_updater_rank", "1.27.0", 0)).empty(), "no such export: nothing");
+    check(image_package_version(pe_image(name + "2", "1.27.0", 0)).empty(), "a longer export name: nothing");
+    check(image_package_version(pe_image(name, "hello", 0)).empty(), "not a version: nothing");
+    check(image_package_version(pe_image(name, "1.27.0", 2)).empty(), "another code shape: nothing");
+    check(image_package_version(pe_image(name, "1", 3)).empty(), "a string without its end: nothing");
+    check(image_package_version("").empty() && image_package_version("MZ").empty(), "not an image: nothing");
+    bool cut_ok = true;
+    for (size_t n = 0; n < good.size(); ++n) {                          // every cut of the file: no read outside it
+        const std::string v = image_package_version(good.substr(0, n));
+        cut_ok = cut_ok && (v.empty() || v == "1.27.0");
+    }
+    check(cut_ok, "a cut file: nothing, or the version when all it needs is there");
+    std::string wild = good;
+    for (size_t o : { size_t(0x3C), size_t(0x58 + 112), size_t(0x58 + 240 + 12), size_t(0x58 + 240 + 20), size_t(0x21C), size_t(0x220), size_t(0x240), size_t(0x244), size_t(0x283) }) {
+        std::string w = good;
+        const uint32_t big = 0xFFFFFFF0u;
+        std::memcpy(&w[o], &big, 4);
+        check(image_package_version(w).empty(), "an offset out of the file at " + std::to_string(o) + ": nothing");
+    }
+    const std::wstring f = g_work + L"\pe_test.dll";
+    put(f, good);
+    check(file_package_version(f) == "1.27.0", "read from a file");
+    check(file_package_version(g_work + L"\no_such.dll").empty(), "no file: nothing");
+}
+
 // ---- the boxes' texts ----
 static void test_texts() {
     Plan plan;
@@ -543,6 +601,7 @@ int main(int argc, char** argv) {
     test_journal();
     test_state();
     test_texts();
+    test_pe();
     test_waiter();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

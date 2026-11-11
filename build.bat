@@ -14,8 +14,9 @@ rem   costume_loader.exe paktool.exe loadtest.exe    costume tools
 rem   colourtest.exe                  colourtest --selftest: the colours following their outfit (colour_follow.hpp)
 rem   SF6_SlotsClean.exe              removes the loader's runtime paks and state (shipped next to amd_ags_x64.dll)
 rem   stagepak.exe stagetest.exe textest.exe         stage tools
+rem   SF6_ModSorter.exe               drop a downloaded mod on it: it says what it is and copies it into the game's right folder (tools\sorter\build.bat)
 rem "build.bat deps" rebuilds the archive decoders (build\archive_deps.lib) first; "build.bat archive_deps" builds only them, when missing (the Color Mod needs them).
-rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm, profile, report.
+rem "build.bat <module>" builds one module only: loader (amd_ags_x64.dll + tools), plugin, core, colormod, crsm, profile, report, sorter.
 rem Every compile runs on all cores (/MP). Build only what changed; the full build is for releases.
 
 rem Visual Studio or Build Tools with the C++ workload, wherever it is installed
@@ -40,6 +41,7 @@ if /i "%1"=="colormod" goto :only_colormod
 if /i "%1"=="crsm" goto :only_crsm
 if /i "%1"=="profile" goto :only_profile
 if /i "%1"=="report" goto :only_report
+if /i "%1"=="sorter" goto :only_sorter
 if /i "%1"=="plugin" goto :plugin
 
 rem ---------------------------------------------------------------------------------------------
@@ -140,10 +142,14 @@ if errorlevel 1 goto :failed
 echo === Report a bug (report_mod.dll) ===
 call report_mod\build.bat
 if errorlevel 1 goto :failed
+echo === SF6_ModSorter.exe ===
+call tools\sorter\build.bat
+if errorlevel 1 goto :failed
 
 echo.
 echo All OK: build\amd_ags_x64.dll, build\costumes_only\amd_ags_x64.dll, build\SF6_CostumeSlotsNative.dll,
-echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll, build\crsm\SF6_CRSMNative.dll, build\report_mod\report_mod.dll and the tools
+echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll, build\crsm\SF6_CRSMNative.dll, build\report_mod\report_mod.dll,
+echo         build\SF6_ModSorter.exe and the tools
 echo Replace the DLLs in the game folder only while the game is closed.
 exit /b 0
 
@@ -161,6 +167,9 @@ call profile_mod\build.bat
 exit /b %errorlevel%
 :only_report
 call report_mod\build.bat
+exit /b %errorlevel%
+:only_sorter
+call tools\sorter\build.bat
 exit /b %errorlevel%
 :done_one
 echo OK: %1 only

@@ -161,6 +161,8 @@ def main():
     report_keys_checks()
     plugin_checks()
     updater_checks()
+    for ok, what in __import__("gen_sorter_texts").checks():
+        check(ok, "sorter: " + what)
     if "--game" in sys.argv:
         at = sys.argv.index("--game") + 1
         glyph_checks(sys.argv[at] if at < len(sys.argv) else __import__("game_msgs").DEFAULT_GAME)

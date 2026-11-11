@@ -114,7 +114,7 @@ def main():
     print("game folder unchanged after the refused zip: %s" % ("yes" if same else "NO"))
     ok = ok and rc_bad != 0 and same
     print("== the main DLLs' versions, as the host reads them")
-    run([a.exe, "versions", "--game", game])
+    ok = run([a.exe, "versions", "--game", game]) == 0 and ok      # and what each file says without being loaded: the same
     if a.fetch:
         print("== a real fetch (GitHub, HTTPS, redirects, sha256)")
         tag = "v" + new_v
