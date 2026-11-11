@@ -22,6 +22,8 @@ replace the exe by hand once; from 1.1.0 it does it alone.
   goes; then the install's line; it leaves by itself a few seconds after.
 - A message the game cannot show is written in `update.log` and the update goes on without it.
 - `manifest.json` lists the tools of a release apart (`"tools"`): the game installs nothing from it.
+- `SF6_SlotsClean.exe` (Slots Loader zip) is rebuilt from the same source: Smart App Control had started to refuse fresh copies
+  of the previous build, and an update in game stops when Windows refuses one of its programs.
 
 ### SF6 Mod Sorter 1.1.0
 - **This tool's updates** (Options tab): when the tool starts, the look at the latest release also says whether a newer Mod
