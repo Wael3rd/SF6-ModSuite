@@ -20,7 +20,7 @@ if not exist "%OUT%\obj" mkdir "%OUT%\obj"
 cl /nologo /c /O2 /W0 /MT /TC ..\common\third_party\miniz.c /Fo:"%OUT%\obj\miniz.obj"
 if errorlevel 1 exit /b 1
 set "COMMON=/nologo /std:c++20 /EHa /utf-8 /W4 /MT /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX /DWIN32_LEAN_AND_MEAN /external:I ..\colormod\third_party /external:W0"
-set "SRC=src\update_logic.cpp src\update_fs.cpp src\update_install.cpp src\update_net.cpp src\update_sys.cpp"
+set "SRC=src\update_logic.cpp src\update_fs.cpp src\update_install.cpp src\update_net.cpp src\update_sys.cpp src\update_text.cpp"
 cl %COMMON% /Od tests\update_test.cpp %SRC% "%OUT%\obj\miniz.obj" /Fe:"%OUT%\update_test.exe" /Fo:"%OUT%\obj\\" /link /nologo
 if errorlevel 1 exit /b 1
 cl %COMMON% /O2 /external:I ..\plugin\include tests\update_e2e.cpp src\update_game.cpp %SRC% "%OUT%\obj\miniz.obj" /Fe:"%OUT%\update_e2e.exe" /Fo:"%OUT%\obj\\" /link /nologo

@@ -17,7 +17,7 @@
 namespace sf6up::game {
 
 bool box_open(const std::string& text, const std::string& title);
-int box_poll();                   // -1 still up, 1 Yes, 0 No (or the box lost)
+int box_poll();                   // -1 still up, 1 Yes, 0 No (Back too: the box's cancel is its No), -2 lost (unreadable: no answer)
 void box_drop();
 bool box_is_open();
 

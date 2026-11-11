@@ -99,6 +99,20 @@ def main():
     for k in diff[:30]:
         print("  differs: " + k)
     ok = rc == 0 and not diff
+    print("== a zip that is not the release's (one byte changed, same size): the update stops, nothing changes")
+    game2, assets2 = os.path.join(a.work, "game_bad"), os.path.join(a.work, "assets_bad")
+    fresh_install(a.old, game2)
+    before2 = tree(game2)
+    shutil.rmtree(assets2, ignore_errors=True)
+    shutil.copytree(assets, assets2)
+    victim = os.path.join(assets2, max(packages(a.new), key=lambda n: "ColorMod" in n))
+    data = bytearray(open(victim, "rb").read())
+    data[len(data) // 2] ^= 0xFF
+    open(victim, "wb").write(bytes(data))
+    rc_bad = run([a.exe, "update", "--game", game2, "--manifest", m_new, "--reports", m_old, "--assets", assets2])
+    same = tree(game2) == before2
+    print("game folder unchanged after the refused zip: %s" % ("yes" if same else "NO"))
+    ok = ok and rc_bad != 0 and same
     print("== the main DLLs' versions, as the host reads them")
     run([a.exe, "versions", "--game", game])
     if a.fetch:

@@ -112,22 +112,22 @@ bool box_open(const std::string& text, const std::string& title) {
 }
 
 int box_poll() {
-    if (!g_box) return 0;
+    if (!g_box) return -2;
     try {
         reframework::InvokeRet r{};
         const bool read = call_named(g_box, "get_IsEnd", 0, {}, &r);
         if (read && !(r.byte & 1)) return -1;
-        int answer = 0;                 // unreadable: the box is taken as lost (No)
+        int answer = -2;                // unreadable: the box is lost, no answer
         if (read) {
             reframework::InvokeRet v{};
-            if (call(method_of(type("app.UIFlowDialog.MessageBox"), "GetSelectValue", 1), nullptr, { g_box }, &v) && (int32_t)v.dword == 0) answer = 1;
+            if (call(method_of(type("app.UIFlowDialog.MessageBox"), "GetSelectValue", 1), nullptr, { g_box }, &v)) answer = (int32_t)v.dword == 0 ? 1 : 0;
         }
         g_box->release();
         g_box = nullptr;
         return answer;
     } catch (...) {
         g_box = nullptr;            // not released: the object may be gone
-        return 0;
+        return -2;
     }
 }
 

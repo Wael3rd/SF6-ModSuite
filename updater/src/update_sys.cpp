@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cwchar>
 
 #include "update_logic.hpp"
 
@@ -50,11 +51,12 @@ SacResult sac_check(const std::wstring& path) {
 std::wstring waiter_command(const std::wstring& system_dir, unsigned long pid, const std::wstring& image, const std::wstring& go_cmd) {
     const std::wstring sys = system_dir;
     const std::wstring id = std::to_wstring(pid);
-    // for 120 rounds of about a second: the process gone (tasklist lists it no more) = wait 5 s, run `go`, end; else wait 1 s.
+    // for 120 rounds of about a second: the process gone (tasklist lists it no more) = wait 8 s (Steam sees the game closed), run `go`,
+    // end; else wait 1 s.
     // Past the 120 rounds (the game was not closed): it ends, nothing is opened.
     std::wstring check = L"(\"" + sys + L"\\tasklist.exe\" /nh /fi \"PID eq " + id + L"\" /fi \"IMAGENAME eq " + image + L"\" | \"" + sys +
                          L"\\find.exe\" /i \"" + image + L"\" >nul)";
-    std::wstring go = L"(\"" + sys + L"\\PING.EXE\" -n 6 127.0.0.1 >nul & " + go_cmd + L" & exit)";
+    std::wstring go = L"(\"" + sys + L"\\PING.EXE\" -n 9 127.0.0.1 >nul & " + go_cmd + L" & exit)";
     std::wstring wait = L"\"" + sys + L"\\PING.EXE\" -n 2 127.0.0.1 >nul";
     return L"\"" + sys + L"\\cmd.exe\" /d /s /c \"for /l %i in (1,1,120) do @((" + check + L" || " + go + L") & " + wait + L")\"";
 }
@@ -89,18 +91,25 @@ bool start_waiter(unsigned long pid, const std::wstring& image, std::string* why
 }
 
 namespace {
+// The game's window: a visible top-level window of this process, the RE Engine's class ("via") first, never a console
+struct Found { HWND via = nullptr, other = nullptr; };
 BOOL CALLBACK find_main(HWND h, LPARAM lp) {
     DWORD pid = 0;
     GetWindowThreadProcessId(h, &pid);
     if (pid != GetCurrentProcessId() || !IsWindowVisible(h) || GetWindow(h, GW_OWNER)) return TRUE;
-    *reinterpret_cast<HWND*>(lp) = h;
-    return FALSE;
+    wchar_t cls[64] = {};
+    GetClassNameW(h, cls, 64);
+    auto* f = reinterpret_cast<Found*>(lp);
+    if (!wcscmp(cls, L"via")) { f->via = h; return FALSE; }
+    if (wcscmp(cls, L"ConsoleWindowClass") && !f->other) f->other = h;
+    return TRUE;
 }
 }  // namespace
 
 bool close_game_window() {
-    HWND main = nullptr;
-    EnumWindows(find_main, reinterpret_cast<LPARAM>(&main));
+    Found f;
+    EnumWindows(find_main, reinterpret_cast<LPARAM>(&f));
+    HWND main = f.via ? f.via : f.other;
     return main && PostMessageW(main, WM_CLOSE, 0, 0);
 }
 

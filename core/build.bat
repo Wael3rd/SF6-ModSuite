@@ -74,7 +74,7 @@ cl %CFLAGS% /DSF6CORE_EXPORTS /I third_party\lua /external:I ..\colormod\third_p
     src\options\guid_text.cpp src\options\guid_table.cpp src\selection.cpp src\title.cpp ^
     src\pausemenu\pm_service.cpp src\pausemenu\pausemenu.cpp src\pausemenu\pm_core.cpp ^
     ..\updater\src\update_host.cpp ..\updater\src\update_game.cpp ..\updater\src\update_install.cpp ..\updater\src\update_logic.cpp ^
-    ..\updater\src\update_fs.cpp ..\updater\src\update_net.cpp ..\updater\src\update_sys.cpp ^
+    ..\updater\src\update_fs.cpp ..\updater\src\update_net.cpp ..\updater\src\update_sys.cpp ..\updater\src\update_text.cpp ^
     /link /DLL ..\build\core\lua.lib ..\build\core\miniz.obj rpcrt4.lib winmm.lib winhttp.lib bcrypt.lib user32.lib
 if errorlevel 1 (
     echo ERROR: sf6core_native.dll build failed

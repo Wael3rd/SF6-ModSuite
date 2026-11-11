@@ -23,7 +23,7 @@ SacResult sac_check(const std::wstring& path);
 bool is_program(const std::string& rel);    // .dll / .exe
 
 // ---- the restart ----
-// cmd.exe's command line that waits (2 minutes at most) for process `pid` named `image` to end, then, 5 s later, runs `go` (a cmd
+// cmd.exe's command line that waits (2 minutes at most) for process `pid` named `image` to end, then, 8 s later, runs `go` (a cmd
 // command). The game: its own pid and exe name, go = start "" "steam://rungameid/1364780" (start_waiter).
 std::wstring waiter_command(const std::wstring& system_dir, unsigned long pid, const std::wstring& image, const std::wstring& go);
 // Started detached (no window, out of the game's job when Windows allows it): a Windows-signed cmd.exe, no program of ours

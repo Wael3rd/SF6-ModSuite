@@ -22,12 +22,11 @@
 #include "update_game.hpp"
 #include "update_install.hpp"
 #include "update_sys.hpp"
+#include "update_text.hpp"
 
 namespace sf6up::host {
 
 namespace {
-
-#include "update_words.inc"
 
 enum class St : int { Idle, Dormant, Checking, Offer, AskInstall, Installing, AskRestart, WaitRestart, AskFailed, WaitFailed, Done };
 
@@ -102,32 +101,6 @@ void spawn(void (*fn)()) {
         log("a worker could not start");
         set_state(St::Done);
     }
-}
-
-// ---- the words ----
-const char* tr(const std::string& lang, Word w) {
-    int li = 0;
-    for (int i = 0; i < kLangCount; ++i)
-        if (lang == kLangs[i]) li = i;
-    const char* t = kText[li][(int)w];
-    return t && *t ? t : kText[0][(int)w];
-}
-
-std::string format(const char* tmpl, std::initializer_list<std::string> args) {
-    std::string out;
-    auto a = args.begin();
-    for (const char* p = tmpl; *p; ++p) {
-        if (*p == '%' && p[1] == 's') {
-            if (a != args.end()) out += *a++;
-            ++p;
-        } else if (*p == '%' && p[1] == '%') {
-            out += '%';
-            ++p;
-        } else {
-            out += *p;
-        }
-    }
-    return out;
 }
 
 // ---- the election: the highest rank of the loaded copies runs the updater ----
@@ -216,40 +189,44 @@ void restart() {
 }
 
 // ---- the screen: a menu held kStableFrames, no battle, no box of the game's ----
+// The flow id (bFlowManager's flow map _ID) is -1 on the title screen and changes with each screen family (48 = the menus after the
+// title in Wael's log of 10/11, 0 = a loading, 3 / 9 = training). The first flow held 5 s without a battle description after the title
+// is the main menu ("home"); afterwards a box shows in that flow, or in any other one without a battle description (a battle's
+// description may stay on a flow map after the battle: home alone never depends on it).
+int32_t g_home = -1;
+int g_flow_lines = 0;
 void watch_screen() {
     if (g_frames % kPollEvery != 0) return;
     const int32_t id = game::flow_id();
-    const bool battle = id < 0 || game::in_battle();
-    if (battle) { g_flow = -2; g_menu_idle = false; return; }
-    if (id != g_flow) { g_flow = id; g_flow_since = g_frames; }
-    g_menu_idle = g_frames - g_flow_since >= kStableFrames && !game::game_dialog_up();
-}
-
-std::string text_of_offer(const std::string& lang) {
-    std::lock_guard lk(g_mx);
-    std::string lines;
-    for (auto& it : g_plan.items) {
-        if (!lines.empty()) lines += "\n";
-        lines += format(tr(lang, Word::Line), { it.pkg.name, it.from, it.pkg.version });
+    if (id != g_flow) {
+        if (g_flow_lines < 40 && state() != St::Done) { ++g_flow_lines; log("screen: flow " + std::to_string(id)); }
+        g_flow = id;
+        g_flow_since = g_frames;
     }
-    return format(tr(lang, Word::Offer), { g_plan.suite, lines, g_plan.suite });
-}
-
-std::string text_of_failure(const std::string& lang) {
-    std::lock_guard lk(g_mx);
-    Word w = Word::WhyPackage;
-    switch (g_result.fail) {
-    case Fail::Download: w = Word::WhyDownload; break;
-    case Fail::Check: w = Word::WhyCheck; break;
-    case Fail::Blocked: w = Word::WhyBlocked; break;
-    case Fail::Files: w = Word::WhyFiles; break;
-    default: break;
+    g_menu_idle = false;
+    if (id < 0 || g_frames - g_flow_since < kStableFrames) return;
+    const bool battle = game::in_battle();
+    if (g_home < 0) {
+        if (battle) return;
+        g_home = id;
+        log("the main menu: flow " + std::to_string(id));
     }
-    return format(tr(lang, Word::Failed), { format(tr(lang, w), { g_result.what }) });
+    if (id != g_home && battle) return;
+    g_menu_idle = !game::game_dialog_up();
 }
 
-bool open_box(const std::string& text, const std::string& lang, const char* what) {
-    if (game::box_open(text, tr(lang, Word::Title))) { log(std::string("box shown: ") + what); return true; }
+std::string offer_text(const std::string& lang) {
+    std::lock_guard lk(g_mx);
+    return text::offer(lang, g_plan);
+}
+
+std::string failure_text(const std::string& lang) {
+    std::lock_guard lk(g_mx);
+    return text::failed(lang, g_result.fail, g_result.what);
+}
+
+bool open_box(const std::string& body, const std::string& lang, const char* what) {
+    if (game::box_open(body, text::title(lang))) { log(std::string("box shown: ") + what); return true; }
     log(std::string("the game's message box could not be opened (") + what + "): nothing done");
     return false;
 }
@@ -293,25 +270,27 @@ void frame() {
             return;
         }
         switch (s) {
-        case St::Offer:
+        case St::Offer: {
             if (!g_menu_idle) break;
-            if (game::box_open(text_of_offer(game::language()), tr(game::language(), Word::Title))) { log("box shown: offer"); set_state(St::AskInstall); }
-            else { log("the game's message box could not be opened (offer): nothing done"); set_state(St::Done); }
+            const std::string lang = game::language();
+            set_state(open_box(offer_text(lang), lang, "offer") ? St::AskInstall : St::Done);
             break;
+        }
         case St::AskInstall: {
             const int a = game::box_poll();
-            if (a < 0) break;
+            if (a == -1) break;
             if (a == 1) { log("Install chosen"); set_state(St::Installing); spawn(install_worker); }
-            else { log("Ignore chosen"); set_state(St::Done); spawn(ignore_worker); }
+            else if (a == 0) { log("Ignore chosen"); set_state(St::Done); spawn(ignore_worker); }
+            else { log("the box went away without an answer: asked again at the next start"); set_state(St::Done); }
             break;
         }
         case St::AskRestart:
             if (!g_menu_idle) break;
-            set_state(open_box(tr(game::language(), Word::Done), game::language(), "installed, restart?") ? St::WaitRestart : St::Done);
+            set_state(open_box(text::done(game::language()), game::language(), "installed, restart?") ? St::WaitRestart : St::Done);
             break;
         case St::WaitRestart: {
             const int a = game::box_poll();
-            if (a < 0) break;
+            if (a == -1) break;
             set_state(St::Done);
             if (a == 1) restart();
             else log("restart declined: the new version applies at the next start");
@@ -319,13 +298,13 @@ void frame() {
         }
         case St::AskFailed:
             if (!g_menu_idle) break;
-            set_state(open_box(text_of_failure(game::language()), game::language(), "failed") ? St::WaitFailed : St::Done);
+            set_state(open_box(failure_text(game::language()), game::language(), "failed") ? St::WaitFailed : St::Done);
             break;
         case St::WaitFailed: {
             const int a = game::box_poll();
-            if (a < 0) break;
+            if (a == -1) break;
             set_state(St::Done);
-            if (a == 1) log("failure: asked again at the next start");
+            if (a != 0) log("failure: asked again at the next start");
             else spawn(ignore_worker);
             break;
         }

@@ -132,7 +132,7 @@ def updater_checks():
     check(cur == gen_updater_words.generate(), "updater: update_words.inc is not up to date: run tools/localisation/gen_updater_words.py")
     keys = read_table(MODULES[4][1])["en"]
     words = {"".join(p[:1].upper() + p[1:] for p in re.split(r"[._-]", k[len("update."):])) for k in keys}
-    for p, text in source("updater/src/*.cpp").items():
+    for p, text in source("updater/src/*.cpp", "updater/src/*.hpp").items():
         for w in set(re.findall(r"\bWord::([A-Za-z]+)", text)):
             check(w == "Count" or w in words, "updater: %s uses Word::%s: not in the table" % (os.path.basename(p), w))
 

@@ -23,6 +23,7 @@
 #include "../src/update_install.hpp"
 #include "../src/update_logic.hpp"
 #include "../src/update_sys.hpp"
+#include "../src/update_text.hpp"
 #include "../../common/third_party/miniz.h"
 
 using namespace sf6up;
@@ -499,6 +500,33 @@ static void test_waiter() {
     CloseHandle(pi.hProcess);
 }
 
+// ---- the boxes' texts ----
+static void test_texts() {
+    Plan plan;
+    plan.suite = "1.31.0";
+    ManifestPackage a, b;
+    a.name = "SF6 Slots Loader"; a.version = "1.27.0";
+    b.name = "SF6 Color Mod"; b.version = "0.27.0";
+    plan.items = { { a, "1.26.1" }, { b, "0.26.1" } };
+    const std::string en = text::offer("en", plan), fr = text::offer("fr", plan);
+    check(en.find("SF6 Mod Suite 1.31.0 is out") == 0, "English offer: " + en);
+    check(en.find("SF6 Slots Loader 1.26.1 -> 1.27.0\nSF6 Color Mod 0.26.1 -> 0.27.0") != std::string::npos, "one line per package: " + en);
+    check(en.find("never ask again for 1.31.0") != std::string::npos, "the release ignored is named");
+    check(fr.find("SF6 Mod Suite 1.31.0 est sortie") == 0 && fr.find("SF6 Color Mod 0.26.1 -> 0.27.0") != std::string::npos, "French offer: " + fr);
+    check(text::offer("xx", plan) == en, "an unknown language: English");
+    check(text::title("ja") != text::title("en") && !text::title("ja").empty(), "Japanese title");
+    const std::string blocked = text::failed("en", Fail::Blocked, "SF6_ColorModNative.dll");
+    check(blocked.find("Smart App Control blocks SF6_ColorModNative.dll") != std::string::npos, "the blocked file named: " + blocked);
+    check(text::failed("fr", Fail::Download, "").find("un téléchargement a échoué") != std::string::npos, "French download failure");
+    check(text::done("en").find("Fluffy Mod Manager") != std::string::npos, "the success text names Fluffy once");
+    check(text::format("%s and %s, 100%%", { "a" }) == "a and , 100%", "format: a missing argument, a percent");
+    for (const char* l : { "en", "fr", "ja", "zh-Hans", "it", "de", "es", "es-419", "ru", "pl", "pt", "ko", "zh-Hant", "ar" }) {
+        const std::string t = text::offer(l, plan);
+        check(t.find("1.31.0") != std::string::npos && t.find("0.26.1 -> 0.27.0") != std::string::npos && t.find("%s") == std::string::npos,
+              std::string("offer in ") + l + ": every slot filled");
+    }
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--work")) g_work = widen(argv[i + 1]);
@@ -512,6 +540,7 @@ int main(int argc, char** argv) {
     test_swap();
     test_journal();
     test_state();
+    test_texts();
     test_waiter();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
