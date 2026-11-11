@@ -106,7 +106,9 @@ def main():
     before2 = tree(game2)
     shutil.rmtree(assets2, ignore_errors=True)
     shutil.copytree(assets, assets2)
-    victim = os.path.join(assets2, max(packages(a.new), key=lambda n: "ColorMod" in n))
+    # a zip the update downloads: one this release changes (an unchanged package is never fetched), the Color Mod's when it is one
+    kept = set(packages(a.old))
+    victim = os.path.join(assets2, max(packages(a.new), key=lambda n: (n not in kept, "ColorMod" in n)))
     data = bytearray(open(victim, "rb").read())
     data[len(data) // 2] ^= 0xFF
     open(victim, "wb").write(bytes(data))

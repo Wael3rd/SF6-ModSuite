@@ -453,6 +453,24 @@
     },
     "T_H_CHECK": {
       "where": "Key hint (F), Options tab, updates row: looks the latest release up now (short)"
+    },
+    "T_O_SELF_UPDATES": {
+      "where": "Options tab: the label of the row about the sorter's own updates (\"this tool\", as T_NOTE_UPDATES says it)"
+    },
+    "T_UP_DOWNLOADING": {
+      "where": "Options tab, an updates row: its value while the update is being downloaded; {0} is a percentage (short)"
+    },
+    "T_NOTE_SELF_UPDATES": {
+      "where": "Footer line, Options tab, the tool's own updates row selected: what the row does"
+    },
+    "T_NOTE_SELF_UPDATE": {
+      "where": "Footer line on the other tabs when a newer version of the tool itself exists; {0} is its number; names the Options tab as T_TAB_OPTIONS does"
+    },
+    "T_NOTE_SELF_UPDATE_HERE": {
+      "where": "Footer line, Options tab, the tool's own updates row selected and a newer version exists; {0} is its number; F is the key"
+    },
+    "T_NOTE_SELF_UPDATED": {
+      "where": "Footer line after the tool updated itself but could not start its new version; {0} is the version's number"
     }
   },
   "en": {
@@ -606,7 +624,13 @@
     "T_NOTE_UPDATES": "The latest release of SF6 Mod Suite is looked up on GitHub when this tool starts; it is installed from here with the game closed.",
     "T_NOTE_UPDATE_FAILED": "The latest release could not be read: check your connection, then press F.",
     "T_H_UPDATE": "Install the update",
-    "T_H_CHECK": "Check now"
+    "T_H_CHECK": "Check now",
+    "T_O_SELF_UPDATES": "This tool's updates",
+    "T_UP_DOWNLOADING": "Downloading… {0} %",
+    "T_NOTE_SELF_UPDATES": "A newer version of this tool is looked up on GitHub when it starts; it is installed from here, then the tool starts again.",
+    "T_NOTE_SELF_UPDATE": "Version {0} of this tool is out: install it from the Options tab.",
+    "T_NOTE_SELF_UPDATE_HERE": "Version {0} of this tool is out: press F to install it; the tool then starts again.",
+    "T_NOTE_SELF_UPDATED": "Version {0} of this tool is installed: close it and start it again."
   },
   "fr": {
     "T_TITLE": "Tri des mods",
@@ -759,7 +783,13 @@
     "T_NOTE_UPDATES": "La dernière version de SF6 Mod Suite est cherchée sur GitHub à l'ouverture de cet outil ; elle s'installe d'ici, jeu fermé.",
     "T_NOTE_UPDATE_FAILED": "La dernière version n'a pas pu être lue : vérifiez votre connexion, puis appuyez sur F.",
     "T_H_UPDATE": "Installer la mise à jour",
-    "T_H_CHECK": "Vérifier maintenant"
+    "T_H_CHECK": "Vérifier maintenant",
+    "T_O_SELF_UPDATES": "Mises à jour de cet outil",
+    "T_UP_DOWNLOADING": "Téléchargement… {0} %",
+    "T_NOTE_SELF_UPDATES": "Une version plus récente de cet outil est cherchée sur GitHub à son ouverture ; elle s'installe d'ici, puis l'outil redémarre.",
+    "T_NOTE_SELF_UPDATE": "La version {0} de cet outil est sortie : installez-la depuis l'onglet Options.",
+    "T_NOTE_SELF_UPDATE_HERE": "La version {0} de cet outil est sortie : appuyez sur F pour l'installer ; l'outil redémarre ensuite.",
+    "T_NOTE_SELF_UPDATED": "La version {0} de cet outil est installée : fermez-le puis relancez-le."
   },
   "ja": {
     "T_TITLE": "MOD仕分け",
@@ -912,7 +942,13 @@
     "T_NOTE_UPDATES": "このツールの起動時に SF6 Mod Suite の最新リリースを GitHub で確認します。インストールはゲームを終了した状態でここから行えます。",
     "T_NOTE_UPDATE_FAILED": "最新リリースを読み込めませんでした：接続を確認して F を押してください。",
     "T_H_UPDATE": "アップデートをインストール",
-    "T_H_CHECK": "今すぐ確認"
+    "T_H_CHECK": "今すぐ確認",
+    "T_O_SELF_UPDATES": "このツールのアップデート",
+    "T_UP_DOWNLOADING": "ダウンロード中… {0}%",
+    "T_NOTE_SELF_UPDATES": "このツールの起動時に、新しいバージョンを GitHub で確認します。ここからインストールでき、その後ツールが再起動します。",
+    "T_NOTE_SELF_UPDATE": "このツールのバージョン {0} が公開されました：オプションタブからインストールできます。",
+    "T_NOTE_SELF_UPDATE_HERE": "このツールのバージョン {0} が公開されました：F でインストールすると、ツールが再起動します。",
+    "T_NOTE_SELF_UPDATED": "このツールのバージョン {0} をインストールしました：一度閉じて、もう一度起動してください。"
   },
   "zh-Hans": {
     "T_TITLE": "模组整理",
@@ -1065,7 +1101,13 @@
     "T_NOTE_UPDATES": "本工具启动时会在 GitHub 上查找 SF6 Mod Suite 的最新版本；游戏关闭时可在此安装。",
     "T_NOTE_UPDATE_FAILED": "无法读取最新版本：请检查网络连接，然后按 F。",
     "T_H_UPDATE": "安装更新",
-    "T_H_CHECK": "立即检查"
+    "T_H_CHECK": "立即检查",
+    "T_O_SELF_UPDATES": "本工具更新",
+    "T_UP_DOWNLOADING": "下载中… {0}%",
+    "T_NOTE_SELF_UPDATES": "本工具启动时会在 GitHub 上查找自身的新版本；可在此安装，随后工具会重新启动。",
+    "T_NOTE_SELF_UPDATE": "本工具的 {0} 版已发布：可在“选项”标签页中安装。",
+    "T_NOTE_SELF_UPDATE_HERE": "本工具的 {0} 版已发布：按 F 安装，随后工具会重新启动。",
+    "T_NOTE_SELF_UPDATED": "本工具的 {0} 版已安装：请关闭后重新启动。"
   },
   "it": {
     "T_TITLE": "Smistamento mod",
@@ -1218,7 +1260,13 @@
     "T_NOTE_UPDATES": "L'ultima versione di SF6 Mod Suite viene cercata su GitHub all'avvio di questo strumento; si installa da qui a gioco chiuso.",
     "T_NOTE_UPDATE_FAILED": "Impossibile leggere l'ultima versione: controlla la connessione, poi premi F.",
     "T_H_UPDATE": "Installa l'aggiornamento",
-    "T_H_CHECK": "Controlla ora"
+    "T_H_CHECK": "Controlla ora",
+    "T_O_SELF_UPDATES": "Aggiornamenti di questo strumento",
+    "T_UP_DOWNLOADING": "Download… {0} %",
+    "T_NOTE_SELF_UPDATES": "Una versione più recente di questo strumento viene cercata su GitHub al suo avvio; si installa da qui, poi lo strumento si riavvia.",
+    "T_NOTE_SELF_UPDATE": "È uscita la versione {0} di questo strumento: installala dalla scheda Opzioni.",
+    "T_NOTE_SELF_UPDATE_HERE": "È uscita la versione {0} di questo strumento: premi F per installarla; poi lo strumento si riavvia.",
+    "T_NOTE_SELF_UPDATED": "La versione {0} di questo strumento è installata: chiudilo e riavvialo."
   },
   "de": {
     "T_TITLE": "Mod-Sortierer",
@@ -1371,7 +1419,13 @@
     "T_NOTE_UPDATES": "Beim Start dieses Tools wird auf GitHub nach der neuesten Version von SF6 Mod Suite gesucht; installiert wird sie von hier aus bei geschlossenem Spiel.",
     "T_NOTE_UPDATE_FAILED": "Die neueste Version konnte nicht gelesen werden: Prüfe deine Verbindung und drücke dann F.",
     "T_H_UPDATE": "Update installieren",
-    "T_H_CHECK": "Jetzt suchen"
+    "T_H_CHECK": "Jetzt suchen",
+    "T_O_SELF_UPDATES": "Updates dieses Tools",
+    "T_UP_DOWNLOADING": "Wird heruntergeladen… {0} %",
+    "T_NOTE_SELF_UPDATES": "Beim Start dieses Tools wird auf GitHub nach einer neueren Version gesucht; installiert wird sie von hier aus, danach startet das Tool neu.",
+    "T_NOTE_SELF_UPDATE": "Version {0} dieses Tools ist erschienen: Installiere sie über den Tab Optionen.",
+    "T_NOTE_SELF_UPDATE_HERE": "Version {0} dieses Tools ist erschienen: Drücke F, um sie zu installieren; danach startet das Tool neu.",
+    "T_NOTE_SELF_UPDATED": "Version {0} dieses Tools ist installiert: Schließe es und starte es neu."
   },
   "es": {
     "T_TITLE": "Clasificador de mods",
@@ -1524,7 +1578,13 @@
     "T_NOTE_UPDATES": "La última versión de SF6 Mod Suite se busca en GitHub al abrir esta herramienta; se instala desde aquí con el juego cerrado.",
     "T_NOTE_UPDATE_FAILED": "No se ha podido leer la última versión: comprueba tu conexión y pulsa F.",
     "T_H_UPDATE": "Instalar la actualización",
-    "T_H_CHECK": "Comprobar ahora"
+    "T_H_CHECK": "Comprobar ahora",
+    "T_O_SELF_UPDATES": "Actualizaciones de esta herramienta",
+    "T_UP_DOWNLOADING": "Descargando… {0} %",
+    "T_NOTE_SELF_UPDATES": "Al abrir esta herramienta se busca en GitHub una versión más reciente; se instala desde aquí y luego la herramienta se reinicia.",
+    "T_NOTE_SELF_UPDATE": "Ya ha salido la versión {0} de esta herramienta: instálala desde la pestaña Opciones.",
+    "T_NOTE_SELF_UPDATE_HERE": "Ya ha salido la versión {0} de esta herramienta: pulsa F para instalarla; después la herramienta se reinicia.",
+    "T_NOTE_SELF_UPDATED": "La versión {0} de esta herramienta está instalada: ciérrala y vuelve a abrirla."
   },
   "es-419": {
     "T_TITLE": "Clasificador de mods",
@@ -1677,7 +1737,13 @@
     "T_NOTE_UPDATES": "La última versión de SF6 Mod Suite se busca en GitHub al abrir esta herramienta; se instala desde aquí con el juego cerrado.",
     "T_NOTE_UPDATE_FAILED": "No se pudo leer la última versión: revisa tu conexión y presiona F.",
     "T_H_UPDATE": "Instalar la actualización",
-    "T_H_CHECK": "Comprobar ahora"
+    "T_H_CHECK": "Comprobar ahora",
+    "T_O_SELF_UPDATES": "Actualizaciones de esta herramienta",
+    "T_UP_DOWNLOADING": "Descargando… {0} %",
+    "T_NOTE_SELF_UPDATES": "Al abrir esta herramienta se busca en GitHub una versión más reciente; se instala desde aquí y luego la herramienta se reinicia.",
+    "T_NOTE_SELF_UPDATE": "Ya salió la versión {0} de esta herramienta: instálala desde la pestaña Opciones.",
+    "T_NOTE_SELF_UPDATE_HERE": "Ya salió la versión {0} de esta herramienta: presiona F para instalarla; después la herramienta se reinicia.",
+    "T_NOTE_SELF_UPDATED": "La versión {0} de esta herramienta está instalada: ciérrala y vuelve a abrirla."
   },
   "ru": {
     "T_TITLE": "Сортировщик модов",
@@ -1830,7 +1896,13 @@
     "T_NOTE_UPDATES": "Последняя версия SF6 Mod Suite ищется на GitHub при запуске этой программы; она устанавливается отсюда при закрытой игре.",
     "T_NOTE_UPDATE_FAILED": "Не удалось прочитать последнюю версию: проверьте подключение и нажмите F.",
     "T_H_UPDATE": "Установить обновление",
-    "T_H_CHECK": "Проверить сейчас"
+    "T_H_CHECK": "Проверить сейчас",
+    "T_O_SELF_UPDATES": "Обновления этой программы",
+    "T_UP_DOWNLOADING": "Загрузка… {0} %",
+    "T_NOTE_SELF_UPDATES": "Более новая версия этой программы ищется на GitHub при её запуске; она устанавливается отсюда, затем программа перезапускается.",
+    "T_NOTE_SELF_UPDATE": "Вышла версия {0} этой программы: установите её на вкладке «Настройки».",
+    "T_NOTE_SELF_UPDATE_HERE": "Вышла версия {0} этой программы: нажмите F, чтобы установить; затем программа перезапустится.",
+    "T_NOTE_SELF_UPDATED": "Версия {0} этой программы установлена: закройте её и запустите снова."
   },
   "pl": {
     "T_TITLE": "Sortownik modów",
@@ -1983,7 +2055,13 @@
     "T_NOTE_UPDATES": "Najnowsza wersja SF6 Mod Suite jest wyszukiwana na GitHubie przy starcie tego narzędzia; instaluje się ją stąd przy zamkniętej grze.",
     "T_NOTE_UPDATE_FAILED": "Nie udało się odczytać najnowszej wersji: sprawdź połączenie i naciśnij F.",
     "T_H_UPDATE": "Zainstaluj aktualizację",
-    "T_H_CHECK": "Sprawdź teraz"
+    "T_H_CHECK": "Sprawdź teraz",
+    "T_O_SELF_UPDATES": "Aktualizacje tego narzędzia",
+    "T_UP_DOWNLOADING": "Pobieranie… {0}%",
+    "T_NOTE_SELF_UPDATES": "Nowsza wersja tego narzędzia jest wyszukiwana na GitHubie przy jego starcie; instaluje się ją stąd, po czym narzędzie uruchamia się ponownie.",
+    "T_NOTE_SELF_UPDATE": "Wyszła wersja {0} tego narzędzia: zainstaluj ją z karty Opcje.",
+    "T_NOTE_SELF_UPDATE_HERE": "Wyszła wersja {0} tego narzędzia: naciśnij F, aby ją zainstalować; potem narzędzie uruchomi się ponownie.",
+    "T_NOTE_SELF_UPDATED": "Wersja {0} tego narzędzia jest zainstalowana: zamknij je i uruchom ponownie."
   },
   "pt": {
     "T_TITLE": "Organizador de mods",
@@ -2136,7 +2214,13 @@
     "T_NOTE_UPDATES": "A versão mais recente do SF6 Mod Suite é procurada no GitHub quando esta ferramenta abre; ela é instalada daqui com o jogo fechado.",
     "T_NOTE_UPDATE_FAILED": "Não foi possível ler a versão mais recente: verifique sua conexão e pressione F.",
     "T_H_UPDATE": "Instalar a atualização",
-    "T_H_CHECK": "Verificar agora"
+    "T_H_CHECK": "Verificar agora",
+    "T_O_SELF_UPDATES": "Atualizações desta ferramenta",
+    "T_UP_DOWNLOADING": "Baixando… {0}%",
+    "T_NOTE_SELF_UPDATES": "Uma versão mais recente desta ferramenta é procurada no GitHub quando ela abre; ela é instalada daqui e depois a ferramenta reinicia.",
+    "T_NOTE_SELF_UPDATE": "Saiu a versão {0} desta ferramenta: instale-a pela aba Opções.",
+    "T_NOTE_SELF_UPDATE_HERE": "Saiu a versão {0} desta ferramenta: pressione F para instalar; depois a ferramenta reinicia.",
+    "T_NOTE_SELF_UPDATED": "A versão {0} desta ferramenta foi instalada: feche-a e abra-a de novo."
   },
   "ko": {
     "T_TITLE": "모드 정리",
@@ -2289,7 +2373,13 @@
     "T_NOTE_UPDATES": "이 도구를 시작할 때 GitHub에서 SF6 Mod Suite의 최신 릴리스를 확인합니다. 게임을 종료한 상태에서 여기서 설치할 수 있습니다.",
     "T_NOTE_UPDATE_FAILED": "최신 릴리스를 읽을 수 없습니다: 연결을 확인한 뒤 F를 누르세요.",
     "T_H_UPDATE": "업데이트 설치",
-    "T_H_CHECK": "지금 확인"
+    "T_H_CHECK": "지금 확인",
+    "T_O_SELF_UPDATES": "이 도구 업데이트",
+    "T_UP_DOWNLOADING": "다운로드 중… {0}%",
+    "T_NOTE_SELF_UPDATES": "이 도구를 시작할 때 GitHub에서 새 버전을 확인합니다. 여기서 설치할 수 있으며, 설치 후 도구가 다시 시작됩니다.",
+    "T_NOTE_SELF_UPDATE": "이 도구의 {0} 버전이 나왔습니다: 옵션 탭에서 설치하세요.",
+    "T_NOTE_SELF_UPDATE_HERE": "이 도구의 {0} 버전이 나왔습니다: F를 눌러 설치하면 도구가 다시 시작됩니다.",
+    "T_NOTE_SELF_UPDATED": "이 도구의 {0} 버전이 설치되었습니다: 도구를 닫고 다시 시작하세요."
   },
   "zh-Hant": {
     "T_TITLE": "模組整理",
@@ -2442,7 +2532,13 @@
     "T_NOTE_UPDATES": "本工具啟動時會在 GitHub 上查找 SF6 Mod Suite 的最新版本；遊戲關閉時可在此安裝。",
     "T_NOTE_UPDATE_FAILED": "無法讀取最新版本：請檢查網路連線，然後按 F。",
     "T_H_UPDATE": "安裝更新",
-    "T_H_CHECK": "立即檢查"
+    "T_H_CHECK": "立即檢查",
+    "T_O_SELF_UPDATES": "本工具更新",
+    "T_UP_DOWNLOADING": "下載中… {0}%",
+    "T_NOTE_SELF_UPDATES": "本工具啟動時會在 GitHub 上查找自身的新版本；可在此安裝，隨後工具會重新啟動。",
+    "T_NOTE_SELF_UPDATE": "本工具的 {0} 版已發布：可在「選項」分頁中安裝。",
+    "T_NOTE_SELF_UPDATE_HERE": "本工具的 {0} 版已發布：按 F 安裝，隨後工具會重新啟動。",
+    "T_NOTE_SELF_UPDATED": "本工具的 {0} 版已安裝：請關閉後重新啟動。"
   },
   "ar": {
     "T_TITLE": "فرز التعديلات",
@@ -2595,6 +2691,12 @@
     "T_NOTE_UPDATES": "يُبحث عن أحدث إصدار من SF6 Mod Suite على GitHub عند تشغيل هذه الأداة؛ ويُثبَّت من هنا واللعبة مغلقة.",
     "T_NOTE_UPDATE_FAILED": "تعذّرت قراءة أحدث إصدار: تحقق من اتصالك ثم اضغط F.",
     "T_H_UPDATE": "تثبيت التحديث",
-    "T_H_CHECK": "تحقق الآن"
+    "T_H_CHECK": "تحقق الآن",
+    "T_O_SELF_UPDATES": "تحديثات هذه الأداة",
+    "T_UP_DOWNLOADING": "جارٍ التنزيل… {0}%",
+    "T_NOTE_SELF_UPDATES": "يُبحث عن إصدار أحدث من هذه الأداة على GitHub عند تشغيلها؛ ويُثبَّت من هنا ثم يُعاد تشغيل الأداة.",
+    "T_NOTE_SELF_UPDATE": "صدر الإصدار {0} من هذه الأداة: ثبِّته من تبويب الخيارات.",
+    "T_NOTE_SELF_UPDATE_HERE": "صدر الإصدار {0} من هذه الأداة: اضغط F لتثبيته؛ ثم يُعاد تشغيل الأداة.",
+    "T_NOTE_SELF_UPDATED": "تم تثبيت الإصدار {0} من هذه الأداة: أغلقها ثم شغِّلها من جديد."
   }
 }

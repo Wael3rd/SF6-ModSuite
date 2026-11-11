@@ -72,12 +72,17 @@ static int cmd_update(std::map<std::string, std::string> a) {
     out("offered by " + c.plan.suite + ": " + std::to_string(c.plan.items.size()) + " package(s)");
     for (auto& it : c.plan.items) out("  " + it.pkg.name + " " + it.from + " -> " + it.pkg.version + " (" + it.pkg.asset + ")");
     const std::wstring assets = widen(a["--assets"]);
-    const Fetch local = [&](const PlanItem& it, const std::wstring& dest, std::string* why) {
+    const Fetch local = [&](const PlanItem& it, const std::wstring& dest, const BytesFn& bytes, std::string* why) {
         const std::wstring src = join(assets, it.pkg.asset);
         if (!CopyFileW(src.c_str(), dest.c_str(), FALSE)) { *why = "no local copy of " + it.pkg.asset; return false; }
+        if (bytes) bytes(it.pkg.size);
         return true;
     };
-    const InstallResult r = run_install(p, c.plan, local, log);
+    Progress progress;
+    const InstallResult r = run_install(p, c.plan, local, log, -1, &progress);
+    out("progress at the end: step " + std::to_string(progress.step.load()) + ", " + std::to_string(progress.done.load()) + " of " +
+        std::to_string(progress.total.load()) + " bytes, " + std::to_string(progress.percent()) + " %");
+    if (r.ok && (progress.percent() != 100 || progress.step.load() != Progress::Install)) { out("the progress did not reach its end"); return 1; }
     out(std::string("install: ") + (r.ok ? "ok" : "FAILED: " + r.why));
     if (!r.ok) return 1;
     out("old copies kept: " + std::to_string(r.swap.backups.size()));
@@ -99,7 +104,10 @@ static int cmd_fetch(std::map<std::string, std::string> a) {
     DeleteFileW(dest.c_str());
     const int64_t size = _strtoi64(a["--size"].c_str(), nullptr, 10);
     const ULONGLONG t0 = GetTickCount64();
-    const HttpResult h = http_get_file(a["--url"], size, dest);
+    int64_t seen = 0, calls = 0;
+    const HttpResult h = http_get_file(a["--url"], size, dest, [&](int64_t n) { seen = n; ++calls; });
+    out("progress: " + std::to_string(calls) + " call(s), the last at " + std::to_string(seen) + " of " + std::to_string(size) + " bytes");
+    if (h.ok && seen != size) { out("the progress did not reach the size"); return 1; }
     out("fetch " + a["--url"] + ": " + (h.ok ? "200" : "FAILED: " + h.why) + ", last host " + h.final_host + ", " + std::to_string(GetTickCount64() - t0) + " ms");
     if (!h.ok) return 1;
     std::string why;

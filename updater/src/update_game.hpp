@@ -6,6 +6,10 @@
 //                     Manager's confirmations (crsm/src/ui/dialogs.cpp) and the Slots Loader's Options pages (plugin/src/options_page.cpp).
 //                     Styles (app.DialogButtonStyle): OK 1, YesNo 4, YesNoCancel 5; the three-button box's third button gets our word in
 //                     place of the game's Cancel (its text in the box's SimpleList_3: message id emptied, set_Message)
+//   the ticker        the strip on the left side of the screen (the one of the Recording Manager's drill downloads): a TickerRequestData
+//                     (Init(112, null), TickerId 1, Category 6, DisplaySecond) to hTicker.Manager.RequestShowTicker; its text is
+//                     what a hook on TickerRequestData.GetMessage answers for our requests (their RequestId); kept on screen by
+//                     its ElapsedSecond put back to zero, its text rewritten on the strip's own via.gui.Text
 //   the screen        bFlowManager.m_flow_work._FlowMap: its _ID (the core's flow id) and its m_desc (a battle's description: a battle,
 //                     a replay or training is loaded or played); app.UIFlowManager._Handles: a message box of the game's is up
 //   the language      app.Option's DispLanguage (611) in its LanguageList, else via.SystemService.get_Language (as the plugin's words)
@@ -25,6 +29,19 @@ bool box_open(const std::string& text, const std::string& title, Buttons buttons
 int box_poll();
 void box_drop();
 bool box_is_open();
+
+// A strip of the game's ticker with this text, for `seconds`. Every strip of ours still on screen (or waiting its turn) reads the
+// last text given, here or by ticker_text: a download's percentage stays the one of the moment. False: no strip (the game's types
+// or the hook are not there), nothing else changes.
+bool ticker(const std::string& text, double seconds);
+void ticker_text(const std::string& text);
+// The last strip asked for, kept on screen and saying `text`, to call every frame while it must stay: Shown = the game shows it (its
+// time starts again: it leaves `seconds` after the last call; its text is rewritten when it changes), Waiting = the game has it and
+// shows another one first, Gone = the game has it no more (never asked, shown and ended, or dropped): ask for a new one.
+enum class Kept { Shown, Waiting, Gone };
+Kept ticker_keep(const std::string& text);
+std::string ticker_stats();       // for the log (after the install: its thread is done)
+std::string ticker_why();         // game thread: the step a refused strip stopped at
 
 int32_t flow_id();                // -1 unknown
 bool in_battle();                 // a battle description is loaded (battle, replay, training)

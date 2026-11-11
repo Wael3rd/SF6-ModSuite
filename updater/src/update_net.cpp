@@ -131,13 +131,17 @@ HttpResult http_get(const std::string& url, size_t max_bytes, std::string* body)
     return r;
 }
 
-HttpResult http_get_file(const std::string& url, int64_t max_bytes, const std::wstring& path) {
+HttpResult http_get_file(const std::string& url, int64_t max_bytes, const std::wstring& path, const BytesFn& bytes) {
     const std::wstring tmp = path + L".part";
     HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) { HttpResult r; r.why = "the download cannot be written"; return r; }
+    int64_t received = 0;
     HttpResult r = get(url, max_bytes, [&](const char* p, size_t n) {
         DWORD put = 0;
-        return WriteFile(h, p, (DWORD)n, &put, nullptr) && put == n;
+        if (!WriteFile(h, p, (DWORD)n, &put, nullptr) || put != n) return false;
+        received += (int64_t)n;
+        if (bytes) bytes(received);
+        return true;
     });
     if (r.ok && !FlushFileBuffers(h)) { r.ok = false; r.why = "the download cannot be written"; }
     CloseHandle(h);

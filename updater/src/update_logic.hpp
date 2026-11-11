@@ -5,10 +5,15 @@
 // The manifest (manifest.json, an asset of every GitHub release since the updater, written by packaging/make_manifest.py):
 //   { "format": "sf6suite-manifest-1", "suite": "1.30.1", "tag": "v1.30.1",
 //     "packages": [ { "id": "color_mod", "name": "SF6 Color Mod", "version": "0.26.1", "asset": "SF6_ColorMod_0.26.1.zip",
-//                     "size": 1418590, "sha256": "<64 hex>", "proof": "reframework/plugins/SF6_ColorModNative.dll" }, ... ] }
+//                     "size": 1418590, "sha256": "<64 hex>", "proof": "reframework/plugins/SF6_ColorModNative.dll" }, ... ],
+//     "tools": [ { "id": "mod_sorter", "name": "SF6 Mod Sorter", "version": "1.1.0", "asset": "SF6_ModSorter_1.1.0.zip",
+//                  "size": 974145, "sha256": "<64 hex>", "file": "SF6_ModSorter.exe" } ] }
+// "tools" (optional, since suite 1.34.0): the programs of the release that are no package and update themselves (the Mod Sorter
+// reads its own entry; the game never installs one). The updaters before it ignore the key.
 // Read as hostile: 64 KiB at most, nesting 8 at most, every field of the expected type, a known id's proof must be the one this code
 // knows (the manifest cannot point the updater at another file), an unknown id is skipped (a later package an older updater does not
-// know), an asset is a bare file name, its size 64 MiB at most. Anything else: the whole manifest is refused.
+// know), an asset is a bare file name, its size 64 MiB at most. Anything else: the whole manifest is refused. A tool's entry that is
+// not as expected is left out alone (tool_notes): a tool never stops the packages' update.
 #pragma once
 
 #include <cstdint>
@@ -43,17 +48,26 @@ constexpr const char* kManifestFormat = "sf6suite-manifest-1";
 constexpr size_t kManifestMaxBytes = 64 * 1024;
 constexpr int64_t kAssetMaxBytes = 64ll * 1024 * 1024;
 constexpr size_t kMaxPackages = 16;
+constexpr size_t kMaxTools = 8;
 
 struct ManifestPackage {
     std::string id, name, version, asset, sha256, proof;
+    int64_t size = 0;
+};
+struct ManifestTool {
+    std::string id, name, version, asset, sha256;
+    std::string file;                        // the program at the zip's root: a bare .exe name
     int64_t size = 0;
 };
 struct Manifest {
     std::string format, suite, tag;
     std::vector<ManifestPackage> packages;   // the known ids only
     std::vector<std::string> skipped;        // ids it does not know (logged)
+    std::vector<ManifestTool> tools;         // the entries as expected only
+    std::vector<std::string> tool_notes;     // why a tool's entry was left out (logged)
 };
 bool parse_manifest(const std::string& text, Manifest* out, std::string* why);
+const ManifestTool* find_tool(const Manifest& m, const std::string& id);
 // The text make_manifest.py writes, for the tests' round trip
 std::string manifest_json(const Manifest& m);
 

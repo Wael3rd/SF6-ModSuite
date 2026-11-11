@@ -4,19 +4,25 @@
                   version (its modinfo.ini), the zip's name, size and sha256, and the file that proves the package is installed (its
                   main DLL). Upload it to the release WITH the zips: the game reads
                   https://github.com/Wael3rd/SF6-ModSuite/releases/latest/download/manifest.json
-                  A tool's zip (TOOL_PREFIXES: the Mod Sorter, make_sorter_package.py) is left out too: the updater installs
-                  packages, a tool is downloaded by hand.
+                  A tool's zip (TOOLS: the Mod Sorter, make_sorter_package.py) is no package, the game never installs it:
+                  it is listed apart, under "tools" (id, name, version, zip, size, sha256, the program in the zip), where
+                  the tool itself reads whether a newer one is out (tools/sorter/suite_update.cpp). Older updaters ignore
+                  that key.
 
 make_bundle.py calls it at its end, so every release folder gets one. Checked, the script stops: a zip that is no known package or two
 zips of one package; a package's modinfo.ini without a version; an entry the updater would refuse (the same rules as
-updater/src/update_logic.cpp classify_entry, kept in step by hand: a refused entry stops the player's whole update).
+updater/src/update_logic.cpp classify_entry, kept in step by hand: a refused entry stops the player's whole update); two zips
+of one tool, a tool's zip without its program at the root or without a version.
 
 Usage: python make_manifest.py --release "<folder>" --version <suite version> [--out "<file>"]
 """
 import argparse, hashlib, json, os, re, sys, zipfile
 
 BUNDLE_PREFIX = "SF6_ModSuite_AllInOne_"
-TOOL_PREFIXES = ("SF6_ModSorter_",)   # zips of a release that are no package: in the all-in-one, never in the manifest
+# zips of a release that are no package (in the all-in-one, never among the manifest's packages): the zip's prefix, the tool's
+# id in the manifest (the tool looks itself up by it), its program at the zip's root
+TOOLS = [("SF6_ModSorter_", "mod_sorter", "SF6_ModSorter.exe")]
+TOOL_PREFIXES = tuple(t[0] for t in TOOLS)
 FORMAT = "sf6suite-manifest-1"
 # id, the file that proves the package is installed: the same table as updater/src/update_logic.cpp known_packages()
 KNOWN = [
@@ -118,7 +124,36 @@ def build_manifest(release, version):
                          "size": os.path.getsize(path), "sha256": sha256(path), "proof": proof})
     order = [i for i, _ in KNOWN]
     packages.sort(key=lambda p: order.index(p["id"]))
-    return {"format": FORMAT, "suite": version, "tag": "v" + version, "packages": packages}
+    m = {"format": FORMAT, "suite": version, "tag": "v" + version, "packages": packages}
+    tools = build_tools(release)
+    if tools:
+        m["tools"] = tools
+    return m
+
+
+def build_tools(release):
+    """The tools' zips of the folder, as the manifest lists them (update_logic.cpp parse_manifest, "tools")."""
+    tools = []
+    for prefix, tid, exe in TOOLS:
+        names = sorted(n for n in os.listdir(release) if n.lower().endswith(".zip") and n.startswith(prefix))
+        if not names:
+            continue
+        if len(names) > 1:
+            sys.exit("make_manifest: %s are both %s" % (" and ".join(names), tid))
+        n = names[0]
+        if not ASSET.match(n):
+            sys.exit("make_manifest: %s: not a name the updater accepts" % n)
+        path = os.path.join(release, n)
+        with zipfile.ZipFile(path) as z:
+            if exe not in z.namelist():
+                sys.exit("make_manifest: %s: no %s at its root" % (n, exe))
+            info = modinfo_of(z)
+        v = info.get("version", "")
+        if not VERSION.match(v):
+            sys.exit("make_manifest: %s: its modinfo.ini has no version" % n)
+        tools.append({"id": tid, "name": info.get("name") or tid, "version": v, "asset": n,
+                      "size": os.path.getsize(path), "sha256": sha256(path), "file": exe})
+    return tools
 
 
 def write_manifest(release, version, out=None):
@@ -130,6 +165,8 @@ def write_manifest(release, version, out=None):
     print("manifest: %s (%d packages, suite %s)" % (out, len(m["packages"]), version))
     for p in m["packages"]:
         print("  %-18s %-8s %-36s %9d %s" % (p["id"], p["version"], p["asset"], p["size"], p["sha256"][:16]))
+    for p in m.get("tools", []):
+        print("  %-18s %-8s %-36s %9d %s  (tool)" % (p["id"], p["version"], p["asset"], p["size"], p["sha256"][:16]))
     return out
 
 

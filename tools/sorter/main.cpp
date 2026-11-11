@@ -4,7 +4,8 @@
 //   SF6_ModSorter.exe --classify <path>...   no window: one JSON line per path (category, character, reason, destination...)
 //   SF6_ModSorter.exe --shot <out.png> [--items <path>...] [--lang <code>] [--select N | --select-sub N] [--install]
 //                     [--nsfw N] [--replace N] [--size WxH] [--page installed|options] [--lang-step N] [--category N] [--running 0|1|2]
-//                     [--move] [--maximized] [--update check|checking|installing|install] [--manifest <file>]
+//                     [--move] [--maximized] [--update check|checking|installing|install|downloading|self-downloading]
+//                     [--manifest <file>]
 //                                            renders the window offscreen at 100 % into a PNG and exits: no window, no focus
 //                                            (--page installed: the Installed tab, --category N its selected category;
 //                                            --page options: the Options tab, --lang-step N its Language row pressed N
@@ -12,14 +13,25 @@
 //                                            --running: as if the game were not running, running, or being started;
 //                                            --move: N pressed on the selected picture of the Installed tab first (it moves
 //                                            the mod, test folders only); --maximized: the header as in a maximised window;
-//                                            --update: the Options tab's updates row after its look at the latest release,
-//                                            as if looking, as if installing, or after its install (test folders only);
-//                                            --select 1 selects that row; --manifest: the release's manifest from a file)
+//                                            --update: the Options tab's update rows after the look at the latest release,
+//                                            as if looking, as if installing, after the suite's install (test folders
+//                                            only), or 42 % into a download (the suite's, the sorter's own);
+//                                            --select 1 selects the sorter's row, 2 the suite's; --manifest: the release's
+//                                            manifest from a file)
 //   SF6_ModSorter.exe --check-updates [--game <folder>] [--manifest <file>]
 //                                            no window: the suite's packages in the game folder against GitHub's latest
-//                                            release, one JSON line (state, latest, lines old -> new)
+//                                            release, one JSON line (state, latest, lines old -> new), then one for the
+//                                            sorter itself (sorter, current, latest)
 //   SF6_ModSorter.exe --install-update --game <folder>
 //                                            tests: the same, then what is offered is installed (refused while the game runs)
+//   SF6_ModSorter.exe --install-self --manifest <file> --assets <folder>
+//                                            tests, on a COPY of the exe: the sorter's own update from a manifest file and
+//                                            a folder holding the zip it names; the copy replaces itself (not started again)
+//   SF6_ModSorter.exe --version              no window: the sorter's version, one line
+//   SF6_ModSorter.exe --manifest <file> --assets <folder>
+//                                            tests, on a COPY of the exe: the window, the release read from that file; the
+//                                            sorter's own update is then installed from the folder (F on its row) and the
+//                                            copy starts again; the suite's packages are never installed from a file
 //   --game <folder>                          the game folder for this run (tests); otherwise the remembered one, the exe's own
 //                                            folder or Steam's
 //   --lang <code>                            the language: en fr ja zh-Hans it de es es-419 ru pl pt ko zh-Hant ar
@@ -47,6 +59,7 @@
 #include "sorter.hpp"
 #include "suite_update.hpp"
 #include "ui.hpp"
+#include "version.hpp"
 
 namespace {
 
@@ -143,7 +156,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     UiOptions o;
     std::wstring game, lang;
     bool classify_mode = false, game_given = false, verbose = false, move_mode = false;
-    int update_mode = 0;   // 1: --check-updates, 2: --install-update
+    int update_mode = 0;   // 1: --check-updates, 2: --install-update, 3: --install-self
     std::wstring move_path;
     std::vector<std::wstring> classify_paths;
     for (size_t i = 0; i < args.size(); ++i) {
@@ -184,10 +197,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         else if (a == L"--lang-step") o.lang_step = _wtoi(next().c_str());
         else if (a == L"--check-updates") update_mode = 1;
         else if (a == L"--install-update") update_mode = 2;
+        else if (a == L"--install-self") update_mode = 3;
+        else if (a == L"--assets") o.assets = full_path(next());
+        else if (a == L"--version") { open_output(); out_line(kSorterVersion); return 0; }
         else if (a == L"--manifest") o.manifest = full_path(next());
         else if (a == L"--update") {
             const std::wstring u = next();
-            o.update = u == L"check" ? 1 : u == L"checking" ? 2 : u == L"installing" ? 3 : u == L"install" ? 4 : 0;
+            o.update = u == L"check" ? 1 : u == L"checking" ? 2 : u == L"installing" ? 3 : u == L"install" ? 4 :
+                       u == L"downloading" ? 5 : u == L"self-downloading" ? 6 : 0;
         }
         else if (a == L"--running") { const int v = _wtoi(next().c_str()); o.running = v < 0 ? 0 : v > 2 ? 2 : v; }
         else if (a == L"--size") {
@@ -220,14 +237,26 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         rc = move_nsfw(o.game_dir, move_path);
     } else if (update_mode) {
         // what the Options tab's updates row would say; --install-update: then what F does there
-        const SuiteCheck c = suite_check(o.game_dir, true, o.manifest);
+        SelfCheck me;
+        const SuiteCheck c = suite_check(o.game_dir, true, o.manifest, &me);
         out_line(suite_check_json(c));
-        if (c.state == SuiteCheck::Failed || c.state == SuiteCheck::NoGame) rc = 1;
+        out_line(self_check_json(me));
+        if (update_mode != 3 && (c.state == SuiteCheck::Failed || c.state == SuiteCheck::NoGame)) rc = 1;
         if (update_mode == 2 && c.state == SuiteCheck::Available) {
             const SuiteInstall r = suite_install(o.game_dir, c, language(), o.running >= 0 ? o.running == 1 : game_process_running());
             std::string said = r.message;
             for (char& ch : said) if (ch == '\n') ch = ' ';
             out_line(r.ok ? (r.nothing ? "nothing left to install: " : "installed: ") + r.version : "error: " + r.why + " [" + said + "]");
+            rc = r.ok ? 0 : 1;
+        }
+        if (update_mode == 3) {   // the sorter itself, from a folder: never from GitHub here, never without --assets
+            SelfInstall r;
+            if (o.assets.empty() || o.manifest.empty()) r.why = "--install-self needs --manifest and --assets";
+            else if (me.state != SelfCheck::Available) r.why = "no newer Mod Sorter in the manifest";
+            else r = self_install(me, language(), nullptr, L"", o.assets);
+            std::string said = r.message;
+            for (char& ch : said) if (ch == '\n') ch = ' ';
+            out_line(r.ok ? "installed: Mod Sorter " + r.version : "error: " + r.why + " [" + said + "]");
             rc = r.ok ? 0 : 1;
         }
     } else if (classify_mode) {

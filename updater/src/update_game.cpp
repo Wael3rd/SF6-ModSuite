@@ -9,7 +9,10 @@
 #endif
 #include <windows.h>
 
+#include <atomic>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <vector>
 
 #pragma warning(push, 0)                // REFramework's header: size_t -> unsigned, an unused local
@@ -35,12 +38,17 @@ TD* type(const char* name) {
 }
 
 // A method by name and number of parameters, on the type or a parent
+// (the name may be a full signature, "Init(System.Int32, System.Object)": tried as it is, then by its name and arity)
 Method* method_of(TD* td, const char* name, int nparams) {
+    const char* open = std::strchr(name, '(');
+    const size_t len = open ? (size_t)(open - name) : std::strlen(name);
     for (TD* t = td; t; t = t->get_parent_type()) {
         if (Method* m = t->find_method(name))
             if (nparams < 0 || m->get_num_params() == (uint32_t)nparams) return m;
-        for (Method* m : t->get_methods())
-            if (m && std::strcmp(m->get_name(), name) == 0 && (nparams < 0 || m->get_num_params() == (uint32_t)nparams)) return m;
+        for (Method* m : t->get_methods()) {
+            const char* n = m ? m->get_name() : nullptr;
+            if (n && std::strlen(n) == len && std::strncmp(n, name, len) == 0 && (nparams < 0 || m->get_num_params() == (uint32_t)nparams)) return m;
+        }
     }
     return nullptr;
 }
@@ -227,6 +235,223 @@ bool game_dialog_up() {
     } catch (...) {
         return false;
     }
+}
+
+// ---- the ticker ----------------------------------------------------------------------------------------------------------------
+// The game's strip (left side of the screen), as the Recording Manager's (crsm/src/ui/ticker.cpp): a TickerRequestData handed to
+// hTicker.Manager.RequestShowTicker; the game asks the request for its message through TickerRequestData.GetMessage, which the hook
+// answers for our requests only (their RequestId), with the text of the moment: a strip the game draws late says where the
+// download is now. The hook is set at the first strip (a player who never updates has none) and stays.
+// A strip is kept on screen by ticker_keep: the game counts a request's time in its ElapsedSecond and takes the strip away at
+// DisplaySecond, so the time put back to zero each frame holds it, and it leaves by itself once nobody holds it. The text on screen
+// is the via.gui.Text of the strip's part (manager.UIFlowHandle -> its element -> the current state's parameter -> the
+// UIPartsTicker whose Data is the request): the game reads GetMessage once when the strip comes, a later text is written there.
+namespace {
+
+constexpr uint64_t kStripKeepMs = 60000;         // a request is kept a minute (shown a few seconds), then released
+constexpr size_t kStripMax = 32;
+
+struct Strip { uint8_t id[16]; uint64_t at; Obj* req; };
+std::mutex g_tk_mx;                              // the strips and the text: GetMessage is hooked on whatever thread calls it
+std::vector<Strip> g_strips;
+std::string g_tk_text;
+std::atomic<int> g_tk_live{0};                   // the strips kept: 0 = the hook has nothing to look at
+std::atomic<uint64_t> g_tk_shown{0}, g_tk_answered{0}, g_tk_rewrites{0}, g_tk_unreached{0};
+std::string g_tk_on_screen;                      // game thread: the text last written on the strip kept
+bool g_tk_hook_tried = false, g_tk_hooked = false;
+std::string g_tk_why;                            // game thread: the step the last refused strip stopped at
+std::string g_tk_notes;                          // under g_tk_mx: what the last strip's calls raised, for the log
+thread_local bool t_tk_hit = false;
+thread_local std::string t_tk_text;
+
+API::Field* field_of(Obj* o, const char* name) {
+    for (TD* t = o->get_type_definition(); t; t = t->get_parent_type())
+        if (API::Field* f = t->find_field(name)) return f->is_static() ? nullptr : f;
+    return nullptr;
+}
+
+// An integer / enum field of any width, a float or double field
+void set_int(Obj* o, const char* name, int64_t v) {
+    API::Field* f = field_of(o, name);
+    void* p = f ? f->get_data_raw(o, false) : nullptr;
+    if (!p) return;
+    TD* ft = f->get_type();
+    uint32_t sz = ft ? ft->get_valuetype_size() : 4;
+    if (sz != 1 && sz != 2 && sz != 8) sz = 4;
+    std::memcpy(p, &v, sz);
+}
+
+void set_real(Obj* o, const char* name, double v) {
+    API::Field* f = field_of(o, name);
+    void* p = f ? f->get_data_raw(o, false) : nullptr;
+    if (!p) return;
+    TD* ft = f->get_type();
+    if (ft && ft->get_valuetype_size() == 8) *static_cast<double*>(p) = v;
+    else *static_cast<float*>(p) = (float)v;
+}
+
+// A request's RequestId: a 16-byte value field
+bool request_id(Obj* req, uint8_t out[16]) {
+    if (!is_managed(req)) return false;
+    API::Field* f = field_of(req, "RequestId");
+    TD* ft = f ? f->get_type() : nullptr;
+    if (!ft || !ft->is_valuetype() || ft->get_valuetype_size() < 16) return false;
+    void* p = f->get_data_raw(req, false);
+    if (!p) return false;
+    std::memcpy(out, p, 16);
+    return true;
+}
+
+int ticker_pre(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    t_tk_hit = false;
+    if (g_tk_live.load(std::memory_order_relaxed) == 0) return REFRAMEWORK_HOOK_CALL_ORIGINAL;   // every ticker of the game comes here
+    try {
+        uint8_t id[16];
+        if (!argv || !request_id(static_cast<Obj*>(argv[1]), id)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+        std::lock_guard lk(g_tk_mx);
+        for (const Strip& s : g_strips) {
+            if (std::memcmp(s.id, id, 16) != 0) continue;
+            t_tk_text = g_tk_text;
+            t_tk_hit = true;
+            g_tk_answered.fetch_add(1);
+            return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
+        }
+    } catch (...) {
+        t_tk_hit = false;
+    }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
+void ticker_post(void** ret, REFrameworkTypeDefinitionHandle, unsigned long long) {
+    if (!t_tk_hit) return;
+    t_tk_hit = false;
+    try {
+        // a managed string handed to the game: one more reference for it (the game releases what GetMessage returns)
+        Obj* s = ret ? new_string(t_tk_text) : nullptr;
+        if (s) { s->add_ref(); *ret = s; }
+    } catch (...) {
+    }
+}
+
+bool ticker_hook() {
+    if (g_tk_hook_tried) return g_tk_hooked;
+    g_tk_hook_tried = true;
+    Method* m = method_of(type("app.TickerRequestData"), "GetMessage", -1);
+    g_tk_hooked = m && m->get_function_raw() && m->add_hook(ticker_pre, ticker_post, false) != 0;
+    return g_tk_hooked;
+}
+
+}  // namespace
+
+void ticker_text(const std::string& text) {
+    std::lock_guard lk(g_tk_mx);
+    g_tk_text = text;
+}
+
+bool ticker(const std::string& text, double seconds) {
+    auto no = [](const char* why) { g_tk_why = why; return false; };
+    try {
+        ticker_text(text);
+        if (!ticker_hook()) return no("no hook on TickerRequestData.GetMessage");
+        TD* rtd = type("app.TickerRequestData");
+        if (!rtd) return no("no type app.TickerRequestData");
+        Method* get_mgr = method_of(type("app.helper.hTicker"), "get_Manager", 0);
+        if (!get_mgr) return no("no hTicker.get_Manager");
+        Method* init = method_of(rtd, "Init(System.Int32, System.Object)", 2);
+        if (!init) return no("no TickerRequestData.Init");
+        Obj* req = rtd->create_instance(1);
+        if (!is_managed(req)) return no("no request made");
+        req->add_ref();                              // ours, released a minute later (the game keeps the request while it shows it)
+        reframework::InvokeRet r{};
+        // Init's and RequestShowTicker's own answers are not asked for, as the Recording Manager's ticker never did
+        std::string notes;
+        if (!call(init, req, { arg_i32(112), nullptr }, &r)) notes += " Init raised;";
+        set_int(req, "TickerId", 1);
+        if (TD* util = type("app.TickerUtil"))       // its static constructor, as the Recording Manager's ticker runs it
+            if (Method* cctor = util->find_method(".cctor")) call(cctor, nullptr, {}, &r);
+        Strip s{};
+        if (!request_id(req, s.id)) { req->release(); return no("the request has no RequestId"); }
+        Obj* manager = call(get_mgr, nullptr, {}, &r) ? static_cast<Obj*>(r.ptr) : nullptr;
+        if (!is_managed(manager)) { req->release(); return no("no ticker manager"); }
+        Method* show = method_of(manager->get_type_definition(), "RequestShowTicker(app.TickerRequestData)", 1);
+        if (!show) { req->release(); return no("no RequestShowTicker on the manager"); }
+        s.at = GetTickCount64();
+        s.req = req;
+        std::vector<Obj*> old;
+        {
+            std::lock_guard lk(g_tk_mx);
+            std::erase_if(g_strips, [&](const Strip& x) {
+                const bool gone = s.at - x.at > kStripKeepMs;
+                if (gone) old.push_back(x.req);
+                return gone;
+            });
+            if (g_strips.size() >= kStripMax) { old.push_back(g_strips.front().req); g_strips.erase(g_strips.begin()); }
+            g_strips.push_back(s);
+            g_tk_live.store((int)g_strips.size());
+        }
+        for (Obj* o : old) { try { o->release(); } catch (...) {} }
+        set_int(req, "Category", 6);
+        set_real(req, "DisplaySecond", seconds);
+        if (!call(show, manager, { req }, &r)) notes += " RequestShowTicker raised;";
+        {
+            std::lock_guard lk(g_tk_mx);
+            g_tk_notes = notes;
+        }
+        g_tk_shown.fetch_add(1);
+        g_tk_on_screen.clear();
+        return true;
+    } catch (...) {
+        return no("an exception");
+    }
+}
+
+Kept ticker_keep(const std::string& text) {
+    try {
+        Obj* req = nullptr;
+        {
+            std::lock_guard lk(g_tk_mx);
+            if (g_strips.empty()) return Kept::Gone;
+            req = g_strips.back().req;
+            g_tk_text = text;                        // a strip still waiting its turn comes with it
+        }
+        static Method* get_mgr = method_of(type("app.helper.hTicker"), "get_Manager", 0);
+        reframework::InvokeRet r{};
+        Obj* manager = get_mgr && call(get_mgr, nullptr, {}, &r) ? static_cast<Obj*>(r.ptr) : nullptr;
+        if (!is_managed(manager)) return Kept::Gone;
+        if (field_obj(manager, "<CurrentRequest>k__BackingField") != req) {
+            Obj* list = field_obj(manager, "<RequestList>k__BackingField");
+            return list && call_named(list, "Contains", 1, { req }, &r) && r.byte ? Kept::Waiting : Kept::Gone;
+        }
+        set_real(req, "ElapsedSecond", 0.0);
+        if (text == g_tk_on_screen) return Kept::Shown;
+        Obj* part = manager;
+        for (const char* f : { "UIFlowHandle", "<Element>k__BackingField", "_Curt", "_Param", "Ticker" }) part = part ? field_obj(part, f) : nullptr;
+        Obj* label = part && field_obj(part, "Data") == req ? field_obj(part, "Text") : nullptr;
+        Obj* str = label ? new_string(text) : nullptr;
+        if (str && call_named(label, "set_Message", 1, { str }, &r)) {
+            g_tk_on_screen = text;
+            g_tk_rewrites.fetch_add(1);
+        } else {
+            g_tk_unreached.fetch_add(1);             // the strip's part is not there yet (it comes a few frames later), or not where it was
+        }
+        return Kept::Shown;
+    } catch (...) {
+        return Kept::Gone;
+    }
+}
+
+std::string ticker_why() { return g_tk_why; }
+
+std::string ticker_stats() {
+    std::string notes;
+    {
+        std::lock_guard lk(g_tk_mx);
+        notes = g_tk_notes;
+    }
+    return "strips " + std::to_string(g_tk_shown.load()) + ", texts asked by the game " + std::to_string(g_tk_answered.load()) +
+           ", texts rewritten on screen " + std::to_string(g_tk_rewrites.load()) + " (not reached " + std::to_string(g_tk_unreached.load()) + ")" +
+           (g_tk_hooked ? "" : g_tk_hook_tried ? ", no hook on TickerRequestData.GetMessage" : ", never used") +
+           (notes.empty() ? "" : "," + notes);
 }
 
 namespace {

@@ -21,9 +21,12 @@ struct UiOptions {
     int running = -1;                  // --running 0|1|2: as if the game were not running / running / being started (tests); -1: look
     bool move = false;                 // --move (tests): N pressed on the Installed tab's selected picture before the render
     bool maximized = false;            // --maximized (tests): the header's buttons as in a maximised window
-    int update = 0;                    // --update check|checking|installing|install (tests): the Options tab's updates row after
-                                       // its check (1), as if looking up (2), as if installing (3), after its install (4)
+    int update = 0;                    // --update check|checking|installing|install|downloading|self-downloading (tests): the
+                                       // Options tab's updates rows after the check (1), as if looking up (2), as if installing
+                                       // (3), after the suite's install (4), 42 % into the suite's download (5), the sorter's (6)
     std::wstring manifest;             // --manifest <file> (tests): the release's manifest read from a file, never installed
+    std::wstring assets;               // --assets <folder> (tests, with --manifest): the sorter's own zip read there, which
+                                       // is the one thing a manifest from a file installs (the exe that runs replaces itself)
 };
 
 int run_window(const UiOptions& o);

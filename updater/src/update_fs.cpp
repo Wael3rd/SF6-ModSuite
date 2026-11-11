@@ -293,6 +293,40 @@ bool extract_zip(const std::wstring& zip, const std::wstring& tree, const std::s
     return true;
 }
 
+bool extract_one(const std::wstring& zip, const std::string& name, const std::wstring& dest, std::string* why) {
+    auto fail = [&](const std::string& w) { if (why) *why = w; return false; };
+    std::string data;
+    if (!read_file(zip, &data, (size_t)kAssetMaxBytes)) return fail("the zip cannot be read");
+    mz_zip_archive z{};
+    if (!mz_zip_reader_init_mem(&z, data.data(), data.size(), 0)) return fail("not a zip");
+    const std::string want = lower(name);
+    int found = -1;
+    uint64_t size = 0;
+    std::string w;
+    const mz_uint n = mz_zip_reader_get_num_files(&z);
+    if (n > 4096) w = "too many entries";
+    for (mz_uint i = 0; w.empty() && i < n; ++i) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&z, i, &st)) { w = "an entry cannot be read"; break; }
+        if (lower(st.m_filename) != want) continue;          // the exact name: an entry in a folder is another name
+        if (found >= 0) { w = "an entry twice: " + name; break; }
+        if (st.m_is_directory || st.m_is_encrypted || !st.m_is_supported) { w = "not a plain file: " + name; break; }
+        if (st.m_uncomp_size == 0 || st.m_uncomp_size > (uint64_t)kAssetMaxBytes) { w = "an entry too large: " + name; break; }
+        found = (int)i;
+        size = st.m_uncomp_size;
+    }
+    if (w.empty() && found < 0) w = "the zip does not hold " + name;
+    if (w.empty()) {
+        size_t got = 0;
+        void* p = mz_zip_reader_extract_to_heap(&z, (mz_uint)found, &got, 0);
+        if (!p || got != size) w = "an entry does not unpack: " + name;
+        else if (!write_file(dest, std::string(static_cast<const char*>(p), got))) w = "the file cannot be written";
+        if (p) mz_free(p);
+    }
+    mz_zip_reader_end(&z);
+    return w.empty() ? true : fail(w);
+}
+
 // ---- the swap ----------------------------------------------------------------------------------------------------------------------
 namespace {
 

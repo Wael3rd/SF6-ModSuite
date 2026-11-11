@@ -9,12 +9,14 @@
 //   update.log         what it did, the last lines
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <string>
 #include <vector>
 
 #include "update_fs.hpp"
 #include "update_logic.hpp"
+#include "update_net.hpp"
 
 namespace sf6up {
 
@@ -57,11 +59,22 @@ struct InstallResult {
     std::string what;             // for the player: the file Smart App Control blocks
     SwapResult swap;
 };
-// Fetch one package's zip to `dest` (in game: https from the release; the tests: a local copy). Its size and sha256 are checked after.
-using Fetch = std::function<bool(const PlanItem&, const std::wstring& dest, std::string* why)>;
-InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, const LogFn& log, int fail_at = -1);
+// Where an install is, for whoever shows it (the game's ticker, the sorter's window): written by the thread that installs, read
+// from any other. The download is counted in bytes over the plan's zips (their sizes are the manifest's).
+struct Progress {
+    enum Step : int { Idle, Download, Install };   // Install: the zips are there (checks, Smart App Control, the swap)
+    std::atomic<int> step{Idle};
+    std::atomic<int64_t> done{0}, total{0};
+    int percent() const;                           // of the download, 0 to 100
+    void reset() { step.store(Idle); done.store(0); total.store(0); }
+};
+// Fetch one package's zip to `dest` (in game: https from the release; the tests: a local copy), telling `bytes` what it has
+// received so far. Its size and sha256 are checked after.
+using Fetch = std::function<bool(const PlanItem&, const std::wstring& dest, const BytesFn& bytes, std::string* why)>;
+InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, const LogFn& log, int fail_at = -1,
+                          Progress* progress = nullptr);
 // The fetch the game uses: the asset of the manifest's release on GitHub
-bool fetch_from_github(const std::string& tag, const PlanItem& item, const std::wstring& dest, std::string* why);
+bool fetch_from_github(const std::string& tag, const PlanItem& item, const std::wstring& dest, const BytesFn& bytes, std::string* why);
 // The manifest of the latest release
 bool fetch_manifest(std::string* text, std::string* why);
 

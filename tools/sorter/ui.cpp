@@ -35,6 +35,8 @@
 #include "sorter.hpp"
 #include "suite_update.hpp"
 #include "ui.hpp"
+#include "version.hpp"
+#include "../../updater/src/update_install.hpp"   // sf6up::Progress
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
@@ -115,7 +117,8 @@ struct InitResult { int gen; bool costume_ok, stage_ok; std::string costume_note
 struct ClassResult { int gen; int item; Classification c; };
 struct PlacedResult { int item; PlaceResult r; };
 struct PicResult { std::wstring key; bool ok = false; ModPicture pic; };
-struct UpdateResult { int gen = 0; bool install = false; SuiteCheck check; SuiteInstall inst; };
+// kind: 0 a look-up (check, self), 1 the suite installed (inst), 2 the sorter itself (sinst)
+struct UpdateResult { int gen = 0; int kind = 0; SuiteCheck check; SelfCheck self; SuiteInstall inst; SelfInstall sinst; };
 
 // A mod's picture as the window holds it. Its key: the size asked, the mod's stamp, its path.
 struct Pic {
@@ -262,12 +265,17 @@ private:
 // The update thread: SF6 Mod Suite's latest release, looked up and installed off the window's thread
 // ---------------------------------------------------------------------------------------------
 
+enum { OPT_LANG = 0, OPT_SELF = 1, OPT_SUITE = 2, OPT_ROWS = 3 };   // the Options page's rows, top to bottom
+
 struct UpdateJob {
-    bool install = false;
+    int kind = 0;                      // as UpdateResult's
     int gen = 0;
     std::wstring game_dir, manifest;
     bool asked = false;                // a look-up: the player pressed the key
     SuiteCheck check;                  // an install: what the look-up offered
+    SelfCheck self;                    // the sorter's own: the same
+    sf6up::Progress* progress = nullptr;   // an install: where it is, read by the window
+    std::wstring assets;               // the sorter's own install, tests: its zip read from that folder
     std::string lang;
     bool running = false;              // an install: the game was running when it was asked
 };
@@ -311,9 +319,10 @@ private:
             }
             auto* r = new UpdateResult;
             r->gen = j.gen;
-            r->install = j.install;
-            if (j.install) r->inst = suite_install(j.game_dir, j.check, j.lang, j.running);
-            else r->check = suite_check(j.game_dir, j.asked, j.manifest);
+            r->kind = j.kind;
+            if (j.kind == 1) r->inst = suite_install(j.game_dir, j.check, j.lang, j.running, j.progress);
+            else if (j.kind == 2) r->sinst = self_install(j.self, j.lang, j.progress, L"", j.assets);
+            else r->check = suite_check(j.game_dir, j.asked, j.manifest, &r->self);
             std::lock_guard<std::mutex> l(s.m);
             if (s.quit || !PostMessageW(s.target, MSG_UPDATE, 0, (LPARAM)r)) delete r;
             if (s.quit) return;
@@ -423,9 +432,13 @@ struct App {
     Msg inst_note;                    // Installed: what the last N did (a move, or why not), shown until the next key or click
     bool inst_note_error = false;
     UpdateThread* updater = nullptr;
-    int opt_sel = 0;                  // Options: the selected row (0: the language, 1: SF6 Mod Suite's updates)
-    int up_busy = 0;                  // 1: the latest release is being looked up, 2: it is being installed
+    int opt_sel = 0;                  // Options: the selected row (OPT_LANG, OPT_SELF, OPT_SUITE)
+    int up_busy = 0;                  // 1: the latest release is being looked up, 2: an update is being installed
+    bool up_self = false;             // up_busy 2: the sorter's own update (else the suite's)
+    bool self_restart = false;        // the sorter replaced itself: the new exe is started, this window closes
+    sf6up::Progress up_progress;      // up_busy 2: where the install is (written by the update thread)
     SuiteCheck up_check;              // what the last look-up found
+    SelfCheck self_check;             // the same for the sorter itself
     Msg up_note;                      // the update was installed: said until the next update action
     std::string up_fail;              // it was not: the updater's own sentence, in the language of the moment
 
@@ -996,7 +1009,7 @@ void queue_update_check(App& a, bool asked) {
     if (!a.updater || a.up_busy) return;
     a.up_note = Msg();
     a.up_fail.clear();
-    if (a.game_dir.empty()) { a.up_check = SuiteCheck(); return; }
+    if (a.game_dir.empty()) a.up_check = SuiteCheck();   // no game folder: the sorter's own version is still looked up
     UpdateJob j;
     j.gen = a.gen;
     j.game_dir = a.game_dir;
@@ -1007,23 +1020,34 @@ void queue_update_check(App& a, bool asked) {
     invalidate(a);
 }
 
-// What F does on the row: the install when a release waits and nothing forbids it (the game running, mods being copied)
+// What F does on the suite's row: the install when a release waits and nothing forbids it (the game running, mods being copied)
 bool update_installable(const App& a) {
     return a.up_check.state == SuiteCheck::Available && a.up_check.plan && !a.game_running && !a.installing;
 }
+// On the sorter's own row: the game may run (the exe is the only file replaced), mods must not be on their way (it starts again)
+bool self_installable(const App& a) {
+    return a.self_check.state == SelfCheck::Available && a.self_check.plan && !a.installing;
+}
 
 void update_action(App& a) {
-    if (!a.updater || a.up_busy || a.game_dir.empty()) return;
-    if (!update_installable(a)) { queue_update_check(a, true); return; }
+    if (!a.updater || a.up_busy || a.opt_sel == OPT_LANG) return;
+    const bool self = a.opt_sel == OPT_SELF;
+    if (!self && a.game_dir.empty()) return;
+    if (self ? !self_installable(a) : !update_installable(a)) { queue_update_check(a, true); return; }
     a.up_note = Msg();
     a.up_fail.clear();
+    a.up_progress.reset();
     UpdateJob j;
-    j.install = true;
+    j.kind = self ? 2 : 1;
     j.gen = a.gen;
     j.game_dir = a.game_dir;
     j.check = a.up_check;
+    j.self = a.self_check;
     j.lang = language();
     j.running = a.game_running;
+    j.progress = &a.up_progress;
+    j.assets = a.opt.assets;
+    a.up_self = self;
     a.up_busy = 2;
     a.updater->push(std::move(j));
     invalidate(a);
@@ -1031,18 +1055,39 @@ void update_action(App& a) {
 
 void apply_update(App& a, UpdateResult& r) {
     a.up_busy = 0;
-    if (!r.install) { a.up_check = std::move(r.check); return; }
-    if (r.inst.ok) {
+    if (r.kind == 0) { a.up_check = std::move(r.check); a.self_check = std::move(r.self); return; }
+    const bool ok = r.kind == 2 ? r.sinst.ok : r.inst.ok;
+    if (!ok) {
+        a.up_fail = r.kind == 2 ? r.sinst.message : r.inst.message;   // it stays offered: F tries again
+        for (char& c : a.up_fail) if (c == '\n') c = ' ';
+    } else if (r.kind == 2) {
+        a.self_check.state = SelfCheck::Current;   // the exe on disk; this window is still the old one: it hands over (MSG_UPDATE)
+        a.self_check.current = r.sinst.version;
+        a.self_check.plan.reset();
+        a.up_note = Msg{T_NOTE_SELF_UPDATED, {r.sinst.version}};
+        a.self_restart = true;
+    } else {
         a.up_check.state = SuiteCheck::Current;
         a.up_check.latest = r.inst.version;
         a.up_check.lines.clear();
         a.up_check.plan.reset();
         a.up_check.ignored = false;
         a.up_note = Msg{T_NOTE_UPDATED, {r.inst.version}};
-    } else {
-        a.up_fail = r.inst.message;       // the release stays offered: F tries again
-        for (char& c : a.up_fail) if (c == '\n') c = ' ';
     }
+}
+
+// The exe as it is on disk now, started: after the sorter replaced itself
+bool start_self() {
+    const std::wstring exe = self_exe_path();
+    if (exe.empty()) return false;
+    std::wstring cmd = L"\"" + exe + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
 }
 
 void select_option(App& a, int row) {
@@ -1385,8 +1430,9 @@ struct Painter {
                 release(p);
             }
             text(s, g_f.band, r.left + 17.f, r.top, tw + 4.f, bh, on ? kDark : hot ? 0xFFFFFF : kTextSoft);
-            // Options: a release of the suite waits there
-            if (k == 2 && !on && a.up_check.state == SuiteCheck::Available && !a.up_check.ignored)
+            // Options: a release of the suite, or a version of the sorter, waits there
+            if (k == 2 && !on && ((a.up_check.state == SuiteCheck::Available && !a.up_check.ignored) ||
+                                  a.self_check.state == SelfCheck::Available))
                 fill(D2D1::RectF(r.right - 12.f, r.top + 5.f, r.right - 6.f, r.top + 11.f), kYellow);
             a.hits.push_back({r, A_TAB, k});
             x += w + 4.f;
@@ -1736,6 +1782,12 @@ struct Painter {
         text(s, g_f.band, px + 16.f, top, pr - px - 30.f, bh, 0xEDEDED);
     }
 
+    // An update on its way, as its row and the footer say it: the download's percentage, then the install
+    std::wstring progress_text() {
+        return a.up_progress.step.load() == sf6up::Progress::Download ? T(T_UP_DOWNLOADING, {std::to_string(a.up_progress.percent())})
+                                                                     : T(T_SUB_INSTALLING);
+    }
+
     // ---- the Options page: the game's value rows (the label at the left, < value > at the right) ----
     void options() {
         const float x0 = 36.f, rw = std::min(a.W - 72.f, 860.f), rh = 40.f, top = 112.f;
@@ -1753,40 +1805,69 @@ struct Painter {
                           sel ? kDark : kText, kLangLocales[i]);
             y += rh + 6.f;
         }
-        // SF6 Mod Suite's own updates: what the last look-up found (a state, not a choice: no arrows), F acts on it
-        const SuiteCheck& c = a.up_check;
-        const bool sel = a.opt_sel == 1;
-        const D2D1_RECT_F r = D2D1::RectF(x0, y, x0 + rw, y + rh);
-        row_shell(r, sel, !sel && a.mouse.x >= 0 && hit_at(r));
-        a.hits.push_back({r, A_ROW, 1, false});
-        marquee(T(T_O_UPDATES), g_f.row, x0 + 18.f, y, rw - vw - 36.f, rh, sel ? kDark : kText, sel, 0);
-        std::wstring v;
-        uint32_t vc = sel ? kDark : kText;
-        if (a.up_busy == 2) v = T(T_SUB_INSTALLING);
-        else if (a.up_busy == 1) v = T(T_UP_CHECKING);
-        else switch (c.state) {
-            case SuiteCheck::NoGame: v = L"\u2014"; break;
-            case SuiteCheck::Off: v = T(T_UP_OFF); break;
-            case SuiteCheck::NotInstalled: v = T(T_UP_NOT_INSTALLED); break;
-            case SuiteCheck::Failed: v = T(T_UP_FAILED); break;
-            // packages older than 1.32.0 report nothing and are never offered: "up to date" would be a guess
-            case SuiteCheck::Current: v = c.unversioned > 0 ? T(T_UP_BY_HAND) : T(T_UP_CURRENT, {c.latest}); break;
-            case SuiteCheck::Available: v = T(T_UP_AVAILABLE, {c.latest}); if (!sel) vc = kYellow; break;
-        }
-        const float vx = r.right - 6.f - vw + 25.f, vtw = vw - 50.f;
-        if (IDWriteTextLayout* l = layout(v, g_f.cat, vtw, rh)) {
-            l->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            DWRITE_TEXT_METRICS m{};
-            l->GetMetrics(&m);
-            rt->DrawTextLayout(D2D1::Point2F(vx, y), l, B(vc), D2D1_DRAW_TEXT_OPTIONS_CLIP);
-            l->Release();
-            if (a.up_busy) {
-                const bool rtl = rtl_text(v);
-                spinner(rtl ? vx + (vtw - m.width) / 2 - 34.f : vx + (vtw + m.width) / 2 + 12.f, y + rh / 2, vc);
-                a.animating = true;
+        // The two update rows: what the last look-up found (a state, not a choice: no arrows), F acts on the selected one.
+        // installing: that row's update is on its way (the download's percentage, a thin bar as under a mod being copied)
+        auto status_row = [&](int row, const std::wstring& label, std::wstring v, uint32_t idle, bool installing, bool looking) {
+            const bool sel = a.opt_sel == row;
+            const D2D1_RECT_F r = D2D1::RectF(x0, y, x0 + rw, y + rh);
+            row_shell(r, sel, !sel && a.mouse.x >= 0 && hit_at(r));
+            a.hits.push_back({r, A_ROW, row, false});
+            marquee(label, g_f.row, x0 + 18.f, y, rw - vw - 36.f, rh, sel ? kDark : kText, sel, 0);
+            uint32_t vc = sel ? kDark : idle;
+            if (installing) v = progress_text();
+            else if (looking) v = T(T_UP_CHECKING);
+            if (installing || looking) vc = sel ? kDark : kText;
+            const float vx = r.right - 6.f - vw + 25.f, vtw = vw - 50.f;
+            if (IDWriteTextLayout* l = layout(v, g_f.cat, vtw, rh)) {
+                l->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                DWRITE_TEXT_METRICS m{};
+                l->GetMetrics(&m);
+                rt->DrawTextLayout(D2D1::Point2F(vx, y), l, B(vc), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                l->Release();
+                if (installing || looking) {
+                    const bool rtl = rtl_text(v);
+                    spinner(rtl ? vx + (vtw - m.width) / 2 - 34.f : vx + (vtw + m.width) / 2 + 12.f, y + rh / 2, vc);
+                    a.animating = true;
+                }
             }
+            if (installing) {
+                const int step = a.up_progress.step.load();
+                const float f = step == sf6up::Progress::Download ? a.up_progress.percent() / 100.f : step == sf6up::Progress::Install ? 1.f : 0.f;
+                fill(D2D1::RectF(r.left + 10.f, r.bottom - 4.f, r.right - 10.f, r.bottom - 2.f), sel ? 0x000000 : 0xFFFFFF, sel ? 0.18f : 0.08f);
+                fill(D2D1::RectF(r.left + 10.f, r.bottom - 4.f, r.left + 10.f + (r.right - r.left - 20.f) * f, r.bottom - 2.f), 0x1E6FD9);
+            }
+            y += rh + 6.f;
+        };
+        {   // the sorter's own updates
+            const SelfCheck& me = a.self_check;
+            std::wstring v;
+            uint32_t vc = kText;
+            switch (me.state) {
+                case SelfCheck::Unknown: v = W8(std::string(kSorterVersion)); break;
+                case SelfCheck::Off: v = T(T_UP_OFF); break;
+                case SelfCheck::Failed: v = T(T_UP_FAILED); break;
+                case SelfCheck::Current: v = T(T_UP_CURRENT, {me.current}); break;
+                case SelfCheck::Available: v = T(T_UP_AVAILABLE, {me.latest}); vc = kYellow; break;
+            }
+            status_row(OPT_SELF, T(T_O_SELF_UPDATES), v, vc, a.up_busy == 2 && a.up_self, a.up_busy == 1);
         }
-        y += rh + 12.f;
+        // SF6 Mod Suite's own updates
+        const SuiteCheck& c = a.up_check;
+        {
+            std::wstring v;
+            uint32_t vc = kText;
+            switch (c.state) {
+                case SuiteCheck::NoGame: v = L"\u2014"; break;
+                case SuiteCheck::Off: v = T(T_UP_OFF); break;
+                case SuiteCheck::NotInstalled: v = T(T_UP_NOT_INSTALLED); break;
+                case SuiteCheck::Failed: v = T(T_UP_FAILED); break;
+                // packages older than 1.32.0 report nothing and are never offered: "up to date" would be a guess
+                case SuiteCheck::Current: v = c.unversioned > 0 ? T(T_UP_BY_HAND) : T(T_UP_CURRENT, {c.latest}); break;
+                case SuiteCheck::Available: v = T(T_UP_AVAILABLE, {c.latest}); vc = kYellow; break;
+            }
+            status_row(OPT_SUITE, T(T_O_UPDATES), v, vc, a.up_busy == 2 && !a.up_self, a.up_busy == 1 && !a.game_dir.empty());
+        }
+        y += 6.f;
         // under it: what an install changes, as the game's box lists it
         for (auto& ln : c.lines) {
             text(W8(suite_line_text(ln, language())), g_f.sub, x0 + 18.f, y, rw - 36.f, 24.f, kTextSoft);
@@ -2020,12 +2101,15 @@ struct Painter {
     // ---- the footer: a description line and the key hints ----
     void footer() {
         const SuiteCheck& up = a.up_check;
-        const bool up_row = a.page == 2 && a.opt_sel == 1;   // on the updates row: what it does, and F
-        std::wstring note = T(a.page == 1 ? T_NOTE_INSTALLED : a.page == 2 ? (up_row ? T_NOTE_UPDATES : T_NOTE_OPTIONS) : T_NOTE);
+        const SelfCheck& me = a.self_check;
+        const bool up_row = a.page == 2 && a.opt_sel == OPT_SUITE;   // on the suite's updates row: what it does, and F
+        const bool self_row = a.page == 2 && a.opt_sel == OPT_SELF;  // on the sorter's own
+        std::wstring note = T(a.page == 1 ? T_NOTE_INSTALLED : a.page != 2 ? T_NOTE : up_row ? T_NOTE_UPDATES
+                              : self_row ? T_NOTE_SELF_UPDATES : T_NOTE_OPTIONS);
         uint32_t nc = 0xDADADA;
         if (a.launch_failed) { note = T(T_NOTE_LAUNCH_FAILED); nc = kRed; }
         else if (a.page == 1 && a.inst_note.id != T__COUNT) { note = T(a.inst_note); nc = a.inst_note_error ? kRed : kYellow; }
-        else if (a.up_busy == 2) note = T(T_SUB_INSTALLING) + L"  SF6 Mod Suite " + W8(up.latest);
+        else if (a.up_busy == 2) note = progress_text() + L"  " + (a.up_self ? T(T_TITLE) + L" " + W8(me.latest) : L"SF6 Mod Suite " + W8(up.latest));
         else if (a.installing) note = T(T_SUB_INSTALLING) + L"  " + std::to_wstring(a.install_count) + L" / " + std::to_wstring(a.install_total);
         else if (a.page == 2 && !a.up_fail.empty()) { note = marked(W8(a.up_fail)); nc = kRed; }
         else if (a.page == 2 && a.up_note.id != T__COUNT) { note = T(a.up_note); nc = kYellow; }
@@ -2035,7 +2119,13 @@ struct Painter {
             note = T(!up_row ? T_NOTE_UPDATE : a.game_running ? T_NOTE_UPDATE_RUNNING : T_NOTE_UPDATE_HERE, {up.latest});
             nc = kYellow;
         }
-        else if (up_row && up.state == SuiteCheck::Failed && !a.up_busy) note = T(T_NOTE_UPDATE_FAILED);
+        else if (me.state == SelfCheck::Available && (self_row || a.page != 2)) {
+            // a version of the sorter itself waits: the same way
+            note = T(self_row ? T_NOTE_SELF_UPDATE_HERE : T_NOTE_SELF_UPDATE, {me.latest});
+            nc = kYellow;
+        }
+        else if (((up_row && up.state == SuiteCheck::Failed) || (self_row && me.state == SelfCheck::Failed)) && !a.up_busy)
+            note = T(T_NOTE_UPDATE_FAILED);
         else if (a.game_running) note = T(T_NOTE_RUNNING);
         marquee(note, g_f.footer, 36.f, a.H - 88.f, a.W - 72.f, 28.f, nc, true, 0);
         const float cy = a.H - 42.f;
@@ -2049,8 +2139,10 @@ struct Painter {
             x = hint(x, cy, L"G", T(T_H_GAME), A_GAME);
             x = hint(x, cy, L"Esc", T(a.inst_grid ? T_H_BACK : T_H_QUIT), A_QUIT);
         } else if (a.page == 2) {
-            if (a.opt_sel == 1)
+            if (a.opt_sel == OPT_SUITE)
                 x = hint(x, cy, L"F", T(update_installable(a) ? T_H_UPDATE : T_H_CHECK), A_UPDATE, !a.up_busy && !a.game_dir.empty());
+            else if (a.opt_sel == OPT_SELF)
+                x = hint(x, cy, L"F", T(self_installable(a) ? T_H_UPDATE : T_H_CHECK), A_UPDATE, !a.up_busy);
             x = hint(x, cy, L"G", T(T_H_GAME), A_GAME, a.up_busy != 2);
             x = hint(x, cy, L"Esc", T(T_H_QUIT), A_QUIT);
         } else if (a.items.empty()) {
@@ -2381,10 +2473,11 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         }
         if (a.page == 2) {
             switch (wp) {
-                case VK_UP: case VK_DOWN: select_option(a, a.opt_sel ^ 1); break;   // two rows: they wrap
+                case VK_UP: select_option(a, (a.opt_sel + OPT_ROWS - 1) % OPT_ROWS); break;   // the rows wrap
+                case VK_DOWN: select_option(a, (a.opt_sel + 1) % OPT_ROWS); break;
                 case VK_LEFT: if (a.opt_sel == 0) change_language(a, -1); break;
                 case VK_RIGHT: if (a.opt_sel == 0) change_language(a, 1); break;
-                case VK_RETURN: case 'F': if (a.opt_sel == 1 && !(lp & (1 << 30))) update_action(a); break;   // not again while held
+                case VK_RETURN: case 'F': if (a.opt_sel != OPT_LANG && !(lp & (1 << 30))) update_action(a); break;   // not again while held
                 default: break;
             }
             return 0;
@@ -2432,6 +2525,10 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case MSG_UPDATE: {
         std::unique_ptr<UpdateResult> r(reinterpret_cast<UpdateResult*>(lp));
         if (r->gen == a.gen) apply_update(a, *r);   // another game folder since: its own look-up is on the way
+        if (a.self_restart) {                       // the sorter replaced itself: the new exe takes over
+            a.self_restart = false;
+            if (start_self()) { DestroyWindow(h); return 0; }
+        }                                           // not started: the footer says to start it again
         invalidate(a);
         return 0;
     }
@@ -2564,13 +2661,19 @@ int run_shot(const UiOptions& o) {
     if (!init_graphics()) return 3;
     for (int k = 0; k < std::abs(o.lang_step); ++k) change_language(a, o.lang_step < 0 ? -1 : 1);
     // --update: the updates row's states, in line (--select 1 on the Options page puts the cursor on it)
-    if (a.page == 2 && o.select >= 0) a.opt_sel = std::min(o.select, 1);
-    if (o.update == 1 || o.update == 3 || o.update == 4) a.up_check = suite_check(a.game_dir, false, o.manifest);
+    if (a.page == 2 && o.select >= 0) a.opt_sel = std::min(o.select, OPT_ROWS - 1);
+    if (o.update == 1 || o.update >= 3) a.up_check = suite_check(a.game_dir, false, o.manifest, &a.self_check);
     if (o.update == 2) a.up_busy = 1;
-    if (o.update == 3) a.up_busy = 2;
+    if (o.update == 3 || o.update == 5 || o.update == 6) a.up_busy = 2;
+    if (o.update == 5 || o.update == 6) {   // 42 % of the download: the suite's, the sorter's own
+        a.up_self = o.update == 6;
+        a.up_progress.total.store(1000);
+        a.up_progress.done.store(420);
+        a.up_progress.step.store(sf6up::Progress::Download);
+    }
     if (o.update == 4) {
         UpdateResult r;
-        r.install = true;
+        r.kind = 1;
         r.inst = suite_install(a.game_dir, a.up_check, language(), a.game_running);
         apply_update(a, r);
     }
@@ -2608,6 +2711,7 @@ int run_shot(const UiOptions& o) {
 int run_window(const UiOptions& o) {
     App& a = g_app;
     a.opt = o;
+    self_cleanup();   // the exe a self-update replaced, kept as <exe>.old until then
     if (!init_graphics()) return 3;
     Worker worker;
     worker.work_dir = o.work_dir;

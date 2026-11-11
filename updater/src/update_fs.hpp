@@ -53,6 +53,10 @@ struct Staged {
 bool extract_zip(const std::wstring& zip, const std::wstring& tree, const std::string& package, const std::string& from, Staged* out,
                  std::string* why);
 
+// One file of a zip's root, by its exact name (case apart), written to `dest`: a tool's program (the manifest's "tools"), which
+// goes beside the running one, not into the game's folders. The other entries are not looked at and never written.
+bool extract_one(const std::wstring& zip, const std::string& name, const std::wstring& dest, std::string* why);
+
 // ---- the swap ----
 struct SwapResult {
     bool ok = false;

@@ -17,6 +17,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <functional>
 #include <vector>
 
 #include "../src/update_fs.hpp"
@@ -166,6 +167,56 @@ static void test_manifest() {
         Manifest many = good_manifest();
         for (int i = 0; i < 20; ++i) { ManifestPackage p; p.id = "x" + std::to_string(i); many.packages.push_back(p); }
         check(!parses(manifest_json(many)), "17 packages and more");
+    }
+    // the tools (the Mod Sorter): optional, each entry on its own
+    {
+        auto tool = [] {
+            ManifestTool t;
+            t.id = "mod_sorter"; t.name = "SF6 Mod Sorter"; t.version = "1.1.0"; t.asset = "SF6_ModSorter_1.1.0.zip";
+            t.size = 4321; t.sha256 = std::string(64, 'b'); t.file = "SF6_ModSorter.exe";
+            return t;
+        };
+        Manifest w = good_manifest();
+        w.tools.push_back(tool());
+        const std::string with = manifest_json(w);
+        Manifest r;
+        check(parse_manifest(with, &r, &why) && r.packages.size() == 5 && r.tools.size() == 1 && r.tool_notes.empty(), "a manifest with a tool: " + why);
+        const ManifestTool* t = find_tool(r, "mod_sorter");
+        check(t && t->version == "1.1.0" && t->asset == "SF6_ModSorter_1.1.0.zip" && t->size == 4321 && t->file == "SF6_ModSorter.exe" &&
+              t->sha256 == std::string(64, 'b'), "the tool read back");
+        check(!find_tool(r, "other_tool") && !find_tool(m, "mod_sorter"), "a tool that is not there");
+        check(manifest_json(r) == with, "a manifest with a tool: written back the same");
+        check(manifest_json(good_manifest()).find("\"tools\"") == std::string::npos, "no tool: no tools key");
+        // one bad entry: left out with a note, the packages kept
+        auto left_out = [&](const std::string& what, const std::function<void(ManifestTool&)>& spoil) {
+            Manifest b = good_manifest();
+            b.tools.push_back(tool());
+            spoil(b.tools[0]);
+            Manifest g;
+            const bool ok = parse_manifest(manifest_json(b), &g, &why);
+            check(ok && g.packages.size() == 5 && g.tools.empty() && g.tool_notes.size() == 1, "a tool " + what + ": left out, the manifest kept");
+        };
+        left_out("whose file is a path", [](ManifestTool& x) { x.file = "..\\SF6_ModSorter.exe"; });
+        left_out("whose file is in a folder", [](ManifestTool& x) { x.file = "bin/SF6_ModSorter.exe"; });
+        left_out("whose file is no program", [](ManifestTool& x) { x.file = "SF6_ModSorter.dll"; });
+        left_out("without a version", [](ManifestTool& x) { x.version = "latest"; });
+        left_out("whose asset is a path", [](ManifestTool& x) { x.asset = "../x.zip"; });
+        left_out("whose asset is a package's", [](ManifestTool& x) { x.asset = "slots_loader_9.9.9.zip"; });
+        left_out("whose sha256 is not hex", [](ManifestTool& x) { x.sha256 = std::string(64, 'z'); });
+        left_out("of no size", [](ManifestTool& x) { x.size = 0; });
+        left_out("over 64 MiB", [](ManifestTool& x) { x.size = kAssetMaxBytes + 1; });
+        left_out("whose id is not a name", [](ManifestTool& x) { x.id = "../x"; });
+        {
+            Manifest two = good_manifest();
+            two.tools = { tool(), tool() };
+            Manifest g;
+            check(parse_manifest(manifest_json(two), &g, &why) && g.tools.size() == 1 && g.tool_notes.size() == 1, "a tool twice: the first kept");
+        }
+        Manifest g;
+        check(parse_manifest(replace_once(good, "\"packages\": [", "\"tools\": {\"id\": \"mod_sorter\"}, \"packages\": ["), &g, &why) &&
+              g.packages.size() == 5 && g.tools.empty() && g.tool_notes.size() == 1, "tools that is no list: left out");
+        check(parse_manifest(replace_once(good, "\"packages\": [", "\"tools\": [7, \"x\"], \"packages\": ["), &g, &why) &&
+              g.packages.size() == 5 && g.tools.empty() && g.tool_notes.size() == 2, "tools that are no objects: left out");
     }
 }
 
@@ -326,6 +377,24 @@ static void test_extract() {
     check(!extract_zip(dir + L"\\none.zip", tree, "pkg", "1.0", &st, &why), "a missing zip");
     put(dir + L"\\junk.zip", "PK not really");
     check(!extract_zip(dir + L"\\junk.zip", tree, "pkg", "1.0", &st, &why), "not a zip");
+    // one file of a zip's root (a tool's program)
+    {
+        const std::wstring z = make_zip(dir + L"\\tool.zip", { { "modinfo.ini", "name=x" }, { "README.txt", "readme" },
+                                                                 { "sub/SF6_ModSorter.exe", "in a folder" }, { "SF6_ModSorter.exe", "the program" } });
+        const std::wstring out = dir + L"\\one\\SF6_ModSorter.exe.new";
+        fs::create_directories(fs::path(out).parent_path());
+        check(extract_one(z, "SF6_ModSorter.exe", out, &why) && get(out) == "the program", "one file taken out of a zip: " + why);
+        check(extract_one(z, "sf6_modsorter.EXE", out, &why) && get(out) == "the program", "its name whatever the case");
+        check(snapshot(dir + L"\\one").size() == 1, "nothing else written");
+        check(!extract_one(z, "Other.exe", dir + L"\\one\\o.exe", &why) && !exists(dir + L"\\one\\o.exe"), "a file the zip does not hold");
+        check(!extract_one(dir + L"\\none.zip", "SF6_ModSorter.exe", dir + L"\\one\\o.exe", &why), "no zip");
+        put(dir + L"\\junk.zip", "this is no zip");
+        check(!extract_one(dir + L"\\junk.zip", "SF6_ModSorter.exe", dir + L"\\one\\o.exe", &why), "not a zip");
+        const std::wstring twice = make_zip(dir + L"\\twice.zip", { { "A.exe", "one" }, { "a.exe", "two" } });
+        check(!extract_one(twice, "A.exe", dir + L"\\one\\o.exe", &why) && !exists(dir + L"\\one\\o.exe"), "the same name twice: refused");
+        const std::wstring empty = make_zip(dir + L"\\empty.zip", { { "A.exe", "" } });
+        check(!extract_one(empty, "A.exe", dir + L"\\one\\o.exe", &why), "an empty program: refused");
+    }
 }
 
 // ---- the swap ----
@@ -552,10 +621,10 @@ static void test_pe() {
         std::memcpy(&w[o], &big, 4);
         check(image_package_version(w).empty(), "an offset out of the file at " + std::to_string(o) + ": nothing");
     }
-    const std::wstring f = g_work + L"\pe_test.dll";
+    const std::wstring f = g_work + L"\\pe_test.dll";
     put(f, good);
     check(file_package_version(f) == "1.27.0", "read from a file");
-    check(file_package_version(g_work + L"\no_such.dll").empty(), "no file: nothing");
+    check(file_package_version(g_work + L"\\no_such.dll").empty(), "no file: nothing");
 }
 
 // ---- the boxes' texts ----
@@ -584,6 +653,33 @@ static void test_texts() {
               std::string("offer in ") + l + ": every slot filled");
         const std::string ign = text::ignore(l);
         check(!ign.empty() && t.find(ign) != std::string::npos, std::string("offer in ") + l + ": its last line names the third button's word");
+    }
+    // the ticker's lines while an update installs, and the progress they read
+    {
+        Progress pr;
+        check(pr.percent() == 0, "progress: nothing yet");
+        pr.total = 1000; pr.done = 420;
+        check(pr.percent() == 42, "progress: 42 %");
+        pr.done = 999;
+        check(pr.percent() == 99, "progress: never 100 before the end");
+        pr.done = 5000;
+        check(pr.percent() == 100, "progress: capped at 100");
+        pr.total = 0;
+        check(pr.percent() == 0, "progress: no total");
+        pr.total = (int64_t)60 << 20; pr.done = (int64_t)59 << 20;
+        check(pr.percent() == 98, "progress: large sizes");
+        pr.step = Progress::Install;
+        pr.reset();
+        check(pr.step == Progress::Idle && pr.done == 0 && pr.total == 0, "progress: reset");
+        const std::string d = text::downloading("en", "1.34.0", 42);
+        check(d == "Downloading SF6 Mod Suite 1.34.0: 42 %", "English download line: " + d);
+        check(text::installing("en", "1.34.0") == "Installing SF6 Mod Suite 1.34.0...", "English install line");
+        for (const char* l : { "en", "fr", "ja", "zh-Hans", "it", "de", "es", "es-419", "ru", "pl", "pt", "ko", "zh-Hant", "ar" }) {
+            const std::string dl = text::downloading(l, "1.34.0", 7), in = text::installing(l, "1.34.0");
+            check(dl.find("1.34.0") != std::string::npos && dl.find("7") != std::string::npos && dl.find("%s") == std::string::npos &&
+                  dl.find("%%") == std::string::npos && dl.find('%') != std::string::npos, std::string("download line in ") + l + ": " + dl);
+            check(in.find("1.34.0") != std::string::npos && in.find("%s") == std::string::npos && in != dl, std::string("install line in ") + l + ": " + in);
+        }
     }
 }
 

@@ -12,6 +12,8 @@ enum class Word : int {
     WhyPackage,   // update.why_package
     WhyBlocked,   // update.why_blocked
     WhyFiles,   // update.why_files
+    Downloading,   // update.downloading
+    Installing,   // update.installing
     Count
 };
 
@@ -30,6 +32,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "a package is not as expected",
         "Windows Smart App Control blocks %s",
         "a file could not be replaced",
+        "Downloading SF6 Mod Suite %s: %s %%",
+        "Installing SF6 Mod Suite %s...",
     },
     {   // fr
         "Mise \303\240 jour de SF6 Mod Suite",
@@ -43,6 +47,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "un paquet n'est pas comme pr\303\251vu",
         "le Contr\303\264le intelligent des applications de Windows bloque %s",
         "un fichier n'a pas pu \303\252tre remplac\303\251",
+        "T\303\251l\303\251chargement de SF6 Mod Suite %s : %s %%",
+        "Installation de SF6 Mod Suite %s...",
     },
     {   // ja
         "SF6 Mod Suite \343\201\256\343\202\242\343\203\203\343\203\227\343\203\207\343\203\274\343\203\210",
@@ -56,6 +62,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "\343\203\221\343\203\203\343\202\261\343\203\274\343\202\270\343\201\256\345\206\205\345\256\271\343\201\214\346\203\263\345\256\232\343\201\250\347\225\260\343\201\252\343\202\212\343\201\276\343\201\231",
         "Windows \343\201\256 Smart App Control \343\201\214 %s \343\202\222\343\203\226\343\203\255\343\203\203\343\202\257\343\201\227\343\201\246\343\201\204\343\201\276\343\201\231",
         "\343\203\225\343\202\241\343\202\244\343\203\253\343\202\222\347\275\256\343\201\215\346\217\233\343\201\210\343\202\211\343\202\214\343\201\276\343\201\233\343\202\223\343\201\247\343\201\227\343\201\237",
+        "SF6 Mod Suite %s \343\202\222\343\203\200\343\202\246\343\203\263\343\203\255\343\203\274\343\203\211\344\270\255\357\274\232%s%%",
+        "SF6 Mod Suite %s \343\202\222\343\202\244\343\203\263\343\202\271\343\203\210\343\203\274\343\203\253\344\270\255...",
     },
     {   // zh-Hans
         "SF6 Mod Suite \346\233\264\346\226\260",
@@ -69,6 +77,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "\350\275\257\344\273\266\345\214\205\345\206\205\345\256\271\344\270\216\351\242\204\346\234\237\344\270\215\347\254\246",
         "Windows \346\231\272\350\203\275\345\272\224\347\224\250\346\216\247\345\210\266\351\230\273\346\255\242\344\272\206 %s",
         "\346\227\240\346\263\225\346\233\277\346\215\242\346\237\220\344\270\252\346\226\207\344\273\266",
+        "\346\255\243\345\234\250\344\270\213\350\275\275 SF6 Mod Suite %s\357\274\232%s%%",
+        "\346\255\243\345\234\250\345\256\211\350\243\205 SF6 Mod Suite %s...",
     },
     {   // it
         "Aggiornamento di SF6 Mod Suite",
@@ -82,6 +92,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "un pacchetto non \303\250 come previsto",
         "Smart App Control di Windows blocca %s",
         "non \303\250 stato possibile sostituire un file",
+        "Download di SF6 Mod Suite %s: %s %%",
+        "Installazione di SF6 Mod Suite %s...",
     },
     {   // de
         "SF6 Mod Suite-Update",
@@ -95,6 +107,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "ein Paket ist nicht wie erwartet",
         "Die intelligente App-Steuerung von Windows blockiert %s",
         "eine Datei konnte nicht ersetzt werden",
+        "SF6 Mod Suite %s wird heruntergeladen: %s %%",
+        "SF6 Mod Suite %s wird installiert...",
     },
     {   // es
         "Actualizaci\303\263n de SF6 Mod Suite",
@@ -108,6 +122,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "un paquete no es como se esperaba",
         "Control inteligente de aplicaciones de Windows bloquea %s",
         "no se ha podido sustituir un archivo",
+        "Descargando SF6 Mod Suite %s: %s %%",
+        "Instalando SF6 Mod Suite %s...",
     },
     {   // es-419
         "Actualizaci\303\263n de SF6 Mod Suite",
@@ -121,6 +137,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "un paquete no es como se esperaba",
         "Control inteligente de aplicaciones de Windows bloquea %s",
         "no se pudo reemplazar un archivo",
+        "Descargando SF6 Mod Suite %s: %s %%",
+        "Instalando SF6 Mod Suite %s...",
     },
     {   // ru
         "\320\236\320\261\320\275\320\276\320\262\320\273\320\265\320\275\320\270\320\265 SF6 Mod Suite",
@@ -134,6 +152,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "\320\277\320\260\320\272\320\265\321\202 \320\275\320\265 \321\202\320\260\320\272\320\276\320\271, \320\272\320\260\320\272 \320\276\320\266\320\270\320\264\320\260\320\273\320\276\321\201\321\214",
         "\320\230\320\275\321\202\320\265\320\273\320\273\320\265\320\272\321\202\321\203\320\260\320\273\321\214\320\275\320\276\320\265 \321\203\320\277\321\200\320\260\320\262\320\273\320\265\320\275\320\270\320\265 \320\277\321\200\320\270\320\273\320\276\320\266\320\265\320\275\320\270\321\217\320\274\320\270 Windows \320\261\320\273\320\276\320\272\320\270\321\200\321\203\320\265\321\202 %s",
         "\320\275\320\265 \321\203\320\264\320\260\320\273\320\276\321\201\321\214 \320\267\320\260\320\274\320\265\320\275\320\270\321\202\321\214 \321\204\320\260\320\271\320\273",
+        "\320\227\320\260\320\263\321\200\321\203\320\267\320\272\320\260 SF6 Mod Suite %s: %s %%",
+        "\320\243\321\201\321\202\320\260\320\275\320\276\320\262\320\272\320\260 SF6 Mod Suite %s...",
     },
     {   // pl
         "Aktualizacja SF6 Mod Suite",
@@ -147,6 +167,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "pakiet nie jest taki, jak oczekiwano",
         "Inteligentna kontrola aplikacji systemu Windows blokuje %s",
         "nie uda\305\202o si\304\231 zast\304\205pi\304\207 pliku",
+        "Pobieranie SF6 Mod Suite %s: %s%%",
+        "Instalowanie SF6 Mod Suite %s...",
     },
     {   // pt
         "Atualiza\303\247\303\243o do SF6 Mod Suite",
@@ -160,6 +182,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "um pacote n\303\243o est\303\241 como esperado",
         "o Controle Inteligente de Aplicativos do Windows bloqueia %s",
         "n\303\243o foi poss\303\255vel substituir um arquivo",
+        "Baixando o SF6 Mod Suite %s: %s%%",
+        "Instalando o SF6 Mod Suite %s...",
     },
     {   // ko
         "SF6 Mod Suite \354\227\205\353\215\260\354\235\264\355\212\270",
@@ -173,6 +197,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "\355\214\250\355\202\244\354\247\200\352\260\200 \354\230\210\354\203\201\352\263\274 \353\213\244\353\246\205\353\213\210\353\213\244",
         "Windows \354\212\244\353\247\210\355\212\270 \354\225\261 \354\273\250\355\212\270\353\241\244\354\235\264 %s\354\235\204(\353\245\274) \354\260\250\353\213\250\355\225\251\353\213\210\353\213\244",
         "\355\214\214\354\235\274\354\235\204 \352\265\220\354\262\264\355\225\230\354\247\200 \353\252\273\355\226\210\354\212\265\353\213\210\353\213\244",
+        "SF6 Mod Suite %s \353\213\244\354\232\264\353\241\234\353\223\234 \354\244\221: %s%%",
+        "SF6 Mod Suite %s \354\204\244\354\271\230 \354\244\221...",
     },
     {   // zh-Hant
         "SF6 Mod Suite \346\233\264\346\226\260",
@@ -186,6 +212,8 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "\345\245\227\344\273\266\345\205\247\345\256\271\350\210\207\351\240\220\346\234\237\344\270\215\347\254\246",
         "Windows \346\231\272\346\205\247\345\236\213\346\207\211\347\224\250\347\250\213\345\274\217\346\216\247\345\210\266\345\260\201\351\216\226\344\272\206 %s",
         "\347\204\241\346\263\225\346\233\277\346\217\233\346\237\220\345\200\213\346\252\224\346\241\210",
+        "\346\255\243\345\234\250\344\270\213\350\274\211 SF6 Mod Suite %s\357\274\232%s%%",
+        "\346\255\243\345\234\250\345\256\211\350\243\235 SF6 Mod Suite %s...",
     },
     {   // ar
         "\330\252\330\255\330\257\331\212\330\253 SF6 Mod Suite",
@@ -199,5 +227,7 @@ inline constexpr const char* kText[kLangCount][static_cast<int>(Word::Count)] = 
         "\330\245\330\255\330\257\331\211 \330\247\331\204\330\255\330\262\331\205 \331\204\331\212\330\263\330\252 \331\203\331\205\330\247 \331\207\331\210 \331\205\330\252\331\210\331\202\330\271",
         "\331\212\330\255\330\270\330\261 \330\247\331\204\330\252\330\255\331\203\331\205 \330\247\331\204\330\260\331\203\331\212 \331\201\331\212 \330\247\331\204\330\252\330\267\330\250\331\212\331\202\330\247\330\252 \331\201\331\212 Windows \330\247\331\204\331\205\331\204\331\201 %s",
         "\330\252\330\271\330\260\331\221\330\261 \330\247\330\263\330\252\330\250\330\257\330\247\331\204 \330\243\330\255\330\257 \330\247\331\204\331\205\331\204\331\201\330\247\330\252",
+        "\330\254\330\247\330\261\331\215 \330\252\331\206\330\262\331\212\331\204 SF6 Mod Suite %s: %s%%",
+        "\330\254\330\247\330\261\331\215 \330\252\330\253\330\250\331\212\330\252 SF6 Mod Suite %s...",
     },
 };

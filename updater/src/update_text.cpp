@@ -43,6 +43,12 @@ std::string ignore(const std::string& lang) { return tr(lang, Word::Ignore); }
 
 std::string done(const std::string& lang) { return tr(lang, Word::Done); }
 
+std::string downloading(const std::string& lang, const std::string& suite, int percent) {
+    return format(tr(lang, Word::Downloading), { suite, std::to_string(percent < 0 ? 0 : percent > 100 ? 100 : percent) });
+}
+
+std::string installing(const std::string& lang, const std::string& suite) { return format(tr(lang, Word::Installing), { suite }); }
+
 std::string failed(const std::string& lang, Fail why, const std::string& what) {
     Word w = Word::WhyPackage;
     switch (why) {

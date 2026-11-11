@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace sf6up {
@@ -18,7 +19,9 @@ struct HttpResult {
 };
 // The body into `body` (max_bytes at most: more = failure)
 HttpResult http_get(const std::string& url, size_t max_bytes, std::string* body);
+// A download's progress: the bytes of the body received so far, told as they arrive (on the thread that downloads)
+using BytesFn = std::function<void(int64_t)>;
 // The body into a file (written beside it, then moved in place); more than max_bytes = failure, the file removed
-HttpResult http_get_file(const std::string& url, int64_t max_bytes, const std::wstring& path);
+HttpResult http_get_file(const std::string& url, int64_t max_bytes, const std::wstring& path, const BytesFn& bytes = {});
 
 }  // namespace sf6up

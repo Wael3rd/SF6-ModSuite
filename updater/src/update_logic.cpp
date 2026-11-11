@@ -118,6 +118,15 @@ bool asset_name_ok(const std::string& a) {
     return a.find("..") == std::string::npos;
 }
 
+// A tool's program: a bare .exe name (letters, digits, _ - .), nothing that is a path
+bool tool_file_ok(const std::string& f) {
+    if (f.size() < 5 || f.size() > 64 || lower(f.substr(f.size() - 4)) != ".exe") return false;
+    if (!std::isalnum((unsigned char)f[0])) return false;
+    for (char c : f)
+        if (!std::isalnum((unsigned char)c) && c != '_' && c != '.' && c != '-') return false;
+    return f.find("..") == std::string::npos;
+}
+
 bool str_field(const json& o, const char* k, std::string* out, size_t max) {
     auto it = o.find(k);
     if (it == o.end() || !it->is_string()) return false;
@@ -170,8 +179,44 @@ bool parse_manifest(const std::string& text, Manifest* out, std::string* why) {
         if (mp.size <= 0 || mp.size > kAssetMaxBytes) return fail(mp.id + ": size out of range");
         m.packages.push_back(std::move(mp));
     }
+    // the tools: optional, each entry on its own (one that is not as expected is left out, the manifest stays good)
+    if (auto tl = j.find("tools"); tl != j.end()) {
+        if (!tl->is_array() || tl->size() > kMaxTools) {
+            m.tool_notes.push_back("tools: not a list of " + std::to_string(kMaxTools) + " entries at most: left out");
+        } else {
+            std::set<std::string> tool_ids;
+            for (const json& t : *tl) {
+                ManifestTool mt;
+                if (!t.is_object() || !str_field(t, "id", &mt.id, 40)) { m.tool_notes.push_back("a tool without an id: left out"); continue; }
+                bool id_ok = true;
+                for (char c : mt.id)
+                    if (!std::isalnum((unsigned char)c) && c != '_') id_ok = false;
+                if (!id_ok) { m.tool_notes.push_back("a tool's id is not a name: left out"); continue; }
+                auto out_tool = [&](const char* w) { m.tool_notes.push_back("tool " + mt.id + ": " + w + ": left out"); };
+                if (!tool_ids.insert(mt.id).second) { out_tool("twice"); continue; }
+                if (!str_field(t, "name", &mt.name, 80)) { out_tool("no name"); continue; }
+                if (!str_field(t, "version", &mt.version, 32) || !parse_version(mt.version)) { out_tool("no version"); continue; }
+                if (!str_field(t, "asset", &mt.asset, 100) || !asset_name_ok(mt.asset)) { out_tool("the asset is not a zip name"); continue; }
+                if (assets.count(lower(mt.asset))) { out_tool("its asset is another entry's"); continue; }
+                if (!str_field(t, "sha256", &mt.sha256, 64) || !is_sha256_hex(mt.sha256)) { out_tool("no sha256"); continue; }
+                if (!str_field(t, "file", &mt.file, 64) || !tool_file_ok(mt.file)) { out_tool("its file is not a program's name"); continue; }
+                auto sz = t.find("size");
+                if (sz == t.end() || !sz->is_number_integer()) { out_tool("no size"); continue; }
+                mt.size = sz->get<int64_t>();
+                if (mt.size <= 0 || mt.size > kAssetMaxBytes) { out_tool("size out of range"); continue; }
+                assets.insert(lower(mt.asset));
+                m.tools.push_back(std::move(mt));
+            }
+        }
+    }
     *out = std::move(m);
     return true;
+}
+
+const ManifestTool* find_tool(const Manifest& m, const std::string& id) {
+    for (auto& t : m.tools)
+        if (t.id == id) return &t;
+    return nullptr;
 }
 
 std::string manifest_json(const Manifest& m) {
@@ -184,6 +229,13 @@ std::string manifest_json(const Manifest& m) {
         arr.push_back({ { "id", p.id }, { "name", p.name }, { "version", p.version }, { "asset", p.asset }, { "size", p.size },
                         { "sha256", p.sha256 }, { "proof", p.proof } });
     j["packages"] = arr;
+    if (!m.tools.empty()) {
+        json tools = json::array();
+        for (auto& t : m.tools)
+            tools.push_back({ { "id", t.id }, { "name", t.name }, { "version", t.version }, { "asset", t.asset }, { "size", t.size },
+                              { "sha256", t.sha256 }, { "file", t.file } });
+        j["tools"] = tools;
+    }
     return j.dump(2);
 }
 
@@ -193,6 +245,7 @@ Plan make_plan(const Manifest& m, const std::vector<Installed>& installed, bool 
     plan.suite = m.suite;
     plan.tag = m.tag;
     for (auto& s : m.skipped) plan.notes.push_back(s + ": not a package this version knows");
+    for (auto& s : m.tool_notes) plan.notes.push_back(s);
     for (auto& p : m.packages) {
         const Installed* in = nullptr;
         for (auto& i : installed)

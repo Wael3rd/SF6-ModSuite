@@ -103,7 +103,13 @@ CheckResult run_check(const Paths& p, const VersionReader& version_of, const std
     return r;
 }
 
-InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, const LogFn& log, int fail_at) {
+int Progress::percent() const {
+    const int64_t t = total.load(), d = done.load();
+    if (t <= 0 || d <= 0) return 0;
+    return d >= t ? 100 : (int)(d * 100 / t);
+}
+
+InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, const LogFn& log, int fail_at, Progress* progress) {
     InstallResult r;
     auto fail = [&](Fail f, const std::string& why) { r.fail = f; r.why = why; if (log) log("install failed: " + why); remove_tree(p.staging); return r; };
     if (plan.items.empty()) return fail(Fail::Package, "nothing to install");
@@ -111,13 +117,23 @@ InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, 
     const std::wstring zips = join(p.staging, "zips"), tree = join(p.staging, "tree");
     if (!make_dirs(zips)) return fail(Fail::Files, "the staging folder cannot be made");
     // a: the zips, each one as the release says
+    int64_t before = 0, all = 0;                    // bytes of the zips already there, of every zip
+    for (auto& it : plan.items) all += it.pkg.size;
+    if (progress) { progress->done.store(0); progress->total.store(all); progress->step.store(Progress::Download); }
     for (auto& it : plan.items) {
         const std::wstring dest = join(zips, it.pkg.asset);
         std::string why;
-        if (!fetch(it, dest, &why)) return fail(Fail::Download, it.pkg.asset + ": " + why);
+        const int64_t size = it.pkg.size;
+        const BytesFn bytes = [progress, before, size](int64_t n) {
+            if (progress) progress->done.store(before + (n < 0 ? 0 : n > size ? size : n));
+        };
+        if (!fetch(it, dest, bytes, &why)) return fail(Fail::Download, it.pkg.asset + ": " + why);
         if (!verify_file(dest, it.pkg.size, it.pkg.sha256, &why)) return fail(Fail::Check, it.pkg.asset + ": " + why);
+        before += size;
+        if (progress) progress->done.store(before);
         if (log) log(it.pkg.asset + ": downloaded, size and sha256 as the release says");
     }
+    if (progress) progress->step.store(Progress::Install);
     // b: their files into the staging tree, every entry checked first
     Staged staged;
     for (auto& it : plan.items) {
@@ -152,8 +168,8 @@ InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, 
     return r;
 }
 
-bool fetch_from_github(const std::string& tag, const PlanItem& item, const std::wstring& dest, std::string* why) {
-    const HttpResult h = http_get_file(asset_url(tag, item.pkg.asset), item.pkg.size, dest);
+bool fetch_from_github(const std::string& tag, const PlanItem& item, const std::wstring& dest, const BytesFn& bytes, std::string* why) {
+    const HttpResult h = http_get_file(asset_url(tag, item.pkg.asset), item.pkg.size, dest, bytes);
     if (!h.ok && why) *why = h.why;
     return h.ok;
 }

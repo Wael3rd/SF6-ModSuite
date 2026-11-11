@@ -1,5 +1,5 @@
 {
-  "_readme": "Words of the SF6 Mod Suite updater (the popup that offers a new release, shown by the Native Core or the Slots Loader's plugin): the source of truth, compiled into both DLLs by tools/localisation/gen_updater_words.py. Same shape as the other modules' locale.json. The language follows the game's text language; a missing word or language: English. %s are format slots, in order. Every text is shown in the game's own message box (app.UIFlowDialog.MessageBox, Yes / No buttons): \\n is a line break. English and French written by hand; the other languages machine-translated, to be reviewed by a native speaker.",
+  "_readme": "Words of the SF6 Mod Suite updater (the popup that offers a new release, shown by the Native Core or the Slots Loader's plugin): the source of truth, compiled into both DLLs by tools/localisation/gen_updater_words.py. Same shape as the other modules' locale.json. The language follows the game's text language; a missing word or language: English. %s are format slots, in order. Every text is shown in the game's own message box (app.UIFlowDialog.MessageBox, Yes / No buttons), where \\n is a line break, but update.downloading and update.installing: the game's ticker strip, one line. English and French written by hand; the other languages machine-translated, to be reviewed by a native speaker.",
   "_context": {
     "update.title": {
       "where": "Title of every updater message box.",
@@ -41,6 +41,14 @@
     "update.why_files": {
       "where": "Slot of update.failed: a file of the game folder could not be replaced (everything was put back).",
       "max": 60
+    },
+    "update.downloading": {
+      "where": "The game's ticker strip (the short message on the left side of the screen) while the update downloads, after Yes on update.offer. Slots: the release (1.34.0), the percentage downloaded (42); %% is the percent sign. One short line.",
+      "max": 70
+    },
+    "update.installing": {
+      "where": "The game's ticker strip once the download is over, while the files are checked and replaced (a few seconds). Slot: the release (1.34.0). One short line.",
+      "max": 60
     }
   },
   "en": {
@@ -54,7 +62,9 @@
     "update.why_check": "a downloaded file is not the release's",
     "update.why_package": "a package is not as expected",
     "update.why_blocked": "Windows Smart App Control blocks %s",
-    "update.why_files": "a file could not be replaced"
+    "update.why_files": "a file could not be replaced",
+    "update.downloading": "Downloading SF6 Mod Suite %s: %s %%",
+    "update.installing": "Installing SF6 Mod Suite %s..."
   },
   "fr": {
     "update.title": "Mise à jour de SF6 Mod Suite",
@@ -67,7 +77,9 @@
     "update.why_check": "un fichier téléchargé n'est pas celui de la version publiée",
     "update.why_package": "un paquet n'est pas comme prévu",
     "update.why_blocked": "le Contrôle intelligent des applications de Windows bloque %s",
-    "update.why_files": "un fichier n'a pas pu être remplacé"
+    "update.why_files": "un fichier n'a pas pu être remplacé",
+    "update.downloading": "Téléchargement de SF6 Mod Suite %s : %s %%",
+    "update.installing": "Installation de SF6 Mod Suite %s..."
   },
   "ja": {
     "update.title": "SF6 Mod Suite のアップデート",
@@ -80,7 +92,9 @@
     "update.why_check": "ダウンロードしたファイルが公開版と一致しません",
     "update.why_package": "パッケージの内容が想定と異なります",
     "update.why_blocked": "Windows の Smart App Control が %s をブロックしています",
-    "update.why_files": "ファイルを置き換えられませんでした"
+    "update.why_files": "ファイルを置き換えられませんでした",
+    "update.downloading": "SF6 Mod Suite %s をダウンロード中：%s%%",
+    "update.installing": "SF6 Mod Suite %s をインストール中..."
   },
   "zh-Hans": {
     "update.title": "SF6 Mod Suite 更新",
@@ -93,7 +107,9 @@
     "update.why_check": "下载的文件与发布版本不符",
     "update.why_package": "软件包内容与预期不符",
     "update.why_blocked": "Windows 智能应用控制阻止了 %s",
-    "update.why_files": "无法替换某个文件"
+    "update.why_files": "无法替换某个文件",
+    "update.downloading": "正在下载 SF6 Mod Suite %s：%s%%",
+    "update.installing": "正在安装 SF6 Mod Suite %s..."
   },
   "it": {
     "update.title": "Aggiornamento di SF6 Mod Suite",
@@ -106,7 +122,9 @@
     "update.why_check": "un file scaricato non è quello della versione pubblicata",
     "update.why_package": "un pacchetto non è come previsto",
     "update.why_blocked": "Smart App Control di Windows blocca %s",
-    "update.why_files": "non è stato possibile sostituire un file"
+    "update.why_files": "non è stato possibile sostituire un file",
+    "update.downloading": "Download di SF6 Mod Suite %s: %s %%",
+    "update.installing": "Installazione di SF6 Mod Suite %s..."
   },
   "de": {
     "update.title": "SF6 Mod Suite-Update",
@@ -119,7 +137,9 @@
     "update.why_check": "eine heruntergeladene Datei entspricht nicht der Veröffentlichung",
     "update.why_package": "ein Paket ist nicht wie erwartet",
     "update.why_blocked": "Die intelligente App-Steuerung von Windows blockiert %s",
-    "update.why_files": "eine Datei konnte nicht ersetzt werden"
+    "update.why_files": "eine Datei konnte nicht ersetzt werden",
+    "update.downloading": "SF6 Mod Suite %s wird heruntergeladen: %s %%",
+    "update.installing": "SF6 Mod Suite %s wird installiert..."
   },
   "es": {
     "update.title": "Actualización de SF6 Mod Suite",
@@ -132,7 +152,9 @@
     "update.why_check": "un archivo descargado no es el de la versión publicada",
     "update.why_package": "un paquete no es como se esperaba",
     "update.why_blocked": "Control inteligente de aplicaciones de Windows bloquea %s",
-    "update.why_files": "no se ha podido sustituir un archivo"
+    "update.why_files": "no se ha podido sustituir un archivo",
+    "update.downloading": "Descargando SF6 Mod Suite %s: %s %%",
+    "update.installing": "Instalando SF6 Mod Suite %s..."
   },
   "es-419": {
     "update.title": "Actualización de SF6 Mod Suite",
@@ -145,7 +167,9 @@
     "update.why_check": "un archivo descargado no es el de la versión publicada",
     "update.why_package": "un paquete no es como se esperaba",
     "update.why_blocked": "Control inteligente de aplicaciones de Windows bloquea %s",
-    "update.why_files": "no se pudo reemplazar un archivo"
+    "update.why_files": "no se pudo reemplazar un archivo",
+    "update.downloading": "Descargando SF6 Mod Suite %s: %s %%",
+    "update.installing": "Instalando SF6 Mod Suite %s..."
   },
   "ru": {
     "update.title": "Обновление SF6 Mod Suite",
@@ -158,7 +182,9 @@
     "update.why_check": "загруженный файл не совпадает с выпуском",
     "update.why_package": "пакет не такой, как ожидалось",
     "update.why_blocked": "Интеллектуальное управление приложениями Windows блокирует %s",
-    "update.why_files": "не удалось заменить файл"
+    "update.why_files": "не удалось заменить файл",
+    "update.downloading": "Загрузка SF6 Mod Suite %s: %s %%",
+    "update.installing": "Установка SF6 Mod Suite %s..."
   },
   "pl": {
     "update.title": "Aktualizacja SF6 Mod Suite",
@@ -171,7 +197,9 @@
     "update.why_check": "pobrany plik nie jest plikiem z wydania",
     "update.why_package": "pakiet nie jest taki, jak oczekiwano",
     "update.why_blocked": "Inteligentna kontrola aplikacji systemu Windows blokuje %s",
-    "update.why_files": "nie udało się zastąpić pliku"
+    "update.why_files": "nie udało się zastąpić pliku",
+    "update.downloading": "Pobieranie SF6 Mod Suite %s: %s%%",
+    "update.installing": "Instalowanie SF6 Mod Suite %s..."
   },
   "pt": {
     "update.title": "Atualização do SF6 Mod Suite",
@@ -184,7 +212,9 @@
     "update.why_check": "um arquivo baixado não é o da versão publicada",
     "update.why_package": "um pacote não está como esperado",
     "update.why_blocked": "o Controle Inteligente de Aplicativos do Windows bloqueia %s",
-    "update.why_files": "não foi possível substituir um arquivo"
+    "update.why_files": "não foi possível substituir um arquivo",
+    "update.downloading": "Baixando o SF6 Mod Suite %s: %s%%",
+    "update.installing": "Instalando o SF6 Mod Suite %s..."
   },
   "ko": {
     "update.title": "SF6 Mod Suite 업데이트",
@@ -197,7 +227,9 @@
     "update.why_check": "다운로드한 파일이 배포된 파일과 다릅니다",
     "update.why_package": "패키지가 예상과 다릅니다",
     "update.why_blocked": "Windows 스마트 앱 컨트롤이 %s을(를) 차단합니다",
-    "update.why_files": "파일을 교체하지 못했습니다"
+    "update.why_files": "파일을 교체하지 못했습니다",
+    "update.downloading": "SF6 Mod Suite %s 다운로드 중: %s%%",
+    "update.installing": "SF6 Mod Suite %s 설치 중..."
   },
   "zh-Hant": {
     "update.title": "SF6 Mod Suite 更新",
@@ -210,7 +242,9 @@
     "update.why_check": "下載的檔案與發布版本不符",
     "update.why_package": "套件內容與預期不符",
     "update.why_blocked": "Windows 智慧型應用程式控制封鎖了 %s",
-    "update.why_files": "無法替換某個檔案"
+    "update.why_files": "無法替換某個檔案",
+    "update.downloading": "正在下載 SF6 Mod Suite %s：%s%%",
+    "update.installing": "正在安裝 SF6 Mod Suite %s..."
   },
   "ar": {
     "update.title": "تحديث SF6 Mod Suite",
@@ -223,6 +257,8 @@
     "update.why_check": "ملف تم تنزيله لا يطابق ملف الإصدار",
     "update.why_package": "إحدى الحزم ليست كما هو متوقع",
     "update.why_blocked": "يحظر التحكم الذكي في التطبيقات في Windows الملف %s",
-    "update.why_files": "تعذّر استبدال أحد الملفات"
+    "update.why_files": "تعذّر استبدال أحد الملفات",
+    "update.downloading": "جارٍ تنزيل SF6 Mod Suite %s: %s%%",
+    "update.installing": "جارٍ تثبيت SF6 Mod Suite %s..."
   }
 }

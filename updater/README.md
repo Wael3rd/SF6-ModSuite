@@ -9,8 +9,11 @@ here is compiled into the **Native Core** (`sf6core_native.dll`) and the **Slots
 `SF6_ModSorter.exe` (`tools/sorter/suite_update.cpp`) drives the same code with the game closed: the same manifest, checks, swap,
 `state.json` and `update.log` (its lines start with `mod sorter:`). Two differences. The installed versions are read from the DLLs'
 files (`update_pe.cpp`: nothing is loaded or run). And nothing is installed while the game runs: the game's own box does that. A
-look at the latest release writes nothing where no package of the suite is installed. Its zip is no package: `make_manifest.py`
-leaves it out, the updater never installs it.
+look at the latest release writes nothing where no package of the suite is installed. Its zip is no package: the game never installs
+it. `make_manifest.py` lists it apart, under `"tools"` (see The manifest), and the sorter (1.1.0 and later) updates itself from that
+entry: its zip downloaded, size and sha256 checked, the exe extracted next to the running one, checked against Smart App Control, then
+two renames (`SF6_ModSorter.exe` -> `.old`, the new one in its place; a running exe can be renamed) and the tool starts again; the
+`.old` copy is deleted at the next start. Its version is `tools/sorter/version.hpp` (`--version` prints it).
 
 ## Who runs it
 
@@ -49,6 +52,15 @@ Read as hostile input (`update_logic.cpp`): 64 KiB and 8 levels at most, every f
 this code knows, an asset is a bare `.zip` name, a size 64 MiB at most; an unknown id is skipped (a later package), anything else refuses
 the manifest.
 
+A tool's zip (the Mod Sorter) is listed apart, never among the packages:
+
+```json
+  "tools": [ { "id": "mod_sorter", "name": "SF6 Mod Sorter", "version": "1.1.0", "asset": "SF6_ModSorter_1.1.0.zip",
+               "size": 1012345, "sha256": "5f0c...", "file": "SF6_ModSorter.exe" } ]
+```
+
+The game reads the key and installs nothing from it; an updater older than 1.34.0 does not know it and ignores it.
+
 ## What happens
 
 1. At start (a worker thread): a swap that stopped in the middle is undone (`swap_journal.json`), the manifest is fetched, the installed
@@ -64,6 +76,13 @@ the manifest.
    written); every `.dll` / `.exe` checked against Smart App Control (`LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` on the staged file,
    under a name of its own: error 4551 = blocked, the update stops and says which file); then the swap: each changed file of the game
    folder renamed `<name>.old-<installed version>`, the new one moved in its place (same volume: renames), all or nothing.
+   While it lasts, the game's own ticker (the strip on the left side of the screen, the one of the Recording Manager's drill
+   downloads) says where it is: `Downloading SF6 Mod Suite 1.34.0: 42%`, then the install's line. One strip, kept on screen the whole
+   time: each frame the host puts the request's `ElapsedSecond` back to zero (the game takes a strip away at `DisplaySecond`) and
+   rewrites the text of the strip's `via.gui.Text` when the percentage changes (`update_game.cpp`, `ticker_keep`); the strip leaves by
+   itself 3 s after the install. All of it on the game thread: the same calls from the render thread crash the game. A ticker that
+   cannot be used is logged and the install goes on without it. Since updater version 2 (suite 1.34.0): the update TO 1.34.0 is run
+   by the installed updater, without the strip.
 4. A box offers the restart. Yes: `cmd.exe` (Windows' own) is started, waiting for the game's process to end (2 minutes at most), then
    runs `start "" "steam://rungameid/1364780"`; the game window gets `WM_CLOSE`, as from its close button. No: the new version applies at
    the next start.
@@ -101,6 +120,9 @@ Fluffy uninstalls the mod.
 - `python updater\tests\run_e2e.py --old build\release_<a> --new build\release_<b> --work <folder> [--fetch]`: a fresh install of
   release a in a fake game folder, updated by the updater's own code from local copies of release b's zips, compared with a fresh
   install of b; `--fetch`: one real download of a release asset, checked against the digest the GitHub API gives.
+
+To watch the strip on a fast line: an empty `slow_download.txt` in `reframework/data/SF6_Update_data/` holds the download at about
+250 KiB/s (a test knob; delete it afterwards).
 
 ## Trying the popup in the game without publishing a release
 

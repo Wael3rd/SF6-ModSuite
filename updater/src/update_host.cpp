@@ -124,6 +124,8 @@ void check_worker() {
     set_state(St::Offer);
 }
 
+Progress g_progress;                             // the install's, read by the game thread for the ticker
+
 void install_worker() {
     Plan plan;
     {
@@ -131,9 +133,21 @@ void install_worker() {
         plan = g_plan;
     }
     const std::string tag = plan.tag;
-    InstallResult r = run_install(*g_paths, plan, [tag](const PlanItem& it, const std::wstring& dest, std::string* why) {
-        return fetch_from_github(tag, it, dest, why);
-    }, log);
+    g_progress.reset();
+    // tests: an empty slow_download.txt in the updater's data folder holds the download at about 250 KiB a second, long enough
+    // to read the percentage on a fast line
+    const bool slow = exists(join(g_paths->data, "slow_download.txt"));
+    if (slow) log("slow_download.txt: the download is held at about 250 KiB a second");
+    InstallResult r = run_install(*g_paths, plan, [tag, slow](const PlanItem& it, const std::wstring& dest, const BytesFn& bytes, std::string* why) {
+        if (!slow) return fetch_from_github(tag, it, dest, bytes, why);
+        int64_t last = 0;
+        return fetch_from_github(tag, it, dest, [&](int64_t n) {
+            if (bytes) bytes(n);
+            if (n > last) Sleep((DWORD)((n - last) / 256));
+            last = n;
+        }, why);
+    }, log, -1, &g_progress);
+    log("ticker: " + game::ticker_stats());
     {
         std::lock_guard lk(g_mx);
         g_result = r;
@@ -196,6 +210,32 @@ void watch_screen() {
     g_menu_idle = !game::game_dialog_up();
 }
 
+// ---- the install on screen: one strip of the game's ticker, kept up while the install lasts, saying the line of the moment ----
+constexpr uint64_t kStripMs = 3000;              // a strip's own time: it leaves that long after the install; the least between two requests
+std::string g_lang = "en";                       // the offer's language: the strip's too
+uint64_t g_strip_at = 0;                         // the last request (0: none yet)
+bool g_strip_failed = false;
+
+void show_progress() {
+    if (g_strip_failed) return;
+    const int step = g_progress.step.load();
+    if (step == Progress::Idle) return;
+    std::string suite;
+    {
+        std::lock_guard lk(g_mx);
+        suite = g_plan.suite;
+    }
+    const std::string line = step == Progress::Download ? text::downloading(g_lang, suite, g_progress.percent()) : text::installing(g_lang, suite);
+    const uint64_t now = GetTickCount64();
+    // the strip the game still has is kept (shown, or waiting behind another one); a new one only when it is gone
+    if (g_strip_at != 0 && (game::ticker_keep(line) != game::Kept::Gone || now - g_strip_at < kStripMs)) return;
+    g_strip_at = now;
+    if (!game::ticker(line, kStripMs / 1000.0)) {
+        g_strip_failed = true;
+        log("the game's ticker could not be used (" + game::ticker_why() + "): the install goes on without its progress on screen");
+    }
+}
+
 std::string offer_text(const std::string& lang) {
     std::lock_guard lk(g_mx);
     return text::offer(lang, g_plan);
@@ -255,6 +295,7 @@ void frame() {
         case St::Offer: {
             if (!g_menu_idle) break;
             const std::string lang = game::language();
+            g_lang = lang;
             set_state(open_box(offer_text(lang), lang, "offer", game::Buttons::YesNoThird) ? St::AskInstall : St::Done);
             break;
         }
@@ -267,6 +308,9 @@ void frame() {
             else { log("the box went away without an answer: asked again at the next start"); set_state(St::Done); }
             break;
         }
+        case St::Installing:
+            show_progress();
+            break;
         case St::AskRestart:
             if (!g_menu_idle) break;
             set_state(open_box(text::done(game::language()), game::language(), "installed, restart?") ? St::WaitRestart : St::Done);
