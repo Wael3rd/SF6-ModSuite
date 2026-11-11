@@ -2779,7 +2779,7 @@ int slot_by_name(int fighter, const std::string& name) {
     auto f = g_slot_of.find(fighter);
     if (f == g_slot_of.end() || name.empty()) return -1;
     // what a costume row shows: the label the loader wrote in the game's name file, or "Outfit VII" when it has none
-    for (auto& [cos, i] : f->second) if (g_slots[i].name == name || outfit_display_name(g_slots[i].label) == name) return cos;
+    for (auto& [cos, i] : f->second) if (g_slots[i].name == name || outfit_display_matches(g_slots[i].label, name)) return cos;
     return -1;
 }
 

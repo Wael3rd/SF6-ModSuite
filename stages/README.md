@@ -96,8 +96,10 @@ stage select screen (Fighting Ground > Versus) keeps its UP / DOWN, unchanged.
 
 Title screen mods (Fluffy-style packs: a `modinfo.ini` and a `natives` tree with the title screen's movies, often
 with files that skip the boot logos and the health warning) go **as downloaded** in `reframework/title_mods/`: the
-`.zip`, `.7z` or `.rar` file itself, or a folder. Archives are unpacked once into `title_mods\.cache` (a `.pak` is not
-read yet). Each pack gets a key (`t` + 12 hex digits) from its archive or folder name, so a choice survives a new
+`.zip`, `.7z` or `.rar` file itself, a folder, or a `.pak` (alone, or inside the archive or folder, as Fluffy installs it).
+Archives are unpacked once into `title_mods\.cache`. A pak keeps only the hashes of its paths: its files are named from the
+twelve paths every title pack has (`title_slots::known_paths()`) and from the packs shipped as files; a file named by neither
+is a startup file (the log counts them). Each pack gets a key (`t` + 12 hex digits) from its archive or folder name, so a choice survives a new
 download of the same file; names and authors come from `modinfo.ini`.
 
 - Three settings, in `reframework/data/SF6_CostumeSlots_data/settings.json`: `"title_pack"` (`""` or missing: the

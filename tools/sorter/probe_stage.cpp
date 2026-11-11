@@ -13,6 +13,8 @@
 
 #include "probes.hpp"
 
+#include <unordered_set>
+
 namespace {
 
 struct StageIndex {
@@ -113,6 +115,22 @@ StageProbe stage_probe(const std::wstring& root, const std::string& rel, const s
                 r.first_other = f.path;
             }
         }
+    // title files in its paks: a pak keeps hashes, the title files' paths are known (title_slots::known_paths, as the stage loader
+    // names a title pack's pak entries)
+    {
+        static const std::unordered_set<uint64_t> title_hashes = [] {
+            std::unordered_set<uint64_t> h;
+            for (auto& p : title_slots::known_paths()) if (title_slots::is_title_file(p)) h.insert(pak_path_hash(std::string_view(p)));
+            return h;
+        }();
+        for (auto& o : paks) {
+            size_t t = 0;
+            for (auto& f : o.files) t += title_hashes.count(f.hash);
+            if (!t) continue;
+            r.pak_title_files += t;
+            r.pak_title_others += o.files.size() - t;
+        }
+    }
     // UI pack nodes, as scan_ui collects them (a folder with a modinfo.ini is a node too)
     if (kind != 2) {
         std::vector<Option> nodes;

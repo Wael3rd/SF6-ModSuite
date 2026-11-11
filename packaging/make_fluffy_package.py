@@ -272,7 +272,7 @@ UI_MODS_TXT = CRLF.join([
 ]) + CRLF
 
 TITLE_MODS_TXT = CRLF.join([
-    "Title screen mods go here, as downloaded: the .zip, .7z or .rar file itself, or a folder.",
+    "Title screen mods go here, as downloaded: the .zip, .7z or .rar file itself, a folder, or a .pak.",
     "(Fluffy-style packs: a modinfo.ini and a natives folder with the title screen's movies, e.g. the",
     "\"Quick Startup\" packs.)",
     "",

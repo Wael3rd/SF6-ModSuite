@@ -7,6 +7,9 @@
 // Before it goes in: valid UTF-8 only; no control character (C0, DEL, C1), line or paragraph separator, or bidirectional control; no
 // < or > (a game text would read them as message tags); no space at its ends; bounded. Nothing left: "", and the outfit keeps its
 // "Outfit VII". Numbers, registry.json, outfits.json's "name" and variants.json's "slot" do not depend on this.
+// A label taken from an archive's file name ("Majin Vegeta.rar") is shown without its extension (.rar, .zip, .7z). That came after
+// paks were built with the extension in the name: a pak keeps the names it was built with until its next rebuild (nothing forces
+// one), so a costume row is compared with both (outfit_display_matches).
 #pragma once
 
 #include <cstddef>
@@ -15,7 +18,26 @@
 
 constexpr size_t kOutfitDisplayMaxBytes = 120;   // far beyond any row; a longer label ends in "..."
 
-inline std::string outfit_display_name(const std::string& label) {
+namespace outfit_display_detail {
+
+// The extension of an archive at the end of a label (any case), "" when there is none or nothing would be left before it
+inline size_t archive_extension(const std::string& s) {
+    for (const char* ext : { ".rar", ".zip", ".7z" }) {
+        size_t n = 0;
+        while (ext[n]) ++n;
+        if (s.size() <= n) continue;
+        bool same = true;
+        for (size_t k = 0; k < n && same; ++k) {
+            char c = s[s.size() - n + k];
+            if (c >= 'A' && c <= 'Z') c = char(c + 32);
+            same = c == ext[k];
+        }
+        if (same) return n;
+    }
+    return 0;
+}
+
+inline std::string clean(const std::string& label, bool strip_extension) {
     std::string out;
     for (size_t i = 0; i < label.size();) {
         const unsigned char c = static_cast<unsigned char>(label[i]);
@@ -40,6 +62,12 @@ inline std::string outfit_display_name(const std::string& label) {
     while (first < out.size() && out[first] == ' ') ++first;
     out.erase(0, first);
     while (!out.empty() && out.back() == ' ') out.pop_back();
+    if (strip_extension) {
+        if (const size_t n = archive_extension(out)) {
+            out.resize(out.size() - n);
+            while (!out.empty() && out.back() == ' ') out.pop_back();
+        }
+    }
     if (out.size() > kOutfitDisplayMaxBytes) {
         size_t cut = kOutfitDisplayMaxBytes - 3;
         while (cut > 0 && (static_cast<unsigned char>(out[cut]) & 0xC0) == 0x80) --cut;
@@ -47,4 +75,14 @@ inline std::string outfit_display_name(const std::string& label) {
         out += "...";
     }
     return out;
+}
+
+}  // namespace outfit_display_detail
+
+inline std::string outfit_display_name(const std::string& label) { return outfit_display_detail::clean(label, true); }
+
+// What a costume row shows for this label: the name of today, or the one a pak built before it was there shows (the extension kept)
+inline bool outfit_display_matches(const std::string& label, const std::string& row) {
+    if (row.empty()) return false;
+    return outfit_display_name(label) == row || outfit_display_detail::clean(label, false) == row;
 }

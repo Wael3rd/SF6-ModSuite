@@ -282,7 +282,10 @@ bool load_stage_index(const std::wstring& path, std::unordered_map<uint64_t, std
 
 // path: natives trees only, in lower case (cased: as in the archive); file: where it is on disk (natives trees only), to read it
 // later when listed without its data
-struct OptFile { uint64_t hash; std::vector<uint8_t> data; int64_t attrib; int64_t dsize; std::string path; std::wstring file; std::string cased; };
+struct OptFile {
+    uint64_t hash = 0; std::vector<uint8_t> data; int64_t attrib = 0; int64_t dsize = 0; std::string path; std::wstring file; std::string cased;
+    int64_t pak_offset = -1, csize = 0;        // listed from a pak (title packs): its data is csize bytes at pak_offset of file, stored as attrib says
+};
 struct Option {
     std::string name, author, bundle, rel;     // bundle: Fluffy's nameAsBundle
     std::wstring screenshot;
@@ -344,6 +347,43 @@ void add_natives(const std::wstring& dir, const std::string& rel, Option& opt, b
     }
 }
 
+// A pak's entries listed, not read (title packs: only the chosen pack is read). Their paths are not known yet (a pak keeps hashes):
+// name_pak_files gives them.
+void list_pak(const std::wstring& path, Option& opt) {
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, lp(path).c_str(), L"rb") != 0 || !f) { slog("  cannot open %s", narrow(path).c_str()); return; }
+    std::vector<KpkaEntry> idx;
+    const bool ok = kpka_index(f, idx);
+    fclose(f);
+    if (!ok) { slog("  not a readable pak: %s", narrow(path).c_str()); return; }
+    for (auto& k : idx) {
+        OptFile of;
+        of.hash = k.hash;
+        of.attrib = k.attrib;
+        of.dsize = k.dsize;
+        of.file = path;
+        of.pak_offset = k.offset;
+        of.csize = k.csize;
+        opt.files.push_back(std::move(of));
+    }
+}
+
+// The data of a listed file: from its pak (as stored there: attrib and dsize stay the entry's) or its file on disk
+bool read_listed(OptFile& f) {
+    if (f.pak_offset < 0) {
+        if (!read_file(f.file, f.data)) return false;
+        f.dsize = (int64_t)f.data.size();
+        return true;
+    }
+    FILE* h = nullptr;
+    if (_wfopen_s(&h, lp(f.file).c_str(), L"rb") != 0 || !h) return false;
+    f.data.resize((size_t)f.csize);
+    const bool ok = _fseeki64(h, f.pak_offset, SEEK_SET) == 0 && fread(f.data.data(), 1, f.data.size(), h) == f.data.size();
+    fclose(h);
+    if (!ok) f.data.clear();
+    return ok;
+}
+
 void add_pak(const std::wstring& path, Option& opt) {
     FILE* f = nullptr;
     if (_wfopen_s(&f, lp(path).c_str(), L"rb") != 0 || !f) { slog("  cannot open %s", narrow(path).c_str()); return; }
@@ -366,16 +406,16 @@ void add_pak(const std::wstring& path, Option& opt) {
 
 // A folder holding a .pak or a natives tree is one option, as Fluffy Mod Manager installs it;
 // otherwise its sub-folders are looked at (bundles: one option per sub-folder).
-// read: false (title packs) lists the natives files without reading them and leaves .pak files out: a title pack's
-// files are told apart by their paths, which a pak's entries do not have.
+// read: false lists the files without reading them (title packs, UI packs, the Mod Sorter's probe); a .pak is then left out,
+// unless list_paks (title packs): its entries listed too (list_pak; their paths found afterwards, name_pak_files).
 // nodes (UI packs, ui_slots.hpp): a folder holding only a modinfo.ini is an option too (a Fluffy title, DummyMod), its text is
 // kept, and the folders beside an option's natives tree are looked at as well (some add-ons sit inside their parent's folder).
 void collect_options(const std::wstring& dir, const std::string& rel, const std::string& default_name,
-                     bool is_root, int depth, std::vector<Option>& out, bool read = true, bool nodes = false) {
+                     bool is_root, int depth, std::vector<Option>& out, bool read = true, bool nodes = false, bool list_paks = false) {
     auto entries = list_dir(dir);
     bool has_pak = false, has_natives = false, has_info = false, pak_left = false;
     for (auto& e : entries) {
-        if (!e.dir && ends_with(e.name, L".pak")) (read ? has_pak : pak_left) = true;
+        if (!e.dir && ends_with(e.name, L".pak")) (read || list_paks ? has_pak : pak_left) = true;
         if (e.dir && _wcsicmp(e.name.c_str(), L"natives") == 0) has_natives = true;
         if (!e.dir && _wcsicmp(e.name.c_str(), L"modinfo.ini") == 0) has_info = true;
     }
@@ -388,7 +428,10 @@ void collect_options(const std::wstring& dir, const std::string& rel, const std:
         if (!opt.screenshot.empty() && !file_exists(opt.screenshot)) opt.screenshot.clear();
         for (auto& e : entries) {
             if (opt.screenshot.empty() && !e.dir && is_image(e.name)) opt.screenshot = dir + L"\\" + e.name;
-            if (read && !e.dir && ends_with(e.name, L".pak")) add_pak(dir + L"\\" + e.name, opt);
+            if (!e.dir && ends_with(e.name, L".pak")) {
+                if (read) add_pak(dir + L"\\" + e.name, opt);
+                else if (list_paks) list_pak(dir + L"\\" + e.name, opt);
+            }
             if (e.dir && _wcsicmp(e.name.c_str(), L"natives") == 0) add_natives(dir + L"\\" + e.name, "natives", opt, read);
         }
         if (nodes && has_info) {
@@ -401,7 +444,7 @@ void collect_options(const std::wstring& dir, const std::string& rel, const std:
     if (depth >= 6) return;
     for (auto& e : entries) {
         if (!e.dir || e.name[0] == L'.' || (nodes && _wcsicmp(e.name.c_str(), L"natives") == 0)) continue;
-        collect_options(dir + L"\\" + e.name, rel + "/" + narrow(e.name), default_name, false, depth + 1, out, read, nodes);
+        collect_options(dir + L"\\" + e.name, rel + "/" + narrow(e.name), default_name, false, depth + 1, out, read, nodes, list_paks);
     }
 }
 
@@ -653,10 +696,10 @@ bool retire_pak(const std::wstring& game_dir, const PatchPak& p, int max_mod, bo
 // ---------------------------------------------------------------------------------------------
 
 // Part of the title packs' fingerprint: bump it when what is written of a pack changes.
-const char* TITLE_FORMAT_VERSION = "titleslots-10";      // 2: the packs' pictures; 3: at 1920x1080, and the game's own; 4: Random's mosaic;
+const char* TITLE_FORMAT_VERSION = "titleslots-11";      // 2: the packs' pictures; 3: at 1920x1080, and the game's own; 4: Random's mosaic;
                                                         // 5: every background's title files at private paths (the live switch);
                                                         // 6: streamed copies under natives/stm/streaming/_titleslots (the core's playlist);
-                                                        // 7: their resource files beside them
+                                                        // 7: their resource files beside them; 11: packs shipped as a .pak
 
 struct TitlePack { title_slots::Pack info; Option opt; };   // opt: its natives files, listed, not read
 
@@ -681,6 +724,29 @@ const char* title_name(const TitleScan& t, int i) {
     return i >= 0 ? t.packs[size_t(i)].info.name.c_str() : "";
 }
 
+// The paths of the files listed from a pak, by their hashes: title_slots::known_paths() and the paths of every file listed from a
+// folder (another pack's). A file named by neither keeps no path: a startup file. Logged per pack.
+void name_pak_files(std::vector<Option>& options) {
+    std::unordered_map<uint64_t, std::string> names;
+    for (auto& p : title_slots::known_paths()) names.emplace(pak_path_hash(std::string_view(p)), p);
+    for (auto& o : options)
+        for (auto& f : o.files)
+            if (f.pak_offset < 0) names.emplace(f.hash, f.path);
+    for (auto& o : options) {
+        size_t from_pak = 0, unnamed = 0;
+        for (auto& f : o.files) {
+            if (f.pak_offset < 0) continue;
+            ++from_pak;
+            auto it = names.find(f.hash);
+            if (it != names.end()) f.path = it->second;
+            else ++unnamed;
+        }
+        if (from_pak)
+            slog("  title_mods: %s: %zu file(s) in a .pak%s", o.rel.c_str(), from_pak,
+                 unnamed ? (", " + std::to_string(unnamed) + " of a path no pack shows (taken as startup files)").c_str() : "");
+    }
+}
+
 // The packs of title_mods (archives unpacked once into title_mods\.cache, like stage mods), the settings and the choice.
 TitleScan scan_titles(const std::wstring& game_dir) {
     TitleScan t;
@@ -692,17 +758,22 @@ TitleScan scan_titles(const std::wstring& game_dir) {
     for (auto& s : sources) {
         const std::string n = narrow(s.name);
         if (s.dir) {
-            collect_options(s.path, n, n, true, 0, options, false);
+            collect_options(s.path, n, n, true, 0, options, false, false, true);
         } else if (s.archive != ArchiveKind::None) {
             std::wstring out;
-            if (unpack_archive(s, dir + L"\\.cache", out)) collect_options(out, n, narrow(stem(s.name)), true, 0, options, false);
+            if (unpack_archive(s, dir + L"\\.cache", out)) collect_options(out, n, narrow(stem(s.name)), true, 0, options, false, false, true);
         } else {
-            slog("  title_mods: %s: a .pak is not read as a title pack, ignored", n.c_str());
+            Option o;                              // a .pak alone: one pack, named after its file
+            o.rel = n;
+            o.name = narrow(stem(s.name));
+            list_pak(s.path, o);
+            options.push_back(std::move(o));
         }
     }
+    name_pak_files(options);
     for (auto& o : options) {
         if (o.files.empty()) {
-            slog("  title_mods: %s: no file in a natives tree (a .pak inside is not read), ignored", o.rel.c_str());
+            slog("  title_mods: %s: no file in a natives tree or a .pak, ignored", o.rel.c_str());
             continue;
         }
         TitlePack p;
@@ -813,8 +884,7 @@ void add_title_files(TitleScan& t, PakWriter& writer, const std::wstring& game_d
         for (auto& f : p.opt.files) {
             if (title_slots::is_title_file(f.path) != title_files) continue;
             OptFile g = f;   // listed: no data yet
-            if (!read_file(g.file, g.data)) { slog("  cannot read %s", narrow(g.file).c_str()); continue; }
-            g.dsize = (int64_t)g.data.size();
+            if (!read_listed(g)) { slog("  cannot read %s", narrow(g.file).c_str()); continue; }
             sel.files.push_back(std::move(g));
         }
         check_textures(sel);
@@ -833,8 +903,8 @@ void add_title_files(TitleScan& t, PakWriter& writer, const std::wstring& game_d
             ++n_private;
             if (!chosen) continue;
             if (writer.add_same_source(f.hash, src)) { ++n_title; continue; }
-            std::vector<uint8_t> again;                    // not shared after all: read again for the real path
-            if (read_file(f.file, again)) { writer.add_raw(f.hash, std::move(again), f.attrib, f.dsize); ++n_title; }
+            OptFile again = f;                             // not shared after all: read again for the real path
+            if (read_listed(again)) { writer.add_raw(f.hash, std::move(again.data), f.attrib, f.dsize); ++n_title; }
         }
     }
     if (t.choice.startup >= 0) {

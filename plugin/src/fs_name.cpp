@@ -230,7 +230,7 @@ Sel fs_selection(Obj* agent, const std::string& row) {
     s.fid = g_fid; s.how = "the preview's fighter, the outfit by the costume row's name";
     s.cos = costumes::slot_by_name(g_fid, row);
     if (s.cos < 0 && rto::on())
-        for (auto& k : rto::manifest().slots) if (k.fighter == g_fid && (k.name == row || outfit_display_name(k.label) == row)) { s.cos = k.costume_no; break; }
+        for (auto& k : rto::manifest().slots) if (k.fighter == g_fid && (k.name == row || outfit_display_matches(k.label, row))) { s.cos = k.costume_no; break; }
     return s;
 }
 // The Character tab is up: its costume row is shown (the screen's other tabs hide it)

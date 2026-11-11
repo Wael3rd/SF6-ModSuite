@@ -3,7 +3,7 @@
 // stagetest --selftest). The stage loader does the rest (stage_loader.cpp).
 //
 // A title pack is a Fluffy-style mod dropped as it is in reframework\title_mods (an archive or a folder holding
-// modinfo.ini and a natives tree). Its files are of two kinds, by their natives path:
+// modinfo.ini and a natives tree or a .pak, or a .pak alone). Its files are of two kinds, by their natives path:
 //   title files    the title screen's movies, natives/stm/streaming/product/gui/gm/ui10000/part/title_*.mov.1
 //                  (any path holding "/gui/gm/ui10000/part/title_")
 //   startup files  every other file: the boot logos and the health warning skipped (ui10001 / ui10004 gui, the logo
@@ -211,6 +211,27 @@ inline std::string pack_key(const std::string& source) {
     char b[17];
     snprintf(b, sizeof(b), "%016llx", (unsigned long long)detail::fnv1a64(detail::lower(source)));
     return "t" + std::string(b, 12);
+}
+
+// The natives paths a title pack's files have (every title pack on PC3, 11/11, holds these twelve and no other). A pak keeps
+// only the hashes of its paths: its entries are named from these and from the paths of the packs shipped as files; an entry
+// named by neither is a startup file (a startup file is written at its own hash, its path is never needed).
+inline const std::vector<std::string>& known_paths() {
+    static const std::vector<std::string> paths = {
+        "natives/stm/streaming/product/gui/gm/ui10000/part/title_start.mov.1",
+        "natives/stm/streaming/product/gui/gm/ui10000/part/title_loop.mov.1",
+        "natives/stm/streaming/product/gui/gm/ui10000/part/title_end.mov.1",
+        "natives/stm/streaming/product/gui/gm/ui10000/part/re logo animation.mov.1.x64",
+        "natives/stm/product/sound/wwise/re_logo.sbnk.1.x64",
+        "natives/stm/product/gui/gm/ui10000/ui10001.gui.530035",
+        "natives/stm/product/gui/gm/ui10000/ui10004.gui.530035",
+        "natives/stm/product/gui/gm/ui10000/part/tex_caplogo.tex.241101895",
+        "natives/stm/product/gui/gm/ui10000/part/tex_havok_logo_im.tex.241101895",
+        "natives/stm/product/gui/gm/ui10000/part/tex_megascans_logo_im.tex.241101895",
+        "natives/stm/product/gui/gm/ui10000/part/tex_microsoft_logo_im.tex.241101895",
+        "natives/stm/product/gui/gm/ui10000/part/tex_st_logo_im.tex.241101895",
+    };
+    return paths;
 }
 
 // A title file (the title screen's movies) rather than a startup file; path: the file's natives path, any case.

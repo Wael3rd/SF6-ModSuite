@@ -445,7 +445,7 @@ const json* find_outfit(const json& outfits, int fighter, const std::string& row
     for (const json& o : *it) {
         if (int_of(o, "fighter", -1) != fighter) continue;
         if (str_of(o, "name") == want) return &o;            // "Outfit VII": one per fighter, the row's own word
-        if (!by_label && outfit_display_name(str_of(o, "label")) == want) by_label = &o;
+        if (!by_label && outfit_display_matches(str_of(o, "label"), want)) by_label = &o;
     }
     return by_label;
 }

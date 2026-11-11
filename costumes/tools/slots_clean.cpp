@@ -2,8 +2,8 @@
 //
 //   SF6_SlotsClean.exe [game folder] [--dry-run]
 //
-// The loader writes its patch paks (re_chunk_000.pak.patch_NNN.pak holding its costume or stage marker)
-// and a few state files when the game starts. They stay when the loader's package is turned off in
+// The loader writes its patch paks (re_chunk_000.pak.patch_NNN.pak holding its costume or stage marker; the stage pak also
+// holds the title screen packs and the UI packs) and a few state files when the game starts. They stay when the loader's package is turned off in
 // Fluffy Mod Manager (nothing runs to remove them), and Fluffy's re-read of the game archives after a
 // game update records them as game files. Run this BEFORE that re-read: it takes the loader's paks and
 // state out of the way and touches nothing of the user's (costume_mods, other mods' data, Fluffy's files).
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
             printf("  %s: not ours, left as it is\n", p.name.c_str());
             continue;
         }
-        const char* what = p.kind == PatchPakKind::Costume ? "costume slots" : "stage slots";
+        const char* what = p.kind == PatchPakKind::Costume ? "costume slots" : "stage slots (stages, title and UI packs)";
         our_names.push_back(p.name);
         if (p.num > top_foreign) {
             printf("  %s: %s pak, no pak of another mod above it -> %s\n", p.name.c_str(), what, dry ? "would delete" : "delete");
@@ -158,13 +158,17 @@ int main(int argc, char** argv) {
     }
     if (our_names.empty()) printf("  no pak of the loader found\n");
 
-    // ---- 2. Runtime state of the loaders. Shipped files (loader\), costume_mods, logs and other data stay. ----
+    // ---- 2. Runtime state of the loaders. Shipped files (loader\), the mods' folders, the player's choices (state.json,
+    //      overdrive.json, shuffle.json, game_title.*), logs and other data stay. Each registry is written again at the next start. ----
     const std::string costume_data = game + "\\reframework\\data\\SF6_Costumes_Data";
     const std::string stage_data = game + "\\reframework\\data\\SF6_StageSlots_Data";
+    const std::string title_data = game + "\\reframework\\data\\SF6_TitleSlots_Data";
+    const std::string ui_data = game + "\\reframework\\data\\SF6_UISlots_Data";
     const std::string state[] = {
         costume_data + "\\registry.json", costume_data + "\\outfits.json", costume_data + "\\pak_sources.tsv",
         costume_data + "\\loose_probes.tsv",
         stage_data + "\\registry.json", stage_data + "\\loader\\variants.tsv",
+        title_data + "\\registry.json", ui_data + "\\registry.json",
     };
     printf("\nRuntime state:\n");
     for (auto& f : state) {

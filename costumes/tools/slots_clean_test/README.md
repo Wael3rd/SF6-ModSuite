@@ -1,7 +1,8 @@
 # SF6_SlotsClean: test
 
 `SF6_SlotsClean.exe` (`costumes/tools/slots_clean.cpp`, built by `build.bat` into `build\`) removes the Slots Loader's
-runtime patch paks and state from the game folder. This test runs it on fake game folders it builds itself (synthetic paks
+runtime patch paks and state from the game folder (the costume, stage, title pack and UI pack registries; the
+player's choices, `state.json`, `overdrive.json`, `shuffle.json` and `game_title.*`, stay). This test runs it on fake game folders it builds itself (synthetic paks
 written with `PakWriter`: ours for the costume slots, ours for the stage slots, a foreign one). It never touches a real game.
 
 1. `build.bat` at the repository root (builds `build\SF6_SlotsClean.exe`), then `build_slots_clean_test.bat`.

@@ -47,6 +47,17 @@ int main() {
     check(cut.size() <= kOutfitDisplayMaxBytes && (cut.size() - 3) % 3 == 0 && outfit_display_name(cut) == cut, "beyond it, never inside a UTF-8 sequence");
     check(outfit_display_name(outfit_display_name("  <a> b\x01 ")) == outfit_display_name("  <a> b\x01 "), "twice is once");
 
+    // an archive's name: shown without its extension; a row of a pak built before still matches
+    check(outfit_display_name("Majin Vegeta.rar") == "Majin Vegeta", ".rar gone");
+    check(outfit_display_name("EliMummySim 3645 2 2026-08-07T04-29Z toYuPJU0O.zip") == "EliMummySim 3645 2 2026-08-07T04-29Z toYuPJU0O", ".zip gone");
+    check(outfit_display_name("Pack.7Z") == "Pack" && outfit_display_name("Pack .RAR") == "Pack", "any case, no space left at its end");
+    check(outfit_display_name(".rar") == ".rar" && outfit_display_name("x.rar.txt") == "x.rar.txt", "nothing left, or not at the end: kept");
+    check(outfit_display_name("C. Viper Battlesuit C2.1") == "C. Viper Battlesuit C2.1" && outfit_display_name("Mai v1.5") == "Mai v1.5", "a dot in a name stays");
+    check(outfit_display_name("Majin Vegeta.rar.zip") == "Majin Vegeta.rar", "one extension only");
+    check(outfit_display_matches("Majin Vegeta.rar", "Majin Vegeta") && outfit_display_matches("Majin Vegeta.rar", "Majin Vegeta.rar"), "both rows match");
+    check(!outfit_display_matches("Majin Vegeta.rar", "Majin") && !outfit_display_matches("", "") && !outfit_display_matches("<>", ""), "no other");
+    check(outfit_display_matches("Aloha Ryu", "Aloha Ryu") && !outfit_display_matches("Aloha Ryu", "Aloha Ryu.rar"), "a plain label: itself only");
+
     // ---- the scrolling ----
     using namespace slots::scroll;
     check(offset_at(0, 5) == 0 && offset_at(-10, 5) == 0, "a name that fits doesn't move");

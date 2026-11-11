@@ -47,8 +47,8 @@ before Fluffy Mod Manager re-reads the game archives, those paks stay and Fluffy
 
 1. The game updated: **before** letting Fluffy re-read the archives ("EXE changed") and before turning mods off,
    close the game and run `SF6_SlotsClean.exe` (double-click, in the game folder; `--dry-run` only lists). It removes
-   the loader's runtime paks and state files, and nothing else: `reframework\costume_mods`, other mods' data and
-   Fluffy's files are not touched.
+   the loader's runtime paks and state files (the costume, stage, title pack and UI pack registries), and nothing else:
+   the mods' folders, your choices (stages, title backgrounds), other mods' data and Fluffy's files are not touched.
 2. Let Fluffy re-read the game archives.
 3. Launch the game: the loader rebuilds the slots from `reframework\costume_mods`.
 

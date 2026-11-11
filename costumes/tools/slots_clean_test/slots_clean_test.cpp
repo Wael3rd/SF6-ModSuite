@@ -107,6 +107,14 @@ static Game make_game(const char* name, const std::vector<std::string>& listed) 
     put(g.root + "\\reframework\\data\\SF6_StageSlots_Data\\loader\\stage_paths.txt", "shipped");
     put(g.root + "\\reframework\\data\\SF6_StageSlots_Data\\loader\\variants.tsv", "#fingerprint\tx\n");
     put(g.root + "\\reframework\\data\\SF6_StageSlots_Data\\registry.json", "{}");
+    put(g.root + "\\reframework\\data\\SF6_StageSlots_Data\\state.json", "{\"selection\":{}}");
+    put(g.root + "\\reframework\\data\\SF6_TitleSlots_Data\\registry.json", "{}");
+    put(g.root + "\\reframework\\data\\SF6_TitleSlots_Data\\overdrive.json", "{\"game\":{}}");
+    put(g.root + "\\reframework\\data\\SF6_TitleSlots_Data\\shuffle.json", "{\"left\":[]}");
+    put(g.root + "\\reframework\\data\\SF6_TitleSlots_Data\\game_title.jpg", "picture");
+    put(g.root + "\\reframework\\data\\SF6_UISlots_Data\\registry.json", "{}");
+    put(g.root + "\\reframework\\title_mods\\Pack.zip", "title pack");
+    put(g.root + "\\reframework\\ui_mods\\Pack.rar", "ui pack");
     std::string list("ARCH\0\0\0\0", 8);
     list += "re_chunk_000.pak";
     list.push_back('\0');
@@ -131,6 +139,7 @@ static const char* STATE[] = {
     "\\reframework\\data\\SF6_Costumes_Data\\registry.json", "\\reframework\\data\\SF6_Costumes_Data\\outfits.json",
     "\\reframework\\data\\SF6_Costumes_Data\\loose_probes.tsv",
     "\\reframework\\data\\SF6_StageSlots_Data\\registry.json", "\\reframework\\data\\SF6_StageSlots_Data\\loader\\variants.tsv",
+    "\\reframework\\data\\SF6_TitleSlots_Data\\registry.json", "\\reframework\\data\\SF6_UISlots_Data\\registry.json",
 };
 static const char* KEPT[] = {
     "\\re_chunk_000.pak", "\\SF6_CostumeLoader.log", "\\reframework\\costume_mods\\Ryu\\Cool.zip",
@@ -138,6 +147,9 @@ static const char* KEPT[] = {
     "\\reframework\\data\\SF6_Costumes_Data\\loader\\vanilla_costume_index.tsv",
     "\\reframework\\data\\SF6_Costumes_Data\\fluffy_location.txt",
     "\\reframework\\data\\SF6_StageSlots_Data\\loader\\stage_paths.txt",
+    "\\reframework\\data\\SF6_StageSlots_Data\\state.json", "\\reframework\\data\\SF6_TitleSlots_Data\\overdrive.json",
+    "\\reframework\\data\\SF6_TitleSlots_Data\\shuffle.json", "\\reframework\\data\\SF6_TitleSlots_Data\\game_title.jpg",
+    "\\reframework\\title_mods\\Pack.zip", "\\reframework\\ui_mods\\Pack.rar",
 };
 
 static void check_state_gone_rest_kept(const Game& g, const std::map<std::string, std::string>& before) {

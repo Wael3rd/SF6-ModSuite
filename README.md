@@ -147,7 +147,8 @@ The rest of this page is about the Slots Loader.
 Street Fighter 6 costume mods replace an existing outfit: install a Ryu mod and Outfit 1 is gone until you
 uninstall it. This loader turns every installed costume mod into an **extra** outfit slot and puts the original
 outfit back, so Outfit 1 and the mod live side by side in the costume spinner. An extra outfit shows under its mod's name in the
-game's lists ("Outfit VII" when the mod gives none); that name is local, online it travels as its outfit number only.
+game's lists ("Outfit VII" when the mod gives none; a name taken from an archive's file shows without its `.zip`, `.rar` or
+`.7z`, from the next rebuild of the slots); that name is local, online it travels as its outfit number only.
 
 Install it once. After that nothing changes in how you use the game: install costume mods the way you already
 do, start the game, and the new outfits are there.
@@ -233,8 +234,8 @@ before Fluffy Mod Manager re-reads the game archives, those paks stay and Fluffy
 
 1. The game updated: **before** letting Fluffy re-read the archives ("EXE changed") and before turning mods off,
    close the game and run `SF6_SlotsClean.exe` (double-click, in the game folder; `--dry-run` only lists). It removes
-   the loader's runtime paks and state files, and nothing else: `reframework\costume_mods`, other mods' data and
-   Fluffy's files are not touched.
+   the loader's runtime paks and state files (the costume, stage, title pack and UI pack registries), and nothing else:
+   the mods' folders, your choices (stages, title backgrounds), other mods' data and Fluffy's files are not touched.
 2. Let Fluffy re-read the game archives.
 3. Launch the game: the loader rebuilds the slots from `reframework\costume_mods`.
 

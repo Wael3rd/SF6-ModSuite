@@ -4,7 +4,7 @@
 // (from the files, never from a folder name), the stage loader whether it changes stages, holds a title screen or interface
 // files, the Color Mod's file rule whether it holds colours. In this order, the first that takes it wins:
 //   Costume      the costume loader finds costume files of a known outfit (whole outfits, or parts that become options)
-//   Title pack   a natives tree with title screen files (title_slots::is_title_file)
+//   Title pack   a natives tree with title screen files (title_slots::is_title_file), or a .pak holding some (by their hashes)
 //   Stage        files of the stage index outside the menus' pictures (the stage loader makes variants of it)
 //   Colours      colour files (esfFFF_CCC_cmd_KKK.user.2, not empty)
 //   Interface    a natives tree with interface files (natives/stm/[streaming/]product/gui/): ui_mods serves any Fluffy option
@@ -414,10 +414,11 @@ Classification classify(const std::wstring& path_in, const ClassifyContext& ctx,
             c.found.push_back({cp.nsfw_options.size() == 1 ? T_NSFW_OPTION_1 : T_NSFW_OPTIONS, {num(cp.nsfw_options.size())}});
         return c;
     }
-    if (kind != 2 && sp.title_files > 0) {
-        // ---- Title pack ----
+    if (sp.title_files + sp.pak_title_files > 0) {
+        // ---- Title pack ---- (a natives tree, or a .pak: alone, or in the archive or folder; the stage loader reads both)
         c.cat = Category::TitlePack;
-        c.found.push_back({T_F_TITLE_FILES, {num(sp.title_files), num(sp.natives_files - sp.title_files)}});
+        c.found.push_back({T_F_TITLE_FILES, {num(sp.title_files + sp.pak_title_files),
+                                             num(sp.natives_files - sp.title_files + sp.pak_title_others)}});
         c.dest_dir = L"reframework\\title_mods";
         c.dest_name = c.name;
         return c;

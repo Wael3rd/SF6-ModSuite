@@ -3,4 +3,4 @@
 // a newer one is out (suite_update.hpp, SelfCheck).
 #pragma once
 
-inline constexpr const char* kSorterVersion = "1.1.0";
+inline constexpr const char* kSorterVersion = "1.1.1";

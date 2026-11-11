@@ -70,6 +70,8 @@ struct StageProbe {
     // natives files of the item (natives trees only: a pak's entries have no path), by what they are
     size_t natives_files = 0;
     size_t title_files = 0;      // title_slots::is_title_file
+    size_t pak_title_files = 0;  // entries of its paks that are title files (title_slots::known_paths, by hash)
+    size_t pak_title_others = 0; // the other entries of those paks (a title pack's startup files)
     size_t ui_files = 0;         // under natives/stm/product/gui/ or natives/stm/streaming/product/gui/
     std::set<std::string> ui_fighters;   // ui_slots::fighter_of_path of those files
     size_t pak_entries = 0;      // entries of the paks found
