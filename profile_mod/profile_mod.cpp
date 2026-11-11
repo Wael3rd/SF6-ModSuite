@@ -814,3 +814,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
     logi("profile_mod: on (full profile %d, Steam name %d)", full ? 1 : 0, set.steam_name ? 1 : 0);
     return true;
 }
+
+// The version the SF6 Mod Suite updater reads to know what is installed (updater/src/update_game.cpp: the loaded DLL's export, never its
+// bytes). Every package's main DLL has one.
+extern "C" __declspec(dllexport) const char* sf6suite_package_version(void) { return kVersion; }
