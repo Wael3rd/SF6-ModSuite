@@ -49,7 +49,7 @@ namespace gm = game::gm;
 using API = reframework::API;
 using MO = API::ManagedObject;
 
-constexpr const char* kVersion = "1.3.0";
+constexpr const char* kVersion = "1.3.1";
 constexpr const char* kDataDir = "reframework/data/SF6_ReportMod_data";
 constexpr const char* kConfigPath = "reframework/data/SF6_ReportMod_data/config.json";   // api_base alone: no key is needed, none ships
 constexpr const char* kLocalePath = "reframework/data/SF6_ReportMod_data/locale.json";

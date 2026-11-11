@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.35.0 (2026-11-11) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Slots Loader | 1.27.2 | outfit names without `.rar` / `.zip`; title packs shipped as a `.pak`; SF6_SlotsClean clears the title and UI packs' registries |
+| SF6 Mod Sorter | 1.1.1 | sorts a title pack shipped as a `.pak` into `title_mods` |
+| SF6 Native Core | 0.9.12 | unchanged |
+| SF6 Color Mod | 0.26.2 | unchanged |
+| SF6 Recording Manager | 2.2.10 | unchanged |
+| SF6 Profile Mod | 1.1.1 | unchanged |
+
+Updating: with 1.34.0 installed, the game offers this release at the main menu, and the download's percentage shows in the
+game's side message for the first time. The Mod Sorter 1.1.0 offers its 1.1.1 in its Options tab (F); a 1.0.0 is replaced by
+hand once.
+
+### SF6 Slots Loader 1.27.2
+- An outfit whose name comes from its archive's file shows without the extension: "Majin Vegeta" instead of "Majin Vegeta.rar"
+  (`.rar`, `.zip`, `.7z`). Nothing is rebuilt for it: the new names show from the next rebuild of the slots (a mod added,
+  removed or changed). Until then the outfits keep their names, and everything that finds an outfit by the name on its row
+  (the Opponent Outfit rows, Report a bug) knows both.
+- Title screen packs shipped as a `.pak` are read: a `.pak` alone in `reframework\title_mods`, or inside the archive or folder,
+  as Fluffy Mod Manager installs it. The stage pak is rebuilt once at the first start.
+- `SF6_SlotsClean.exe` also removes the title packs' and UI packs' registries (`SF6_TitleSlots_Data\registry.json`,
+  `SF6_UISlots_Data\registry.json`), written again at the next start. Your choices (the stage variants, the title backgrounds,
+  their OVERDRIVE EDITION settings) stay.
+- Report a bug 1.3.1: finds an outfit by either name.
+
+### SF6 Mod Sorter 1.1.1
+- A title pack shipped as a `.pak` (alone, or in an archive or folder) is recognised and goes in `reframework\title_mods`.
+
 ## 1.34.0 (2026-11-11) — SF6 Mod Suite
 
 | Package | Version | |
