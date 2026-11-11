@@ -9,7 +9,7 @@ packages:
 | **SF6 Color Mod** | extra costume colours, a colour editor, Drive colours per character and per player, all from the game's own menus: [colormod/README.md](colormod/README.md) | REFramework, SF6 Native Core |
 | **SF6 Native Core** | the shared native-UI core the mods display through: [core/README.md](core/README.md) | REFramework |
 | **SF6 Recording Manager** | (CRSM) 30 recording slots per character in Training, drills, a reversal picker and online sharing of recordings, all in the game's training pause menu: [crsm/README.md](crsm/README.md) | REFramework, SF6 Native Core |
-| **SF6 Profile Mod** | opens the full Fighter Profile where the game opens the limited one, and shows a player's Steam name on a key press: see below | REFramework, SF6 Native Core |
+| **SF6 Profile Mod** | opens the full Fighter Profile where the game opens the limited one, shows a player's Steam name on a key press, and adds **Zen Mode** (ranks, points, win streaks and player details hidden, from a tab of Battle Settings): see below | REFramework, SF6 Native Core |
 | **Report a bug** | `report_mod.dll`, in the Slots Loader's package: R / pad X on Fighter Settings sends the author a report, only once you confirm: see below | REFramework, SF6 Native Core |
 
 Install what you want: the Slots Loader works on its own (only its Replays Settings tab and the Stage Variation hint in the guide bar need the Native Core); the Color Mod, the Recording Manager and the Profile Mod need the Native Core of the same
@@ -26,6 +26,33 @@ links lead here.
 - It opens the full Fighter Profile where the game opens the limited one. It only reuses what the server already sent: the sections the server does not send stay empty. It does not bypass anyone's privacy settings. The limited profile shows briefly first.
 - On a profile whose platform line already shows a Steam ID, R / pad X switches that line between the ID and the player's Steam name. A line the game hides stays hidden. **Network:** only on a press of that key, the shown ID is sent to steamcommunity.com (HTTPS) to read the public name, and to steamcommunity.com again if the account has no community profile. Nothing is sent at any other time. Names are kept in memory for the session, never written to disk or to the log.
 - Off switches, in `reframework\data\profile_mod.ini` (create it; it is not shipped): `full_profile=0`, `steam_name=0`.
+
+### Zen Mode
+
+Since Profile Mod 1.1.0 (suite 1.31.0). It hides what tells you who you are up against and what is at stake, to play with a clear
+mind. Battle Settings has a new tab, **Zen Mode**: the first row turns it On / Off (Off when installed), the five others choose
+Hidden / Shown for each group:
+
+| Group | Hides |
+|---|---|
+| Ranks | rank icons, rank gauges and rank-up notices |
+| League Points / MR | League Points and Master Rate |
+| Win Streaks | win streak counters |
+| Player Names | player names, titles and clubs, during matches |
+| Player Details | country flags, platform icons and control types, during matches |
+
+- Where: the fight's HUD, the versus and result screens, the Fighting Ground's banner, Battle Settings, fighter profiles and
+  lists, clubs, rankings, custom rooms, the replay list and replays themselves.
+- A change applies at once and is kept in `reframework\data\zen_mode.json`. It only changes what your own game draws: nothing
+  is sent, nothing changes for the other player.
+- It is native and costs next to nothing: during the fight itself it does no work on the game's thread (the fight's HUD is
+  looked at around it only: the intro, a round's start and end, a pause); what is left is a table lookup per drawn element,
+  about 0.015 ms a frame.
+- **It needs a REFramework nightly build** (plugin API 1.14 or newer; the stable 1.5.9.1 has 1.10). With an older REFramework
+  the tab does not appear, REFramework's log says `Zen Mode off`, and the rest of the Profile Mod works.
+- If you used the `ZenMode.lua` script, which Zen Mode's list of screens started from: its settings are taken at the first
+  start (Zen Mode then starts On). Remove `reframework\autorun\ZenMode.lua`: the two together do the same work twice.
+- The tab's texts follow the game's language (14 languages; all but English and French are machine translations).
 
 ## Report a bug
 
@@ -367,7 +394,8 @@ loader loads nothing else.
 REFramework in `dinput8.dll`, official build 1.5.8 or newer (plugin API 1.10). The Native Core, the Color Mod and the
 Recording Manager are built with REFramework's plugin API 1.15 headers (`core/third_party/reframework`, REFramework
 commit 76520cac) and run on REFramework 1.5.8 (the core checks the running version before using anything newer; the
-Recording Manager uses nothing past plugin API 1.10).
+Recording Manager uses nothing past plugin API 1.10). The Profile Mod's Zen Mode needs plugin API 1.14 or newer, that is a
+REFramework nightly build; without it only Zen Mode is off.
 
 ## Credits and licence
 
