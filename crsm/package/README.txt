@@ -33,6 +33,11 @@ COMMUNITY (2.1.0)
   reframework/data/SF6_Community_data/identity.json: delete that file to forget it on this PC (a new one is made at
   the next share or like). If Steam cannot verify you, browsing and downloading keep working; sharing and likes say why.
 
+UPDATES
+  Once per launch the game asks GitHub (github.com) whether a newer SF6 Mod Suite release exists (nothing about you is
+  sent) and, if so, offers it at the main menu. "check_for_updates": false in reframework/data/SF6_Update_data/state.json
+  turns this off.
+
 REPORT A BUG
   Since 2.2.9 it is not part of this package: report_mod.dll comes with the Slots Loader's package and the all-in-one. Both use the same token file.
 

@@ -16,8 +16,27 @@ Install what you want: the Slots Loader works on its own (only its Replays Setti
 release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, every package in one: install either it or
 the separate packages, never both (two packages shipping the same files conflict in Fluffy Mod Manager).
 
+**Updates in game**: once per launch the game asks GitHub (github.com) whether a newer release of the suite exists (nothing about
+you is sent) and, if so, offers it at the main menu: see [Updates in game](#updates-in-game).
+
 This repository was named SF6-SlotsLoader until 07/10/2026 and SF6-CostumeSlotsLoader until 30/09/2026; the old
 links lead here.
+
+## Updates in game
+
+The Native Core or the Slots Loader's plugin (whichever is installed; one of them per launch) reads the latest release's
+`manifest.json` on GitHub once per launch. When a package you have is older than that release's, the game's own message box
+offers it at the main menu, listing each package `old -> new`. **Yes**: the zips are downloaded, checked (size, SHA-256, every
+file's path, Windows Smart App Control), and swapped in all at once (the old files are kept as `<name>.old-<version>` until the
+new version has started once); then the game closes and Steam starts it again (or at your next start, if you say No to the
+restart). **No**: that release is never offered again; a later one is. Your mods, your settings and anything a package does not
+ship are never touched. Packages installed by ZZtaii's Slotsloader Manager are left to it. With Fluffy Mod Manager, replace the
+zip there too, or Fluffy puts the old version back when the mod is re-enabled.
+
+- **Network**: `github.com` and its download servers only, over HTTPS; nothing about you or your PC is sent.
+- **Off**: `"check_for_updates": false` in `reframework\data\SF6_Update_data\state.json` (create the file with
+  `{ "check_for_updates": false }`). Its log: `update.log` in the same folder.
+- Details: [updater/README.md](updater/README.md).
 
 ## Profile Mod
 
@@ -314,7 +333,9 @@ plugin/              native REFramework plugin: menus, ownership, colours, onlin
 core/                SF6 Native Core: sf6core_native.dll, its C API (core/include) and docs
 colormod/            SF6 Color Mod: SF6_ColorModNative.dll and its locale table
 crsm/                SF6 Recording Manager: SF6_CRSMNative.dll, its locale table, package texts and offline tests
-packaging/           builds the distributable zips (make_suite_packages.py: those of a release; make_bundle.py: the all-in-one)
+packaging/           builds the distributable zips (make_suite_packages.py: those of a release; make_bundle.py: the all-in-one,
+                     then make_manifest.py: the release's manifest.json for the in-game updater)
+updater/             the in-game updater, compiled into the core and the Slots Loader's plugin
 ```
 
 The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash

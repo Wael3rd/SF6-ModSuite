@@ -13,6 +13,7 @@ MODULES = [
     ("Color Mod", os.path.join(REPO, "colormod", "data", "SF6_NativeLocale_data", "locale.json")),
     ("Recording Manager", os.path.join(REPO, "crsm", "data", "SF6_CRSM_data", "locale.json")),
     ("Report a bug", os.path.join(REPO, "report_mod", "data", "SF6_ReportMod_data", "locale.json")),
+    ("Updater", os.path.join(REPO, "updater", "locale", "locale.json")),
 ]
 GAME_WORDS = os.path.join(REPO, "plugin", "locale", "game_words.json")
 

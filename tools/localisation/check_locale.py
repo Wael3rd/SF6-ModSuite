@@ -8,6 +8,7 @@ import re
 import sys
 
 from gen_plugin_words import generate, OUT
+import gen_updater_words
 from locale_common import GAME_WORDS, LANGS, MODULES, REPO, read_table, slots, tags, units
 
 FAIL = []
@@ -122,6 +123,20 @@ def plugin_checks():
                 check('"' + word + '"' not in code, "plugin: %s still writes %s" % (os.path.basename(p), word))
 
 
+def updater_checks():
+    # the updater's generated table (compiled into the core and the plugin) up to date; every Word the host uses is a key
+    cur = ""
+    if os.path.exists(gen_updater_words.OUT):
+        with open(gen_updater_words.OUT, encoding="utf-8", newline="") as f:
+            cur = f.read().replace("\r\n", "\n")
+    check(cur == gen_updater_words.generate(), "updater: update_words.inc is not up to date: run tools/localisation/gen_updater_words.py")
+    keys = read_table(MODULES[4][1])["en"]
+    words = {"".join(p[:1].upper() + p[1:] for p in re.split(r"[._-]", k[len("update."):])) for k in keys}
+    for p, text in source("updater/src/*.cpp").items():
+        for w in set(re.findall(r"\bWord::([A-Za-z]+)", text)):
+            check(w == "Count" or w in words, "updater: %s uses Word::%s: not in the table" % (os.path.basename(p), w))
+
+
 def glyph_checks(game_dir):
     """Every character of ours appears in the game's own text in that language: its fonts for that language draw it (--game)."""
     import game_msgs
@@ -145,6 +160,7 @@ def main():
     keys_used_checks()
     report_keys_checks()
     plugin_checks()
+    updater_checks()
     if "--game" in sys.argv:
         at = sys.argv.index("--game") + 1
         glyph_checks(sys.argv[at] if at < len(sys.argv) else __import__("game_msgs").DEFAULT_GAME)
