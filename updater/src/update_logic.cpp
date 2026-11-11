@@ -216,8 +216,9 @@ Plan make_plan(const Manifest& m, const std::vector<Installed>& installed, bool 
 
 // ---- zip entries -------------------------------------------------------------------------------------------------------------------
 const std::vector<std::string>& keep_if_present() {
-    // The Recording Manager's settings.json: its owners (lua / native) are the player's choice once written
-    static const std::vector<std::string> k = { "reframework/data/sf6_crsmnative_data/settings.json" };
+    // The Recording Manager's settings.json: its owners (lua / native) are the player's choice once written. The loader's
+    // costume_mods/settings.ini (the player's Fluffy Mod Manager folder, NSFW words): no package ships it today.
+    static const std::vector<std::string> k = { "reframework/data/sf6_crsmnative_data/settings.json", "reframework/costume_mods/settings.ini" };
     return k;
 }
 
@@ -285,6 +286,7 @@ EntryRule classify_entry(const std::string& raw) {
         return r;
     }
     if (ls[1] == "data") {
+        if (seg.size() >= 3 && ls[2] == "sf6_update_data") return refuse("the updater's own folder");
         if (is_dir) { r.kind = Entry::Dir; return r; }
         if (seg.size() < 4) return refuse("a file directly in reframework/data/");
         if (ls.back() == "identity.json") return refuse("a player's token");
@@ -302,6 +304,8 @@ EntryRule classify_entry(const std::string& raw) {
             return r;
         }
         if (seg.size() != 3) return refuse("a file inside a player's mod folder");
+        for (auto& k : keep_if_present())
+            if (lp == k) { r.kind = Entry::KeepIfPresent; return r; }
         r.kind = Entry::File;     // the folder's own readme and tools (README.txt, SF6_CostumeAudit.bat)
         return r;
     }

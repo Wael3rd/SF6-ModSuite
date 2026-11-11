@@ -236,7 +236,8 @@ static void test_entries() {
         { "reframework/data/SF6_CRSMNative_data/settings.json", Entry::KeepIfPresent },
         { "reframework/costume_mods/LISEZMOI.txt", Entry::File }, { "reframework/costume_mods/SF6_CostumeAudit.bat", Entry::File },
         { "reframework/costume_mods/Ryu/", Entry::Dir }, { "reframework/color_mods/all_chars/", Entry::Dir }, { "reframework/stage_mods/README.txt", Entry::File },
-        { "reframework/data/SF6_Update_data/", Entry::Dir },
+        { "reframework/data/SF6_Update_data/", Entry::Refuse }, { "reframework/data/SF6_Update_data/state.json", Entry::Refuse },
+        { "reframework/costume_mods/settings.ini", Entry::KeepIfPresent },
         // zip slip and friends
         { "../evil.dll", Entry::Refuse }, { "..\\evil.dll", Entry::Refuse }, { "reframework/plugins/../../evil.dll", Entry::Refuse },
         { "reframework/../../evil.dll", Entry::Refuse }, { "reframework/data/x/../../../evil.dll", Entry::Refuse },

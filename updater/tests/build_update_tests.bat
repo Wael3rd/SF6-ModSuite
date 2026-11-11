@@ -23,7 +23,7 @@ set "COMMON=/nologo /std:c++20 /EHa /utf-8 /W4 /MT /D_CRT_SECURE_NO_WARNINGS /DN
 set "SRC=src\update_logic.cpp src\update_fs.cpp src\update_install.cpp src\update_net.cpp src\update_sys.cpp"
 cl %COMMON% /Od tests\update_test.cpp %SRC% "%OUT%\obj\miniz.obj" /Fe:"%OUT%\update_test.exe" /Fo:"%OUT%\obj\\" /link /nologo
 if errorlevel 1 exit /b 1
-cl %COMMON% /O2 tests\update_e2e.cpp %SRC% "%OUT%\obj\miniz.obj" /Fe:"%OUT%\update_e2e.exe" /Fo:"%OUT%\obj\\" /link /nologo
+cl %COMMON% /O2 /external:I ..\plugin\include tests\update_e2e.cpp src\update_game.cpp %SRC% "%OUT%\obj\miniz.obj" /Fe:"%OUT%\update_e2e.exe" /Fo:"%OUT%\obj\\" /link /nologo
 if errorlevel 1 exit /b 1
 echo OK: build\update_tests\update_test.exe, update_e2e.exe
 exit /b 0

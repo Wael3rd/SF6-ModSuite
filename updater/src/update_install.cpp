@@ -48,7 +48,14 @@ void cleanup(const Paths& p, const LogFn& log) {
     if (s.cleanup.empty()) return;
     std::string l;
     const std::vector<std::string> left = cleanup_backups(p.root, s.cleanup, &l);
-    update_state(p, [&](State& st) { st.cleanup = left; });
+    std::set<std::string> done(s.cleanup.begin(), s.cleanup.end());
+    for (auto& x : left) done.erase(x);
+    update_state(p, [&](State& st) {                    // only what it took care of: an install may have added some since
+        std::vector<std::string> keep;
+        for (auto& x : st.cleanup)
+            if (!done.count(x)) keep.push_back(x);
+        st.cleanup = keep;
+    });
     if (log) log("clean-up of the last update: " + l);
 }
 

@@ -10,6 +10,9 @@
 //       One real download through the updater's HTTPS code (redirects checked against its host list), then its size and sha256.
 //   update_e2e.exe manifest
 //       The latest release's manifest.json, as the game asks for it (prints the outcome).
+//   update_e2e.exe versions --game <folder holding packages' DLLs in reframework/plugins>
+//       Each main DLL there loaded into this process, then asked its version as the game's host asks it (update_game.cpp): the
+//       sf6suite_package_version export, the Native Core's get_version for a core without it. Prints what each one reports.
 //   Exit 0: all as expected.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -25,6 +28,7 @@
 #include <string>
 
 #include "../src/update_fs.hpp"
+#include "../src/update_game.hpp"
 #include "../src/update_install.hpp"
 #include "../src/update_logic.hpp"
 #include "../src/update_net.hpp"
@@ -120,12 +124,27 @@ static int cmd_manifest() {
     return 0;
 }
 
+static int cmd_versions(std::map<std::string, std::string> a) {
+    const std::wstring root = widen(a["--game"]);
+    for (auto& k : known_packages()) {
+        const std::wstring dll = join(root, k.proof);
+        if (!exists(dll)) continue;
+        SetLastError(0);
+        HMODULE h = LoadLibraryW(dll.c_str());
+        if (!h) { out(std::string(k.id) + ": not loaded (error " + std::to_string(GetLastError()) + ")"); continue; }
+        const std::string v = game::package_version(k, root);
+        out(std::string(k.id) + ": " + (v.empty() ? "reports no version" : "reports " + v));
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) { out("usage: update_e2e.exe update|fetch|manifest ..."); return 2; }
     const std::string c = argv[1];
     if (c == "update") return cmd_update(args(argc, argv));
     if (c == "fetch") return cmd_fetch(args(argc, argv));
     if (c == "manifest") return cmd_manifest();
+    if (c == "versions") return cmd_versions(args(argc, argv));
     out("unknown command");
     return 2;
 }

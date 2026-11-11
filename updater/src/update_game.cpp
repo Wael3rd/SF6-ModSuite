@@ -12,7 +12,9 @@
 #include <cstring>
 #include <vector>
 
+#pragma warning(push, 0)                // REFramework's header: size_t -> unsigned, an unused local
 #include <reframework/API.hpp>
+#pragma warning(pop)
 
 #include "update_fs.hpp"
 
