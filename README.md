@@ -16,6 +16,9 @@ Install what you want: the Slots Loader works on its own (only its Replays Setti
 release. Each release also carries `SF6_ModSuite_AllInOne_v<version>.zip`, every package in one: install either it or
 the separate packages, never both (two packages shipping the same files conflict in Fluffy Mod Manager).
 
+**Mod Sorter**: `SF6_ModSorter.exe`, a program outside the game: drop downloaded mods on it, each goes to its folder of the game,
+and it tells you when a newer release of the suite is out: see [Mod Sorter](#mod-sorter).
+
 **Updates in game**: once per launch the game asks GitHub (github.com) whether a newer release of the suite exists (nothing about
 you is sent) and, if so, offers it at the main menu: see [Updates in game](#updates-in-game).
 
@@ -38,6 +41,40 @@ zip there too, or Fluffy puts the old version back when the mod is re-enabled.
 - **Off**: `"check_for_updates": false` in `reframework\data\SF6_Update_data\state.json` (create the file with
   `{ "check_for_updates": false }`). Its log: `update.log` in the same folder.
 - Details: [updater/README.md](updater/README.md).
+
+## Mod Sorter
+
+`SF6_ModSorter.exe` (since suite 1.33.0; `SF6_ModSorter_<version>.zip`, also in the all-in-one) is a small Windows program in the
+game's style, used outside the game. Drop the mods you downloaded on it, **as downloaded** (archives `.zip`, `.7z`, `.rar`, folders,
+`.pak` files, colour files): it says what each one is and, on **Install all**, copies it where the game reads it. Your downloads
+are copied, never moved or changed, and nothing is ever run from an archive.
+
+| A mod that is | goes to (in the game folder) |
+|---|---|
+| a costume | `reframework\costume_mods\<Character>`, or `reframework\costume_mods_nsfw\<Character>` when you answer NSFW: Yes |
+| a stage | `reframework\stage_mods` |
+| an interface pack | `reframework\ui_mods` |
+| a title pack | `reframework\title_mods` |
+| colours | `reframework\color_mods\<Character>` |
+
+The decision is the loaders' own code (the costume loader, the stage loader, the Color Mod's file rule), from the files, never from a
+folder's name. A mod it does not recognise is not placed and the reason is shown; a mod already there asks Skip or Replace.
+
+- **Installed** tab: what is in the game folder, by category, with the mods' pictures. N marks or unmarks a costume as NSFW (it moves
+  between `costume_mods` and `costume_mods_nsfw`).
+- **Options** tab: the language (the game's 14) and **SF6 Mod Suite updates**. When the tool starts it reads the latest release's
+  `manifest.json` on GitHub and compares it with the packages in the game folder, so you can know a release is out before starting
+  the game. A newer release is listed `old -> new`; F installs it, **with the game closed**, with the same code as the update in
+  game (same checks, same all-or-nothing swap, same `state.json` and `update.log`). Packages installed before suite 1.32.0 report no
+  version: update those by hand once. With Fluffy Mod Manager, replace the zip there too.
+- It finds the game through Steam (G chooses another folder) and can start it (L). It needs the SF6 Slots Loader installed in that
+  game folder: costumes and stages are recognised with its indexes.
+- Install: unzip anywhere and run it, or install its zip with Fluffy Mod Manager (the exe lands in the game folder). Its settings
+  (the game folder, the language): `%APPDATA%\SF6_ModSorter\settings.ini`.
+- **Network**: `github.com` and its download servers only, over HTTPS, for the update check; nothing about you or your PC is sent.
+  Off with `"check_for_updates": false` in `reframework\data\SF6_Update_data\state.json` (F still checks when you ask).
+- The program is not signed: Windows SmartScreen may ask before the first run (More info, Run anyway), and Windows may refuse it with
+  Smart App Control on. The in-game updater does not update the Mod Sorter itself: a new version is downloaded by hand.
 
 ## Profile Mod
 
@@ -364,6 +401,8 @@ crsm/                SF6 Recording Manager: SF6_CRSMNative.dll, its locale table
 packaging/           builds the distributable zips (make_suite_packages.py: those of a release; make_bundle.py: the all-in-one,
                      then make_manifest.py: the release's manifest.json for the in-game updater)
 updater/             the in-game updater, compiled into the core and the Slots Loader's plugin
+tools/sorter/        SF6_ModSorter.exe, the Mod Sorter: the loaders' own code decides what a mod is; the updater's code
+                     for its update check (packaging/make_sorter_package.py: its zip)
 ```
 
 The costume loader has no hooks, no user interface and no scripting. It imports `kernel32`, `bcrypt` (to hash
@@ -383,6 +422,7 @@ build\SF6_CostumeSlotsNative.dll       REFramework plugin
 build\core\sf6core_native.dll         SF6 Native Core (core\build.bat)
 build\colormod\SF6_ColorModNative.dll SF6 Color Mod (colormod\build.bat)
 build\crsm\SF6_CRSMNative.dll         SF6 Recording Manager (crsm\build.bat)
+build\SF6_ModSorter.exe              the Mod Sorter (tools\sorter\build.bat)
 build\costume_loader.exe, paktool.exe, loadtest.exe, stagepak.exe, stagetest.exe, textest.exe
 ```
 

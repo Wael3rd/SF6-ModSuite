@@ -4,6 +4,14 @@ When a newer release of the suite is out, the game says so once per launch, at t
 installs it on Yes: download, checks, swap of the files, then the game closes and Steam starts it again. No new DLL, no new EXE: the code
 here is compiled into the **Native Core** (`sf6core_native.dll`) and the **Slots Loader's plugin** (`SF6_CostumeSlotsNative.dll`).
 
+## Outside the game: the Mod Sorter
+
+`SF6_ModSorter.exe` (`tools/sorter/suite_update.cpp`) drives the same code with the game closed: the same manifest, checks, swap,
+`state.json` and `update.log` (its lines start with `mod sorter:`). Two differences. The installed versions are read from the DLLs'
+files (`update_pe.cpp`: nothing is loaded or run). And nothing is installed while the game runs: the game's own box does that. A
+look at the latest release writes nothing where no package of the suite is installed. Its zip is no package: `make_manifest.py`
+leaves it out, the updater never installs it.
+
 ## Who runs it
 
 Every package but the Slots Loader needs the Native Core; the Slots Loader's plugin works without it. So in any combination one of the

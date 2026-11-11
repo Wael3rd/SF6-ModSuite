@@ -4,6 +4,8 @@
                   version (its modinfo.ini), the zip's name, size and sha256, and the file that proves the package is installed (its
                   main DLL). Upload it to the release WITH the zips: the game reads
                   https://github.com/Wael3rd/SF6-ModSuite/releases/latest/download/manifest.json
+                  A tool's zip (TOOL_PREFIXES: the Mod Sorter, make_sorter_package.py) is left out too: the updater installs
+                  packages, a tool is downloaded by hand.
 
 make_bundle.py calls it at its end, so every release folder gets one. Checked, the script stops: a zip that is no known package or two
 zips of one package; a package's modinfo.ini without a version; an entry the updater would refuse (the same rules as
@@ -14,6 +16,7 @@ Usage: python make_manifest.py --release "<folder>" --version <suite version> [-
 import argparse, hashlib, json, os, re, sys, zipfile
 
 BUNDLE_PREFIX = "SF6_ModSuite_AllInOne_"
+TOOL_PREFIXES = ("SF6_ModSorter_",)   # zips of a release that are no package: in the all-in-one, never in the manifest
 FORMAT = "sf6suite-manifest-1"
 # id, the file that proves the package is installed: the same table as updater/src/update_logic.cpp known_packages()
 KNOWN = [
@@ -85,7 +88,8 @@ def sha256(path):
 def build_manifest(release, version):
     if not VERSION.match(version):
         sys.exit("make_manifest: %s is not a version" % version)
-    names = sorted(n for n in os.listdir(release) if n.lower().endswith(".zip") and not n.startswith(BUNDLE_PREFIX))
+    names = sorted(n for n in os.listdir(release)
+                   if n.lower().endswith(".zip") and not n.startswith(BUNDLE_PREFIX) and not n.startswith(TOOL_PREFIXES))
     if not names:
         sys.exit("make_manifest: no package zip in " + release)
     packages, seen = [], {}

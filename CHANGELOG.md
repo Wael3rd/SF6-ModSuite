@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.33.0 (2026-11-11) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Mod Sorter | 1.0.0 | **new**: a program outside the game; drop downloaded mods on it, each goes to its folder of the game; it also checks for suite updates |
+| SF6 Native Core | 0.9.11 | unchanged |
+| SF6 Slots Loader | 1.27.0 | unchanged |
+| SF6 Color Mod | 0.26.2 | unchanged |
+| SF6 Recording Manager | 2.2.10 | unchanged |
+| SF6 Profile Mod | 1.1.1 | unchanged |
+
+Updating: nothing to update. The five packages are 1.32.0's zips, byte for byte, so the game offers nothing with this release
+(the first offer in game comes with the next release that changes a package). To get the Mod Sorter, download
+`SF6_ModSorter_1.0.0.zip` alone, or replace the all-in-one 1.32.0 with 1.33.0 (it now holds `SF6_ModSorter.exe`).
+
+### SF6 Mod Sorter 1.0.0 (new)
+- `SF6_ModSorter.exe`, a small Windows program in the game's style, used outside the game. Drop the mods you downloaded on it,
+  **as downloaded** (archives `.zip`, `.7z`, `.rar`, folders, `.pak` files, colour files): it says what each one is and, on
+  **Install all**, copies it where the game reads it. Your downloads are copied, never moved or changed; nothing is ever run
+  from an archive.
+- What goes where: costumes in `reframework\costume_mods\<Character>` (or `costume_mods_nsfw` when you answer NSFW: Yes; a name
+  that says NSFW is proposed as Yes), stages in `stage_mods`, interface packs in `ui_mods`, title packs in `title_mods`, colours
+  in `color_mods\<Character>`. The decision is the loaders' own code, from the files, never from a folder's name. A mod it does
+  not recognise is not placed and the reason is shown; a mod already there asks Skip or Replace.
+- **Installed** tab: what is in the game folder, by category, with the mods' pictures; N marks or unmarks a costume as NSFW (it
+  moves between `costume_mods` and `costume_mods_nsfw`).
+- **Options** tab: the language (the game's 14) and **SF6 Mod Suite updates**. When the tool starts it reads the latest release
+  on GitHub and compares it with the packages in the game folder: you can know a release is out before starting the game. A
+  newer release is listed `old -> new`; F installs it with the game closed, with the checks and the all-or-nothing swap of the
+  update box in game. Packages installed before 1.32.0 report no version: update those by hand once.
+- It finds the game through Steam (G chooses another folder) and can start it (L). It needs the SF6 Slots Loader installed in
+  that game folder: costumes and stages are recognised with its indexes.
+- Install: unzip anywhere and run it, or install the zip with Fluffy Mod Manager (the exe lands in the game folder).
+- **Network**: `github.com` and its download servers only, over HTTPS, for the update check; nothing about you or your PC is sent.
+- Known limits: the program is not signed, so Windows SmartScreen may ask before the first run (More info, Run anyway), and
+  Windows may refuse it with Smart App Control on. Its texts are machine translations in every language but English and French.
+  The in-game updater does not update the Mod Sorter itself: a new version of it is downloaded by hand.
+
 ## 1.32.0 (2026-11-11) — SF6 Mod Suite
 
 | Package | Version | |

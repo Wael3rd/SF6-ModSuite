@@ -11,13 +11,14 @@ import argparse, json, os, shutil, subprocess, sys, urllib.request, zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(REPO, "packaging"))
-from make_manifest import BUNDLE_PREFIX, write_manifest  # noqa: E402
+from make_manifest import BUNDLE_PREFIX, TOOL_PREFIXES, write_manifest  # noqa: E402
 
 OURS = "reframework/data/SF6_Update_data/"      # the updater's own state and log: not part of an install
 
 
 def packages(release):
-    return sorted(n for n in os.listdir(release) if n.lower().endswith(".zip") and not n.startswith(BUNDLE_PREFIX))
+    return sorted(n for n in os.listdir(release)
+                  if n.lower().endswith(".zip") and not n.startswith(BUNDLE_PREFIX) and not n.startswith(TOOL_PREFIXES))
 
 
 def fresh_install(release, game):

@@ -2,7 +2,8 @@
 
   SF6_ModSuite_AllInOne_v<version>.zip   every file of every package zip found in the release folder, one modinfo.ini
                                          (carrying the Slots Loader's SlotsloaderContract), one README.txt (this
-                                         package's notice, then each package's README)
+                                         package's notice, then each package's README). The Mod Sorter's zip
+                                         (make_sorter_package.py) is one of them: SF6_ModSorter.exe lands in the game folder.
 
 Run it after make_suite_packages.py, once every package of the release is in the folder. Two packages shipping the
 same path with different contents stop the build. It then writes the folder's manifest.json (make_manifest.py): upload it
