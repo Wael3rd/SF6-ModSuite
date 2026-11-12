@@ -24,6 +24,8 @@ Paths::Paths(const std::wstring& game_root) : root(game_root) {
     journal = join(data, "swap_journal.json");
     staging = join(data, "staging");
     log = join(data, "update.log");
+    downloads = join(data, "downloads");
+    previous = join(downloads, "previous_version");
 }
 
 namespace {
@@ -160,12 +162,90 @@ InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, 
     update_state(p, [&](State& st) {
         for (auto& b : r.swap.backups) st.cleanup.push_back(b);
     });
+    std::vector<std::string> assets;
+    for (auto& it : plan.items) assets.push_back(it.pkg.asset);
+    keep_downloads(p, assets, zips, log);
     remove_tree(p.staging);
     if (log)
         log("installed: " + std::to_string(r.swap.replaced) + " replaced, " + std::to_string(r.swap.added) + " added, " + std::to_string(r.swap.same) +
             " unchanged, " + std::to_string(r.swap.kept) + " kept (the player's), " + std::to_string(r.swap.dirs) + " folders made");
     r.ok = true;
     return r;
+}
+
+namespace {
+// The zips of a folder (names), not its subfolders
+std::vector<std::string> zips_in(const std::wstring& dir) {
+    std::vector<std::string> out;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"\\*.zip").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) out.push_back(narrow(fd.cFileName));
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return out;
+}
+}  // namespace
+
+int keep_downloads(const Paths& p, const std::vector<std::string>& assets, const std::wstring& from, const LogFn& log) {
+    int kept = 0;
+    for (auto& asset : assets) {
+        const std::string fam = asset_family(asset);
+        const std::wstring src = join(from, asset);
+        if (fam.empty() || !exists(src)) continue;
+        if (!make_dirs(p.downloads)) { if (log) log("downloads: the folder cannot be made"); return kept; }
+        bool moved_ok = true;
+        for (auto& n : zips_in(p.downloads)) {
+            if (asset_family(n) != fam) continue;
+            const std::wstring there = join(p.downloads, n);
+            if (lower(n) == lower(asset)) { DeleteFileW(there.c_str()); continue; }   // the same zip again: the new copy replaces it
+            // the one before: previous_version/, in place of an older one of the same package
+            if (!make_dirs(p.previous)) { moved_ok = false; break; }
+            for (auto& o : zips_in(p.previous))
+                if (asset_family(o) == fam) DeleteFileW(join(p.previous, o).c_str());
+            if (!MoveFileExW(there.c_str(), join(p.previous, n).c_str(), MOVEFILE_REPLACE_EXISTING)) moved_ok = false;
+            else if (log) log("downloads: " + n + " moved to previous_version");
+        }
+        if (!moved_ok && log) log("downloads: an older zip of " + asset + " could not be moved to previous_version");
+        if (MoveFileExW(src.c_str(), join(p.downloads, asset).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+            ++kept;
+            if (log) log("downloads: " + asset + " kept");
+        } else if (log) {
+            log("downloads: " + asset + " could not be kept (error " + std::to_string(GetLastError()) + ")");
+        }
+    }
+    return kept;
+}
+
+std::wstring newest_download(const Paths& p) {
+    std::wstring best;
+    FILETIME bt{};
+    for (auto& n : zips_in(p.downloads)) {
+        const std::wstring f = join(p.downloads, n);
+        WIN32_FILE_ATTRIBUTE_DATA d;
+        if (!GetFileAttributesExW(f.c_str(), GetFileExInfoStandard, &d)) continue;
+        if (best.empty() || CompareFileTime(&d.ftLastWriteTime, &bt) > 0) { best = f; bt = d.ftLastWriteTime; }
+    }
+    return best;
+}
+
+bool show_downloads(const Paths& p) {
+    wchar_t win[MAX_PATH] = {};
+    if (!GetWindowsDirectoryW(win, MAX_PATH)) return false;
+    const std::wstring exe = std::wstring(win) + L"\\explorer.exe";
+    const std::wstring zip = newest_download(p);
+    std::wstring cmd = L"\"" + exe + L"\" ";
+    if (!zip.empty()) cmd += L"/select,\"" + zip + L"\"";
+    else if (exists(p.downloads)) cmd += L"\"" + p.downloads + L"\"";
+    else cmd += L"\"" + p.data + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
 }
 
 bool fetch_from_github(const std::string& tag, const PlanItem& item, const std::wstring& dest, const BytesFn& bytes, std::string* why) {

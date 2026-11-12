@@ -81,7 +81,7 @@ struct Item {
 };
 
 enum Action { A_NONE, A_ROW, A_LEFT, A_RIGHT, A_TOGGLE, A_BROWSE, A_GAME, A_INSTALL, A_REMOVE, A_QUIT, A_MIN, A_CLOSE,
-              A_TAB, A_CAT, A_OPEN, A_LAUNCH, A_CELL, A_MAX, A_NSFW, A_UPDATE };   // A_TAB / A_CAT / A_CELL: item is the tab / the category / the cell
+              A_TAB, A_CAT, A_OPEN, A_LAUNCH, A_CELL, A_MAX, A_NSFW, A_UPDATE, A_ZIP };   // A_TAB / A_CAT / A_CELL: item is the tab / the category / the cell
 
 struct Hit {
     D2D1_RECT_F r;
@@ -440,6 +440,7 @@ struct App {
     SuiteCheck up_check;              // what the last look-up found
     SelfCheck self_check;             // the same for the sorter itself
     Msg up_note;                      // the update was installed: said until the next update action
+    bool kept_zip = false;            // a zip kept by the updates (has_kept_zip), looked at on the Options page and after an update
     std::string up_fail;              // it was not: the updater's own sentence, in the language of the moment
 
     Item* find(int id) { for (auto& it : items) if (it.id == id) return &it; return nullptr; }
@@ -899,6 +900,14 @@ void drop_pictures(App& a, bool all) {
     }
 }
 
+// The zips the updates keep (SF6_Update_data\\downloads): O on the Options page, Explorer with the newest one selected
+bool has_kept_zip(const App& a) {
+    return !a.game_dir.empty() && !sf6up::newest_download(sf6up::Paths(a.game_dir)).empty();
+}
+void show_zip(App& a) {
+    if (has_kept_zip(a)) sf6up::show_downloads(sf6up::Paths(a.game_dir));
+}
+
 void set_page(App& a, int page) {
     page = ((page % 3) + 3) % 3;   // 0: To install, 1: Installed, 2: Options; the tabs wrap
     if (page == a.page) return;
@@ -907,6 +916,7 @@ void set_page(App& a, int page) {
     a.panel_scroll = 0;
     a.sel_t0 = now_s();
     if (page == 1) scan_installed(a);
+    if (page == 2) a.kept_zip = has_kept_zip(a);
     invalidate(a);
 }
 
@@ -1073,6 +1083,7 @@ void apply_update(App& a, UpdateResult& r) {
         a.up_check.plan.reset();
         a.up_check.ignored = false;
         a.up_note = Msg{T_NOTE_UPDATED, {r.inst.version}};
+        a.kept_zip = has_kept_zip(a);
     }
 }
 
@@ -2143,6 +2154,7 @@ struct Painter {
                 x = hint(x, cy, L"F", T(update_installable(a) ? T_H_UPDATE : T_H_CHECK), A_UPDATE, !a.up_busy && !a.game_dir.empty());
             else if (a.opt_sel == OPT_SELF)
                 x = hint(x, cy, L"F", T(self_installable(a) ? T_H_UPDATE : T_H_CHECK), A_UPDATE, !a.up_busy);
+            if (a.opt_sel == OPT_SUITE && a.kept_zip) x = hint(x, cy, L"O", T(T_H_SHOW_ZIP), A_ZIP);
             x = hint(x, cy, L"G", T(T_H_GAME), A_GAME, a.up_busy != 2);
             x = hint(x, cy, L"Esc", T(T_H_QUIT), A_QUIT);
         } else if (a.items.empty()) {
@@ -2248,6 +2260,7 @@ void do_action(App& a, const Hit& h) {
         case A_OPEN: open_category(a); break;
         case A_LAUNCH: launch_game(a); break;
         case A_UPDATE: update_action(a); break;
+        case A_ZIP: show_zip(a); break;
         default: break;
     }
 }
@@ -2478,6 +2491,7 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 case VK_LEFT: if (a.opt_sel == 0) change_language(a, -1); break;
                 case VK_RIGHT: if (a.opt_sel == 0) change_language(a, 1); break;
                 case VK_RETURN: case 'F': if (a.opt_sel != OPT_LANG && !(lp & (1 << 30))) update_action(a); break;   // not again while held
+                case 'O': if (a.opt_sel == OPT_SUITE && !(lp & (1 << 30))) show_zip(a); break;
                 default: break;
             }
             return 0;
@@ -2656,6 +2670,7 @@ int run_shot(const UiOptions& o) {
     a.page = o.page == 1 || o.page == 2 ? o.page : 0;
     a.cat = o.category;
     if (a.page == 1) scan_installed(a);
+    if (a.page == 2) a.kept_zip = has_kept_zip(a);
     if (a.page == 1 && o.select >= 0) { a.inst_grid = true; a.inst_sel = o.select; }
     check_game(a, true);
     if (!init_graphics()) return 3;

@@ -165,6 +165,10 @@ void ignore_worker() {
     log("release " + suite + (ok ? " ignored: not offered again" : " ignored, but state.json could not be written"));
 }
 
+void show_zip_worker() {
+    log(show_downloads(*g_paths) ? "the kept zip shown in Explorer" : "Explorer could not be started");
+}
+
 void cleanup_worker() {
     for (int i = 0; i < 600 && !g_recovered.load(); ++i) Sleep(100);
     cleanup(*g_paths, log);
@@ -246,8 +250,8 @@ std::string failure_text(const std::string& lang) {
     return text::failed(lang, g_result.fail, g_result.what);
 }
 
-bool open_box(const std::string& body, const std::string& lang, const char* what, game::Buttons buttons = game::Buttons::YesNo) {
-    const std::string third = buttons == game::Buttons::YesNoThird ? text::ignore(lang) : std::string();
+bool open_box(const std::string& body, const std::string& lang, const char* what, game::Buttons buttons = game::Buttons::YesNo,
+              const std::string& third = {}) {
     if (game::box_open(body, text::title(lang), buttons, third)) { log(std::string("box shown: ") + what); return true; }
     log(std::string("the game's message box could not be opened (") + what + "): nothing done");
     return false;
@@ -296,7 +300,7 @@ void frame() {
             if (!g_menu_idle) break;
             const std::string lang = game::language();
             g_lang = lang;
-            set_state(open_box(offer_text(lang), lang, "offer", game::Buttons::YesNoThird) ? St::AskInstall : St::Done);
+            set_state(open_box(offer_text(lang), lang, "offer", game::Buttons::YesNoThird, text::ignore(lang)) ? St::AskInstall : St::Done);
             break;
         }
         case St::AskInstall: {
@@ -313,11 +317,16 @@ void frame() {
             break;
         case St::AskRestart:
             if (!g_menu_idle) break;
-            set_state(open_box(text::done(game::language()), game::language(), "installed, restart?") ? St::WaitRestart : St::Done);
+        {   // the third button shows the kept zip (Fluffy Mod Manager's players replace theirs with it), then the box comes back
+            const std::string lang = game::language();
+            set_state(open_box(text::done(lang), lang, "installed, restart?", game::Buttons::YesNoThird, text::show_zip(lang)) ? St::WaitRestart
+                                                                                                                        : St::Done);
+        }
             break;
         case St::WaitRestart: {
             const int a = game::box_poll();
             if (a == -1) break;
+            if (a == 2) { log("Show zip chosen"); spawn(show_zip_worker); set_state(St::AskRestart); break; }
             set_state(St::Done);
             if (a == 1) restart();
             else log("restart declined: the new version applies at the next start");

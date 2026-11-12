@@ -6,6 +6,8 @@
 //   state.json         the module's state and its one setting (update_logic.hpp, State)
 //   swap_journal.json  only during a swap (update_fs.hpp)
 //   staging/           only during an install: zips/ (the downloads), tree/ (their files)
+//   downloads/         the zips of the installs, kept for the players who install with Fluffy Mod Manager (it keeps its own copy
+//                      of each zip): the last one of each package; previous_version/ the one before it (two versions at most)
 //   update.log         what it did, the last lines
 #pragma once
 
@@ -23,7 +25,7 @@ namespace sf6up {
 constexpr const char* kDataDir = "reframework/data/SF6_Update_data";
 
 struct Paths {
-    std::wstring root, data, state, journal, staging, log;
+    std::wstring root, data, state, journal, staging, log, downloads, previous;
     explicit Paths(const std::wstring& game_root);
 };
 
@@ -73,6 +75,15 @@ struct Progress {
 using Fetch = std::function<bool(const PlanItem&, const std::wstring& dest, const BytesFn& bytes, std::string* why)>;
 InstallResult run_install(const Paths& p, const Plan& plan, const Fetch& fetch, const LogFn& log, int fail_at = -1,
                           Progress* progress = nullptr);
+// After an install: its zips (in `from`) moved into downloads/; a zip of the same package already there (asset_family) goes to
+// downloads/previous_version/, in place of the one there. Never fails the install: what could not be kept is logged.
+// Returns the zips kept.
+int keep_downloads(const Paths& p, const std::vector<std::string>& assets, const std::wstring& from, const LogFn& log);
+// The newest zip of downloads/ ("" when there is none)
+std::wstring newest_download(const Paths& p);
+// Explorer on downloads/, the newest zip selected (the folder alone when there is none). False when Explorer could not start.
+bool show_downloads(const Paths& p);
+
 // The fetch the game uses: the asset of the manifest's release on GitHub
 bool fetch_from_github(const std::string& tag, const PlanItem& item, const std::wstring& dest, const BytesFn& bytes, std::string* why);
 // The manifest of the latest release

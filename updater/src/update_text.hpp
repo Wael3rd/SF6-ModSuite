@@ -21,6 +21,7 @@ std::string title(const std::string& lang);
 std::string offer(const std::string& lang, const Plan& plan);            // the release, one line per package (old -> new)
 std::string ignore(const std::string& lang);                             // the offer's third button: never ask again for this release
 std::string done(const std::string& lang);                               // installed: restart now?
+std::string show_zip(const std::string& lang);                           // the done box's third button: the kept zip in Explorer
 // The game's ticker strip while an update installs: the release and the download's percentage, then the release alone
 std::string downloading(const std::string& lang, const std::string& suite, int percent);
 std::string installing(const std::string& lang, const std::string& suite);

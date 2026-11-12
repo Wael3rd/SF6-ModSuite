@@ -17,6 +17,18 @@ std::string lower(std::string s) {
     return s;
 }
 
+std::string asset_family(const std::string& asset) {
+    if (asset.size() < 5 || lower(asset.substr(asset.size() - 4)) != ".zip") return "";
+    std::string stem = asset.substr(0, asset.size() - 4);
+    const size_t us = stem.find_last_of('_');
+    if (us != std::string::npos && us > 0) {
+        size_t v = us + 1;
+        if (v < stem.size() && (stem[v] == 'v' || stem[v] == 'V')) ++v;
+        if (v < stem.size() && std::isdigit((unsigned char)stem[v])) stem.resize(us);   // "_1.2.3", "_v1.2.3": the version
+    }
+    return lower(stem);
+}
+
 // ---- versions ----------------------------------------------------------------------------------------------------------------------
 std::optional<Version> parse_version(const std::string& s) {
     if (s.empty() || s.size() > 32) return std::nullopt;

@@ -11,6 +11,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -646,6 +647,11 @@ static void test_texts() {
     check(blocked.find("Smart App Control blocks SF6_ColorModNative.dll") != std::string::npos, "the blocked file named: " + blocked);
     check(text::failed("fr", Fail::Download, "").find("un téléchargement a échoué") != std::string::npos, "French download failure");
     check(text::done("en").find("Fluffy Mod Manager") != std::string::npos, "the success text names Fluffy once");
+    for (const char* l : { "en", "fr", "ja", "zh-Hans", "it", "de", "es", "es-419", "ru", "pl", "pt", "ko", "zh-Hant", "ar" }) {
+        const std::string sz = text::show_zip(l), d = text::done(l);
+        check(!sz.empty() && sz.size() <= 24 && d.find(sz) != std::string::npos && d.find("Fluffy Mod Manager") != std::string::npos,
+              std::string("restart box in ") + l + ": its last line names the third button's word");
+    }
     check(text::format("%s and %s, 100%%", { "a" }) == "a and , 100%", "format: a missing argument, a percent");
     for (const char* l : { "en", "fr", "ja", "zh-Hans", "it", "de", "es", "es-419", "ru", "pl", "pt", "ko", "zh-Hant", "ar" }) {
         const std::string t = text::offer(l, plan);
@@ -683,6 +689,62 @@ static void test_texts() {
     }
 }
 
+// ---- the zips kept for Fluffy Mod Manager's players: downloads/, previous_version/ ----
+static void test_downloads() {
+    check(asset_family("SF6_SlotsLoader_v1.27.2.zip") == "sf6_slotsloader", "family: _v1.27.2");
+    check(asset_family("SF6_NativeCore_0.9.12.zip") == "sf6_nativecore", "family: _0.9.12");
+    check(asset_family("SF6_CRSM_2.2.10.zip") == asset_family("SF6_CRSM_2.2.9.zip"), "family: two versions, one package");
+    check(asset_family("SF6_ColorMod_0.26.2.zip") != asset_family("SF6_CRSM_2.2.10.zip"), "family: two packages");
+    check(asset_family("SF6_ModSuite_AllInOne_v1.35.0.zip") == "sf6_modsuite_allinone", "family: the AllInOne");
+    check(asset_family("Readme.ZIP") == "readme" && asset_family("notes.txt").empty() && asset_family(".zip").empty(), "family: odd names");
+    check(asset_family("SF6_Thing_vX.zip") == "sf6_thing_vx", "family: no version, the whole name");
+
+    const std::wstring root = join(g_work, "downloads_game");
+    remove_tree(root);
+    const Paths p(root);
+    const std::wstring from = join(root, "staging_zips");
+    auto stage = [&](const std::string& n) { put(join(from, n), "zip " + n); };
+    auto kept = [&](const std::wstring& dir) {
+        std::vector<std::string> v;
+        std::error_code ec;
+        for (auto& e : fs::directory_iterator(fs::path(dir), ec))
+            if (e.is_regular_file()) v.push_back(narrow(e.path().filename().wstring()));
+        std::sort(v.begin(), v.end());
+        std::string s;
+        for (auto& x : v) s += (s.empty() ? "" : ",") + x;
+        return s;
+    };
+    check(newest_download(p).empty(), "no download yet: nothing to show");
+    // the first update: kept, nothing before it
+    stage("SF6_SlotsLoader_v1.27.2.zip"); stage("SF6_NativeCore_0.9.12.zip");
+    check(keep_downloads(p, { "SF6_SlotsLoader_v1.27.2.zip", "SF6_NativeCore_0.9.12.zip" }, from, nullptr) == 2, "first update: two zips kept");
+    check(kept(p.downloads) == "SF6_NativeCore_0.9.12.zip,SF6_SlotsLoader_v1.27.2.zip", "first update: in downloads/ " + kept(p.downloads));
+    check(!exists(p.previous), "first update: no previous_version/");
+    check(get(join(p.downloads, "SF6_SlotsLoader_v1.27.2.zip")) == "zip SF6_SlotsLoader_v1.27.2.zip", "first update: the zip itself");
+    check(!exists(join(from, "SF6_SlotsLoader_v1.27.2.zip")), "first update: moved, not copied");
+    // the second: the Slots Loader's old zip goes to previous_version/, the Native Core's stays (not in this update)
+    Sleep(20);
+    stage("SF6_SlotsLoader_v1.27.3.zip");
+    check(keep_downloads(p, { "SF6_SlotsLoader_v1.27.3.zip" }, from, nullptr) == 1, "second update: one zip kept");
+    check(kept(p.downloads) == "SF6_NativeCore_0.9.12.zip,SF6_SlotsLoader_v1.27.3.zip", "second update: downloads/ " + kept(p.downloads));
+    check(kept(p.previous) == "SF6_SlotsLoader_v1.27.2.zip", "second update: previous_version/ " + kept(p.previous));
+    check(newest_download(p) == join(p.downloads, "SF6_SlotsLoader_v1.27.3.zip"), "the newest zip is the one shown");
+    // the third: two versions at most, the oldest one gone
+    stage("SF6_SlotsLoader_v1.27.4.zip"); stage("SF6_NativeCore_0.9.13.zip");
+    check(keep_downloads(p, { "SF6_SlotsLoader_v1.27.4.zip", "SF6_NativeCore_0.9.13.zip" }, from, nullptr) == 2, "third update: two zips kept");
+    check(kept(p.downloads) == "SF6_NativeCore_0.9.13.zip,SF6_SlotsLoader_v1.27.4.zip", "third update: downloads/ " + kept(p.downloads));
+    check(kept(p.previous) == "SF6_NativeCore_0.9.12.zip,SF6_SlotsLoader_v1.27.3.zip", "third update: previous_version/ " + kept(p.previous));
+    // the same release again (a reinstall): the new copy replaces it, previous_version/ unchanged
+    put(join(from, "SF6_SlotsLoader_v1.27.4.zip"), "again");
+    check(keep_downloads(p, { "SF6_SlotsLoader_v1.27.4.zip" }, from, nullptr) == 1, "the same zip again: kept");
+    check(get(join(p.downloads, "SF6_SlotsLoader_v1.27.4.zip")) == "again", "the same zip again: the new copy");
+    check(kept(p.previous) == "SF6_NativeCore_0.9.12.zip,SF6_SlotsLoader_v1.27.3.zip", "the same zip again: previous_version/ unchanged");
+    // a zip the install did not leave (an odd name, none there): nothing kept, nothing broken
+    check(keep_downloads(p, { "SF6_ColorMod_0.26.3.zip", "manifest.json" }, from, nullptr) == 0, "nothing to keep: 0");
+    check(kept(p.downloads) == "SF6_NativeCore_0.9.13.zip,SF6_SlotsLoader_v1.27.4.zip", "nothing to keep: downloads/ unchanged");
+    remove_tree(root);
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--work")) g_work = widen(argv[i + 1]);
@@ -697,6 +759,7 @@ int main(int argc, char** argv) {
     test_journal();
     test_state();
     test_texts();
+    test_downloads();
     test_pe();
     test_waiter();
     printf("%d checks, %d failed\n", g_checks, g_failed);

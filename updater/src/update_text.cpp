@@ -43,6 +43,8 @@ std::string ignore(const std::string& lang) { return tr(lang, Word::Ignore); }
 
 std::string done(const std::string& lang) { return tr(lang, Word::Done); }
 
+std::string show_zip(const std::string& lang) { return tr(lang, Word::ShowZip); }
+
 std::string downloading(const std::string& lang, const std::string& suite, int percent) {
     return format(tr(lang, Word::Downloading), { suite, std::to_string(percent < 0 ? 0 : percent > 100 ? 100 : percent) });
 }

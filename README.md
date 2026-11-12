@@ -35,7 +35,9 @@ new version has started once); then the game closes and Steam starts it again (o
 restart). **No**: nothing is done, the next launch asks again. **Ignore**: that release is never offered again; a later one is.
 Since suite 1.32.0; a package of an older release is not seen by the updater. Your mods, your settings and anything a package
 does not ship are never touched. Packages installed by ZZtaii's Slotsloader Manager are left to it. With Fluffy Mod Manager, replace the
-zip there too, or Fluffy puts the old version back when the mod is re-enabled.
+zip there too, or Fluffy puts the old version back when the mod is re-enabled: the update keeps the zips it downloaded in
+`reframework\data\SF6_Update_data\downloads` (the one before each in `previous_version`, two versions at most), and the restart box's
+third button (**Show zip**; **O** in the Mod Sorter) opens that folder, the new zip selected.
 
 - **Network**: `github.com` and its download servers only, over HTTPS; nothing about you or your PC is sent.
 - **Off**: `"check_for_updates": false` in `reframework\data\SF6_Update_data\state.json` (create the file with

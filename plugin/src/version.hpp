@@ -4,5 +4,5 @@
 #pragma once
 
 namespace slots {
-constexpr const char* kPackageVersion = "1.27.2";
+constexpr const char* kPackageVersion = "1.27.3";
 }  // namespace slots

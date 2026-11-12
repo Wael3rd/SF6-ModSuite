@@ -130,6 +130,11 @@ std::string asset_url(const std::string& tag, const std::string& asset);
 // The hosts a request may reach, the redirects included (exact names, https only)
 bool host_allowed(const std::string& host);
 
+// ---- the downloaded zips kept (update_install.hpp, keep_downloads) ----
+// A package's zip name without its version, lower case: "SF6_SlotsLoader_v1.27.2.zip" -> "sf6_slotsloader". The zips of one package
+// share it; "" for a name that is not a zip.
+std::string asset_family(const std::string& asset);
+
 // ---- text helpers ----
 bool is_sha256_hex(const std::string& s);
 std::string lower(std::string s);

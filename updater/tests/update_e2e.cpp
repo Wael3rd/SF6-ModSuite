@@ -85,6 +85,13 @@ static int cmd_update(std::map<std::string, std::string> a) {
     if (r.ok && (progress.percent() != 100 || progress.step.load() != Progress::Install)) { out("the progress did not reach its end"); return 1; }
     out(std::string("install: ") + (r.ok ? "ok" : "FAILED: " + r.why));
     if (!r.ok) return 1;
+    // the zips kept for Fluffy Mod Manager's players: every one of the update, as the release says
+    for (auto& it : c.plan.items) {
+        std::string why;
+        if (!verify_file(join(p.downloads, it.pkg.asset), it.pkg.size, it.pkg.sha256, &why)) { out("not kept in downloads: " + it.pkg.asset + ": " + why); return 1; }
+    }
+    out("zips kept in downloads: " + std::to_string(c.plan.items.size()) + ", the newest " + narrow(newest_download(p)).substr(narrow(p.downloads).size() + 1));
+    if (exists(p.staging)) { out("the staging folder is still there"); return 1; }
     out("old copies kept: " + std::to_string(r.swap.backups.size()));
     for (auto& b : r.swap.backups) out("  " + b);
     // the next start: the new DLLs report the new versions

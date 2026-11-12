@@ -83,7 +83,13 @@ The game reads the key and installs nothing from it; an updater older than 1.34.
    itself 3 s after the install. All of it on the game thread: the same calls from the render thread crash the game. A ticker that
    cannot be used is logged and the install goes on without it. Since updater version 2 (suite 1.34.0): the update TO 1.34.0 is run
    by the installed updater, without the strip.
-4. A box offers the restart. Yes: `cmd.exe` (Windows' own) is started, waiting for the game's process to end (2 minutes at most), then
+   Once the swap is done, the zips are moved to `downloads/` (`keep_downloads`), for the players who install with Fluffy Mod Manager
+   (it keeps its own copy of each zip, and puts the old version back when the mod is re-enabled): the last zip of each package
+   there, the one before it moved to `downloads/previous_version/` (in place of an older one: two versions at most; a package's zips
+   are told by their name without the version, `asset_family`). Keeping them never fails an install. Since updater version 3
+   (suite 1.36.0).
+4. A box offers the restart, with a third button, **Show zip**: Explorer on `downloads/`, the newest zip selected
+   (`show_downloads`), then the box comes back. Yes: `cmd.exe` (Windows' own) is started, waiting for the game's process to end (2 minutes at most), then
    runs `start "" "steam://rungameid/1364780"`; the game window gets `WM_CLOSE`, as from its close button. No: the new version applies at
    the next start.
 5. At the next start, once the game reaches the main menu (the new version runs), the `.old-*` copies are deleted.
