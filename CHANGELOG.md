@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.36.0 (2026-11-12) — SF6 Mod Suite
+
+| Package | Version | |
+|---|---|---|
+| SF6 Native Core | 0.9.13 | the updater keeps the downloaded zips; Show zip |
+| SF6 Slots Loader | 1.27.3 | the same updater (the plugin only) |
+| SF6 Mod Sorter | 1.1.2 | the same, and O shows the kept zip |
+| SF6 Color Mod | 0.26.2 | unchanged |
+| SF6 Recording Manager | 2.2.10 | unchanged |
+| SF6 Profile Mod | 1.1.1 | unchanged |
+
+Updating: with 1.34.0 or 1.35.0 installed, the game offers this release at the main menu. That update is still run by the
+updater you have, so its zip is not kept yet: the zips are kept from the update after. To have it now, update the Mod Sorter
+first (its Options tab, "This tool's updates", F), then the suite from the Mod Sorter.
+
+### The updater keeps the zips it downloads
+- For the players who install with Fluffy Mod Manager: Fluffy keeps its own copy of each zip, and puts the old version back when
+  the mod is re-enabled, so its zip has to be replaced too. The update now keeps the zips it downloaded in
+  `reframework\data\SF6_Update_data\downloads`: the last zip of each package there, the one before it in
+  `downloads\previous_version` (two versions at most per package; the older ones are deleted).
+- In game, the "Restart the game now?" box has a third button, **Show zip**: Explorer opens on that folder, the new zip selected,
+  and the box comes back.
+- In the Mod Sorter, **O** (Show zip) on the "SF6 Mod Suite updates" row does the same, as long as a zip is kept.
+
 ## 1.35.0 (2026-11-11) — SF6 Mod Suite
 
 | Package | Version | |
