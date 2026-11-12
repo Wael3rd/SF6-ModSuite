@@ -879,6 +879,25 @@ typedef struct SF6CoreAPI {
      * service could not be installed. */
     SF6CoreStatus (SF6CORE_CALL *opt_section_place_rows)(SF6CoreClient* client, int64_t group, int32_t tab, int32_t before_section);
 
+    /* -- Increment 15: GUID texts of a client (append-only) --
+     *
+     * Probe with SF6CORE_HAS(api, obj_set_guid) (core >= 0.9.14). The game draws most of its texts from a message GUID
+     * (app.helper.hMsg.GetMessage(System.Guid)); the core owns the one hook on it in the process. A client gets GUIDs of
+     * its own from it, each answering its text, and writes them into the game's System.Guid fields (titles, row names,
+     * guide lines). Any thread. The texts stay until the client releases them or unregisters. The hook is installed on
+     * the first text_new of any client (ERR_NOT_READY before the core's init, ERR_DISABLED when it cannot be installed).
+     * Hot path: GetMessage sees every message of the UI; a text costs one table entry, a miss one lookup. */
+
+    /* A FRESH GUID answering `utf8` (never reused, even for the same text: reusing one crashed), into out_guid16. */
+    SF6CoreStatus (SF6CORE_CALL *text_new)(SF6CoreClient* client, const char* utf8, uint8_t out_guid16[16]);
+    /* New text for one of the client's GUIDs, in place. ERR_NOT_FOUND: not one of the client's. */
+    SF6CoreStatus (SF6CORE_CALL *text_set)(SF6CoreClient* client, const uint8_t guid16[16], const char* utf8);
+    /* Forget one of the client's GUIDs (GetMessage gives the game's own answer for it again). ERR_NOT_FOUND: not the client's. */
+    SF6CoreStatus (SF6CORE_CALL *text_release)(SF6CoreClient* client, const uint8_t guid16[16]);
+    /* Write 16 bytes into a System.Guid field of a managed object, with the obj_set_* guards (the field must be a
+     * System.Guid; the same value is not written again). Any GUID: one of text_new's, or a value read before to put back. */
+    SF6CoreStatus (SF6CORE_CALL *obj_set_guid)(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]);
+
 } SF6CoreAPI;
 
 #ifdef __cplusplus

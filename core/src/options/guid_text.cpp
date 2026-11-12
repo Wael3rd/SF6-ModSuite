@@ -23,6 +23,7 @@
 #include "ll_common.hpp"
 #include "opt_common.hpp"
 #include "../pausemenu/pausemenu.hpp"
+#include "../sf6core_internal.h"
 
 namespace dialogs::guid_text {
 namespace {
@@ -145,4 +146,48 @@ std::string status() {
     return buf;
 }
 
+// ---- the client API (sf6core_api.h, increment 15): GUID texts owned by a client ---------------------------------
+namespace {
+bool client_keep(Owner o) { return o && static_cast<const SF6CoreClient*>(o)->active; }
+void to_gb(const uint8_t g[16], GuidBytes& gb) { std::memcpy(&gb.hi, g, 8); std::memcpy(&gb.lo, g + 8, 8); }
+}  // namespace
+
 }  // namespace dialogs::guid_text
+
+namespace gt = dialogs::guid_text;
+
+SF6CoreStatus SF6CORE_CALL api_text_new(SF6CoreClient* client, const char* utf8, uint8_t out_guid16[16]) {
+    if (!client || !utf8 || !out_guid16) return SF6CORE_ERR_INVALID_ARG;
+    if (!client->active || client->state == SF6CORE_CLIENT_DISABLED_BY_BREAKER || kill_switch_active()) return SF6CORE_ERR_DISABLED;
+    if (!s_initialized.load(std::memory_order_acquire)) return SF6CORE_ERR_NOT_READY;
+    if (!gt::installed() && !gt::install()) return gt::install_failed() ? SF6CORE_ERR_DISABLED : SF6CORE_ERR_NOT_READY;
+    gt::GuidBytes gb;
+    if (!gt::alloc_owned(client, utf8, gt::client_keep, gb, nullptr)) return SF6CORE_ERR_DISABLED;
+    std::memcpy(out_guid16, &gb.hi, 8);
+    std::memcpy(out_guid16 + 8, &gb.lo, 8);
+    return SF6CORE_OK;
+}
+
+SF6CoreStatus SF6CORE_CALL api_text_set(SF6CoreClient* client, const uint8_t guid16[16], const char* utf8) {
+    if (!client || !guid16 || !utf8) return SF6CORE_ERR_INVALID_ARG;
+    gt::GuidBytes gb;
+    gt::to_gb(guid16, gb);
+    return gt::retext_owned(client, gb, utf8) ? SF6CORE_OK : SF6CORE_ERR_NOT_FOUND;
+}
+
+SF6CoreStatus SF6CORE_CALL api_text_release(SF6CoreClient* client, const uint8_t guid16[16]) {
+    if (!client || !guid16) return SF6CORE_ERR_INVALID_ARG;
+    gt::GuidBytes gb;
+    gt::to_gb(guid16, gb);
+    return gt::release_owned(client, gb) ? SF6CORE_OK : SF6CORE_ERR_NOT_FOUND;
+}
+
+SF6CoreStatus SF6CORE_CALL api_obj_set_guid(SF6CoreClient* client, void* obj, const char* field, const uint8_t guid16[16]) {
+    return core_obj_set_guid(client, obj, field, guid16);
+}
+
+// unregister_client: the client's texts go with it
+void guid_text_release_client(SF6CoreClient* c) {
+    const size_t n = gt::release_owner(c);
+    if (n) core_log(SF6CORE_LOG_INFO, c->client_id, "[guid_text] %zu text(s) released (unregistered)", n);
+}

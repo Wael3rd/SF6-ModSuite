@@ -40,7 +40,7 @@
 // Constants
 // ========================================================================
 
-static constexpr const char* CORE_VERSION = "0.9.13";
+static constexpr const char* CORE_VERSION = "0.9.14";
 static constexpr const char* TAG          = "[sf6core] ";
 // Circuit breaker per ADR-0008: MAX_CONSECUTIVE_FAULTS faults in a row ->
 // disabled for BREAKER_COOLDOWN_FRAMES, then half-open (one retry: success
@@ -2041,6 +2041,11 @@ SF6CoreStatus SF6CORE_CALL api_opt_section_state(SF6CoreClient*, int64_t, SF6Cor
 SF6CoreStatus SF6CORE_CALL api_opt_section_hold(SF6CoreClient*, int64_t, int32_t);
 // Increment 14: a client's section whose right side is the game's sub list holding its entries (options/options_service.cpp)
 SF6CoreStatus SF6CORE_CALL api_opt_section_place_rows(SF6CoreClient*, int64_t, int32_t, int32_t);
+// Increment 15: GUID texts of a client (options/guid_text.cpp)
+SF6CoreStatus SF6CORE_CALL api_text_new(SF6CoreClient*, const char*, uint8_t[16]);
+SF6CoreStatus SF6CORE_CALL api_text_set(SF6CoreClient*, const uint8_t[16], const char*);
+SF6CoreStatus SF6CORE_CALL api_text_release(SF6CoreClient*, const uint8_t[16]);
+SF6CoreStatus SF6CORE_CALL api_obj_set_guid(SF6CoreClient*, void*, const char*, const uint8_t[16]);
 
 // ========================================================================
 // Closing guard: window message callback (0.7.2)
@@ -2302,6 +2307,8 @@ static void SF6CORE_CALL api_unregister_client(SF6CoreClient* client) {
     // Training pause menu (increment 8): its callbacks gone, its pages / rows out of
     // the menu at the next pass
     pausemenu_release_client(client);
+    // GUID texts (increment 15)
+    guid_text_release_client(client);
 
     push_breadcrumb(BC_UNREGISTER, client->client_id, nullptr);
     core_log(SF6CORE_LOG_INFO, client->client_id, "unregistered");
@@ -2687,7 +2694,12 @@ static const SF6CoreAPI s_api = {
     api_opt_section_state,
     api_opt_section_hold,
     // increment 14 (core 0.9.10)
-    api_opt_section_place_rows
+    api_opt_section_place_rows,
+    // increment 15 (core 0.9.14)
+    api_text_new,
+    api_text_set,
+    api_text_release,
+    api_obj_set_guid
 };
 
 // Accessor for the static API pointer (used by lua_bridge.cpp)
