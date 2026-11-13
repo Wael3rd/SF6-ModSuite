@@ -905,7 +905,7 @@ static size_t upgrade_mod_user(std::vector<uint8_t>& data, const std::string& so
 // A file of the game's own natives tree, by pak path (loose files: Fluffy Mod Manager puts the files
 // it installs there), with current type signatures; empty when there is none
 static std::string g_game_dir;
-static void probe_asked_loose(const std::string& pak_path);   // (below, with the probes) Manager mode: every loose file asked for is watched
+static void probe_asked_loose(const std::string& pak_path);   // (below, with the probes) Manager mode: every loose path asked for is watched (there or not)
 // The loose copy of a game file in the game folder (natives\...), or empty when there is none
 static std::string loose_game_path(const std::string& pak_path) {
     if (g_game_dir.empty() || str_lower(pak_path).compare(0, 8, "natives/") != 0) return {};
@@ -971,13 +971,32 @@ static std::string loose_probe_state(const std::string& pak_path) {
     }
     return buf;
 }
+// Manager mode, a probe of a path the build only looked up (probe_asked_loose: is there a loose file?): "there" or "none",
+// the file not read. A replacement put over that loose file keeps the pak; the file going away, or one appearing where
+// there was none, builds again. A path a build also took content from is probed by content (probe_loose), which wins.
+static const char* const LOOSE_THERE = "there";
+static std::string loose_exists_state(const std::string& pak_path) {
+    if (g_game_dir.empty()) return "none";
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(make_wide_path(p).c_str(), GetFileExInfoStandard, &fa)
+        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return "none";
+    return LOOSE_THERE;
+}
 static void probe_loose(const std::string& pak_path) {
     const std::string low = str_lower(pak_path);
     if (low.compare(0, 8, "natives/") != 0) return;
     if (!g_manager_mode && low.compare(0, 30, "natives/stm/product/model/esf/") == 0) return;   // the folder walk sees those
-    if (!g_loose_probes.count(low)) g_loose_probes[low] = loose_probe_state(low);
+    auto it = g_loose_probes.find(low);
+    if (it == g_loose_probes.end()) g_loose_probes[low] = loose_probe_state(low);
+    else if (it->second == LOOSE_THERE) it->second = loose_probe_state(low);   // looked up first, its content taken since
 }
-static void probe_asked_loose(const std::string& pak_path) { if (g_manager_mode) probe_loose(pak_path); }
+static void probe_asked_loose(const std::string& pak_path) {
+    if (!g_manager_mode) return;
+    const std::string low = str_lower(pak_path);
+    if (low.compare(0, 8, "natives/") == 0 && !g_loose_probes.count(low)) g_loose_probes[low] = loose_exists_state(low);
+}
 
 // Manager mode: the pak in place is kept after a replacement is installed over the game, by the rule of ZZtaii's
 // Slotsloader fork (1.9.5 and 1.10.9, MIT). The Manager's "Replace original"
@@ -11248,7 +11267,11 @@ static std::map<std::string, std::string> load_loose_probes(const std::string& p
 }
 static std::map<std::string, std::string> current_loose_probes(const std::map<std::string, std::string>& saved) {
     std::map<std::string, std::string> now;
-    for (auto& sp : saved) now[sp.first] = loose_probe_state(sp.first);
+    for (auto& sp : saved)
+        // Manager mode: a path looked up only ("there"), or with no loose file then ("none": anything there now builds
+        // again, whatever it holds), is not read; only a loose file the build took content from is
+        now[sp.first] = g_manager_mode && (sp.second == LOOSE_THERE || sp.second == "none") ? loose_exists_state(sp.first)
+                                                                                           : loose_probe_state(sp.first);
     return now;
 }
 static bool save_loose_probes(const std::string& path, const std::map<std::string, std::string>& probes) {
@@ -11535,8 +11558,16 @@ struct AskedJournal {
     std::map<std::string, bool> exists;      // g_exists_asked: decides
     std::map<uint64_t, bool> found;          // PakReader::Asked::found: for the log
     std::map<uint64_t, std::string> off;     // PakReader::Asked::off: for the log
+    size_t found_total = 0, off_total = 0;   // read back: how many the build had (more than were kept: asked_log_kept)
     size_t deciding() const { return strict.size() + exists.size(); }
 };
+// "f" and "o" are for the launch's log line alone, and read at every launch: the first ones are kept, with how many there were.
+// Tests only: SF6_COSTUME_TEST_ASKED_KEPT gives another number.
+static size_t asked_log_kept() {
+    char v[32];
+    const DWORD n = GetEnvironmentVariableA("SF6_COSTUME_TEST_ASKED_KEPT", v, sizeof v);
+    return n > 0 && n < sizeof v ? (size_t)strtoull(v, nullptr, 10) : 300;
+}
 // Ends the saved fingerprint (before the meta id): at launch it is computed again from the answers of then
 static std::string asked_digest(const AskedJournal& j) {
     CacheDigest d;
@@ -11553,7 +11584,8 @@ static AskedJournal asked_by_build() {
     for (auto& [h, rows] : g_asked.off) j.off[h] = rows;
     return j;
 }
-// One line each: "s<TAB>hash<TAB>0|1", "e<TAB>path<TAB>0|1", "f<TAB>hash<TAB>0|1", "o<TAB>hash<TAB>rows"
+// One line each: "s<TAB>hash<TAB>0|1", "e<TAB>path<TAB>0|1", "f<TAB>hash<TAB>0|1", "o<TAB>hash<TAB>rows", then
+// "c<TAB>f<TAB>count" and "c<TAB>o<TAB>count" when there were more "f" or "o" than are kept
 static AskedJournal load_asked(const std::string& path) {
     AskedJournal j;
     const std::string text = read_text_file(path);
@@ -11569,11 +11601,18 @@ static AskedJournal load_asked(const std::string& path) {
         if (tab == std::string::npos) continue;
         const std::string key = rest.substr(0, tab), value = rest.substr(tab + 1);
         if (line[0] == 'e') { j.exists[key] = value == "1"; continue; }
+        if (line[0] == 'c') {
+            const size_t n = (size_t)strtoull(value.c_str(), nullptr, 10);
+            if (key == "f") j.found_total = n; else if (key == "o") j.off_total = n;
+            continue;
+        }
         const uint64_t h = strtoull(key.c_str(), nullptr, 16);
         if (line[0] == 's') j.strict[h] = value == "1";
         else if (line[0] == 'f') j.found[h] = value == "1";
         else if (line[0] == 'o') j.off[h] = value;
     }
+    j.found_total = std::max(j.found_total, j.found.size());
+    j.off_total = std::max(j.off_total, j.off.size());
     return j;
 }
 static bool save_asked(const std::string& path, const AskedJournal& j) {
@@ -11583,8 +11622,17 @@ static bool save_asked(const std::string& path, const AskedJournal& j) {
     bool ok = true;
     for (auto& [h, there] : j.strict) ok = fprintf(f, "s\t%016llx\t%d\n", (unsigned long long)h, there ? 1 : 0) > 0 && ok;
     for (auto& [p, there] : j.exists) ok = fprintf(f, "e\t%s\t%d\n", p.c_str(), there ? 1 : 0) > 0 && ok;
-    for (auto& [h, there] : j.found) ok = fprintf(f, "f\t%016llx\t%d\n", (unsigned long long)h, there ? 1 : 0) > 0 && ok;
-    for (auto& [h, rows] : j.off) ok = fprintf(f, "o\t%016llx\t%s\n", (unsigned long long)h, rows.c_str()) > 0 && ok;
+    const size_t keep = asked_log_kept();
+    size_t n = 0;
+    for (auto& [h, there] : j.found)
+        if (++n <= keep) ok = fprintf(f, "f\t%016llx\t%d\n", (unsigned long long)h, there ? 1 : 0) > 0 && ok;
+    if (n > keep) ok = fprintf(f, "c\tf\t%zu\n", n) > 0 && ok;
+    n = 0;
+    for (auto& [h, rows] : j.off) {
+        if (j.found.count(h)) continue;   // the log counts the hash once, by its "f"
+        if (++n <= keep) ok = fprintf(f, "o\t%016llx\t%s\n", (unsigned long long)h, rows.c_str()) > 0 && ok;
+    }
+    if (n > keep) ok = fprintf(f, "c\to\t%zu\n", n) > 0 && ok;
     ok = fclose(f) == 0 && ok;
     if (!ok || !MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp.c_str()); return false; }
     return true;
@@ -11667,7 +11715,11 @@ static void log_asked_kept(const AskedJournal& then, const AskedJournal& now) {
         if (auto it = now.found.find(kv.first); it != now.found.end() && it->second != kv.second && !then.strict.count(kv.first)) n++;
     for (auto& kv : then.off)
         if (auto it = now.off.find(kv.first); it != now.off.end() && it->second != kv.second && !then.found.count(kv.first)) n++;
-    if (n)
+    const size_t kept = then.found.size() + then.off.size(), total = then.found_total + then.off_total;
+    if (n && total > kept)
+        logf("  %zu of the %zu game files kept for this line (of %zu this pak was built from) are replaced, or back, since (no "
+             "colour file a slot took): the pak is kept, as the Slotsloader fork keeps it\n", n, kept, total);
+    else if (n)
         logf("  %zu game files this pak was built from are replaced, or back, since (no colour file a slot took): the pak is "
              "kept, as the Slotsloader fork keeps it\n", n);
 }
@@ -12387,6 +12439,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     g_exists_asked.clear();
     g_asked_strict.clear();
     g_asked_pak = nullptr;
+    // base_pak is this function's: whatever way the build ends, an early return included, nothing points at it after
+    struct AskedPakReset {
+        PakReader& pak;
+        ~AskedPakReset() { pak.record_asked(nullptr); g_asked_pak = nullptr; }
+    } asked_pak_reset{ base_pak };
     if (g_manager_mode) { base_pak.record_asked(&g_asked); g_asked_pak = &base_pak; }
     load_current_crcs(base_pak);
 
@@ -12960,7 +13017,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         logf("  WARN: could not write %s: the pak is built again at the next launch\n", probes_path.c_str());
     if (!g_loose_probes.empty()) {
         size_t loose = 0;
-        for (auto& lp : g_loose_probes) if (lp.second.compare(0, 6, "loose:") == 0) loose++;
+        for (auto& lp : g_loose_probes) if (lp.second.compare(0, 6, "loose:") == 0 || lp.second == LOOSE_THERE) loose++;
         logf("  %zu game files outside the model folders this pak depends on (%zu of them loose files in its natives "
              "folder) are watched for changes\n", g_loose_probes.size(), loose);
     }

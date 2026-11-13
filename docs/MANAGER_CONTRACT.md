@@ -150,9 +150,15 @@ Everything of contract 1, and:
        the mod-only dependencies left to a loose file are watched by content (`loose_probes.tsv`), as before;
      - `e`, the files the slot check and the swatches asked for, kept as "the game has it, as a row of the base pak or
        as a loose file": a replacement of one keeps the pak, the file gone altogether (or one that was nowhere
-       appearing) builds again;
+       appearing) builds again. The other loose paths a build only looked up (the files a mod's scene names, say) are
+       kept in `loose_probes.tsv` the same way, as `there` or `none`, without reading the file: a replacement over one
+       keeps the pak, the file going away builds again, and so does a file appearing at a path where the build found
+       none (a replacement installed at a path a build only looked up rebuilds once). Only the loose files a build took
+       content from (the colour files above, the mod-only dependencies left to a loose file) are read and hashed at
+       launch;
      - `f` and `o`, every other question the build put to the base pak's table: kept for the log only. The launch says
-       how many are answered differently now and keeps the pak.
+       how many are answered differently now and keeps the pak. The first 300 of each are kept, with a `c` line giving
+       how many there were; the line then says how many of those kept differ.
      The log names the first files when the pak is built again. What the rule accepts, as the fork did: a slot holds what
      it was built with. An outfit made while a game file was there keeps its copy of it (the material file a mesh-only
      mod is given, a scene) after a replacement is installed over that file, and one made while the replacement was
