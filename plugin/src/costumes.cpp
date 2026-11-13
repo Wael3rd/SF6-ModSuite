@@ -83,6 +83,7 @@ ownership::Book g_book;
 
 // Manager mode (common/manager_mode.hpp): the Slotsloader Manager installed this loader. The same answer as the
 // loader's, from the same list (manager_installs.json) and this plugin's size on disk.
+bool g_managed = false;   // read once by init()
 bool installed_by_manager() {
     const std::string dir = std::string(manager_mode::kRecordDir) + "\\";
     Json j;
@@ -2541,13 +2542,16 @@ void init() {
     load_state();
     for (int fid : g_fighters) g_f[fid];
     // Manager mode: the ownership rules of the Manager's Slotsloader, read once (they stay until the game is closed)
-    if (installed_by_manager()) {
+    g_managed = installed_by_manager();
+    if (g_managed) {
         const bool check = !marker::opt_out_present(L"reframework\\data\\SF6_CostumeSlots_data");
         g_book.set_manager_rules(check);
         logf("costumes: Manager mode (installed by the Slotsloader Manager): Outfit 1 and DriveTech slots always shown%s",
              check ? "" : ", ownership filter inactive");
     }
 }
+
+bool manager_mode() { return g_managed; }
 
 void install_hooks() {
     if (g_slots.empty()) { logf("costumes: no slot, no hook"); return; }

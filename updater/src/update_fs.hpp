@@ -33,6 +33,9 @@ using VersionReader = std::function<std::string(const KnownPackage&)>;
 std::vector<Installed> detect_installed(const std::wstring& root, const VersionReader& version_of);
 // The Slotsloader Manager installed the Slots Loader (common/manager_mode.hpp, read as the plugin reads it)
 bool manager_mode(const std::wstring& root);
+// The Manager's list holds `rel` (relative to the game folder) in an enabled mod, at the size the file has on disk: the Manager
+// installed that file, whatever the package (the same test as manager_mode's, for any file)
+bool manager_lists(const std::wstring& root, const std::string& rel);
 
 // ---- a downloaded zip: its size and sha256 as the manifest says ----
 bool verify_file(const std::wstring& p, int64_t size, const std::string& sha256, std::string* why);

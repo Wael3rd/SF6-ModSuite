@@ -105,6 +105,14 @@ a package does not ship are never touched, and files a new version no longer shi
 
 `reframework/data/SF6_Update_data/` of the game folder: `state.json` (`check_for_updates`, `ignored_suite_version`,
 `pending_cleanup`; other keys are kept), `update.log`, and only during an install `staging/` and `swap_journal.json`.
+**The Slotsloader Manager's installs**: when ZZtaii's Slotsloader Manager installed the Slots Loader (`common/manager_mode.hpp`), the
+game fetches nothing: its players update in the Manager. `"check_in_manager_mode": true` in `state.json` turns the check on for
+them; the module never writes that key. With the check on in that mode, a package whose main DLL the Manager's
+`manager_installs.json` lists at the size it has on disk (the Native Core installed by the Manager, say) is left out like the
+Slots Loader: replacing it would leave the Manager's record of the file wrong. The Mod Sorter, outside the game, still looks
+at the latest release, with the same rule for the Manager's packages. Outside Manager mode nothing of this applies: the check
+and the offers are what they were.
+
 **Off switch**: `"check_for_updates": false` in `state.json` (create the file with `{ "check_for_updates": false }`): nothing is
 fetched; a half-done swap is still undone and old copies still deleted.
 

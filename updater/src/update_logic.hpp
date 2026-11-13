@@ -76,6 +76,7 @@ struct Installed {
     std::string id;
     bool present = false;         // its proof file is in the game folder
     std::string version;          // what its main DLL reports ("" = it reports none)
+    bool managed = false;         // the Slotsloader Manager's list holds its proof file at the size it has on disk: the Manager installed it
 };
 struct PlanItem {
     ManifestPackage pkg;
@@ -87,7 +88,9 @@ struct Plan {
     std::vector<std::string> notes;          // why a package is not offered, for the log
 };
 // A package installed whose manifest version is strictly newer than what its DLL reports. The Slots Loader is left out when the
-// Slotsloader Manager installed it (manager_mode): the Manager owns those files. Nothing when `ignored` is the manifest's suite.
+// Slotsloader Manager installed it (manager_mode): the Manager owns those files. In that mode any other package the Manager
+// installed is left out too (Installed::managed: the Native Core, say): replacing its files would leave the Manager's record of
+// them wrong. Outside Manager mode nothing changes. Nothing when `ignored` is the manifest's suite.
 Plan make_plan(const Manifest& m, const std::vector<Installed>& installed, bool manager_mode, const std::string& ignored);
 
 // ---- zip entries: where a package file may go ----
@@ -112,12 +115,17 @@ const std::vector<std::string>& keep_if_present();
 // ---- the module's own state: reframework/data/SF6_Update_data/state.json ----
 struct State {
     bool check = true;                       // "check_for_updates": false turns the whole updater off (README)
+    bool check_managed = false;              // "check_in_manager_mode": true lets the game check when the Slotsloader Manager installed the loader
     std::string ignored;                     // "ignored_suite_version": Ignore was answered for that version
     std::vector<std::string> cleanup;        // "pending_cleanup": the .old-<version> files of the last update, deleted at the next start
     std::string raw;                         // the text it was read from: unknown keys are kept when written back
 };
 State parse_state(const std::string& text);
 std::string state_json(const State& s);
+// May the game look for a newer release at this start? Not with the off switch. Not either when the Slotsloader Manager installed
+// the loader (manager_mode), unless the player asked for it ("check_in_manager_mode": true): a Manager's player updates in the
+// Manager, and nothing is fetched from inside the game. `why` (may be null): the line for the log when the answer is no.
+bool check_allowed(const State& s, bool manager_mode, std::string* why);
 
 // ---- the old copies kept by a swap: <name>.old-<version> ----
 std::string backup_name(const std::string& file_name, const std::string& version, int n);   // n > 0: ".1", ".2"... when taken

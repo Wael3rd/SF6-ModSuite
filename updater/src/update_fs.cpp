@@ -179,19 +179,23 @@ std::vector<Installed> detect_installed(const std::wstring& root, const VersionR
         i.id = k.id;
         i.present = is_file(join(root, k.proof));
         if (i.present && version_of) i.version = version_of(k);
+        i.managed = i.present && manager_lists(root, k.proof);
         out.push_back(i);
     }
     return out;
 }
 
-bool manager_mode(const std::wstring& root) {
+namespace {
+
+// The Slotsloader Manager's list of what it installed (manager_installs.json), read as the plugin reads it. False: no list, or not one
+bool read_manager_list(const std::wstring& root, std::string* fmt, std::vector<manager_mode::ListedFile>* out) {
     std::string text;
     const std::wstring list = join(root, "reframework/data/SF6_Costumes_Data/" + std::string(manager_mode::kRecordFile));
     if (!read_file(list, &text, 4u << 20)) return false;
     try {
         json j = json::parse(text);
         if (!j.is_object()) return false;
-        std::vector<manager_mode::ListedFile> files;
+        std::vector<manager_mode::ListedFile>& files = *out;
         if (auto mods = j.find("mods"); mods != j.end() && mods->is_array())
             for (auto& m : *mods) {
                 if (!m.is_object()) continue;
@@ -207,12 +211,32 @@ bool manager_mode(const std::wstring& root) {
                         files.push_back(lf);
                     }
             }
-        std::string fmt;
-        if (auto f = j.find("format"); f != j.end() && f->is_string()) fmt = f->get<std::string>();
-        return manager_mode::installed_by_manager(fmt, files, file_size(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll")));
+        if (auto f = j.find("format"); f != j.end() && f->is_string()) *fmt = f->get<std::string>();
+        return true;
     } catch (...) {
         return false;
     }
+}
+
+}  // namespace
+
+bool manager_mode(const std::wstring& root) {
+    std::string fmt;
+    std::vector<manager_mode::ListedFile> files;
+    if (!read_manager_list(root, &fmt, &files)) return false;
+    return manager_mode::installed_by_manager(fmt, files, file_size(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll")));
+}
+
+bool manager_lists(const std::wstring& root, const std::string& rel) {
+    std::string fmt;
+    std::vector<manager_mode::ListedFile> files;
+    if (!read_manager_list(root, &fmt, &files) || fmt != manager_mode::kRecordFormat) return false;
+    const long long size = file_size(join(root, rel));
+    if (size < 0) return false;
+    const std::string want = manager_mode::norm_path(rel);
+    for (auto& f : files)
+        if (f.enabled && f.size == size && manager_mode::norm_path(f.path) == want) return true;
+    return false;
 }
 
 bool verify_file(const std::wstring& p, int64_t size, const std::string& sha256, std::string* why) {

@@ -62,9 +62,10 @@ Everything of contract 1, and:
    that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk. Installed any
    other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the plugin is not listed at its size and
    nothing of this applies. In Manager mode:
-   - outfits come from `reframework/costume_mods` (and `reframework/costume_mods_nsfw`, unlike the fork: empty, it
-     changes nothing; its outfits stay hidden unless "Display NSFW Outfits" is on): no Fluffy Mod Manager discovery, no
-     loose `natives` files and no other patch paks as outfits (they are still read as the game's files);
+   - outfits come from `reframework/costume_mods` only: no Fluffy Mod Manager discovery, no loose `natives` files and no
+     other patch paks as outfits (they are still read as the game's files). `reframework/costume_mods_nsfw` is neither
+     read nor made, as under the fork, which had no such folder; mods someone put there give no outfit, and the log says
+     how many. So no outfit is NSFW in Manager mode, and the plugin never adds the "Display NSFW Outfits" row;
    - one outfit per variant of a modular mod (`variants.json`'s `"runtime_options"` is `"off"`), each switched by
      `variant_choices.json`; no in-game costume options (a `costume_options.json` a build in normal mode left is removed:
      it names the same pak, so the plugin would use it);
@@ -76,6 +77,11 @@ Everything of contract 1, and:
      outfit per add-on and one with all of them, up to three add-ons, each its row in `variants.json`; "only the complete
      outfit", and "handled together", belong to the runtime options;
    - no NSFW detection by keywords;
+   - a modular mod with one menu level ("01 Main files" and its options) keeps the fork's variant labels, made from its path
+     below `costume_mods` (`Ryu/Sakura as Ryu C1.zip/01 Main files - Sakura as Ryu C1 - Combined hair`, not `Sakura as Ryu C1 -
+     Combined hair`): `variant_choices.json` names a variant by its label, and one turned off under the fork stays off;
+   - the game checks for no update of the suite (`updater/README.md`, The Slotsloader Manager's installs): nothing is fetched
+     from inside the game unless `state.json` says `"check_in_manager_mode": true`;
    - character-swap repairs (ported from fork 1.10.4, MIT, `costumes/loader/swap_repairs.cpp`) while an empty
      `swap_repairs.txt` is in `SF6_Costumes_Data`. The Manager has no switch for it since 1.0.15: it writes the file at
      its start, at every refresh and when it installs the loader, as soon as that folder exists. Its coming or going
@@ -83,6 +89,42 @@ Everything of contract 1, and:
    - plugin: slots made from Outfit 1 or DriveTech are always shown, and the owned-outfit check is off while the
      Manager's opt-out marker is in `reframework/data/SF6_CostumeSlots_data` (`plugin/src/manager_marker.hpp`).
    A change of mode rebuilds the costume pak once.
+
+   - the costume pak is built again after a game update that the base pak's size and date do not show (ported from fork
+     1.9.5, MIT): the fingerprint also holds a digest of the game's executable (size, date, first 4 KiB), of
+     `re_chunk_000.pak`'s index (its path-hash fields left out: a mod manager turns rows off and on there), of
+     `vanilla_costume_index.tsv`, `static_meta.json` and the static files it names, and each DLC pak's date beside its size;
+   - each of the plugin's additions to the game's menus can be left out, by a key of its own set to `false` in
+     `reframework/data/SF6_CostumeSlots_data/settings.json` (read at start; a key that is not there means shown):
+     - `menu_outfit_names`: the mods' names in the costume lists, and their scrolling. The loader reads the same key and keeps
+       each slot's "Outfit V" name in place of its mod's label (a change rebuilds the costume pak once);
+     - `menu_fighter_settings_name`: the outfit's name on Fighter Settings;
+     - `menu_online_outfit_row`: Options > Interface > Other Settings, "Outfit Others See";
+     - `menu_title_screen`: the "Title Screen Selection" section and the "Skip intro screens" row;
+     - `menu_interface_packs`: the "Interface Packs" section and its editor;
+     - `menu_replay_settings`: the Replays menu's settings tab.
+
+     `"menu_additions": false` leaves out every one of them whose own key is not in the file. The "Display NSFW Outfits"
+     row of that place has no key: it is never added in Manager mode. The stage select is not
+     concerned; `online_outfit` is still read from that file (as without the Native Core), `title_pack`
+     and `skip_intro` by the loader at the next launch, so the Manager can set them from outside the game. Not checked in the
+     game yet: the interface packs' choices (`ui_choices`) with the section left out.
+
+   - nothing of the game is written back at its own path (fork 1.9.4, MIT): no original is "restored" into the costume pak,
+     and neither a mod-only dependency nor the texture repair writes at a path of the game's own index, even when a
+     replacement turned that entry off in the base pak. The pak holds the slots' own files, the mod-only files at paths the
+     game does not have, and the tables the loader builds. A replacement installed later is never covered by it;
+   - a loose game file the build depended on is watched by content as well as by size and date (fork 1.10.9's digest, kept in
+     `loose_probes.tsv`), the files below `model\esf` and the loose colour files a slot took included: a replacement put back
+     with the size and date it had still rebuilds the pak;
+   - a mod's own scene that is another layout of the outfit (another fighter's body, another number of model parts) is used
+     whole even when it names a file found nowhere, as the fork takes it (1.10.3): Swimsuit Sakura as Ryu C2 names
+     `sakura_001_01_havok.user`, which it does not ship, and was sent back to the game's scene, on Ryu's skeleton. The
+     game-version check of such a scene is unchanged;
+   - Report a bug (`report_mod.dll`, when it is installed) stays off: `"report_a_bug": true` in the same `settings.json` turns
+     it on (read at start).
+
+   Outside Manager mode none of the above applies: the fingerprint, the menus, the updater and Report a bug are what they were.
 
    The fork's other loader fixes of 1.10.6 - 1.10.9 (a scene or colour file read from its turned-off entry, an outfit's
    own colour list, donor colour files following the slot, promise 5) and its Opponent Outfit Settings summary (done

@@ -29,6 +29,9 @@ constexpr int32_t kSectionOthers = 290;    // app.Option.GroupType OthersSetting
 
 bool g_done = false;          // setup() ran (row placed or given up)
 int64_t g_group = -1, g_entry = -1, g_entry_outfit = -1;
+// The rows are placed (make_row succeeded). It was "g_entry >= 0" while the Display NSFW Outfits row was always made: in
+// Manager mode a row can be left out (menus::shown), the others and the title section still follow settings.json.
+bool g_live = false;
 bool g_shown = false;         // the value the row holds (what the core was given / told)
 bool g_shown_dt = false;      // the value the "Outfit Others See" row holds
 uint32_t g_words = 0;         // the language the rows were written in (words::version)
@@ -138,31 +141,42 @@ bool make_row(const char** why) {
     const SF6CoreAPI* a = A();
     if (g_group >= 0) a->opt_remove_group(C(), g_group);
     g_group = g_entry = g_entry_outfit = g_entry_title = g_entry_skip = -1;
+    g_live = false;
     g_shown = costumes::display_nsfw();
     g_shown_dt = costumes::online_drivetech();
     g_words = words::version();
     using words::G; using words::W; using words::game; using words::tr; using words::trf;
-    g_group = a->opt_group(C(), "slots.interface", "Slots Loader", "");
-    if (g_group < 0) { *why = "opt_group refused"; return false; }
+    // Manager mode: each row and the title screen's part can be left out (menus::shown, main.cpp); installed any other way
+    // all of them are made, as always. The group is made for the rows there are.
+    const bool row_nsfw = menus::shown(menus::NsfwRow), row_outfit = menus::shown(menus::OnlineOutfitRow);
+    const bool title = menus::shown(menus::TitleScreen) && !g_packs.empty();
+    if (row_nsfw || row_outfit || title) {
+        g_group = a->opt_group(C(), "slots.interface", "Slots Loader", "");
+        if (g_group < 0) { *why = "opt_group refused"; return false; }
+    }
     const std::string off = game(G::Off), on = game(G::On), outfit1 = game(G::Outfit1), dt = game(G::OutfitDrivetech);
     const std::string desc = trf(W::NsfwDisplayDesc, { off, outfit1 }), desc_outfit = trf(W::NsfwOnlineOutfitDesc, { game(G::BattleSettings), dt, outfit1 });
     const char* labels[] = { off.c_str(), on.c_str() };
-    SF6CoreOptEntryDesc d{};
-    d.struct_size = sizeof d;
-    d.kind = SF6CORE_OPT_CHOICE; d.key = "display_nsfw"; d.title = tr(W::NsfwDisplay); d.desc = desc.c_str();
-    d.options = labels; d.n_options = 2; d.value = g_shown ? 2 : 1;
-    g_entry = a->opt_entry(C(), g_group, &d);
-    if (g_entry < 0) { *why = "opt_entry refused"; return false; }
+    if (row_nsfw) {
+        SF6CoreOptEntryDesc d{};
+        d.struct_size = sizeof d;
+        d.kind = SF6CORE_OPT_CHOICE; d.key = "display_nsfw"; d.title = tr(W::NsfwDisplay); d.desc = desc.c_str();
+        d.options = labels; d.n_options = 2; d.value = g_shown ? 2 : 1;
+        g_entry = a->opt_entry(C(), g_group, &d);
+        if (g_entry < 0) { *why = "opt_entry refused"; return false; }
+    }
     const char* outfits[] = { outfit1.c_str(), dt.c_str() };
-    SF6CoreOptEntryDesc o{};
-    o.struct_size = sizeof o;
-    o.kind = SF6CORE_OPT_CHOICE; o.key = "online_outfit"; o.title = tr(W::NsfwOnlineOutfit); o.desc = desc_outfit.c_str();
-    o.options = outfits; o.n_options = 2; o.value = g_shown_dt ? 2 : 1;
-    g_entry_outfit = a->opt_entry(C(), g_group, &o);
-    if (g_entry_outfit < 0) { *why = "opt_entry refused (Outfit Others See)"; return false; }
+    if (row_outfit) {
+        SF6CoreOptEntryDesc o{};
+        o.struct_size = sizeof o;
+        o.kind = SF6CORE_OPT_CHOICE; o.key = "online_outfit"; o.title = tr(W::NsfwOnlineOutfit); o.desc = desc_outfit.c_str();
+        o.options = outfits; o.n_options = 2; o.value = g_shown_dt ? 2 : 1;
+        g_entry_outfit = a->opt_entry(C(), g_group, &o);
+        if (g_entry_outfit < 0) { *why = "opt_entry refused (Outfit Others See)"; return false; }
+    }
     g_title_keys.clear();
     g_title_labels.clear();
-    if (!g_packs.empty()) {
+    if (title) {
         const std::string pack_now = costumes::title_pack();
         g_title_keys.push_back("");
         std::vector<std::string> names = { tr(W::TitleGameOwn) };
@@ -179,11 +193,12 @@ bool make_row(const char** why) {
         g_entry_skip = a->opt_entry(C(), g_group, &k);
         if (g_entry_skip < 0) { *why = "opt_entry refused (Skip intro screens)"; return false; }
     }
-    if (a->opt_group_place(C(), g_group, kTabInterface, kSectionOthers) != SF6CORE_OK) { *why = "opt_group_place refused"; return false; }
+    if (g_group >= 0 && a->opt_group_place(C(), g_group, kTabInterface, kSectionOthers) != SF6CORE_OK) { *why = "opt_group_place refused"; return false; }
     // the title screen's section: made once, its texts updated in place (the core keeps its unit), withdrawn with the last pack
+    // (`title`: there are packs, and the section is not left out)
     if (SF6CORE_HAS(a, opt_section_place)) {
         const std::string sec_words = std::string(tr(W::TitleSection)) + "|" + tr(W::TitleSectionDesc);
-        if (!g_packs.empty() && g_section < 0) {
+        if (title && g_section < 0) {
             g_section = a->opt_group(C(), "slots.title_section", tr(W::TitleSection), tr(W::TitleSectionDesc));
             if (g_section >= 0 && a->opt_section_place(C(), g_section, kTabInterface, kSectionOthers) != SF6CORE_OK) {
                 logf("nsfw option: the title screen section refused by the core");
@@ -191,10 +206,10 @@ bool make_row(const char** why) {
                 g_section = -1;
             }
             g_section_words = sec_words;
-        } else if (!g_packs.empty() && sec_words != g_section_words) {
+        } else if (title && sec_words != g_section_words) {
             a->opt_group_def(C(), g_section, tr(W::TitleSection), tr(W::TitleSectionDesc));
             g_section_words = sec_words;
-        } else if (g_packs.empty() && g_section >= 0) {
+        } else if (!title && g_section >= 0) {
             a->opt_section_place(C(), g_section, -1, -1);
             a->opt_remove_group(C(), g_section);
             g_section = -1;
@@ -202,6 +217,7 @@ bool make_row(const char** why) {
     }
     a->opt_rebuild(C());
     a->opt_ensure_built(C());
+    g_live = true;
     return true;
 }
 
@@ -250,14 +266,21 @@ void setup() {
         if (a->opt_set_callbacks(C(), &cb) != SF6CORE_OK) why = "opt_set_callbacks refused";
     }
     if (!why) read_registry();                        // the title rows need the pack list before the group is made
-    if (!why) costumes::nsfw_row_present(true);       // the file is followed (and read now) even with no NSFW content
+    // the file is followed (and read now) even with no NSFW content, when its row is there to show it
+    if (!why) costumes::nsfw_row_present(menus::shown(menus::NsfwRow));
     if (!why && make_row(&why)) {
-        logf("nsfw option: rows placed in Interface > Other Settings (Display NSFW Outfits, Outfit Others See%s)%s",
-             g_entry_skip >= 0 ? ", Skip Intro Screens" : "", g_section >= 0 ? "; the Title Screen Selection section above it" : "");
+        std::string rows;                             // the rows made (Manager mode can leave some out)
+        auto row = [&](int64_t entry, const char* name) { if (entry >= 0) rows += std::string(rows.empty() ? "" : ", ") + name; };
+        row(g_entry, "Display NSFW Outfits");
+        row(g_entry_outfit, "Outfit Others See");
+        row(g_entry_skip, "Skip Intro Screens");
+        logf("nsfw option: rows placed in Interface > Other Settings (%s)%s", rows.empty() ? "none" : rows.c_str(),
+             g_section >= 0 ? "; the Title Screen Selection section above it" : "");
         return;
     }
     logf("nsfw option: rows not placed (%s)", why);
     g_group = g_entry = g_entry_outfit = g_entry_title = g_entry_skip = -1;
+    g_live = false;
 }
 
 bool title_row(TitleRow& out) {
@@ -311,13 +334,13 @@ bool set_title_value(int value) {
 }
 
 // The rows were written in another language than the game's: tick() has to write them again
-bool retext_pending() { return g_entry >= 0 && g_words != words::version(); }
+bool retext_pending() { return g_live && g_words != words::version(); }
 
 // The setting changed elsewhere (settings.json edited), the pack list did (registry.json) or the game's language did: the rows
 // are made again with the new values and words. Not while an option window is open (a rebuild would pull the rows from under
 // the player, and registry.json is not read then either).
 void tick() {
-    if (g_entry < 0) return;
+    if (!g_live) return;
     const SF6CoreAPI* a = A();
     if (!a || !C()) return;
     bool title_changed = false;
@@ -325,13 +348,13 @@ void tick() {
         title_changed = read_registry();
         if (!title_changed && g_entry_skip >= 0)
             title_changed = title_value(g_title_keys, costumes::title_pack()) != g_shown_title || costumes::skip_intro() != g_shown_skip;
-        if (!title_changed && g_packs.empty() != (g_entry_skip < 0)) title_changed = true;
+        if (!title_changed && (menus::shown(menus::TitleScreen) && !g_packs.empty()) != (g_entry_skip >= 0)) title_changed = true;
     }
     if (!title_changed && costumes::display_nsfw() == g_shown && costumes::online_drivetech() == g_shown_dt && !retext_pending()) return;
     if (a->opt_window_open()) return;
     const char* why = nullptr;
     if (make_row(&why)) logf("nsfw option: rows follow settings.json (NSFW %s, %s, %zu title pack%s)", g_shown ? "On" : "Off", g_shown_dt ? "DriveTech" : "Outfit 1", g_packs.size(), g_packs.size() == 1 ? "" : "s");
-    else { logf("nsfw option: rows lost (%s)", why); g_group = g_entry = g_entry_outfit = g_entry_title = g_entry_skip = -1; }
+    else { logf("nsfw option: rows lost (%s)", why); g_group = g_entry = g_entry_outfit = g_entry_title = g_entry_skip = -1; g_live = false; }
 }
 
 } // namespace slots::nsfwopt

@@ -276,6 +276,38 @@ static void test_plan() {
     check(!manager_mode(root), "the plugin replaced since: not manager mode");
     put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), "{ broken");
     check(!manager_mode(root), "a broken list: not manager mode");
+
+    // any package the Manager installed is the Manager's (the Native Core beside a loader it did not install)
+    for (auto& p : m.packages)
+        if (p.id == "native_core") p.version = "0.9.11";
+    plan = make_plan(m, detect_installed(root, reader), manager_mode(root), "");
+    check(plan.items.size() == 3, "no list: the core offered with the two others: " + std::to_string(plan.items.size()));
+    const std::string core_rel = "reframework/plugins/sf6core_native.dll";
+    const std::string core_list = "{\"format\": \"sf6-manager-installs-1\", \"mods\": [{\"enabled\": true, \"files\": [{\"path\": \"Reframework\\\\Plugins\\\\SF6Core_Native.dll\", \"size\": 4}]}]}";
+    put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), core_list);
+    check(manager_lists(root, core_rel) && !manager_mode(root), "the Manager's list holds the core at its size, not the plugin");
+    plan = make_plan(m, detect_installed(root, reader), manager_mode(root), "");
+    check(plan.items.size() == 3, "the Manager's core beside a loader it did not install: not manager mode, offered as always: " + std::to_string(plan.items.size()));
+    // manager mode (the list holds the plugin too): the Manager's core is left out with the loader
+    const std::string both_list = "{\"format\": \"sf6-manager-installs-1\", \"mods\": [{\"enabled\": true, \"files\": [{\"path\": \"reframework/plugins/SF6_CostumeSlotsNative.dll\", \"size\": 6}, "
+                                  "{\"path\": \"Reframework\\\\Plugins\\\\SF6Core_Native.dll\", \"size\": 4}]}]}";
+    put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), both_list);
+    put(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll"), "plugin");      // the size the list gives again (replaced above)
+    check(manager_mode(root) && manager_lists(root, core_rel), "the Manager's list holds the plugin and the core");
+    plan = make_plan(m, detect_installed(root, reader), manager_mode(root), "");
+    bool core_offered = false, core_note = false;
+    for (auto& it : plan.items) core_offered |= it.pkg.id == "native_core";
+    for (auto& n : plan.notes) core_note |= n.find("native_core: installed by the Slotsloader Manager") != std::string::npos;
+    check(plan.items.size() == 1 && plan.items[0].pkg.id == "color_mod" && !core_offered && core_note, "manager mode: the Manager's core left out and noted with the loader, the Color Mod offered");
+    put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), core_list);
+    put(join(root, core_rel), "core, replaced since");
+    check(!manager_lists(root, core_rel), "the core replaced since: no longer the Manager's");
+    put(join(root, core_rel), "core");
+    std::string off_list = core_list;
+    off_list.replace(off_list.find("\"enabled\": true"), 15, "\"enabled\": false");
+    put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), off_list);
+    check(!manager_lists(root, core_rel), "a mod turned off in the Manager claims nothing");
+    check(!manager_lists(root, "reframework/plugins/not_there.dll"), "a file that is not there: not the Manager's");
 }
 
 // ---- zip entries ----
@@ -539,6 +571,19 @@ static void test_state() {
     check(load_state(p).ignored == "1.30.1" && load_state(p).check, "the ignored release remembered");
     put(p.state, "{\"check_for_updates\": false}");
     check(update_state(p, [](State& st) { st.ignored = "1.30.2"; }) && !load_state(p).check, "the player's off switch kept when the module writes");
+
+    // the Slotsloader Manager's installs: nothing is fetched from the game unless the player asks for it
+    std::string why;
+    check(check_allowed(parse_state(""), false, &why) && why.empty(), "not manager mode: checked");
+    check(!check_allowed(parse_state(""), true, &why) && why.find("Slotsloader Manager") != std::string::npos, "manager mode: off, and the log says why");
+    check(check_allowed(parse_state("{\"check_in_manager_mode\": true}"), true, nullptr), "manager mode, asked for: checked");
+    check(!check_allowed(parse_state("{\"check_for_updates\": false, \"check_in_manager_mode\": true}"), true, &why) && why.find("check_for_updates") != std::string::npos,
+          "the off switch wins");
+    check(!check_allowed(parse_state("{\"check_for_updates\": false}"), false, nullptr), "the off switch, not manager mode: off as before");
+    check(!check_allowed(parse_state("{\"check_in_manager_mode\": \"yes\"}"), true, nullptr), "a wrong type: the default (off in manager mode)");
+    s = parse_state("{\"check_in_manager_mode\": true}");
+    s.ignored = "1.31.0";
+    check(parse_state(state_json(s)).check_managed, "the player's key kept when the module writes");
 }
 
 // ---- the restart's waiter: run for real against a short process, with a marker file instead of Steam ----
