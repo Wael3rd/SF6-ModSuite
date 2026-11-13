@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 
 // ============================================================================
 // Murmur3-based path hash (RE Engine pak format)
@@ -97,6 +98,21 @@ public:
     // From ZZtaii's Slotsloader fork (1.10.6), MIT.
     std::vector<const PakEntry*> turned_off_candidates(uint64_t hash) const;
 
+    // What was asked of this pak's own table (the added paks are not concerned): each hash find() was given, with
+    // whether the table had it, and each hash turned_off_candidates() was asked for, with the offsets of the rows it
+    // found in this table ("123,456,"). For a caller that keeps what it built from this pak for as long as the same
+    // questions get the same answers (the costume loader in Manager mode: a replacement installed over the game turns
+    // rows off and on). quiet > 0: nothing is noted (the caller notes itself what its question decided). Never set:
+    // nothing is kept, as before.
+    struct Asked {
+        std::unordered_map<uint64_t, bool> found;
+        std::unordered_map<uint64_t, std::string> off;
+        int quiet = 0;
+    };
+    void record_asked(Asked* asked) { asked_ = asked; }
+    // This pak's own table has the hash; nothing is noted.
+    bool has_own(uint64_t hash) const { return entries_.count(hash) > 0; }
+
     // Returns the raw (possibly compressed) blob.
     std::vector<uint8_t> read_raw(const PakEntry& e);
 
@@ -113,6 +129,7 @@ private:
     // A turned-off entry and the hashes of the entries around it (0 / UINT64_MAX at the table's ends)
     struct TurnedOff { uint64_t after, before; PakEntry e; };
     std::vector<TurnedOff> turned_off_;
+    Asked* asked_ = nullptr;
 
     PakReader* owner_of(const PakEntry& e);
 };

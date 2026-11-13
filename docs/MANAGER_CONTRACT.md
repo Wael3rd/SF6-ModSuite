@@ -138,6 +138,27 @@ Everything of contract 1, and:
      whole even when it names a file found nowhere, as the fork takes it (1.10.3): Swimsuit Sakura as Ryu C2 names
      `sakura_001_01_havok.user`, which it does not ship, and was sent back to the game's scene, on Ryu's skeleton. The
      game-version check of such a scene is unchanged;
+   - the costume pak in place is kept after a replacement is installed over the game, or removed, when no outfit was built
+     from the files it touches (as ZZtaii's Slotsloader fork keeps it). The Manager's "Replace original" turns rows of
+     `re_chunk_000.pak` off, puts its files in the game's `natives` folder and writes `manager_installs.json` again; the
+     fingerprint of every other install sees all three (the base pak's date, its walk of `natives\stm\product\model\esf`,
+     the list's date) and builds again each time. In Manager mode those three are not in the fingerprint, and the fork's
+     rule takes their place. Each build keeps what decides in `game_lookups.tsv` beside the registry, and the next launch
+     asks again from the base pak's index, which is read for the game-inputs digest anyway:
+     - `s`, the colour files a slot took from the game (the fork's `game_colours.tsv`): a replacement installed over one,
+       or removed, builds the pak again, since the slot holds a copy of that file. The loose colour files a slot took and
+       the mod-only dependencies left to a loose file are watched by content (`loose_probes.tsv`), as before;
+     - `e`, the files the slot check and the swatches asked for, kept as "the game has it, as a row of the base pak or
+       as a loose file": a replacement of one keeps the pak, the file gone altogether (or one that was nowhere
+       appearing) builds again;
+     - `f` and `o`, every other question the build put to the base pak's table: kept for the log only. The launch says
+       how many are answered differently now and keeps the pak.
+     The log names the first files when the pak is built again. What the rule accepts, as the fork did: a slot holds what
+     it was built with. An outfit made while a game file was there keeps its copy of it (the material file a mesh-only
+     mod is given, a scene) after a replacement is installed over that file, and one made while the replacement was
+     installed refers to the replacement; the slot check's verdict, its repairs and the swatches are those of the last
+     build. Any rebuild brings everything up to date. The base pak's size, header and index (path hashes left out) are
+     still in the game-inputs digest, so a game update rebuilds;
    - Report a bug (`report_mod.dll`, when it is installed) stays off: `"report_a_bug": true` in the same `settings.json` turns
      it on (read at start).
 
