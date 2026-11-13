@@ -2078,6 +2078,7 @@ void stage_settings(Obj* si) {
 }
 
 int pre_stage_setup(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    recorder::setup_calls.fetch_add(1);           // (a reset left pending by the training menu ends here, whoever caused it)
     if (!on_game_thread() || (!custom_mode.load() && recorder::setup_uq.empty())) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     std::lock_guard lk(g_mx);
     try {

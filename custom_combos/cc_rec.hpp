@@ -164,6 +164,50 @@ inline std::string settings_key(const Settings& s, int fighter) {
     return k;
 }
 
+// A Reset Battle left pending by the training menu (a setting changed): asked as the player LEAVES the pause menu, not
+// as the training menu closes (the pause menu is still up then). Read frame by frame in game:
+//   the frame of the cancel   agent Show, flow Main, its element's _Next = UIFlowCommon.HideObject, Param.isCancel true
+//   one frame later           agent FadeOut, no delegates, no flow
+// isCancel alone is stale (true from the last cancel until a decision clears it); a decided row closes with the same
+// _Next and isCancel false; a sub-window (Control Settings) keeps the agent in Show with no delegates. The decision
+// asked on the cancel frame resets the battle, and so does one asked the frame after with the flow of the frame before
+// (the net for a way out not seen). It ends at the next StageSetup whoever caused it, when our rows are no longer the
+// menu's, or when the scene has had no pause menu for 120 frames. Fed once a frame while no training menu is up.
+struct PauseView {
+    bool agent = false;          // the pause menu's agent is in the scene
+    bool shown = false;          // its state is Show
+    bool flow = false;           // it has delegates, a flow and the flow's Param
+    bool hide_next = false;      // the flow's element goes to UIFlowCommon.HideObject next
+    bool cancel = false;         // Param.isCancel
+};
+struct PendingReset {
+    enum Act { None, Now, Prev };    // Now: with this frame's flow; Prev: with the flow kept from the frame before
+    bool pending = false, decided = false, have_prev = false;
+    uint64_t at = 0;                 // StageSetup calls counted when it was armed
+    int dec_n = 0, gone = 0;
+    void arm(uint64_t setup_calls) { *this = PendingReset{}; pending = true; at = setup_calls; }
+    void row_decided() { if (pending) { decided = true; dec_n = 0; } }   // a row of the pause menu was decided
+    void menu_up() { have_prev = false; }                                // the training menu is up again
+    Act tick(uint64_t setup_calls, bool ours_on, const PauseView& v) {
+        if (!pending) return None;
+        if (setup_calls != at || !ours_on) { pending = false; have_prev = false; return None; }
+        if (!v.agent) {                  // no pause menu in this scene any more: the trial was left
+            have_prev = false;
+            if (++gone > 120) pending = false;
+            return None;
+        }
+        gone = 0;
+        if (decided && ++dec_n > 30) { decided = false; dec_n = 0; }   // a decided row: what follows is the game's own
+        Act go = None;
+        if (v.shown) { if (v.flow && v.hide_next && v.cancel) go = Now; }
+        else if (have_prev) go = Prev;
+        have_prev = v.shown && go == None && v.flow;
+        if (go == None || decided) return None;
+        pending = false;
+        return go;
+    }
+};
+
 inline TrialP make_slot(int chara, const Settings& rs, const std::string& rec_counter) {
     auto t = std::make_shared<Trial>();
     t->rec = true;

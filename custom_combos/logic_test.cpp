@@ -333,6 +333,48 @@ int main() {
         check(!rc.trial.contains("recipe") && rc.trial["gauges"]["sa_stock"] == "max", "a replay's take: none of the slot's settings");
     }
 
+    // the reset a changed setting leaves pending: asked as the player leaves the pause menu
+    {
+        using PR = rec::PendingReset;
+        rec::PauseView menu;                       // the pause menu on screen, its flow there
+        menu.agent = menu.shown = menu.flow = true;
+        rec::PauseView stale = menu;               // isCancel still true from an earlier cancel
+        stale.cancel = true;
+        rec::PauseView cancel = stale;             // the cancel frame
+        cancel.hide_next = true;
+        rec::PauseView decided = menu;             // a row decided: same _Next, isCancel false
+        decided.hide_next = true;
+        rec::PauseView fading;                     // the frame after: FadeOut, no delegates
+        fading.agent = true;
+        rec::PauseView sub = fading;               // a sub-window: Show, no delegates
+        sub.shown = true;
+        PR p;
+        check(p.tick(0, true, cancel) == PR::None, "nothing pending: nothing asked");
+        p.arm(5);
+        check(p.tick(5, true, stale) == PR::None && p.pending, "the training menu closed: the pause menu is still up");
+        check(p.tick(5, true, cancel) == PR::Now && !p.pending, "asked on the cancel frame");
+        p.arm(5);
+        check(p.tick(5, true, menu) == PR::None && p.tick(5, true, fading) == PR::Prev, "the net: the frame after, with the flow kept");
+        p.arm(5);
+        p.row_decided();
+        check(p.tick(5, true, decided) == PR::None && p.tick(5, true, fading) == PR::None && p.pending, "a decided row asks nothing");
+        check(p.tick(6, true, menu) == PR::None && !p.pending, "ended by the next StageSetup (the row's own reset)");
+        p.arm(5);
+        check(p.tick(5, true, sub) == PR::None && p.tick(5, true, fading) == PR::None && p.pending, "a sub-window asks nothing");
+        check(p.tick(5, true, cancel) == PR::Now, "... and the cancel after it does");
+        p.arm(5);
+        p.tick(5, true, menu);
+        p.menu_up();
+        check(p.tick(5, true, fading) == PR::None && p.pending, "the training menu up again: no flow kept");
+        check(p.tick(5, false, cancel) == PR::None && !p.pending, "ended when our rows are not the menu's");
+        p.arm(5);
+        rec::PauseView none;
+        for (int i = 0; i < 120; ++i) p.tick(5, true, none);
+        check(p.pending, "no pause menu for 120 frames: still pending");
+        p.tick(5, true, none);
+        check(!p.pending, "ended when the scene has no pause menu");
+    }
+
     // the Replay Menu's rows and when they are written again
     {
         const auto idle = replay_rows(false, 0);

@@ -479,7 +479,7 @@ struct TMState {
     Obj* tabs_ui = nullptr; Obj* game_tabs = nullptr; Obj* our_tabs = nullptr;
     bool swapped = false;                        // our tab list put in, the game's not back yet
     std::string snap;                            // the slot's settings when the menu opened (rec::settings_key)
-    bool reset = false;                          // a setting changed: the battle resets once the pause menu is back
+
     std::optional<int64_t> start_loc;
     bool blocked = false;
 } TM;
@@ -657,20 +657,59 @@ void tm_unique_show(Obj* tm) {
 }
 
 // Reset Battle without the player (rule 15): the game's own decision for that row (item type 10: it closes the menu
-// and resets the battle), static UIFlowESportsPauseMenu.DecidePauseMenuItem(10, flow), with the flow of the pause menu
-// on screen looked up now, from the game thread. (BattleFlow.DoSoftReset() crashes the game; Param.isDecide,
-// set_IsReqRefresh / IsReqRestart and a StageSetup by hand do nothing.)
+// and resets the battle), static UIFlowESportsPauseMenu.DecidePauseMenuItem(10, flow), from the game thread, with the
+// pause menu's flow. (BattleFlow.DoSoftReset() crashes the game; Param.isDecide, set_IsReqRefresh / IsReqRestart and
+// a StageSetup by hand do nothing.) When: as the player leaves the pause menu (rec::PendingReset).
 bool pm_ours_on();                             // (the trial pause menu's rows, below)
-const char* menu_reset_now() {
-    if (!pm_ours_on()) return "not our list";
-    Obj* a = pause_agent();
-    Obj* cur = a ? get_obj(get_obj(a, "_StateManager"), "_Curt") : nullptr;
-    if (!cur || type_name(cur).find("Show") == std::string::npos) return "pause menu not shown";
-    Obj* flow = get_obj(get_obj(a, "<InputDelegates>k__BackingField"), "<Flow>k__BackingField");
-    if (!flow || !get_obj(flow, "_Param")) return "no flow";
-    Method* m = method_of(type("app.esports.UIFlowESportsPauseMenu"), "DecidePauseMenuItem", 2);
+std::atomic<uint64_t> setup_calls{0};          // StageSetup calls, any trial (the pending reset ends at the next one)
+std::atomic<bool> pend_on{false}, pend_decided{false};   // read / set by the decide hook (another thread)
+rec::PendingReset pend;
+Obj* pend_flow = nullptr;                      // the pause menu's flow of the frame before (rooted while kept)
+
+void pend_keep(Obj* flow) {
+    if (flow == pend_flow) return;
+    if (flow) flow->add_ref();
+    if (pend_flow) pend_flow->release();
+    pend_flow = flow;
+}
+void pend_arm() {
+    pend.arm(setup_calls.load());
+    pend_decided = false;
+    pend_keep(nullptr);
+    pend_on = true;
+}
+const char* reset_with(Obj* flow) {
+    TD* ft = type("app.esports.UIFlowESportsPauseMenu");
+    if (!flow || !live(flow) || !get_obj(flow, "_Param")) return "no flow";
+    Method* m = method_of(ft, "DecidePauseMenuItem", 2);
     if (!m) return "no decide method";
     return invoke(m, nullptr, { arg_i32(10), flow }).exception_thrown ? "the call failed" : "asked";
+}
+// game thread, every frame while a reset is pending
+void pend_tick() {
+    if (pend_decided.exchange(false)) pend.row_decided();
+    if (TM.want || TM.open) { pend.menu_up(); pend_keep(nullptr); return; }   // nothing is watched while the training menu is up
+    rec::PauseView v;
+    Obj* flow = nullptr;
+    Obj* a = pause_agent();
+    v.agent = a != nullptr;
+    if (a) {
+        Obj* cur = get_obj(get_obj(a, "_StateManager"), "_Curt");
+        v.shown = cur && type_name(cur).find("Show") != std::string::npos;
+        if (v.shown) {
+            flow = get_obj(get_obj(a, "<InputDelegates>k__BackingField"), "<Flow>k__BackingField");
+            Obj* param = get_obj(flow, "_Param");
+            Obj* nx = get_obj(get_obj(flow, "_Manager"), "_Next");
+            v.flow = param != nullptr;
+            v.hide_next = nx && type_name(nx).find("HideObject") != std::string::npos;
+            v.cancel = param && flag(param, "isCancel");
+        }
+    }
+    const rec::PendingReset::Act act = pend.tick(setup_calls.load(), pm_ours_on(), v);
+    if (act == rec::PendingReset::Now) logf("reset as the pause menu is left (on the cancel): %s", reset_with(flow));
+    else if (act == rec::PendingReset::Prev) logf("reset as the pause menu is left (the frame after): %s", reset_with(pend_flow));
+    pend_keep(pend.have_prev ? flow : nullptr);
+    pend_on = pend.pending;
 }
 
 // what the training menu left in the training data becomes the slot's settings
@@ -725,11 +764,12 @@ void tm_sync(Obj* tm) {
     }
     rs_save();
     if (slot_trial && slot_trial->rec) { slot_fields(*slot_trial); mode::apply_settings(*slot_trial, true); }
-    // a setting changed: the battle resets as the menu closes (the start, life and a started timer only show at the
-    // start of a battle); config.json "rec_menu_reset": false leaves it to the player
-    TM.reset = cfg.rec_menu_reset && !TM.snap.empty() && TM.snap != rec::settings_key(rs, slot_trial ? slot_trial->fighter_id : 0);
+    // a setting changed: the battle will be reset when the player leaves the pause menu (the start, life and a started
+    // timer only show at the start of a battle; not while the pause menu is still up); config.json "rec_menu_reset":
+    // false leaves it to the player
+    if (cfg.rec_menu_reset && !TM.snap.empty() && TM.snap != rec::settings_key(rs, slot_trial ? slot_trial->fighter_id : 0)) pend_arm();
     logf("training menu closed: state %d guard %d counter %d, P1 sa %d dg %d, dummy sa %d dg %d, life %d / %d%s", rs.state,
-         rs.guard_raw.value_or(-1), rs.counter.value_or(-1), rs.sa, rs.dg, rs.sa2, rs.dg2, rs.vp1, rs.vp2, TM.reset ? ", reset asked" : "");
+         rs.guard_raw.value_or(-1), rs.counter.value_or(-1), rs.sa, rs.dg, rs.sa2, rs.dg2, rs.vp1, rs.vp2, pend.pending ? ", reset pending" : "");
 }
 
 // Our menu given up or cut short: everything of it back at once (tabs, input, half speed); the pause guard stays on
@@ -773,7 +813,6 @@ void tm_tick() {
         }
         tm_unique_show(tm);
         TM.snap = rec::settings_key(rs, slot_trial ? slot_trial->fighter_id : 0);
-        TM.reset = false;
         Method* om = method_of(td_of(tm), "OpenMenu(app.training.TrainingManager.MenuType, app.training.BaseParam)");
         auto r = invoke(om, tm, { arg_i32(0), nullptr });
         if (r.exception_thrown || !r.byte) return;
@@ -792,8 +831,7 @@ void tm_tick() {
         if (--TM.unblock_in < 0) {
             tm_block(false);
             TM.open = false;
-            logf("training menu: pause menu back");
-            if (TM.reset) { TM.reset = false; logf("reset after the training menu: %s", menu_reset_now()); }
+            logf("training menu: pause menu back%s", pend.pending ? " (a reset is pending)" : "");
         }
         return;
     }
@@ -963,6 +1001,7 @@ int pre_decide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long
         if (PM.ours_on.load()) pm_tm_want = true;
         return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
     }
+    if (pend_on.load()) pend_decided = true;     // (a plain store: this is not our thread)
     // Reset Battle or our clone of it (the game resets the battle either way): which row it was. GetSelectIndex() is the
     // one call left here (a getter returning the cursor's row; no field for it is known), as the reference does.
     if (ty == 10 && PM.ours_on.load() && PM.discard_at.load() >= 0)
@@ -1290,6 +1329,7 @@ struct SlotRecorder final : rec::Recorder {
                 TM.hidden_for = 0;
             }
         }
+        if (pend.pending) { try { pend_tick(); } catch (...) { pend.pending = false; pend_on = false; pend_keep(nullptr); } }
         // the training data put back (asked when the slot was left under a held pause): once the fight runs again, or on
         // the first frame out of the trial; later than that the next mode may have loaded its own: dropped
         if (tsnap.pending && !TM.want && !TM.open) {
