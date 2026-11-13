@@ -946,13 +946,18 @@ bool rows_were_reset(Trial& t) {
 void own_text_tick(Trial& t) {
     Trial& tm = t;
     if (tm.own_text < 0) { tm.own_text = 0; for (const Step& s : t.steps) if (!s.own.empty()) tm.own_text = 1; }
-    if (!tm.own_text || frame % 15 != 0 || pending_recipe_open || in_pause) return;
+    // every frame, the pause and the example included: the game rewrites its rows (a start, Reset Battle, the example)
+    // and a line of ours stays blank until this puts it back; set_message compares first, so a row already right costs
+    // one read (seen in game: every 15 frames and not under a pause, the line was blank for a while, and after a
+    // Reset Battle or an example it was not written again)
+    if (!tm.own_text || pending_recipe_open) return;
     if (window_size(t) < static_cast<int>(t.steps.size())) return;
     auto rows = recipe_rows();
     if (!rows) return;
     for (size_t i = 0; i < t.steps.size(); ++i) {
         auto it = rows->find(static_cast<int>(i));
-        if (it != rows->end() && !t.steps[i].own.empty()) set_message(it->second, t.steps[i].own);
+        if (it == rows->end() || t.steps[i].own.empty()) continue;
+        if (!set_message(it->second, t.steps[i].own)) why_once("own line text", "row " + std::to_string(i) + " not written");
     }
 }
 
