@@ -9747,6 +9747,9 @@ static void finalize_units(ScanOutputs& o) {
         printf("\n  subsets: %llu ms\n", (unsigned long long)(GetTickCount64() - t_subsets));
     }
 
+    // One outfit per variant (Manager mode): options that are a choice for a complete option of their mod (below), each
+    // with that option's unit
+    std::map<size_t, size_t> choice_of;
     // Modular mods: options whose "addonfor" names no option of the same mod
     std::set<size_t> modular;
     {
@@ -9765,6 +9768,50 @@ static void finalize_units(ScanOutputs& o) {
                 if (!names_option) tree.push_back(i);
             }
             if (tree.size() < 2) continue;
+            // One outfit per variant (Manager mode): options that hang from a menu entry which itself names a complete
+            // option of the mod (a bundle with five material sets under "Skin Finish
+            // Options", a menu entry whose AddonFor is the bundle's outfit) are a choice for that outfit, not a mod of
+            // their own. None has a body mesh, so as a modular mod they could make no outfit: all were dropped ("an add-on
+            // mod, not used") and the outfit came without any of them. Each is made with that outfit instead: one variant
+            // per option (the add-on rules below). Only when no option of the tree has a body mesh and none is named by
+            // another option: a mod that gives outfits as a modular mod is read as before.
+            if (g_rto_layout == RtoLayout::Off) {
+                std::map<size_t, size_t> base_of;
+                std::string group;
+                bool choice = true;
+                for (auto i : tree) {
+                    const auto& u = g_units[i];
+                    if (!u.costumes.empty() || u.files.empty()) { choice = false; break; }
+                    for (auto j : idx)   // an option worn with this one: the modular rules
+                        if (j != i && !g_units[j].files.empty() && eq_ci(u.name, g_units[j].addonfor)) choice = false;
+                    std::string want = trim_ws(u.addonfor);
+                    if (group.empty()) group = want;
+                    size_t base = SIZE_MAX;
+                    for (int depth = 0; depth < 8 && base == SIZE_MAX; ++depth) {   // up the menu entries
+                        const MenuNode* menu = nullptr;
+                        for (auto& m : g_menus) if (m.source == src && eq_ci(m.name, want)) { menu = &m; break; }
+                        if (!menu) break;
+                        want = trim_ws(menu->addonfor);
+                        if (want.empty()) break;
+                        for (auto j : idx)
+                            if (!g_units[j].files.empty() && !g_units[j].costumes.empty() && trim_ws(g_units[j].addonfor).empty()
+                                && eq_ci(g_units[j].name, want)) { base = j; break; }
+                    }
+                    if (base == SIZE_MAX) { choice = false; break; }
+                    base_of[i] = base;
+                }
+                if (choice && !base_of.empty()) {
+                    std::set<size_t> bases;
+                    for (auto& [i, b] : base_of) { choice_of[i] = b; bases.insert(b); }
+                    for (auto b : bases) {
+                        size_t n = 0;
+                        for (auto& [i, bb] : base_of) if (bb == b) n++;
+                        printf("\n  %s: %zu options of its menu (%s): a choice for this outfit, one variant each\n",
+                               unit_label(g_units[b]).c_str(), n, group.c_str());
+                    }
+                    continue;
+                }
+            }
             // Add-ons whose "addonfor" names nothing of their mod (no option, no menu entry) beside a single
             // complete option that hangs from nothing: that option was renamed after the add-ons were written
             // ("Buff Leon as Luke" for an option now named "Buff Leon as Luke - Buff Leon as Luke C1 [...]").
@@ -9851,6 +9898,11 @@ static void finalize_units(ScanOutputs& o) {
         const auto& a = g_units[i];
         if (!a.costumes.empty() || a.files.empty() || modular.count(i) || retouch.count(i)) continue;
         std::vector<size_t> bases;
+        if (auto c = choice_of.find(i); c != choice_of.end()) {   // a choice for a complete option of its mod (above)
+            const size_t b = c->second;
+            if (!g_units[b].costumes.empty() && !modular.count(b) && !retouch.count(b) && !complete_addon_of.count(b)) bases.push_back(b);
+            else choice_of.erase(c);
+        }
         for (int rule = 0; rule < 4 && bases.empty(); ++rule) {
             for (size_t j = 0; j < g_units.size(); ++j) {
                 const auto& b = g_units[j];
@@ -9917,9 +9969,16 @@ static void finalize_units(ScanOutputs& o) {
         printf("\n  merges: %llu ms\n", (unsigned long long)(GetTickCount64() - t0));
     }
 
-    for (auto& [j, adds] : addons_of) {
+    for (auto& [j, all_adds] : addons_of) {
         if (merged.count(j)) continue;   // made with its merged outfit
         const auto& b = g_units[j];
+        // One outfit per variant (Manager mode): the options that are a choice for this outfit (choice_of) are set apart, one
+        // variant each after the others; the add-ons that are no such choice follow the rules below as if alone
+        std::vector<size_t> adds, choices;
+        for (auto a : all_adds) {
+            auto c = choice_of.find(a);
+            (c != choice_of.end() && c->second == j ? choices : adds).push_back(a);
+        }
         bool apart = true;
         for (size_t x = 0; x < adds.size(); ++x)
             for (size_t y = x + 1; y < adds.size(); ++y)
@@ -9978,7 +10037,27 @@ static void finalize_units(ScanOutputs& o) {
         if (adds.size() > 3 && !separate && !alternatives) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());
-            continue;
+            if (choices.empty()) continue;
+            variants.clear();
+        }
+        if (!choices.empty()) {
+            // Each choice alone, then with each combination of the other add-ons made above ("Hair + Clean + Skin - Oily"),
+            // the choice last. Not with an add-on that replaces a file of the choice, and not past the
+            // limit of the modular mods.
+            const std::vector<std::vector<size_t>> others = variants;
+            for (auto a : choices) variants.push_back({a});
+            std::vector<std::vector<size_t>> with;
+            for (auto& v : others)
+                for (auto a : choices) {
+                    bool clash = false;
+                    for (auto x : v) if (units_overlap(g_units[x], g_units[a])) clash = true;
+                    if (clash) continue;
+                    with.push_back(v);
+                    with.back().push_back(a);
+                }
+            if (variants.size() + with.size() <= MODULAR_MAX_COMBINATIONS) variants.insert(variants.end(), with.begin(), with.end());
+            else printf("\n  %s: %zu combinations of its choices with its other add-ons, too many: each choice alone\n",
+                        unit_label(b).c_str(), with.size());
         }
         if (grouped) {
             o.mods_out.erase(std::remove_if(o.mods_out.begin(), o.mods_out.end(),
@@ -11915,7 +11994,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // built before that (test packages of this branch only) is built again
     // 3: nothing written at the game's own paths, a mod's scene on another body followed whatever it names: a pak built in
     // Manager mode before that is built again
-    if (g_manager_mode) new_fp += ";manager_mode3";
+    // 4: options of a menu group that names a complete outfit are variants of that outfit (finalize_units, choice_of): a pak
+    // built before that has not got them. A rule that changes what a build makes in Manager mode moves this number: with the
+    // number kept, the pak in place is "Up to date" and the new outfits never come.
+    if (g_manager_mode) new_fp += ";manager_mode4";
     if (!g_outfit_labels) new_fp += ";names=outfit";   // Manager mode's "menu_outfit_names": false: turning it on or off rebuilds
     if (g_swap_repairs) new_fp += "|swap_repairs";    // turning them on or off rebuilds
     if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)

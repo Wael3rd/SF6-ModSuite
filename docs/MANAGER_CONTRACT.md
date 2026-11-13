@@ -76,6 +76,13 @@ Everything of contract 1, and:
    - a costume put in one sub-folder with add-ons that replace no same file (each its own archive or folder) gives one
      outfit per add-on and one with all of them, up to three add-ons, each its row in `variants.json`; "only the complete
      outfit", and "handled together", belong to the runtime options;
+   - options that hang from a menu entry which itself names a complete option of the mod (a group of material sets with
+     `AddonFor=<the group>`, the group a `Dummymod` entry with `AddonFor=<the outfit>`) are a choice for that outfit: one
+     variant each ("outfit + option"), after the outfit's other variants, which keep their rows and numbers, then one
+     with each combination of the outfit's other add-ons ("outfit + add-on + option"; not with an add-on that replaces
+     a file of the option, and none past fifty variants). As a
+     modular mod of their own such options have no body mesh, so they made no outfit and were dropped ("an add-on mod,
+     not used"), under the fork too. Only then: a group whose options make outfits as a modular mod is read as before;
    - no NSFW detection by keywords;
    - a modular mod with one menu level ("01 Main files" and its options) keeps the fork's variant labels, made from its path
      below `costume_mods` (`Ryu/Sakura as Ryu C1.zip/01 Main files - Sakura as Ryu C1 - Combined hair`, not `Sakura as Ryu C1 -
