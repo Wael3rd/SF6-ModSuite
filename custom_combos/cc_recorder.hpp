@@ -168,12 +168,18 @@ void slot_fields(Trial& slot) {
     rec::slot_fields(slot, rs, cfg.rec_counter);
     if (rs.pos == 0 && last_start && last_start->chara == slot.fighter_id) slot.j["start"] = { { "p1", last_start->p1 }, { "p2", last_start->p2 } };
 }
-TrialP slot_of(int chara) {
-    if (!sets_loaded) return nullptr;
+// the fighter's recording slots, one per tab
+std::vector<TrialP> slots_of(int chara) {
+    std::vector<TrialP> out;
+    if (!sets_loaded) return out;
     auto it = all_sets.find(chara);
-    if (it == all_sets.end()) return nullptr;
-    for (const TrialP& t : it->second) if (t && t->rec) return t;
-    return nullptr;
+    if (it != all_sets.end()) for (const TrialP& t : it->second) if (t && t->rec) out.push_back(t);
+    return out;
+}
+// the settings changed: every slot of every fighter gets them (they share the slot's settings)
+void refresh_slots() {
+    if (!sets_loaded) return;
+    for (auto& [id, set] : all_sets) for (const TrialP& t : set) if (t && t->rec) slot_fields(*t);
 }
 
 // ---------------------------------------------------------------- saving a take
@@ -192,7 +198,7 @@ std::optional<Found> find_recorded(int chara, const std::string& sig) {
 void on_saved(int chara, const json& trial, const std::string& path) {
     bool del = false;
     if (TrialP t = trial_from(trial, upath(path), chara, labels_of(chara), &del)) mode::on_saved(chara, t);
-    if (TrialP slot = slot_of(chara)) {
+    for (const TrialP& slot : slots_of(chara)) {          // the three slots share the fighter's last take
         if (const json* d = at(trial, "demo")) slot->j["demo"] = *d;
         if (const json* u = at(trial, "unique")) slot->j["unique"] = *u; else slot->j.erase("unique");
         rec::slot_own_gauge(*slot, rs);          // (what the training menu set for this fighter stays)
@@ -227,6 +233,7 @@ void finish_slot_take(const Take& t, int chara) {
     o.dummy_state = rs.state; o.dummy_guard = rs_guard();
     o.teams = rec::settings_teams(rs, &o.teams_any);
     o.own_gauge = rec::own_gauge(rs, chara);
+    o.level = slot_trial && slot_trial->rec ? slot_trial->level : 0;   // the tab of the slot the take was played in
     o.dir = dir ? dir : "Unknown";
     o.when = stamp_of(std::time(nullptr));
     Closed c = close_take(t, L, chara, o);
@@ -244,8 +251,7 @@ void finish_slot_take(const Take& t, int chara) {
     }
     std::string path = replaced ? replaced->path : new_take_path(o.dir, o.when.file);
     if (replaced) {
-        c.trial["title"] = replaced->title;
-        c.trial["level"] = replaced->level;
+        c.trial["title"] = replaced->title;      // (its level does not follow: the slot's tab wins)
         c.trial["order"] = replaced->order;
     }
     LastFile lf{ path, chara, std::nullopt };
@@ -278,7 +284,7 @@ void discard_last() {
         fs::remove(upath(lf->path), ec);
         mode::on_discard(lf->chara, lf->path);
     }
-    if (TrialP slot = slot_of(lf->chara)) slot->j.erase("demo");
+    for (const TrialP& slot : slots_of(lf->chara)) slot->j.erase("demo");
     last_steps.clear();
     result = Result::Deleted;
     shown.cleared = false;
@@ -763,7 +769,8 @@ void tm_sync(Obj* tm) {
         if (static_cast<int64_t>(*loc) != TM.start_loc.value_or(-1) && p >= 0) rs.pos = p;
     }
     rs_save();
-    if (slot_trial && slot_trial->rec) { slot_fields(*slot_trial); mode::apply_settings(*slot_trial, true); }
+    refresh_slots();
+    if (slot_trial && slot_trial->rec) mode::apply_settings(*slot_trial, true);
     // a setting changed: the battle will be reset when the player leaves the pause menu (the start, life and a started
     // timer only show at the start of a battle; not while the pause menu is still up); config.json "rec_menu_reset":
     // false leaves it to the player

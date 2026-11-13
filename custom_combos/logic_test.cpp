@@ -375,6 +375,61 @@ int main() {
         check(!p.pending, "ended when the scene has no pause menu");
     }
 
+    // one recording slot per tab; a take goes to its slot's tab
+    {
+        std::vector<TrialP> set;
+        for (int lv = 2; lv >= 0; --lv) set.insert(set.begin(), rec::make_slot(1, rec::Settings{}, "", lv));
+        auto f1 = std::make_shared<Trial>(); f1->title = "a"; f1->level = 1; f1->steps.resize(1); f1->path = "x/a.json";
+        auto f2 = std::make_shared<Trial>(); f2->title = "b"; f2->level = 1; f2->steps.resize(1); f2->path = "x/b.json"; f2->order = -5;
+        set.push_back(f1);
+        set.push_back(f2);
+        for (size_t i = 0; i < set.size(); ++i) set[i]->file_order = static_cast<int>(i) + 1;
+        auto tabs = level_sets(set, false, nullptr);
+        check(tabs[0].rows.size() == 1 && tabs[1].rows.size() == 3 && tabs[2].rows.size() == 1 && tabs[0].rows[0]->rec &&
+              tabs[1].rows[0]->rec && tabs[1].rows[0]->level == 1 && tabs[2].rows[0]->rec && tabs[1].rows[1] == f2,
+              "a recording slot first in every tab");
+        // Move: the file's level, the tabs sorted again
+        f2->level = 2;
+        tabs = level_sets(set, false, nullptr);
+        check(tabs[1].rows.size() == 2 && tabs[2].rows.size() == 2 && tabs[2].rows[0]->rec && tabs[2].rows[1] == f2, "moved: in the other tab, after its slot");
+        TrialOpts o1;
+        o1.dir = "Ryu";
+        o1.level = tabs[1].rows[0]->level;
+        Take tk;
+        tk.inputs.assign(10, 16);
+        Move a; a.act = 640; a.note = "2+MK"; a.hit = true; a.hits = 1; a.ids = { 640 }; a.f = 1;
+        Move b; b.act = 900; b.note = "236+LP"; b.hit = true; b.hits = 1; b.ids = { 900 }; b.f = 5;
+        tk.moves = { a, b };
+        tk.hits = 2;
+        tk.last_hit = 6;
+        check(close_take(tk, R, 1, o1).trial["level"] == 1, "a take gets its slot's tab");
+    }
+
+    // the sub-menu of a trial: its buttons per tab, the names, the trash
+    {
+        auto titles = [](int lv) { std::string s; for (const auto& b : manage::buttons(lv)) s += b.title + "|"; return s; };
+        eq(titles(0), "Rename|Move to Intermediate|Move to Advanced|Delete|Share Trial|Download Trial|", "buttons, Beginner tab");
+        eq(titles(1), "Rename|Move to Beginner|Move to Advanced|Delete|Share Trial|Download Trial|", "buttons, Intermediate tab");
+        eq(titles(2), "Rename|Move to Beginner|Move to Intermediate|Delete|Share Trial|Download Trial|", "buttons, Advanced tab");
+        const auto b1 = manage::buttons(1);
+        check(b1.size() == 6 && b1[1].act == manage::Act::Move && b1[1].level == 0 && b1[2].level == 2 && b1[3].act == manage::Act::Delete &&
+              b1[4].act == manage::Act::Share && b1[5].act == manage::Act::Download, "buttons: actions and levels");
+        check(manage::buttons(7).size() == 6 && manage::buttons(7)[1].level == 1, "buttons: a level out of range is Beginner");
+        auto own = std::make_shared<Trial>(); own->path = "x/a.json";
+        auto rslot = rec::make_slot(1, rec::Settings{}, "", 1);
+        auto bare = std::make_shared<Trial>();
+        check(manage::can_manage(*own) && !manage::can_manage(*rslot) && !manage::can_manage(*bare), "the sub-menu: our files only");
+        eq(manage::clean_name("  My combo  ", 40), "My combo", "name trimmed");
+        eq(manage::clean_name("   ", 40), "", "an empty name changes nothing");
+        eq(manage::clean_name(std::string("Ab\xC3\xA9", 4), 3), "Ab", "name cut on a character boundary");
+        const fs::path tp = manage::trash_path("data", "Ryu", "data/Ryu/rec_20261113_080000.json", "20261113_091500");
+        eq(u8(tp), u8(fs::path("data") / "_trash" / "Ryu" / "rec_20261113_080000_20261113_091500.json"), "trash path");
+        check(manage::deleted_marker() == json::parse(R"({ "deleted": true })"), "the marker");
+        bool mdel = false;
+        check(!trial_from(manage::deleted_marker(), "a.json", 1, L, &mdel) && mdel, "the marker is a deleted take for the loader");
+        check(!manage::share_trial(*own).empty() && !manage::download_trial(1).empty(), "share / download: inert, they say so");
+    }
+
     // the Replay Menu's rows and when they are written again
     {
         const auto idle = replay_rows(false, 0);

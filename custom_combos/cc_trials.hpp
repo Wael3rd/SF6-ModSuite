@@ -322,4 +322,70 @@ inline std::string cmd_key(const std::string& cmd_text) {
     return out;
 }
 
+// ---------------------------------------------------------------- the sub-menu of a trial (no game dependency)
+// A trial of the list that is a file of ours (not a recording slot) has a sub-menu: Rename, Move to <the two other
+// tabs>, Delete, Share Trial, Download Trial, all buttons, in that order (the game's option window draws a page's value
+// rows before its buttons, so a choice row would come first).
+namespace manage {
+
+enum class Act { Rename, Move, Delete, Share, Download };
+struct Button { Act act; int level; std::string title, guide; };
+
+inline const char* level_name(int l) { return l == 1 ? "Intermediate" : l == 2 ? "Advanced" : "Beginner"; }
+
+inline std::vector<Button> buttons(int level) {
+    const int lv = level >= 0 && level <= 2 ? level : 0;
+    std::vector<Button> b = { { Act::Rename, -1, "Rename", "Give this trial another name." } };
+    for (int l = 0; l <= 2; ++l)
+        if (l != lv) b.push_back({ Act::Move, l, std::string("Move to ") + level_name(l),
+                                   std::string("Show this trial in the ") + level_name(l) + " tab of the list." });
+    b.push_back({ Act::Delete, -1, "Delete", "Remove this trial from the list (a copy is kept in the _trash folder)." });
+    b.push_back({ Act::Share, -1, "Share Trial", "Coming soon: share this trial with other players." });
+    b.push_back({ Act::Download, -1, "Download Trial", "Coming soon: download the trials other players shared." });
+    return b;
+}
+
+// the rows the sub-menu opens on: our files only
+inline bool can_manage(const Trial& t) { return !t.rec && !t.path.empty(); }
+
+// a new name: trimmed, at most `max` bytes of UTF-8 (cut on a character boundary); empty = no change
+inline std::string clean_name(const std::string& in, size_t max) {
+    size_t a = 0, b = in.size();
+    while (a < b && text::sp(in[a])) ++a;
+    while (b > a && text::sp(in[b - 1])) --b;
+    std::string s = in.substr(a, b - a);
+    if (s.size() > max) {
+        size_t cut = max;
+        while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) --cut;
+        s.resize(cut);
+        while (!s.empty() && text::sp(s.back())) s.pop_back();
+    }
+    return s;
+}
+
+// Delete keeps the file's content: <data>/_trash/<Fighter>/<file name>_<stamp>.json, then the file becomes the
+// { "deleted": true } marker (which the next load removes: its content is in the trash already, checked before the
+// marker is written). Nothing of the player's is erased.
+inline fs::path trash_path(const fs::path& data_dir, const std::string& fighter_dir, const fs::path& file, const std::string& stamp) {
+    return data_dir / "_trash" / fs::path(fighter_dir) / fs::path(file.stem().wstring() + L"_" + fs::path(stamp).wstring() + L".json");
+}
+inline json deleted_marker() { return json{ { "deleted", true } }; }
+
+// The two buttons the players' trial database will answer (written on the server, not deployed: until then they stay
+// inert and say so). Contract of the routes, through the Recording Manager's community client (its Worker, API key and
+// Steam ticket):
+//   GET  /api/trials?fighter=<id>&control=&level=&sort=recent|popular|downloads&page=&per_page=
+//        -> { items: [{ id, source, fighter_id, control, level, title, author, step_count, damage, downloads, score,
+//             my_vote? }], page, per_page, total, has_more }
+//   GET  /api/trials/download/<id>  -> { ..., file }: a sf6.custom-trial.v1 file, written into <data>/<Fighter>/ as it
+//        is (it keeps its `source` id, so a like can be sent for it later)
+//   POST /api/trials/share  { file, cfn? } (Bearer token; 409 no_changes when already shared): the trial's file as it is
+//        on disk
+//   POST /api/trials/vote/<id>  { value: 1 | -1 } (Bearer token, a toggle)
+// What each answers for now: the text of the game's box.
+inline std::string share_trial(const Trial& t) { (void)t; return "Sharing trials is coming soon."; }
+inline std::string download_trial(int fighter) { (void)fighter; return "Downloading other players' trials is coming soon."; }
+
+}  // namespace manage
+
 }  // namespace cc

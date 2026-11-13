@@ -148,7 +148,10 @@ void read_all_sets() {
             const json j = read_json(p);
             bool deleted = false;
             TrialP t = trial_from(j, p, f.id, L, &deleted);
-            if (deleted) {        // a take the player deleted in game (the Lua could only empty the file)
+            // A file reduced to { "deleted": true }: a take or a trial deleted in game. Removing it loses nothing: the
+            // marker holds no content, and the list's Delete wrote the content into _trash/<Fighter>/ and read it back
+            // before it wrote the marker (cc_manage.hpp do_delete); _trash is never read as a list.
+            if (deleted) {
                 std::error_code e3;
                 if (fs::remove(p, e3)) ++removed;
                 continue;
@@ -158,9 +161,10 @@ void read_all_sets() {
         cmd_ids[f.id] = command_ids(L);
         if (!set.empty()) logf("custom set: %zu trial(s) for %s", set.size(), f.dir);
     }
-    if (cfg.rec) {           // the recording slot: the first Beginner row of every fighter, files or not
+    if (cfg.rec) {           // the recording slot: the first row of every tab of every fighter, files or not
         const rec::Settings rs = rec::load_settings(kData);
-        for (const auto& f : kFighters) all_sets[f.id].insert(all_sets[f.id].begin(), rec::make_slot(f.id, rs, cfg.rec_counter));
+        for (const auto& f : kFighters)
+            for (int lv = 2; lv >= 0; --lv) all_sets[f.id].insert(all_sets[f.id].begin(), rec::make_slot(f.id, rs, cfg.rec_counter, lv));
     }
     for (auto& [id, set] : all_sets)
         for (size_t i = 0; i < set.size(); ++i) set[i]->file_order = static_cast<int>(i) + 1;
@@ -1538,19 +1542,25 @@ void ensure_menu_entry() {
 // ---------------------------------------------------------------- [CUSTOM] on the guide line
 // Only while the trial list is on screen or a trial of ours is fought; taken off the guide line otherwise
 bool guide_marked = false;
+namespace manage_ui { bool available(); bool busy(); void tick(); void leave(); }   // (cc_manage.hpp)
+
+// On the trial list, when the sub-menu of a trial can open, the mark also names its key
 void mark_guide(bool want_mode, bool in_fight) {
     const bool has_list = !agents(kListAgent).empty();
     bool want = want_mode && (has_list || in_fight);
     if (g_rec->training_menu_open()) want = false;   // the training menu in the slot: its guides are its own
-    const size_t ml = std::strlen(kMark);
+    const std::string mark = kMark, hint = std::string(kMark) + "   T: Rename / Move / Delete";
+    auto ends = [](const std::string& a, const std::string& b) { return a.size() >= b.size() && a.compare(a.size() - b.size(), b.size(), b) == 0; };
     for (Obj* a : agents("InputGuide")) {
         Obj* ctrl = call_obj(a, "get_ControlMain");
         Obj* t = ctrl ? find_named(ctrl, "e_text", 5) : nullptr;
         if (!t) continue;
         const std::string cur = message(t);
-        const bool marked = cur.size() >= ml && cur.compare(cur.size() - ml, ml, kMark) == 0;
-        if (want && !cur.empty() && !marked && cur.find(kMark) == std::string::npos) set_message(t, cur + kMark);
-        else if (!want && marked) set_message(t, cur.substr(0, cur.size() - ml));
+        std::string base = cur;
+        if (ends(base, hint)) base.resize(base.size() - hint.size());
+        else if (ends(base, mark)) base.resize(base.size() - mark.size());
+        const std::string next = base + (want ? (has_list && manage_ui::available() ? hint : mark) : std::string{});
+        if (next != cur && !base.empty() && base.find(kMark) == std::string::npos) set_message(t, next);
     }
     guide_marked = want;
 }
@@ -1672,6 +1682,11 @@ std::atomic<bool> want_refresh{false};
     set_cache.erase(chara);
     want_refresh = true;
 }
+// a trial was renamed or moved from the list's sub-menu: the tabs are sorted again and the lists rebuilt
+[[maybe_unused]] void manage_changed(int chara) {
+    set_cache.erase(chara);
+    want_refresh = true;
+}
 [[maybe_unused]] void on_discard(int chara, const std::string& path) {
     auto& set = all_sets[chara];
     set.erase(std::remove_if(set.begin(), set.end(), [&](const TrialP& x) { return x->path == path; }), set.end());
@@ -1787,6 +1802,9 @@ void tick() {
         try { mark_guide(custom, f == kFlowComboTrial); } catch (...) {}
     if (custom && in_menu && frame >= settle_until)
         try { preview_tick(); } catch (...) {}
+    // the sub-menu of a trial (the list on screen, or a window / box of it still up)
+    if ((custom && in_menu) || manage_ui::busy()) try { manage_ui::tick(); } catch (...) {}
+    if (!custom && manage_ui::busy()) try { manage_ui::leave(); } catch (...) {}
     if (f != kFlowComboTrial) { leave_trial(); return; }
     // an official trial with nothing of ours to put back: not looked at
     if (!custom && !applied.load() && !rec_live && team_orig.empty() && pos_orig.empty() && params_orig.empty() &&
@@ -2029,6 +2047,7 @@ bool hook(const char* type_name, const char* method, int nparams, REFPreHookFn p
 
 // ---------------------------------------------------------------- part 2: the recorder (uses everything above)
 #include "cc_recorder.hpp"
+#include "cc_manage.hpp"
 
 // ---------------------------------------------------------------- the stage settings, when the game reads them (rule 13)
 // The game reads a trial's stage settings in ComboTrialManager.StageSetup(StageInfo): twice at every start and every
@@ -2106,6 +2125,7 @@ void install_hooks() {
     } else logf("SaveStage not hooked: progression guard OFF");
     hook("app.training.ComboTrialManager", "StageSetup(CharacterAsset.Mission.StageInfo)", -1, pre_stage_setup, post_pass);
     recorder::install_hooks();
+    manage_ui::install_hooks();
 }
 
 }  // namespace
@@ -2149,6 +2169,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
     g_rec = recorder::make();
     install_hooks();
     param->functions->on_pre_application_entry("LateUpdateBehavior", on_late_update);
+    if (param->functions->on_message) param->functions->on_message(manage_ui::on_message);   // T: the trial sub-menu
     logf("on (version %s)", kVersion);
     return true;
 }

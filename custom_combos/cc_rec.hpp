@@ -208,12 +208,14 @@ struct PendingReset {
     }
 };
 
-inline TrialP make_slot(int chara, const Settings& rs, const std::string& rec_counter) {
+// One per tab (the first row of every tab): a take goes to the tab of the slot it was played in. The three share the
+// slot's settings and the fighter's last take (preview, Watch Example).
+inline TrialP make_slot(int chara, const Settings& rs, const std::string& rec_counter, int level = 0) {
     auto t = std::make_shared<Trial>();
     t->rec = true;
     t->title = kSlotTitle;
     t->fighter_id = chara;
-    t->level = 0;
+    t->level = level >= 0 && level <= 2 ? level : 0;
     t->order = -1e15;
     for (int i = 1; i <= kRows; ++i) {
         Step st;
