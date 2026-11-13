@@ -65,7 +65,7 @@ The game reads the key and installs nothing from it; an updater older than 1.34.
 
 1. At start (a worker thread): a swap that stopped in the middle is undone (`swap_journal.json`), the manifest is fetched, the installed
    packages (their main DLL in the game folder) are compared with it. The Slots Loader is left out when ZZtaii's Slotsloader Manager
-   installed it (`common/manager_mode.hpp`: the Manager owns those files, and a plugin of another size would end its Manager mode).
+   installed it (`common/manager_mode.hpp`: the Manager owns those files, and a plugin of another size or other bytes would end its Manager mode).
 2. Something newer, at the main menu (a screen held 5 s, no battle, replay or training loaded, no message box of the game's up): the box
    lists the release and each package `old -> new`, with three buttons (the game's Yes / No / Cancel box, the third button's word
    replaced by ours). **Yes** installs; **No** (Back too) does nothing, the next launch asks again; **Ignore** never offers that
@@ -105,6 +105,18 @@ a package does not ship are never touched, and files a new version no longer shi
 
 `reframework/data/SF6_Update_data/` of the game folder: `state.json` (`check_for_updates`, `ignored_suite_version`,
 `pending_cleanup`; other keys are kept), `update.log`, and only during an install `staging/` and `swap_journal.json`.
+**The Slotsloader Manager's installs**: when ZZtaii's Slotsloader Manager installed the Slots Loader (`common/manager_mode.hpp`), the
+game fetches nothing: its players update in the Manager. The Manager installed it when its `manager_installs.json` lists the
+plugin at the size it has on disk and, when the entry gives a `sha256` (the Manager writes one), with the plugin's SHA-256: a loader
+installed again by hand or by Fluffy Mod Manager over the Manager's is the player's again, unless it is byte for byte the same file.
+`update.log` says in one line what decided whenever the list is there (`manager_installs.json: the plugin's size and sha256 matched:
+installed by the Slotsloader Manager`, or `...: normal mode`). `"check_in_manager_mode": true` in `state.json` turns the check on for
+them; the module never writes that key. With the check on in that mode, a package whose main DLL the Manager's
+`manager_installs.json` lists at the size (and `sha256`, when given) it has on disk (the Native Core installed by the Manager, say)
+is left out like the Slots Loader: replacing it would leave the Manager's record of the file wrong. The Mod Sorter, outside the game, still looks
+at the latest release, with the same rule for the Manager's packages. Outside Manager mode nothing of this applies: the check
+and the offers are what they were.
+
 **Off switch**: `"check_for_updates": false` in `state.json` (create the file with `{ "check_for_updates": false }`): nothing is
 fetched; a half-done swap is still undone and old copies still deleted.
 

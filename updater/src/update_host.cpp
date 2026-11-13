@@ -106,7 +106,12 @@ void check_worker() {
     recover(p, log);
     g_recovered.store(true);
     const State s = load_state(p);
-    if (!s.check) { log("off (check_for_updates is false in state.json): nothing fetched"); set_state(St::Done); return; }
+    // the off switch, and the Slotsloader Manager's installs (check_allowed): nothing leaves the game
+    std::string mode_why;
+    const bool managed = manager_mode(p.root, &mode_why);
+    if (!mode_why.empty())
+        log(std::string("manager_installs.json: ") + mode_why + (managed ? ": installed by the Slotsloader Manager" : ": normal mode (not the Slotsloader Manager's install)"));
+    if (std::string off; !check_allowed(s, managed, &off)) { log(off); set_state(St::Done); return; }
     std::string text, why;
     if (!fetch_manifest(&text, &why)) { log("no manifest from the latest release: " + why); set_state(St::Done); return; }
     const std::wstring root = p.root;

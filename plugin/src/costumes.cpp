@@ -24,6 +24,7 @@
 #include "ownership.hpp"
 #include "true_owner.hpp"
 #include "manager_marker.hpp"
+#include "../../common/file_sha256.hpp"
 #include "../../common/manager_mode.hpp"
 #include "../../common/outfit_display.hpp"
 #include "carrier.hpp"
@@ -82,11 +83,16 @@ bool is_mod_slot(int fid, int cos) { return is_slot(fid, cos) && !is_random(fid,
 ownership::Book g_book;
 
 // Manager mode (common/manager_mode.hpp): the Slotsloader Manager installed this loader. The same answer as the
-// loader's, from the same list (manager_installs.json) and this plugin's size on disk.
-bool installed_by_manager() {
+// loader's, from the same list (manager_installs.json) and this plugin's size and SHA-256 on disk. why: what decided
+// (empty when there is no list).
+bool g_managed = false;   // read once by init()
+bool installed_by_manager(std::string& why) {
+    why.clear();
     const std::string dir = std::string(manager_mode::kRecordDir) + "\\";
+    const std::string text = read_file((dir + manager_mode::kRecordFile).c_str());
+    if (text.empty()) return false;
     Json j;
-    if (!json_parse(read_file((dir + manager_mode::kRecordFile).c_str()), j) || j.kind != Json::Object) return false;
+    if (!json_parse(text, j) || j.kind != Json::Object) { why = "the list is not a JSON object"; return false; }
     std::vector<manager_mode::ListedFile> files;
     if (const Json* mods = j.get("mods"); mods && mods->kind == Json::Array)
         for (auto& m : mods->arr) {
@@ -96,14 +102,20 @@ bool installed_by_manager() {
                 for (auto& f : fs->arr) {
                     const Json* p = f.get("path");
                     const Json* sz = f.get("size");
-                    files.push_back({ on, p ? p->as_str() : std::string(), sz && sz->kind == Json::Number && sz->num >= 0 ? (long long)sz->num : -1 });
+                    const Json* sh = f.get("sha256");
+                    files.push_back({ on, p ? p->as_str() : std::string(), sz && sz->kind == Json::Number && sz->num >= 0 ? (long long)sz->num : -1,
+                                      sh && sh->kind == Json::String ? manager_mode::lower(sh->as_str()) : std::string() });
                 }
         }
     const Json* fmt = j.get("format");
+    const wchar_t* plugin = L"reframework\\plugins\\SF6_CostumeSlotsNative.dll";
     WIN32_FILE_ATTRIBUTE_DATA fa;
-    const long long size = GetFileAttributesExA("reframework\\plugins\\SF6_CostumeSlotsNative.dll", GetFileExInfoStandard, &fa)
+    const long long size = GetFileAttributesExW(plugin, GetFileExInfoStandard, &fa)
         ? (long long)((uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow) : -1;
-    return manager_mode::installed_by_manager(fmt ? fmt->as_str() : std::string(), files, size);
+    const manager_mode::Decision d = manager_mode::decide(fmt ? fmt->as_str() : std::string(), files, size,
+                                                          [plugin] { return file_sha256::hex(plugin); });
+    why = d.why;
+    return d.manager;
 }
 
 // NSFW outfits (the registry's "nsfw" slots): shown only while settings.json's "display_nsfw" is true (off by
@@ -2541,13 +2553,19 @@ void init() {
     load_state();
     for (int fid : g_fighters) g_f[fid];
     // Manager mode: the ownership rules of the Manager's Slotsloader, read once (they stay until the game is closed)
-    if (installed_by_manager()) {
+    std::string why;
+    g_managed = installed_by_manager(why);
+    if (g_managed) {
         const bool check = !marker::opt_out_present(L"reframework\\data\\SF6_CostumeSlots_data");
         g_book.set_manager_rules(check);
-        logf("costumes: Manager mode (installed by the Slotsloader Manager): Outfit 1 and DriveTech slots always shown%s",
-             check ? "" : ", ownership filter inactive");
+        logf("costumes: Manager mode (installed by the Slotsloader Manager; manager_installs.json: %s): Outfit 1 and DriveTech "
+             "slots always shown%s", why.c_str(), check ? "" : ", ownership filter inactive");
+    } else if (!why.empty()) {
+        logf("costumes: manager_installs.json: %s: normal mode (not the Slotsloader Manager's install)", why.c_str());
     }
 }
+
+bool manager_mode() { return g_managed; }
 
 void install_hooks() {
     if (g_slots.empty()) { logf("costumes: no slot, no hook"); return; }

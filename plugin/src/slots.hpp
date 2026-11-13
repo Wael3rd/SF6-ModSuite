@@ -148,9 +148,26 @@ bool write_file(const char* path, const std::string& data);   // through a tempo
 
 // ---- JSON: json.hpp ----
 
+// ---- the plugin's additions to the game's menus, each of which the Slotsloader Manager's player can leave out ----
+// (main.cpp: Manager mode only, a key of settings.json each; installed any other way every one is shown)
+namespace menus {
+    enum Item {
+        OutfitNames,        // the mod's name in the Costume rows (the loader's text), long names sliding
+        FighterName,        // the outfit's name on Fighter Settings
+        NsfwRow,            // Options > Interface: Display NSFW Outfits (Manager mode: never added, no key)
+        OnlineOutfitRow,    // Options > Interface: Outfit Others See
+        TitleScreen,        // Options > Interface: Title Screen Selection, Skip intro screens
+        InterfacePacks,     // Options > Interface: a section per interface mod
+        ReplaySettings,     // the Replays menu's Settings tab
+        kItems
+    };
+    bool shown(Item item);
+}
+
 // ---- modules: install their hooks once, then work on events ----
 namespace costumes {
     void init();                      // registry and state files, before the first frame
+    bool manager_mode();              // the Slotsloader Manager installed this loader (common/manager_mode.hpp), as init() read it
     void install_hooks();             // first frame (the type database is ready)
     bool busy();                      // work left without a new event (boot, a mount in progress)
     void tick(uint32_t events);

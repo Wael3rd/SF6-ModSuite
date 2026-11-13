@@ -26,7 +26,7 @@ cl /nologo /MP /std:c++20 /EHa /O2 /LD /utf-8 /W4 /DWIN32_LEAN_AND_MEAN /DNOMINM
    /I src /I %C% ^
    %SRC% %SHARED% ^
    /Fe:"%OUT%\report_mod.dll" /Fo:"%OUT%\\" ^
-   /link /nologo user32.lib windowscodecs.lib
+   /link /nologo user32.lib windowscodecs.lib bcrypt.lib
 if errorlevel 1 exit /b 1
 echo OK: %OUT%\report_mod.dll
 exit /b 0

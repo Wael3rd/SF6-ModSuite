@@ -118,16 +118,49 @@ int main() {
     {
         using manager_mode::installed_by_manager;
         const std::string F = "sf6-manager-installs-1";
+        int hashed = 0;
+        const std::string H = "1c2f8a0d4e6b3c5a7f9e1d2c4b6a8f0e1d3c5b7a9f8e6d4c2b0a1f3e5d7c9b8a";
+        auto plugin_hash = [&] { ++hashed; return H; };
+        auto other_hash = [&] { ++hashed; return std::string(64, 'e'); };
         const std::vector<manager_mode::ListedFile> list = {
-            {true, "natives/stm/product/model/esf/esf001/001/x.mesh", 10},
-            {true, "reframework\\Plugins\\SF6_CostumeSlotsNative.dll", 4096}};
-        check(installed_by_manager(F, list, 4096), "Manager mode: plugin listed, same size");
-        check(!installed_by_manager(F, list, 4097), "not Manager mode: plugin replaced since (other size)");
-        check(!installed_by_manager(F, list, -1), "not Manager mode: no plugin on disk");
-        check(!installed_by_manager("other", list, 4096), "not Manager mode: unknown list format");
-        check(!installed_by_manager(F, {{false, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096}}, 4096),
+            {true, "natives/stm/product/model/esf/esf001/001/x.mesh", 10, ""},
+            {true, "reframework\\Plugins\\SF6_CostumeSlotsNative.dll", 4096, ""}};
+        check(installed_by_manager(F, list, 4096, plugin_hash), "Manager mode: plugin listed, same size");
+        check(hashed == 0, "no sha256 in the list: the plugin is not hashed (size rule as before)");
+        check(installed_by_manager(F, list, 4096, other_hash), "no sha256 in the list: any bytes at that size match");
+        check(!installed_by_manager(F, list, 4097, plugin_hash), "not Manager mode: plugin replaced since (other size)");
+        check(!installed_by_manager(F, list, -1, plugin_hash), "not Manager mode: no plugin on disk");
+        check(!installed_by_manager("other", list, 4096, plugin_hash), "not Manager mode: unknown list format");
+        check(!installed_by_manager(F, {{false, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, ""}}, 4096, plugin_hash),
               "not Manager mode: the loader's entry disabled in the Manager");
-        check(!installed_by_manager(F, {{true, "natives/x", 4096}}, 4096), "not Manager mode: plugin not listed");
+        check(!installed_by_manager(F, {{true, "natives/x", 4096, ""}}, 4096, plugin_hash), "not Manager mode: plugin not listed");
+
+        // the list gives the plugin's sha256 (the Manager writes it for every file)
+        std::string upper = H;
+        for (auto& c : upper) c = (char)std::toupper((unsigned char)c);
+        const std::vector<manager_mode::ListedFile> hashed_list = {
+            {true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, H}};
+        hashed = 0;
+        check(installed_by_manager(F, hashed_list, 4096, plugin_hash), "Manager mode: size and sha256 match");
+        check(hashed == 1, "the plugin hashed once, only for the entry at its size");
+        check(!installed_by_manager(F, hashed_list, 4096, other_hash),
+              "not Manager mode: same size, other sha256 (installed again by hand or by Fluffy)");
+        check(!installed_by_manager(F, hashed_list, 4096, [] { return std::string(); }),
+              "not Manager mode: the plugin could not be hashed");
+        hashed = 0;
+        check(!installed_by_manager(F, hashed_list, 4097, plugin_hash) && hashed == 0,
+              "other size: not Manager mode, and nothing hashed");
+        check(installed_by_manager(F, {{true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, upper}}, 4096, plugin_hash),
+              "a sha256 in capitals matches");
+        check(installed_by_manager(F, {{true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, std::string(64, 'e')},
+                                       {true, "reframework/plugins/SF6_CostumeSlotsNative.dll", 4096, H}}, 4096, plugin_hash),
+              "two mods list the plugin: the one with its sha256 decides");
+        const manager_mode::Decision d = manager_mode::decide(F, hashed_list, 4096, other_hash);
+        check(!d.manager && d.why.find("sha256 differs") != std::string::npos, "the log line says the sha256 differs");
+        check(manager_mode::decide(F, hashed_list, 4096, plugin_hash).why.find("size and sha256 matched") != std::string::npos,
+              "the log line says size and sha256 matched");
+        check(manager_mode::decide(F, list, 4096, plugin_hash).why.find("no sha256") != std::string::npos,
+              "the log line says the list gives no sha256");
     }
 
     check(outfit_label(0) == "Outfit 1", "label of costume 0");

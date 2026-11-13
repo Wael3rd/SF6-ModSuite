@@ -59,12 +59,23 @@ Everything of contract 1, and:
 6. **Manager mode** (`common/manager_mode.hpp`): when the Slotsloader Manager installed this loader, the loader and the
    plugin behave as the Manager's own Slotsloader fork (1.10.9) does. The loader knows it from
    `reframework/data/SF6_Costumes_Data/manager_installs.json` (written by the Manager since 1.0.9): an enabled mod of
-   that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk. Installed any
-   other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the plugin is not listed at its size and
-   nothing of this applies. In Manager mode:
-   - outfits come from `reframework/costume_mods` (and `reframework/costume_mods_nsfw`, unlike the fork: empty, it
-     changes nothing; its outfits stay hidden unless "Display NSFW Outfits" is on): no Fluffy Mod Manager discovery, no
-     loose `natives` files and no other patch paks as outfits (they are still read as the game's files);
+   that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk and, when the
+   entry gives a `sha256` (the Manager writes one for every file), with the SHA-256 the plugin has on disk. A list
+   without `sha256` (an older Manager) is read by the size alone, as before. The plugin is hashed only when an entry at
+   its size gives one. Installed any other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the
+   plugin is not listed at its size and SHA-256, and nothing of this applies. One case cannot be told apart: a plugin
+   put back by hand that is byte for byte the one the Manager installed (the same release) matches its entry, and the
+   game stays in Manager mode until the Manager's list or the plugin changes. Whenever the list is there, the loader's
+   log says in one line what decided: `Manager mode: installed by the Slotsloader Manager (manager_installs.json: the
+   plugin's size and sha256 matched)` (or `the plugin's size matched, the list gives no sha256`), else
+   `manager_installs.json: the plugin is listed at its size, but its sha256 differs: normal mode (not the Slotsloader
+   Manager's install)` (or `is listed at another size`, `is not listed`, ...). Without the list nothing is logged (the
+   log is as it always was). The plugin's log (`costumes:`), the updater's and Report a bug's say the same. In Manager
+   mode:
+   - outfits come from `reframework/costume_mods` only: no Fluffy Mod Manager discovery, no loose `natives` files and no
+     other patch paks as outfits (they are still read as the game's files). `reframework/costume_mods_nsfw` is neither
+     read nor made, as under the fork, which had no such folder; mods someone put there give no outfit, and the log says
+     how many. So no outfit is NSFW in Manager mode, and the plugin never adds the "Display NSFW Outfits" row;
    - one outfit per variant of a modular mod (`variants.json`'s `"runtime_options"` is `"off"`), each switched by
      `variant_choices.json`; no in-game costume options (a `costume_options.json` a build in normal mode left is removed:
      it names the same pak, so the plugin would use it);
@@ -75,7 +86,19 @@ Everything of contract 1, and:
    - a costume put in one sub-folder with add-ons that replace no same file (each its own archive or folder) gives one
      outfit per add-on and one with all of them, up to three add-ons, each its row in `variants.json`; "only the complete
      outfit", and "handled together", belong to the runtime options;
+   - options that hang from a menu entry which itself names a complete option of the mod (a group of material sets with
+     `AddonFor=<the group>`, the group a `Dummymod` entry with `AddonFor=<the outfit>`) are a choice for that outfit: one
+     variant each ("outfit + option"), after the outfit's other variants, which keep their rows and numbers, then one
+     with each combination of the outfit's other add-ons ("outfit + add-on + option"; not with an add-on that replaces
+     a file of the option, and none past fifty variants). As a
+     modular mod of their own such options have no body mesh, so they made no outfit and were dropped ("an add-on mod,
+     not used"), under the fork too. Only then: a group whose options make outfits as a modular mod is read as before;
    - no NSFW detection by keywords;
+   - a modular mod with one menu level ("01 Main files" and its options) keeps the fork's variant labels, made from its path
+     below `costume_mods` (`Ryu/Sakura as Ryu C1.zip/01 Main files - Sakura as Ryu C1 - Combined hair`, not `Sakura as Ryu C1 -
+     Combined hair`): `variant_choices.json` names a variant by its label, and one turned off under the fork stays off;
+   - the game checks for no update of the suite (`updater/README.md`, The Slotsloader Manager's installs): nothing is fetched
+     from inside the game unless `state.json` says `"check_in_manager_mode": true`;
    - character-swap repairs (ported from fork 1.10.4, MIT, `costumes/loader/swap_repairs.cpp`) while an empty
      `swap_repairs.txt` is in `SF6_Costumes_Data`. The Manager has no switch for it since 1.0.15: it writes the file at
      its start, at every refresh and when it installs the loader, as soon as that folder exists. Its coming or going
@@ -84,12 +107,48 @@ Everything of contract 1, and:
      Manager's opt-out marker is in `reframework/data/SF6_CostumeSlots_data` (`plugin/src/manager_marker.hpp`).
    A change of mode rebuilds the costume pak once.
 
+   - the costume pak is built again after a game update that the base pak's size and date do not show (ported from fork
+     1.9.5, MIT): the fingerprint also holds a digest of the game's executable (size, date, first 4 KiB), of
+     `re_chunk_000.pak`'s index (its path-hash fields left out: a mod manager turns rows off and on there), of
+     `vanilla_costume_index.tsv`, `static_meta.json` and the static files it names, and each DLC pak's date beside its size;
+   - each of the plugin's additions to the game's menus can be left out, by a key of its own set to `false` in
+     `reframework/data/SF6_CostumeSlots_data/settings.json` (read at start; a key that is not there means shown):
+     - `menu_outfit_names`: the mods' names in the costume lists, and their scrolling. The loader reads the same key and keeps
+       each slot's "Outfit V" name in place of its mod's label (a change rebuilds the costume pak once);
+     - `menu_fighter_settings_name`: the outfit's name on Fighter Settings;
+     - `menu_online_outfit_row`: Options > Interface > Other Settings, "Outfit Others See";
+     - `menu_title_screen`: the "Title Screen Selection" section and the "Skip intro screens" row;
+     - `menu_interface_packs`: the "Interface Packs" section and its editor;
+     - `menu_replay_settings`: the Replays menu's settings tab.
+
+     `"menu_additions": false` leaves out every one of them whose own key is not in the file. The "Display NSFW Outfits"
+     row of that place has no key: it is never added in Manager mode. The stage select is not
+     concerned; `online_outfit` is still read from that file (as without the Native Core), `title_pack`
+     and `skip_intro` by the loader at the next launch, so the Manager can set them from outside the game. Not checked in the
+     game yet: the interface packs' choices (`ui_choices`) with the section left out.
+
+   - nothing of the game is written back at its own path (fork 1.9.4, MIT): no original is "restored" into the costume pak,
+     and neither a mod-only dependency nor the texture repair writes at a path of the game's own index, even when a
+     replacement turned that entry off in the base pak. The pak holds the slots' own files, the mod-only files at paths the
+     game does not have, and the tables the loader builds. A replacement installed later is never covered by it;
+   - a loose game file the build depended on is watched by content as well as by size and date (fork 1.10.9's digest, kept in
+     `loose_probes.tsv`), the files below `model\esf` and the loose colour files a slot took included: a replacement put back
+     with the size and date it had still rebuilds the pak;
+   - a mod's own scene that is another layout of the outfit (another fighter's body, another number of model parts) is used
+     whole even when it names a file found nowhere, as the fork takes it (1.10.3): Swimsuit Sakura as Ryu C2 names
+     `sakura_001_01_havok.user`, which it does not ship, and was sent back to the game's scene, on Ryu's skeleton. The
+     game-version check of such a scene is unchanged;
+   - Report a bug (`report_mod.dll`, when it is installed) stays off: `"report_a_bug": true` in the same `settings.json` turns
+     it on (read at start).
+
+   Outside Manager mode none of the above applies: the fingerprint, the menus, the updater and Report a bug are what they were.
+
    The fork's other loader fixes of 1.10.6 - 1.10.9 (a scene or colour file read from its turned-off entry, an outfit's
    own colour list, donor colour files following the slot, promise 5) and its Opponent Outfit Settings summary (done
    in the plugin, no Lua script; with or without SF6 Native Core) apply in every mode, Manager mode included.
 
-What the Manager must keep doing for Manager mode: write `manager_installs.json` (with the loader's own files and
-sizes), `swap_repairs.txt` and its opt-out marker where it does now.
+What the Manager must keep doing for Manager mode: write `manager_installs.json` (with the loader's own files, their
+sizes and their `sha256`), `swap_repairs.txt` and its opt-out marker where it does now.
 
 ### What the Manager checks in the install (Manager 1.0.17, the download of 2026-11-06, source 0f2c7b1)
 
@@ -177,6 +236,8 @@ when no Replace-original mod is installed.
   `Files[].Path`). `files` holds the loose files, `paks` the patch paks the mod added (a patch pak listed under
   `files` counts the same).
 - `size` (bytes) is what the loader checks; `sha256` is used for a pak only when `size` is missing. Both optional.
+  The Manager-mode test (contract 2, promise 6) checks both for the plugin's own entry, and the updater for the main
+  DLL of a package it would leave out.
 - `enabled: false`: the mod claims nothing. Mods in priority order (first = the one whose file is in the game).
 - `generated`, `manager`, `id`, `installed_utc` are for logs and support; the loader does not need them.
 - A later, incompatible layout gets a new `format` string; fields may be added to this one freely.

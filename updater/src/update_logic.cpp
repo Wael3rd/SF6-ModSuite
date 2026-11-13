@@ -266,8 +266,8 @@ Plan make_plan(const Manifest& m, const std::vector<Installed>& installed, bool 
         if (in->version.empty()) { plan.notes.push_back(p.id + ": installed, but its DLL reports no version: not offered"); continue; }
         if (!parse_version(in->version)) { plan.notes.push_back(p.id + ": its DLL reports \"" + in->version + "\": not a version"); continue; }
         if (!newer(p.version, in->version)) continue;
-        if (manager_mode && p.id == "slots_loader") {
-            plan.notes.push_back("slots_loader: installed by the Slotsloader Manager: its updates are the Manager's");
+        if (manager_mode && (in->managed || p.id == "slots_loader")) {   // nothing of this outside Manager mode
+            plan.notes.push_back(p.id + ": installed by the Slotsloader Manager: its updates are the Manager's");
             continue;
         }
         plan.items.push_back({ p, in->version });
@@ -386,6 +386,7 @@ State parse_state(const std::string& text) {
         json j = json::parse(text);
         if (!j.is_object()) return s;
         if (auto it = j.find("check_for_updates"); it != j.end() && it->is_boolean()) s.check = it->get<bool>();
+        if (auto it = j.find("check_in_manager_mode"); it != j.end() && it->is_boolean()) s.check_managed = it->get<bool>();
         if (auto it = j.find("ignored_suite_version"); it != j.end() && it->is_string()) s.ignored = it->get<std::string>();
         if (auto it = j.find("pending_cleanup"); it != j.end() && it->is_array())
             for (auto& e : *it)
@@ -408,6 +409,20 @@ std::string state_json(const State& s) {
     j["ignored_suite_version"] = s.ignored;
     j["pending_cleanup"] = s.cleanup;
     return j.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
+}
+
+// "check_in_manager_mode" is the player's own key: state_json keeps it as it was read (s.raw), the module never writes it.
+bool check_allowed(const State& s, bool manager_mode, std::string* why) {
+    if (!s.check) {
+        if (why) *why = "off (check_for_updates is false in state.json): nothing fetched";
+        return false;
+    }
+    if (manager_mode && !s.check_managed) {
+        if (why) *why = "off (installed by the Slotsloader Manager: its updates are the Manager's; \"check_in_manager_mode\": true in "
+                        "state.json turns the check on): nothing fetched";
+        return false;
+    }
+    return true;
 }
 
 // ---- backups -----------------------------------------------------------------------------------------------------------------------
