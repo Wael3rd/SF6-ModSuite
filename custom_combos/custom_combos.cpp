@@ -950,14 +950,18 @@ void own_text_tick(Trial& t) {
     // and a line of ours stays blank until this puts it back; set_message compares first, so a row already right costs
     // one read (seen in game: every 15 frames and not under a pause, the line was blank for a while, and after a
     // Reset Battle or an example it was not written again)
+    // A recipe longer than the window (it scrolls) shows steps win_off.. in rows 0..: row i is step win_off + i (seen
+    // in game: a 13-step trial was skipped here, its Drive Rush line blank after every Reset Battle and example)
     if (!tm.own_text || pending_recipe_open) return;
-    if (window_size(t) < static_cast<int>(t.steps.size())) return;
     auto rows = recipe_rows();
     if (!rows) return;
-    for (size_t i = 0; i < t.steps.size(); ++i) {
-        auto it = rows->find(static_cast<int>(i));
-        if (it == rows->end() || t.steps[i].own.empty()) continue;
-        if (!set_message(it->second, t.steps[i].own)) why_once("own line text", "row " + std::to_string(i) + " not written");
+    const int n = static_cast<int>(t.steps.size()), w = window_size(t);
+    const int off = w < n ? t.win_off : 0;
+    for (int i = 0; i < w && off + i < n; ++i) {
+        const Step& st = t.steps[static_cast<size_t>(off + i)];
+        auto it = rows->find(i);
+        if (it == rows->end() || st.own.empty()) continue;
+        if (!set_message(it->second, st.own)) why_once("own line text", "row " + std::to_string(i) + " not written");
     }
 }
 
