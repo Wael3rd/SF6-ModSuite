@@ -98,7 +98,9 @@ Everything of contract 1, and:
      of it;
    - **in-game options, only when asked for**: the plugin's `settings.json` key `"menu_outfit_options": true` (written by
      the Manager; a file without the key, or with any other value, changes nothing) keeps every outfit, number, label and
-     `variants.json` row of the lines above and stores, with each outfit, the options of its own mod for the in-game
+     `variants.json` row of the lines above (the variants of more than three complete add-ons that replace the same
+     files included, and an outfit with too many add-ons to combine whose add-ons cannot be options: the outfit alone,
+     as without the key) and stores, with each outfit, the options of its own mod for the in-game
      options menu (`costume_options.json`, `"layout": "variants"`; `variants.json`'s `"runtime_options"` is
      `"variants"`): the options of a modular mod, the add-ons of an outfit, and the options of the choice above, which
      then make no variant of their own (one choice per menu entry; options of several entries that replace a same file
@@ -135,8 +137,12 @@ Everything of contract 1, and:
      player's choice follows the part through a new name or place in the list); `"on"` is `true` or `false` and `"dir"`
      is given; a listed folder without costume files counts as not there (`base`: null when no path needs it). Before
      anything is offered, the rule above is checked against the outfit's folder: each file of a part that is on, unless
-     a later part that is on has the same path, must be in the folder at the same size. One of these not met leaves
-     that whole outfit as its folder has it, with one log line; the other outfits of the list are not concerned.
+     a later part that is on has the same path, must be in the folder at the same size and with the same last-write
+     time (the Manager copies a part's files into the folder with File.Copy, which keeps the date, so the two are
+     equal; a texture swapped in the folder by hand at the same size then no longer counts as the part's). A listed
+     folder that is, or holds, a junction or a link is not read (counts as not there), and the fingerprint's walk of
+     the folders does not follow one. One of these not met leaves that whole outfit as its folder has it, with one
+     log line; the other outfits of the list are not concerned.
      Of several parts that are on and replace a same file (one choice), the one applied last is the choice's default
      in the menu; the others are listed there, not selected, and the folder still holds their files where the later
      part did not replace them, so the outfit itself is the same. The fingerprint holds what the list says (not its

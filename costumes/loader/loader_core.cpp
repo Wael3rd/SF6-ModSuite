@@ -8118,6 +8118,7 @@ static void load_manager_parts(const std::string& registry_dir) {
         FindClose(h);
         std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (auto& [name, e] : entries) {
+            if (e.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;   // a junction or link: not the Manager's, not followed
             if (e.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { walk(dir + L"\\" + e.cFileName, rel + "/" + name); continue; }
             const uint64_t sz = (uint64_t(e.nFileSizeHigh) << 32) | e.nFileSizeLow;
             const uint64_t mt = (uint64_t(e.ftLastWriteTime.dwHighDateTime) << 32) | e.ftLastWriteTime.dwLowDateTime;
@@ -9941,6 +9942,27 @@ static void join_addon_archives() {
     }
 }
 
+// Two files on disk with the same last-write time (either not on disk: nothing to compare)
+static bool same_disk_date(const ModFileRef& a, const ModFileRef& b) {
+    if (!a.is_disk() || !b.is_disk()) return true;
+    uint64_t sa = 0, ma = 0, sb = 0, mb = 0;
+    return file_stat_long(a.disk_path, sa, ma) && file_stat_long(b.disk_path, sb, mb) && ma == mb;
+}
+// A junction or a link somewhere below a folder (the folder itself apart)
+static bool holds_reparse_point(const std::wstring& dir) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(long_w(dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    bool found = false;
+    do {
+        const std::wstring name(fd.cFileName);
+        if (name == L"." || name == L"..") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) found = true;
+        else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) found = holds_reparse_point(dir + L"\\" + name);
+    } while (!found && FindNextFileW(h, &fd));
+    FindClose(h);
+    return found;
+}
 // Added parts of the Slotsloader Manager (manager_parts.json, load_manager_parts): the units of each listed outfit
 // (AddedParts), appended to g_units, by the outfit's own unit in `out`. Called once the outfits are made and before
 // their add-ons are (no reference into g_units is held across it). The outfit's unit is not touched: the outfit is
@@ -9949,7 +9971,10 @@ static void join_addon_archives() {
 // mod of costume_mods with one option that makes an outfit of its own; a listed folder is not below manager_parts, is
 // not there or holds no costume file; a part has no usable id; a part ships a file for another fighter or another
 // costume folder than the outfit's; the outfit's folder does not hold a file of a part that is on, or holds one of
-// another size (the folder was changed after the list was written); nothing of the folder is the outfit's own.
+// another size or another date (the folder was changed after the list was written: the Manager copies a part's files into
+// the folder with their date, so the two are the same file only when both match); nothing of the folder is the outfit's own.
+// A listed folder that is, or holds, a junction or a link is not read (the Manager makes none; load_manager_parts does not
+// follow them either).
 static void added_parts_units(ScanOutputs& o, std::map<size_t, AddedParts>& out) {
     std::set<std::string> seen;
     for (const ManagerPartsOutfit& mo : g_manager_parts) {
@@ -9995,6 +10020,8 @@ static void added_parts_units(ScanOutputs& o, std::map<size_t, AddedParts>& out)
             if (abs.empty()) return "folder \"" + rel + "\" is not below manager_parts";
             const DWORD at = GetFileAttributesW(long_w(a2w_path(abs)).c_str());
             if (at == INVALID_FILE_ATTRIBUTES || !(at & FILE_ATTRIBUTE_DIRECTORY)) return "folder \"" + rel + "\" is not there";
+            if ((at & FILE_ATTRIBUTE_REPARSE_POINT) || holds_reparse_point(a2w_path(abs)))
+                return "folder \"" + rel + "\" is or holds a junction or a link, not followed";
             int ignored = 0, upgraded = 0;
             files = scan_folder_mod(abs, o.inv, ignored, upgraded);
             drop_stale_user_files(files);   // as the outfit's own folder was read (load_unit)
@@ -10033,6 +10060,9 @@ static void added_parts_units(ScanOutputs& o, std::map<size_t, AddedParts>& out)
                 why = "the outfit's folder has no " + rel_tail(pth) + ", a file of " + label_of(k) + ", which is on";
             else if (mod_file_size(f->second) != mod_file_size(files[k].at(pth)))
                 why = rel_tail(pth) + " in the outfit's folder is not the one of " + label_of(k) + ", which is on (another size)";
+            else if (!same_disk_date(f->second, files[k].at(pth)))
+                why = rel_tail(pth) + " in the outfit's folder is not the one of " + label_of(k) + ", which is on (same size, "
+                    "another date)";
         }
         std::unordered_map<std::string, ModFileRef> base;
         if (why.empty() && !mo.base.empty() && !(why = read(mo.base, base)).empty()) why = "base: " + why;
@@ -10568,8 +10598,9 @@ static void finalize_units(ScanOutputs& o) {
         // One outfit per variant (Manager mode): complete add-ons that all replace the same files (each its own copy
         // of the body mesh, pick one) cannot be combined, so each is one variant, however many there are (Ingrid C1
         // Barefoot Stockings v2: "Main Files" + five whole-body overrides naming it in AddonFor). From ZZtaii's
-        // Slotsloader fork (1.10.5), MIT. Other add-on sets keep the limit of three.
-        bool alternatives = g_rto_layout == RtoLayout::Off && adds.size() > 3 && !separate;
+        // Slotsloader fork (1.10.5), MIT. Other add-on sets keep the limit of three. With the options chosen in game
+        // ("menu_outfit_options") the same variants are made (they then carry the options): every outfit as without it.
+        bool alternatives = (g_rto_layout == RtoLayout::Off || g_manager_mode) && adds.size() > 3 && !separate;
         for (size_t x = 0; x < adds.size() && alternatives; ++x) {
             if (!complete_addon_of.count(adds[x])) alternatives = false;
             for (size_t y = x + 1; y < adds.size() && alternatives; ++y)
@@ -10583,7 +10614,10 @@ static void finalize_units(ScanOutputs& o) {
         if (adds.size() > 3 && !separate && !alternatives) {
             printf("\n  %s: %zu add-ons, too many to combine; the base alone is installed\n",
                    unit_label(b).c_str(), adds.size());
-            if (choices.empty() && g_rto_layout == RtoLayout::Off) continue;
+            // Outside Manager mode the base alone, as always (the add-ons could not be options either: build_addon_options
+            // above). Manager mode: the choices still make their variants; with the options chosen in game the outfit
+            // still gets its options below.
+            if (!g_manager_mode || (choices.empty() && g_rto_layout == RtoLayout::Off)) continue;
             variants.clear();
         }
         // Manager mode with the options chosen in game ("menu_outfit_options"): the outfits made so far (the ones made without
@@ -10606,6 +10640,9 @@ static void finalize_units(ScanOutputs& o) {
             if (auto ap = added_parts.find(j); ap != added_parts.end()) { parts = &ap->second; added_parts_seen.insert(j); }
             if (build_addon_options(j, all, variants, worn_now, o, &choice_menu, parts)) continue;
             if (parts) added_parts_left(j, "an add-on of the outfit brings files for another costume folder");
+            // Not done, and nothing else to make (too many to combine, no choice): the base alone, as without the options;
+            // never taken out by the sub-folder rule below
+            if (choices.empty() && variants.empty()) continue;
         }
         if (!choices.empty()) {
             // Each choice alone, then with each combination of the other add-ons made above ("Hair + Clean + Skin - Oily"),
@@ -12836,7 +12873,10 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // ship in a fighter folder that is no costume folder (written after the slots), and a game file whose row a replacement
     // turned off, taken from the loose file in the game folder. A pak built before that lacks those copies (an option worn
     // by default there could not be turned off). Without the options a build makes what it made.
-    if (g_manager_mode) new_fp += ";manager_mode7";
+    // 8: with the options chosen in game, the variants of complete add-ons that all replace the same files are made (as
+    // without them), an outfit with too many add-ons to combine is kept when its add-ons cannot be options, and an added
+    // part's file must have the date of the outfit folder's copy as well as its size.
+    if (g_manager_mode) new_fp += ";manager_mode8";
     if (!g_outfit_labels) new_fp += ";names=outfit";   // Manager mode's "menu_outfit_names": false: turning it on or off rebuilds
     if (g_swap_repairs) new_fp += "|swap_repairs";    // turning them on or off rebuilds
     if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)
