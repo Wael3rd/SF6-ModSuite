@@ -1304,6 +1304,8 @@ void replay_tick_impl(bool in_replay) {
 int pre_replay_decide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
     const int64_t ft = static_cast<int64_t>(reinterpret_cast<uintptr_t>(argv[2]) & 0xFFFFFFFF);
     if (!replay_ft_ours(ft)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    static TD* const ctl_td = type("app.esports.ReplayUICtrl");                // shared machine code: only the replay's controller
+    if (!live(reinterpret_cast<Obj*>(argv[1])) || td_of(reinterpret_cast<Obj*>(argv[1])) != ctl_td) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     RP.ctl = reinterpret_cast<Obj*>(argv[1]);
     RP.want = static_cast<int>(ft);
     return REFRAMEWORK_HOOK_SKIP_ORIGINAL;

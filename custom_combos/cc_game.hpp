@@ -95,7 +95,12 @@ inline reframework::InvokeRet call(Obj* o, const char* name, std::vector<void*> 
     reframework::InvokeRet bad{};
     bad.exception_thrown = true;
     if (!o) return bad;
-    return invoke(method_of(td_of(o), name, std::strchr(name, '(') ? -1 : static_cast<int>(args.size())), o, std::move(args));
+    // the parameter count is read BEFORE args is moved: in one call expression the compiler may build the moved-to
+    // parameter first (MSVC does, right to left), and args.size() then read 0 and found no method (or the 0-parameter
+    // overload) for every call with arguments
+    const int np = std::strchr(name, '(') ? -1 : static_cast<int>(args.size());
+    Method* m = method_of(td_of(o), name, np);
+    return invoke(m, o, std::move(args));
 }
 inline Obj* call_obj(Obj* o, const char* name, std::vector<void*> args = {}) {
     auto r = call(o, name, std::move(args));

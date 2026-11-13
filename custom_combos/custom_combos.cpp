@@ -65,6 +65,13 @@ void logf(const char* fmt, ...) {
     if (core && client) core->log(client, SF6CORE_LOG_INFO, buf);
     else API::get()->log_info("custom_combos: %s", buf);
 }
+// Log a reason once per key until it changes (paths that run every frame or every call)
+void why_once(const char* key, const std::string& why) {
+    static std::map<std::string, std::string> last;
+    static std::mutex mx;
+    { std::lock_guard lk(mx); auto& l = last[key]; if (l == why) return; l = why; }
+    logf("%s: %s", key, why.c_str());
+}
 
 // ---------------------------------------------------------------- config.json (the keys the mode reads)
 struct Cfg {
@@ -714,7 +721,14 @@ Obj* param_array(const std::vector<const Step*>& steps, bool preview, int first_
     }
     return arr;
 }
-bool set_info(Obj* si, Obj* arr) { return arr && call_ok(si, "set_InfoProp", { arr }); }
+bool set_info(Obj* si, Obj* arr) {
+    if (!arr) { why_once("set_InfoProp", "no step array (ParamInfo array or a ParamInfo not created)"); return false; }
+    if (!live(si)) { why_once("set_InfoProp", "the StageInfo is not live"); return false; }
+    if (!method_of(td_of(si), "set_InfoProp")) { why_once("set_InfoProp", "no set_InfoProp on " + td_of(si)->get_full_name()); return false; }
+    const auto r = call(si, "set_InfoProp", { arr });
+    if (r.exception_thrown) { why_once("set_InfoProp", "the call threw (array of " + std::to_string(arr_len(arr)) + ")"); return false; }
+    return true;
+}
 
 void step_flags(Obj* sd, const Step& st) {
     set(sd, "IsHitCheck", st.check_type == 0);
@@ -1409,7 +1423,7 @@ void forget_list(Obj* ld) {
 // One level list: our trials in, or the official array back
 void update_list(Obj* ld, int chara, int it) {
     Obj* cur = ld ? get_obj(ld, "ComboTrialDatas") : nullptr;
-    if (!cur) return;
+    if (!cur) { why_once("level list", std::string("no ComboTrialDatas on ") + (ld && td_of(ld) ? td_of(ld)->get_full_name() : "null")); return; }
     if (custom_mode.load()) {
         if (custom_lists.count(ld)) return;
         if (!orig_lists.count(ld)) { cur->add_ref(); ld->add_ref(); orig_lists[ld] = cur; }
@@ -1419,7 +1433,8 @@ void update_list(Obj* ld, int chara, int it) {
         int n = 0;
         std::string why;
         Obj* arr = build_custom_array(orig_lists[ld], ls, modern, n, why);
-        if (arr && set_ref(ld, "ComboTrialDatas", arr)) {
+        if (arr && !set_ref(ld, "ComboTrialDatas", arr)) why_once("level list", "ComboTrialDatas not written");
+        if (arr && get_obj(ld, "ComboTrialDatas") == arr) {
             custom_lists.insert(ld);
             { std::lock_guard lk(idx_mx); list_n[orig_lists[ld]] = n; }   // (rows the game's index may name)
             logf("custom list installed: %d trial(s) (fighter %d)", n, chara);
@@ -1450,7 +1465,18 @@ void restore_lists(const char* why) {
 
 Obj* own_fd(Obj* cat, int id) {
     tl_own_call = true;
-    Obj* f = call_obj(cat, "GetComboTrialFighterData", { arg_i32(id) });
+    // asked through the method found by name alone: in game the lookup by name + parameter count answered null where
+    // this one answered the entry (same holder, same frame)
+    Method* m = method_of(td_of(cat), "GetComboTrialFighterData");
+    const auto r1 = invoke(m, cat, { arg_i32(id) });
+    Obj* f = !r1.exception_thrown && r1.ptr ? reinterpret_cast<Obj*>(r1.ptr) : nullptr;
+    static bool told = false;
+    if (!told && f) {
+        told = true;
+        Obj* g = call_obj(cat, "GetComboTrialFighterData", { arg_i32(id) });
+        Method* m1 = method_of(td_of(cat), "GetComboTrialFighterData", 1);
+        logf("catalog lookup: by name %p, by name + 1 parameter %p (methods %p / %p)", (void*)f, (void*)g, (void*)m, (void*)m1);
+    }
     tl_own_call = false;
     return f;
 }
@@ -1536,27 +1562,31 @@ int current_chara() {
 // ---------------------------------------------------------------- the Fighting Ground entry
 // The Practice submenu is data: FGMainMenuData.ArrData[c].ModeTypes is an array of ModeTypeData. One more row = one more
 // cell, copied from the Combo Trial row (Map 14) with our own message GUIDs for the label and the guide line.
+// Why the entry is not in yet: logged once per reason (the function runs every 30 frames)
+int menu_why_last = -1;
+void menu_why(int code, const char* why) { if (code != menu_why_last) { menu_why_last = code; logf("menu entry not added yet: %s", why); } }
+
 void ensure_menu_entry() {
     Obj* md = menu_data.load();
-    if (!md) return;
+    if (!md) { menu_why(1, "the Fighting Ground menu data not captured (no FGMainMenuData call seen)"); return; }
     Obj* arrd = get_obj(md, "ArrData");
     for (int32_t i = 0, n = arr_len(arrd); i < n; ++i) {
         Obj* sub = arr_get(arrd, i);
         if (!sub || inum(get(ref(sub), "Category"), "Category", -1) != kPracticeCategory) continue;
         Obj* modes = get_obj(sub, "ModeTypes");
         const int nm = arr_len(modes);
-        if (nm < 1) return;
+        if (nm < 1) { menu_why(2, "Practice has no ModeTypes"); return; }
         Obj* tpl = nullptr;
         int dup = -1;
         for (int k = 0; k < nm; ++k) {
             Obj* e = arr_get(modes, k);
             if (e && inum(e, "Map", -1) == kFlowComboTrial) { if (tpl) dup = k; else tpl = e; }
         }
-        if (!tpl) return;
+        if (!tpl) { menu_why(3, "no Combo Trial row (Map 14) in Practice"); return; }
         Obj* mine = menu_entry.load();
         if (mine && dup >= 0 && arr_get(modes, dup) == mine) return;      // already in
         Obj* e = new_obj(type("app.menu.ModeTypeData"), false);
-        if (!e) return;
+        if (!e) { menu_why(4, "ModeTypeData not created"); return; }
         set(e, "Enable", 1);
         for (const char* f : { "ModeType", "IsRootFlow", "Map", "Scene", "BGM_Key", "DecideNar" }) {
             Field* fl = field_of(td_of(tpl), f);
@@ -1570,7 +1600,7 @@ void ensure_menu_entry() {
             } else set_ref(e, f, get_obj(tpl, f));
         }
         uint8_t gn[16], gg[16];
-        if (!text_guid("Custom Combos", gn) || !text_guid("Your own combos as trials. Record one in the first row: play it, it is saved.", gg)) return;
+        if (!text_guid("Custom Combos", gn) || !text_guid("Your own combos as trials. Record one in the first row: play it, it is saved.", gg)) { menu_why(5, "the core gave no text GUID"); return; }
         write_guid(e, "Name", gn);
         write_guid(e, "GuideMessage", gg);
         if (dup >= 0) {                                           // a stale row of ours (never seen natively; kept as the Lua)
@@ -1579,15 +1609,37 @@ void ensure_menu_entry() {
             logf("menu entry replaced (row %d)", dup);
         } else {
             Obj* bigger = new_array(type("app.menu.ModeTypeData"), nm + 1);
-            if (!bigger) return;
+            if (!bigger) { menu_why(6, "the bigger ModeTypes array not created"); return; }
             for (int k = 0; k < nm; ++k) arr_set(bigger, k, arr_get(modes, k));
             arr_set(bigger, nm, e);
-            if (!set_ref(sub, "ModeTypes", bigger)) return;
+            if (!set_ref(sub, "ModeTypes", bigger)) { menu_why(7, "ModeTypes not written"); return; }
             menu_entry.store(e);
             logf("menu entry added to Practice (%d -> %d rows)", nm, nm + 1);
         }
         return;
     }
+    if (menu_why_last != 8) {                                    // what ArrData holds instead, once
+        std::string seen;
+        for (int32_t i = 0, n = arr_len(arrd); i < n; ++i) {
+            Obj* sub = arr_get(arrd, i);
+            seen += (seen.empty() ? "" : ",") + std::to_string(sub ? inum(get(ref(sub), "Category"), "Category", -1) : -9);
+        }
+        logf("ArrData: %d categories [%s]", arr_len(arrd), seen.c_str());
+        // the captured object, its type and every field (parents included), once: to see where the categories are
+        TD* t = td_of(md);
+        logf("menu data object: %s, ArrData %s", t ? t->get_full_name().c_str() : "?", arrd ? "found" : "null");
+        for (TD* c = t; c; c = c->get_parent_type()) {
+            std::string fl;
+            for (Field* f : c->get_fields()) {
+                if (!f || !f->get_name()) continue;
+                TD* ft = f->get_type();
+                fl += std::string(fl.empty() ? "" : ", ") + f->get_name() + ":" + (ft ? ft->get_full_name() : "?");
+            }
+            logf("  fields of %s: %s", c->get_full_name().c_str(), fl.c_str());
+            if (c->get_full_name() == "System.Object") break;
+        }
+    }
+    menu_why(8, "no Practice category (Category 1) in ArrData");
 }
 
 // ---------------------------------------------------------------- [CUSTOM] on the guide line
@@ -1819,7 +1871,8 @@ void tick() {
             for (int id : ids) {
                 Obj* x = catalog_fd(id);
                 if (!x) x = known_fd.count(id) ? known_fd[id] : nullptr;
-                if (x) { try { catalog_update(x, id); lists_done[id] = true; } catch (...) {} }
+                if (x) { try { catalog_update(x, id); lists_done[id] = true; why_once("lists", "fighter " + std::to_string(id) + "'s lists given"); } catch (...) { why_once("lists", "exception for fighter " + std::to_string(id)); } }
+                else why_once("lists", "no catalog entry yet for fighter " + std::to_string(id));
             }
         }
         if (fd && chara > 0) try { catalog_update(fd, chara); } catch (...) {}
@@ -2044,6 +2097,7 @@ void post_fighter_data(void** ret, REFrameworkTypeDefinitionHandle, unsigned lon
     if (chara <= 0 || !ret) return;
     try {
         Obj* fd = reinterpret_cast<Obj*>(*ret);
+        why_once("game's GetComboTrialFighterData", "fighter " + std::to_string(chara) + (fd ? " answered" : " null"));
         if (!fd) return;
         last_chara = chara;
         if (!on_game_thread()) {
@@ -2069,7 +2123,10 @@ void post_level_list(void** ret, REFrameworkTypeDefinitionHandle, unsigned long 
     Obj* fdo = reinterpret_cast<Obj*>(tl_fd);
     tl_lvl = tl_it = -1;
     tl_fd = nullptr;
-    if (!ret || !*ret || level < 0 || level > 2 || !on_game_thread()) return;
+    if (!ret || !*ret || level < 0 || level > 2 || !on_game_thread()) {
+        if (custom_mode.load()) why_once("GetLevelListData", !ret || !*ret ? "no list returned" : (level < 0 || level > 2) ? "level " + std::to_string(level) : "not the game thread");
+        return;
+    }
     if (!custom_mode.load() && custom_lists.empty()) return;     // nothing of ours: one atomic read and a size
     try {
         std::lock_guard lk(g_mx);
@@ -2078,14 +2135,23 @@ void post_level_list(void** ret, REFrameworkTypeDefinitionHandle, unsigned long 
         if (chara > 0) last_chara = chara;
         else chara = catalog_data ? -1 : current_chara();   // (a guess only while no catalog is reachable)
         if (chara > 0) update_list(ld, chara, it);
-    } catch (...) {}
+        else if (custom_mode.load()) why_once("GetLevelListData", "whose list it is not known (no catalog answer yet)");
+    } catch (const std::exception& e) { why_once("GetLevelListData", std::string("exception: ") + e.what()); }
+    catch (...) { why_once("GetLevelListData", "exception"); }
 }
 
+// These small getters can share their machine code with other types' (seen in game: the first call came with a closure
+// object as "this"), so the object is kept only when it IS the menu data
+TD* menu_data_td() { static TD* t = type("app.menu.FGMainMenuData"); return t; }
 int pre_menu_data(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!menu_data.load() && argv[1]) {
-        Obj* expected = nullptr;
-        Obj* md = reinterpret_cast<Obj*>(argv[1]);
-        if (menu_data.compare_exchange_strong(expected, md)) md->add_ref();      // the menu asset, kept
+    if (menu_data.load() || !argv[1]) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    Obj* md = reinterpret_cast<Obj*>(argv[1]);
+    if (!live(md) || td_of(md) != menu_data_td()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    Obj* expected = nullptr;
+    if (menu_data.compare_exchange_strong(expected, md)) {
+        md->add_ref();                                                           // the menu asset, kept
+        // the entry at once, before this build reads the Practice rows (the tick's pass came after: missed on screen)
+        if (on_game_thread()) { std::lock_guard lk(g_mx); try { ensure_menu_entry(); } catch (...) {} }
     }
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
 }
@@ -2105,6 +2171,8 @@ int pre_trial_on_attack(int, void** argv, REFrameworkTypeDefinitionHandle*, unsi
         std::lock_guard lk(g_mx);
         Obj* m = reinterpret_cast<Obj*>(argv[1]);
         Obj* w = reinterpret_cast<Obj*>(argv[2]);
+        static TD* const mission_td = type("app.FBattleMission");                // shared machine code: only the judge itself
+        if (td_of(m) != mission_td) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
         if (rec_live) g_rec->on_attack(m, w);
         else on_attack_mode(m, w);
     } catch (...) {}
