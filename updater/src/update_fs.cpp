@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <set>
 
+#include "../../common/file_sha256.hpp"
 #include "../../common/manager_mode.hpp"
 #include "../../common/third_party/miniz.h"
 #include "nlohmann/json.hpp"
@@ -208,6 +209,7 @@ bool read_manager_list(const std::wstring& root, std::string* fmt, std::vector<m
                         lf.enabled = on;
                         if (auto p = f.find("path"); p != f.end() && p->is_string()) lf.path = p->get<std::string>();
                         if (auto s = f.find("size"); s != f.end() && s->is_number() && s->get<double>() >= 0) lf.size = (long long)s->get<double>();
+                        if (auto h = f.find("sha256"); h != f.end() && h->is_string()) lf.sha256 = manager_mode::lower(h->get<std::string>());
                         files.push_back(lf);
                     }
             }
@@ -220,23 +222,28 @@ bool read_manager_list(const std::wstring& root, std::string* fmt, std::vector<m
 
 }  // namespace
 
-bool manager_mode(const std::wstring& root) {
+bool manager_mode(const std::wstring& root, std::string* why) {
+    if (why) why->clear();
     std::string fmt;
     std::vector<manager_mode::ListedFile> files;
-    if (!read_manager_list(root, &fmt, &files)) return false;
-    return manager_mode::installed_by_manager(fmt, files, file_size(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll")));
+    if (!read_manager_list(root, &fmt, &files)) {
+        if (why && exists(join(root, "reframework/data/SF6_Costumes_Data/" + std::string(manager_mode::kRecordFile))))
+            *why = "the list could not be read";
+        return false;
+    }
+    const std::wstring plugin = join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll");
+    const manager_mode::Decision d = manager_mode::decide(fmt, files, file_size(plugin), [&] { return file_sha256::hex(plugin.c_str()); });
+    if (why) *why = d.why;
+    return d.manager;
 }
 
 bool manager_lists(const std::wstring& root, const std::string& rel) {
     std::string fmt;
     std::vector<manager_mode::ListedFile> files;
     if (!read_manager_list(root, &fmt, &files) || fmt != manager_mode::kRecordFormat) return false;
-    const long long size = file_size(join(root, rel));
-    if (size < 0) return false;
-    const std::string want = manager_mode::norm_path(rel);
-    for (auto& f : files)
-        if (f.enabled && f.size == size && manager_mode::norm_path(f.path) == want) return true;
-    return false;
+    const std::wstring p = join(root, rel);
+    return manager_mode::matched(manager_mode::match_file(files, manager_mode::norm_path(rel), file_size(p),
+                                                          [&] { return file_sha256::hex(p.c_str()); }));
 }
 
 bool verify_file(const std::wstring& p, int64_t size, const std::string& sha256, std::string* why) {

@@ -31,10 +31,12 @@ void remove_tree(const std::wstring& dir);
 // What a package's main DLL reports (in game: its sf6suite_package_version export, update_game.cpp); "" = nothing
 using VersionReader = std::function<std::string(const KnownPackage&)>;
 std::vector<Installed> detect_installed(const std::wstring& root, const VersionReader& version_of);
-// The Slotsloader Manager installed the Slots Loader (common/manager_mode.hpp, read as the plugin reads it)
-bool manager_mode(const std::wstring& root);
-// The Manager's list holds `rel` (relative to the game folder) in an enabled mod, at the size the file has on disk: the Manager
-// installed that file, whatever the package (the same test as manager_mode's, for any file)
+// The Slotsloader Manager installed the Slots Loader (common/manager_mode.hpp, read as the plugin reads it). why: what decided, for
+// a log line ("" when there is no list)
+bool manager_mode(const std::wstring& root, std::string* why = nullptr);
+// The Manager's list holds `rel` (relative to the game folder) in an enabled mod, at the size the file has on disk and, when the entry
+// gives a sha256, with that SHA-256: the Manager installed that file, whatever the package (the same test as manager_mode's, for any
+// file)
 bool manager_lists(const std::wstring& root, const std::string& rel);
 
 // ---- a downloaded zip: its size and sha256 as the manifest says ----

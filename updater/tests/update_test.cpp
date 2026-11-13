@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -308,6 +309,39 @@ static void test_plan() {
     put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), off_list);
     check(!manager_lists(root, core_rel), "a mod turned off in the Manager claims nothing");
     check(!manager_lists(root, "reframework/plugins/not_there.dll"), "a file that is not there: not the Manager's");
+
+    // the list gives each file's sha256 (the Manager writes it; older Managers did not): size and sha256 must both match
+    const std::string plugin_sha = "5e689e2b01672bf33996e75d5e372ff60c536ce1599a1458e867cd8f4bef5160";   // of "plugin"
+    const std::string core_sha = "0d45f5fd462b8c70bffb10021ac1bcff3f58f29b1faf7568595095427d42812c";     // of "core"
+    const std::string sha_list = "{\"format\": \"sf6-manager-installs-1\", \"mods\": [{\"enabled\": true, \"files\": ["
+                                 "{\"path\": \"reframework/plugins/SF6_CostumeSlotsNative.dll\", \"size\": 6, \"sha256\": \"" + plugin_sha + "\"}, "
+                                 "{\"path\": \"reframework/plugins/sf6core_native.dll\", \"size\": 4, \"sha256\": \"" + core_sha + "\"}]}]}";
+    put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), sha_list);
+    put(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll"), "plugin");
+    std::string why;
+    check(manager_mode(root, &why) && why.find("size and sha256 matched") != std::string::npos, "sha256 in the list, the same plugin: manager mode (" + why + ")");
+    check(manager_lists(root, core_rel), "sha256 in the list, the same core: the Manager's");
+    put(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll"), "PLUGIN");   // same size, other bytes: put back by hand or by Fluffy
+    check(!manager_mode(root, &why) && why.find("sha256 differs") != std::string::npos, "same size, other sha256: not manager mode (" + why + ")");
+    plan = make_plan(m, detect_installed(root, reader), manager_mode(root), "");
+    bool loader_offered = false;
+    for (auto& it : plan.items) loader_offered |= it.pkg.id == "slots_loader";
+    check(loader_offered, "same size, other sha256: the Slots Loader offered as always");
+    put(join(root, core_rel), "CORE");
+    check(!manager_lists(root, core_rel), "the core at the listed size with other bytes: not the Manager's");
+    put(join(root, core_rel), "core");
+    std::string upper_list = sha_list;
+    for (size_t at = upper_list.find(plugin_sha), i = 0; i < plugin_sha.size(); ++i) upper_list[at + i] = (char)std::toupper((unsigned char)upper_list[at + i]);
+    put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), upper_list);
+    put(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll"), "plugin");
+    check(manager_mode(root), "a sha256 in capitals: still the same file");
+    put(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json"), both_list);   // no sha256: the size alone, as before
+    put(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll"), "PLUGIN");
+    check(manager_mode(root, &why) && why.find("no sha256") != std::string::npos, "no sha256 in the list: the size alone decides, as before (" + why + ")");
+    check(manager_lists(root, core_rel), "no sha256 in the list: the core at its size is the Manager's, as before");
+    std::filesystem::remove(std::filesystem::path(join(root, "reframework/data/SF6_Costumes_Data/manager_installs.json")));
+    check(!manager_mode(root, &why) && why.empty(), "no list: nothing to log");
+    put(join(root, "reframework/plugins/SF6_CostumeSlotsNative.dll"), "plugin");
 }
 
 // ---- zip entries ----

@@ -10830,13 +10830,20 @@ static void find_manager(const std::string& game_dir, const std::string& costume
 }
 
 // Manager mode (common/manager_mode.hpp, docs/MANAGER_CONTRACT.md): the Slotsloader Manager installed this
-// loader. Read once per launch, before anything else of the scan depends on it.
-static bool detect_manager_mode(const std::string& game_dir, const std::string& registry_dir) {
+// loader. Read once per launch, before anything else of the scan depends on it. why: what decided, for the
+// log line (empty when there is no list: nothing to say, the log stays as it always was).
+static bool detect_manager_mode(const std::string& game_dir, const std::string& registry_dir, std::string* why_out = nullptr) {
+    std::string scratch;
+    std::string& why = why_out ? *why_out : scratch;
+    why.clear();
     const std::string list = registry_dir + "\\" + manager_mode::kRecordFile;
     if (GetFileAttributesA(list.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
     JsonValue root;
     const std::string txt = read_text_file(list);
-    if (txt.empty() || !json_parse_text(txt, root) || root.kind != JsonValue::Obj) return false;
+    if (txt.empty() || !json_parse_text(txt, root) || root.kind != JsonValue::Obj) {
+        why = "the list is not a JSON object";
+        return false;
+    }
     std::vector<manager_mode::ListedFile> files;
     for (auto& m : root.arr("mods")) {
         if (m.kind != JsonValue::Obj) continue;
@@ -10844,12 +10851,16 @@ static bool detect_manager_mode(const std::string& game_dir, const std::string& 
         const bool on = !(en && en->kind == JsonValue::Bool && !en->b);
         for (auto& f : m.arr("files")) {
             const JsonValue* sz = f.get("size");
-            files.push_back({ on, f.str("path"), sz && sz->kind == JsonValue::Num && sz->n >= 0 ? (long long)sz->n : -1 });
+            files.push_back({ on, f.str("path"), sz && sz->kind == JsonValue::Num && sz->n >= 0 ? (long long)sz->n : -1,
+                              str_lower(f.str("sha256")) });
         }
     }
     std::string plugin = game_dir + "\\" + manager_mode::kPluginPath;
     for (auto& c : plugin) if (c == '/') c = '\\';
-    return manager_mode::installed_by_manager(root.str("format"), files, file_size_of(plugin));
+    const manager_mode::Decision d = manager_mode::decide(root.str("format"), files, file_size_of(plugin),
+                                                          [&] { return sha256_file_hex(plugin); });
+    why = d.why;
+    return d.manager;
 }
 
 // The Manager's claimed loose files as the scan names them -> the mod's name
@@ -11832,12 +11843,16 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     const DWORD nsfw_attr = GetFileAttributesA(nsfw_mods_dir.c_str());
     const bool nsfw_dir_there = nsfw_attr != INVALID_FILE_ATTRIBUTES && (nsfw_attr & FILE_ATTRIBUTE_DIRECTORY);
     // Manager mode (common/manager_mode.hpp): the Slotsloader Manager installed this loader
-    g_manager_mode = detect_manager_mode(game_dir, registry_dir);
+    std::string mode_why;
+    g_manager_mode = detect_manager_mode(game_dir, registry_dir, &mode_why);
     // Manager mode: costume_mods_nsfw is not read (as the Manager's own Slotsloader, which had no such folder)
     const bool has_nsfw_mods = nsfw_dir_there && !g_manager_mode;
     if (g_manager_mode)
-        logf("  Manager mode: installed by the Slotsloader Manager (manager_installs.json): outfits as the Manager's "
-             "Slotsloader made them (costume_mods only, one outfit per variant)\n");
+        logf("  Manager mode: installed by the Slotsloader Manager (manager_installs.json: %s): outfits as the Manager's "
+             "Slotsloader made them (costume_mods only, one outfit per variant)\n", mode_why.c_str());
+    else if (!mode_why.empty())
+        logf("  %s: %s: normal mode (not the Slotsloader Manager's install)\n", manager_mode::kRecordFile,
+             mode_why.c_str());
     // Character-swap repairs: the Manager's setting (an empty swap_repairs.txt), read in Manager mode only
     g_swap_repairs = g_manager_mode
         && GetFileAttributesA((registry_dir + "\\swap_repairs.txt").c_str()) != INVALID_FILE_ATTRIBUTES;

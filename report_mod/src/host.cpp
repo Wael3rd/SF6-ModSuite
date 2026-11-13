@@ -42,6 +42,7 @@
 #include "ui/gx.hpp"
 #include "ui/internal.hpp"
 #include "ui/lang.hpp"
+#include "../../common/file_sha256.hpp"
 #include "../../common/manager_mode.hpp"
 
 namespace {
@@ -63,8 +64,8 @@ constexpr int kMaxFaults = 5;
 // Manager mode (common/manager_mode.hpp): ZZtaii's Slotsloader Manager installed the Slots Loader. Its players send nothing
 // from inside the game unless they ask for it: Report a bug stays off there, "report_a_bug": true in the Slots Loader's
 // settings.json turns it on. Installed any other way nothing of this is read. The same list and the same test as the loader's
-// and the plugin's (manager_installs.json, the plugin's size on disk).
-bool off_in_manager_mode() {
+// and the plugin's (manager_installs.json, the plugin's size and SHA-256 on disk). why: what decided, for the log line.
+bool off_in_manager_mode(std::string& why) {
     auto read = [](const char* path) {
         std::ifstream f(path, std::ios::binary);
         std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -87,6 +88,7 @@ bool off_in_manager_mode() {
                         lf.enabled = on;
                         if (auto p = f.find("path"); p != f.end() && p->is_string()) lf.path = p->get<std::string>();
                         if (auto s = f.find("size"); s != f.end() && s->is_number() && s->get<double>() >= 0) lf.size = (long long)s->get<double>();
+                        if (auto h = f.find("sha256"); h != f.end() && h->is_string()) lf.sha256 = manager_mode::lower(h->get<std::string>());
                         files.push_back(lf);
                     }
             }
@@ -94,7 +96,10 @@ bool off_in_manager_mode() {
         if (auto f = j.find("format"); f != j.end() && f->is_string()) fmt = f->get<std::string>();
         std::error_code ec;
         const auto size = std::filesystem::file_size("reframework/plugins/SF6_CostumeSlotsNative.dll", ec);
-        if (!manager_mode::installed_by_manager(fmt, files, ec ? -1 : (long long)size)) return false;
+        const manager_mode::Decision d = manager_mode::decide(fmt, files, ec ? -1 : (long long)size,
+                                                              [] { return file_sha256::hex(L"reframework\\plugins\\SF6_CostumeSlotsNative.dll"); });
+        why = d.why;
+        if (!d.manager) return false;
         const nlohmann::json s = nlohmann::json::parse(read("reframework/data/SF6_CostumeSlots_data/settings.json"), nullptr, false);
         if (s.is_object())
             if (auto k = s.find("report_a_bug"); k != s.end() && k->is_boolean() && k->get<bool>()) return false;
@@ -400,8 +405,9 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
             log_line(false, why);
             report_host::flush_journal();
         };
-        if (off_in_manager_mode()) {
-            off("report_mod: off (installed by the Slotsloader Manager; \"report_a_bug\": true in SF6_CostumeSlots_data/settings.json turns it on)");
+        if (std::string mode_why; off_in_manager_mode(mode_why)) {
+            off(("report_mod: off (installed by the Slotsloader Manager, manager_installs.json: " + mode_why
+                 + "; \"report_a_bug\": true in SF6_CostumeSlots_data/settings.json turns it on)").c_str());
             return true;
         }
         HMODULE h = GetModuleHandleW(L"sf6core_native.dll");

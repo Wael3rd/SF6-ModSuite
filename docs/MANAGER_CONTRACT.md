@@ -59,9 +59,19 @@ Everything of contract 1, and:
 6. **Manager mode** (`common/manager_mode.hpp`): when the Slotsloader Manager installed this loader, the loader and the
    plugin behave as the Manager's own Slotsloader fork (1.10.9) does. The loader knows it from
    `reframework/data/SF6_Costumes_Data/manager_installs.json` (written by the Manager since 1.0.9): an enabled mod of
-   that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk. Installed any
-   other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the plugin is not listed at its size and
-   nothing of this applies. In Manager mode:
+   that list holds `reframework/plugins/SF6_CostumeSlotsNative.dll` at the size the plugin has on disk and, when the
+   entry gives a `sha256` (the Manager writes one for every file), with the SHA-256 the plugin has on disk. A list
+   without `sha256` (an older Manager) is read by the size alone, as before. The plugin is hashed only when an entry at
+   its size gives one. Installed any other way (by hand, by Fluffy Mod Manager, or over the Manager's install), the
+   plugin is not listed at its size and SHA-256, and nothing of this applies. One case cannot be told apart: a plugin
+   put back by hand that is byte for byte the one the Manager installed (the same release) matches its entry, and the
+   game stays in Manager mode until the Manager's list or the plugin changes. Whenever the list is there, the loader's
+   log says in one line what decided: `Manager mode: installed by the Slotsloader Manager (manager_installs.json: the
+   plugin's size and sha256 matched)` (or `the plugin's size matched, the list gives no sha256`), else
+   `manager_installs.json: the plugin is listed at its size, but its sha256 differs: normal mode (not the Slotsloader
+   Manager's install)` (or `is listed at another size`, `is not listed`, ...). Without the list nothing is logged (the
+   log is as it always was). The plugin's log (`costumes:`), the updater's and Report a bug's say the same. In Manager
+   mode:
    - outfits come from `reframework/costume_mods` only: no Fluffy Mod Manager discovery, no loose `natives` files and no
      other patch paks as outfits (they are still read as the game's files). `reframework/costume_mods_nsfw` is neither
      read nor made, as under the fork, which had no such folder; mods someone put there give no outfit, and the log says
@@ -137,8 +147,8 @@ Everything of contract 1, and:
    own colour list, donor colour files following the slot, promise 5) and its Opponent Outfit Settings summary (done
    in the plugin, no Lua script; with or without SF6 Native Core) apply in every mode, Manager mode included.
 
-What the Manager must keep doing for Manager mode: write `manager_installs.json` (with the loader's own files and
-sizes), `swap_repairs.txt` and its opt-out marker where it does now.
+What the Manager must keep doing for Manager mode: write `manager_installs.json` (with the loader's own files, their
+sizes and their `sha256`), `swap_repairs.txt` and its opt-out marker where it does now.
 
 ### What the Manager checks in the install (Manager 1.0.17, the download of 2026-11-06, source 0f2c7b1)
 
@@ -226,6 +236,8 @@ when no Replace-original mod is installed.
   `Files[].Path`). `files` holds the loose files, `paks` the patch paks the mod added (a patch pak listed under
   `files` counts the same).
 - `size` (bytes) is what the loader checks; `sha256` is used for a pak only when `size` is missing. Both optional.
+  The Manager-mode test (contract 2, promise 6) checks both for the plugin's own entry, and the updater for the main
+  DLL of a package it would leave out.
 - `enabled: false`: the mod claims nothing. Mods in priority order (first = the one whose file is in the game).
 - `generated`, `manager`, `id`, `installed_utc` are for logs and support; the loader does not need them.
 - A later, incompatible layout gets a new `format` string; fields may be added to this one freely.
