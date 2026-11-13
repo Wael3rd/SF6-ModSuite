@@ -905,9 +905,11 @@ static size_t upgrade_mod_user(std::vector<uint8_t>& data, const std::string& so
 // A file of the game's own natives tree, by pak path (loose files: Fluffy Mod Manager puts the files
 // it installs there), with current type signatures; empty when there is none
 static std::string g_game_dir;
+static void probe_asked_loose(const std::string& pak_path);   // (below, with the probes) Manager mode: every loose path asked for is watched (there or not)
 // The loose copy of a game file in the game folder (natives\...), or empty when there is none
 static std::string loose_game_path(const std::string& pak_path) {
     if (g_game_dir.empty() || str_lower(pak_path).compare(0, 8, "natives/") != 0) return {};
+    probe_asked_loose(pak_path);
     std::string p = g_game_dir + "\\" + pak_path;
     for (auto& c : p) if (c == '/') c = '\\';
     uint64_t sz = 0, mt = 0;
@@ -969,11 +971,79 @@ static std::string loose_probe_state(const std::string& pak_path) {
     }
     return buf;
 }
+// Manager mode, a probe of a path the build only looked up (probe_asked_loose: is there a loose file?): "there" or "none",
+// the file not read. A replacement put over that loose file keeps the pak; the file going away, or one appearing where
+// there was none, builds again. A path a build also took content from is probed by content (probe_loose), which wins.
+static const char* const LOOSE_THERE = "there";
+static std::string loose_exists_state(const std::string& pak_path) {
+    if (g_game_dir.empty()) return "none";
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(make_wide_path(p).c_str(), GetFileExInfoStandard, &fa)
+        || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return "none";
+    return LOOSE_THERE;
+}
 static void probe_loose(const std::string& pak_path) {
     const std::string low = str_lower(pak_path);
     if (low.compare(0, 8, "natives/") != 0) return;
     if (!g_manager_mode && low.compare(0, 30, "natives/stm/product/model/esf/") == 0) return;   // the folder walk sees those
-    if (!g_loose_probes.count(low)) g_loose_probes[low] = loose_probe_state(low);
+    auto it = g_loose_probes.find(low);
+    if (it == g_loose_probes.end()) g_loose_probes[low] = loose_probe_state(low);
+    else if (it->second == LOOSE_THERE) it->second = loose_probe_state(low);   // looked up first, its content taken since
+}
+static void probe_asked_loose(const std::string& pak_path) {
+    if (!g_manager_mode) return;
+    const std::string low = str_lower(pak_path);
+    if (low.compare(0, 8, "natives/") == 0 && !g_loose_probes.count(low)) g_loose_probes[low] = loose_exists_state(low);
+}
+
+// Manager mode: the pak in place is kept after a replacement is installed over the game, by the rule of ZZtaii's
+// Slotsloader fork (1.9.5 and 1.10.9, MIT). The Manager's "Replace original"
+// turns rows of re_chunk_000.pak off (zeros over the path hash), puts its files in the game's natives folder and writes
+// manager_installs.json again. His fingerprint sees all three (the base pak's date, the walk of natives\...\model\esf,
+// the list's date) and builds again each time. In Manager mode those three leave the fingerprint. What decides in
+// their place is kept by each build in game_lookups.tsv beside the registry and asked again at the next launch, from
+// the base pak's index alone (read for the game-inputs digest anyway):
+//   - strict ("s"): the colour files a slot took from the game (the fork's game_colours.tsv): a hash looked up in the
+//     base pak's table and whether a row had it. A replacement installed over one, or removed, builds again: the slot
+//     holds a copy of that file. The loose colour files it took are watched by content (probe_loose), as the mod-only
+//     dependencies add_restorations leaves to a loose file.
+//   - exists ("e"): a path the slot check or the swatches asked for (slotcheck::GameFiles), kept as "the game has it:
+//     a row of the table or a loose file". A replacement of it keeps the pak; the file gone altogether, or one that
+//     was nowhere appearing, builds again (the slot would be left out, or no longer be).
+//   - every other question to the table ("f": a hash looked up, "o": a hash whose turned-off rows were asked for) is
+//     kept for the log only: the launch says how many are answered differently and keeps the pak, as the fork does.
+// What this rule accepts, as the fork did: a slot holds what it was built with. An outfit made while the game's file was
+// there keeps its copy of it (the material file a mesh-only mod is given, a scene) after a replacement is installed
+// over that file, and one made while the replacement was installed refers to the replacement; the slot check's verdict,
+// its repairs and the swatches are those of the last build. Any rebuild (a mod added, changed or removed in
+// costume_mods, a colour file, a game update) brings everything up to date. A game update is seen by the game-inputs
+// digest (the base pak's size, header and index, its path hashes left out).
+static PakReader::Asked g_asked;
+static PakReader* g_asked_pak = nullptr;                // re_chunk_000.pak while a Manager-mode build notes what it asks
+static std::set<uint64_t> g_asked_strict;               // "strict" above
+static std::map<std::string, bool> g_exists_asked;      // "exists" above: lower-case pak path -> the game had it
+struct AskQuiet { AskQuiet() { ++g_asked.quiet; } ~AskQuiet() { --g_asked.quiet; } };
+static void ask_note(uint64_t hash) { if (g_asked_pak) g_asked.found.emplace(hash, g_asked_pak->has_own(hash)); }   // the table's own answer, as find() notes it
+static void ask_strict(uint64_t hash) { if (g_asked_pak) g_asked_strict.insert(hash); }
+static void ask_exists(const std::string& pak_path, uint64_t hash) {   // found in a pak: noted when it is the base pak's own row
+    if (g_asked_pak && g_asked_pak->has_own(hash)) g_exists_asked[str_lower(pak_path)] = true;
+}
+static void ask_exists_loose(const std::string& pak_path, bool there) {   // in no pak: there as a loose file, or nowhere
+    if (g_asked_pak) g_exists_asked.emplace(str_lower(pak_path), there);
+}
+// A loose file of the game folder, without a probe (the launch's check, and the slot check in Manager mode)
+static std::string loose_file_path(const std::string& pak_path) {
+    if (g_game_dir.empty() || str_lower(pak_path).compare(0, 8, "natives/") != 0) return {};
+    std::string p = g_game_dir + "\\" + pak_path;
+    for (auto& c : p) if (c == '/') c = '\\';
+    return p;
+}
+static bool loose_file_there(const std::string& pak_path) {
+    const std::string p = loose_file_path(pak_path);
+    uint64_t sz = 0, mt = 0;
+    return !p.empty() && file_stat_long(p, sz, mt);
 }
 
 struct ModFileRef {
@@ -3354,6 +3424,7 @@ static void add_slot_files(PakWriter& writer,
             } else {
                 uint64_t oh = pak_path_hash(std::string_view(cmd_orig));
                 auto* oe = base_pak.find(oh);
+                ask_strict(oh);   // Manager mode: a replacement installed over this colour file, or removed, builds again
                 if (oe) {
                     put_game_raw(writer, th, base_pak, *oe);
                     written_paths.insert(cmd_target); count++;
@@ -3373,7 +3444,9 @@ static void add_slot_files(PakWriter& writer,
                         auto read_colour = [&](const std::string& p) -> std::vector<uint8_t> {
                             if (auto f = mc->files_in_folder.find(p); f != mc->files_in_folder.end()) return f->second.read_data();
                             if (from_own_mod(p)) return amf.at(p).read_data();
-                            if (auto* fe = base_pak.find(pak_path_hash(std::string_view(p)))) return base_pak.read(*fe);
+                            const uint64_t ph = pak_path_hash(std::string_view(p));
+                            ask_strict(ph);   // the colour standing in is one the slot takes too
+                            if (auto* fe = base_pak.find(ph)) return base_pak.read(*fe);
                             if (g_manager_mode) probe_loose(p);
                             return read_loose_game_file(p);
                         };
@@ -4971,7 +5044,13 @@ static void add_restorations(PakWriter& writer,
             if (pak_path.size() >= pfx.size() && pak_path.compare(0, pfx.size(), pfx) == 0)
                 { in_relocated = true; break; }
         uint64_t h = pak_path_hash(std::string_view(pak_path));
-        auto* be = base_pak.find(h);
+        const PakEntry* be;
+        { AskQuiet quiet; be = base_pak.find(h); }
+        // Manager mode, the lookups kept for the next launch (g_asked): this one decides something only for a path that
+        // is not of the game's own index and could be written below (a mod-only dependency of the model folders). For
+        // every other path the file is left to the game whether its row is on or off, and nothing is written elsewhere.
+        if ((pak_path.find("/model/esf/") != std::string::npos || is_model_root_file(pak_path))
+            && !g_relocated_mod_paths.count(pak_path) && !inv.all_hashes.count(h)) ask_note(h);
         // Manager mode (ZZtaii's Slotsloader fork 1.9.4, MIT): nothing of the game is written back at its own path. Its outfits
         // come from costume_mods alone and replace no original, so there is nothing to restore, and the pak then has no entry a
         // replacement installed later (a loose file, or a pak of its own below this one) would be covered by.
@@ -5216,17 +5295,24 @@ static std::vector<std::string> material_textures(const std::vector<uint8_t>& md
 struct GameFiles {
     PakWriter* writer = nullptr;
     std::vector<PakReader*> paks;
+    // Manager mode (g_asked, "exists"): what is asked is "the game has it", in a pak's table or as a loose file
     bool exists(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return true;
-        for (auto* pk : paks) if (pk->find(h)) return true;
+        { AskQuiet quiet; for (auto* pk : paks) if (pk->find(h)) { ask_exists(p, h); return true; } }
+        if (g_asked_pak) { const bool there = loose_file_there(p); ask_exists_loose(p, there); return there; }
         probe_loose(p);
         return !loose_game_path(p).empty();
     }
     std::vector<uint8_t> load(const std::string& p) const {
         uint64_t h = pak_path_hash(std::string_view(p));
         if (writer->find(h)) return writer->get(h);
-        for (auto* pk : paks) if (auto* e = pk->find(h)) return pk->read(*e);
+        { AskQuiet quiet; for (auto* pk : paks) if (auto* e = pk->find(h)) { ask_exists(p, h); return pk->read(*e); } }
+        if (g_asked_pak) {
+            const bool there = loose_file_there(p);
+            ask_exists_loose(p, there);
+            return there ? read_file_long(loose_file_path(p)) : std::vector<uint8_t>{};
+        }
         probe_loose(p);
         std::string full = loose_game_path(p);
         return full.empty() ? std::vector<uint8_t>{} : read_file_long(full);
@@ -11181,7 +11267,11 @@ static std::map<std::string, std::string> load_loose_probes(const std::string& p
 }
 static std::map<std::string, std::string> current_loose_probes(const std::map<std::string, std::string>& saved) {
     std::map<std::string, std::string> now;
-    for (auto& sp : saved) now[sp.first] = loose_probe_state(sp.first);
+    for (auto& sp : saved)
+        // Manager mode: a path looked up only ("there"), or with no loose file then ("none": anything there now builds
+        // again, whatever it holds), is not read; only a loose file the build took content from is
+        now[sp.first] = g_manager_mode && (sp.second == LOOSE_THERE || sp.second == "none") ? loose_exists_state(sp.first)
+                                                                                           : loose_probe_state(sp.first);
     return now;
 }
 static bool save_loose_probes(const std::string& path, const std::map<std::string, std::string>& probes) {
@@ -11392,7 +11482,15 @@ static bool fingerprint_input_file(CacheDigest& digest, const std::string& path,
     return ok;
 }
 
-static bool fingerprint_base_index(CacheDigest& digest, const std::string& path) {
+// The base pak's table as the index pass sees it, for the questions of the last build (g_asked): which of the wanted hashes
+// a row has, and the turned-off rows (zeros over the hash) with the hashes around them, as PakReader::open keeps them.
+struct BaseRows {
+    std::unordered_map<uint64_t, bool> present;   // in: the hashes to look for (false); out: true when a row has it
+    struct Off { uint64_t after, before; long long offset; };
+    std::vector<Off> off;
+    bool read = false;                            // the whole table was read
+};
+static bool fingerprint_base_index(CacheDigest& digest, const std::string& path, BaseRows* base_rows = nullptr) {
     uint64_t size = 0, mtime = 0;
     if (!file_stat_long(path, size, mtime) || size < 16) return false;
     FILE* f = _wfopen(make_wide_path(path).c_str(), L"rb");
@@ -11407,24 +11505,40 @@ static bool fingerprint_base_index(CacheDigest& digest, const std::string& path)
     digest.add(&size, sizeof size);
     digest.add(header, sizeof header);
     std::vector<uint8_t> rows(4096 * 48);
+    uint64_t last = 0;
+    bool sorted = true;
+    size_t open_from = 0;
     while (ok && count) {
         size_t n = std::min<size_t>(count, rows.size() / 48);
         if (fread(rows.data(), 48, n, f) != n) { ok = false; break; }
+        if (base_rows)
+            for (size_t i = 0; i < n; i++) {   // as PakReader::open reads the table
+                uint64_t h; long long at;
+                memcpy(&h, rows.data() + i * 48, 8);
+                memcpy(&at, rows.data() + i * 48 + 8, 8);
+                if (h == 0) { base_rows->off.push_back({last, UINT64_MAX, at}); continue; }
+                if (h < last) sorted = false;
+                for (; open_from < base_rows->off.size(); open_from++) base_rows->off[open_from].before = h;
+                last = h;
+                if (auto w = base_rows->present.find(h); w != base_rows->present.end()) w->second = true;
+            }
         for (size_t i = 0; i < n; i++) memset(rows.data() + i * 48, 0, 8);   // hash_lower, hash_upper: a mod manager's
         digest.add(rows.data(), n * 48);
         count -= (uint32_t)n;
     }
     fclose(f);
+    if (base_rows) { if (!sorted) base_rows->off.clear(); base_rows->read = ok; }
     return ok;
 }
 
 // out: ";game-inputs=<digest>", or left empty (false) when an input could not be read: the fingerprint is then the one of
 // before this check, never a refusal to start.
 static bool game_inputs_fingerprint(const std::string& game_dir, const std::string& base_path, const std::string& tsv_path,
-                                    const std::string& static_dir, const StaticMeta& meta, std::string& out) {
+                                    const std::string& static_dir, const StaticMeta& meta, std::string& out,
+                                    BaseRows* base_rows = nullptr) {
     CacheDigest digest;
     if (!fingerprint_input_file(digest, game_dir + "\\StreetFighter6.exe", true)
-        || !fingerprint_base_index(digest, base_path)
+        || !fingerprint_base_index(digest, base_path, base_rows)
         || !fingerprint_input_file(digest, tsv_path)
         || !fingerprint_input_file(digest, static_dir + "\\static_meta.json")) return false;
     // the static files the build would take (old metadata: the three hardcoded names); others in the folder are no input
@@ -11435,6 +11549,179 @@ static bool game_inputs_fingerprint(const std::string& game_dir, const std::stri
         if (!fingerprint_input_file(digest, static_dir + "\\" + local)) return false;
     out = ";game-inputs=" + digest.hex();
     return true;
+}
+
+// ---- Manager mode: the questions of the last build and their answers (g_asked), kept in game_lookups.tsv ----
+static const char* GAME_LOOKUPS_FILE = "game_lookups.tsv";
+struct AskedJournal {
+    std::map<uint64_t, bool> strict;         // g_asked_strict: decides
+    std::map<std::string, bool> exists;      // g_exists_asked: decides
+    std::map<uint64_t, bool> found;          // PakReader::Asked::found: for the log
+    std::map<uint64_t, std::string> off;     // PakReader::Asked::off: for the log
+    size_t found_total = 0, off_total = 0;   // read back: how many the build had (more than were kept: asked_log_kept)
+    size_t deciding() const { return strict.size() + exists.size(); }
+};
+// "f" and "o" are for the launch's log line alone, and read at every launch: the first ones are kept, with how many there were.
+// Tests only: SF6_COSTUME_TEST_ASKED_KEPT gives another number.
+static size_t asked_log_kept() {
+    char v[32];
+    const DWORD n = GetEnvironmentVariableA("SF6_COSTUME_TEST_ASKED_KEPT", v, sizeof v);
+    return n > 0 && n < sizeof v ? (size_t)strtoull(v, nullptr, 10) : 300;
+}
+// Ends the saved fingerprint (before the meta id): at launch it is computed again from the answers of then
+static std::string asked_digest(const AskedJournal& j) {
+    CacheDigest d;
+    for (auto& [h, there] : j.strict) { d.add(&h, sizeof h); d.add(&there, 1); }
+    d.text("|");
+    for (auto& [p, there] : j.exists) { d.text(p); d.add(&there, 1); }
+    return ";asked:" + std::to_string(j.deciding()) + ":" + d.hex();
+}
+static AskedJournal asked_by_build() {
+    AskedJournal j;
+    for (uint64_t h : g_asked_strict) j.strict[h] = g_asked_pak && g_asked_pak->has_own(h);
+    j.exists = g_exists_asked;
+    for (auto& [h, there] : g_asked.found) j.found[h] = there;
+    for (auto& [h, rows] : g_asked.off) j.off[h] = rows;
+    return j;
+}
+// One line each: "s<TAB>hash<TAB>0|1", "e<TAB>path<TAB>0|1", "f<TAB>hash<TAB>0|1", "o<TAB>hash<TAB>rows", then
+// "c<TAB>f<TAB>count" and "c<TAB>o<TAB>count" when there were more "f" or "o" than are kept
+static AskedJournal load_asked(const std::string& path) {
+    AskedJournal j;
+    const std::string text = read_text_file(path);
+    for (size_t at = 0; at < text.size(); ) {
+        size_t e = text.find('\n', at);
+        if (e == std::string::npos) e = text.size();
+        std::string line = text.substr(at, e - at);
+        at = e + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() < 3 || line[1] != '\t') continue;
+        const std::string rest = line.substr(2);
+        const size_t tab = rest.find('\t');
+        if (tab == std::string::npos) continue;
+        const std::string key = rest.substr(0, tab), value = rest.substr(tab + 1);
+        if (line[0] == 'e') { j.exists[key] = value == "1"; continue; }
+        if (line[0] == 'c') {
+            const size_t n = (size_t)strtoull(value.c_str(), nullptr, 10);
+            if (key == "f") j.found_total = n; else if (key == "o") j.off_total = n;
+            continue;
+        }
+        const uint64_t h = strtoull(key.c_str(), nullptr, 16);
+        if (line[0] == 's') j.strict[h] = value == "1";
+        else if (line[0] == 'f') j.found[h] = value == "1";
+        else if (line[0] == 'o') j.off[h] = value;
+    }
+    j.found_total = std::max(j.found_total, j.found.size());
+    j.off_total = std::max(j.off_total, j.off.size());
+    return j;
+}
+static bool save_asked(const std::string& path, const AskedJournal& j) {
+    const std::string tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = true;
+    for (auto& [h, there] : j.strict) ok = fprintf(f, "s\t%016llx\t%d\n", (unsigned long long)h, there ? 1 : 0) > 0 && ok;
+    for (auto& [p, there] : j.exists) ok = fprintf(f, "e\t%s\t%d\n", p.c_str(), there ? 1 : 0) > 0 && ok;
+    const size_t keep = asked_log_kept();
+    size_t n = 0;
+    for (auto& [h, there] : j.found)
+        if (++n <= keep) ok = fprintf(f, "f\t%016llx\t%d\n", (unsigned long long)h, there ? 1 : 0) > 0 && ok;
+    if (n > keep) ok = fprintf(f, "c\tf\t%zu\n", n) > 0 && ok;
+    n = 0;
+    for (auto& [h, rows] : j.off) {
+        if (j.found.count(h)) continue;   // the log counts the hash once, by its "f"
+        if (++n <= keep) ok = fprintf(f, "o\t%016llx\t%s\n", (unsigned long long)h, rows.c_str()) > 0 && ok;
+    }
+    if (n > keep) ok = fprintf(f, "c\to\t%zu\n", n) > 0 && ok;
+    ok = fclose(f) == 0 && ok;
+    if (!ok || !MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp.c_str()); return false; }
+    return true;
+}
+// Tests only: the paths SF6_COSTUME_TEST_TURNED_OFF makes the build read as turned off (costume_loader_run)
+static std::vector<uint64_t> test_turned_off_hashes() {
+    std::vector<uint64_t> out;
+    char zf[MAX_PATH];
+    DWORD zn = GetEnvironmentVariableA("SF6_COSTUME_TEST_TURNED_OFF", zf, MAX_PATH);
+    if (zn == 0 || zn >= MAX_PATH) return out;
+    FILE* f = fopen(zf, "rb");
+    char line[1024];
+    while (f && fgets(line, sizeof line, f)) {
+        std::string p = str_lower(trim_ws(line));
+        if (!p.empty()) out.push_back(pak_path_hash(std::string_view(p)));
+    }
+    if (f) fclose(f);
+    return out;
+}
+// The hashes the index pass has to look for
+static void asked_wanted(const AskedJournal& saved, BaseRows& rows) {
+    for (auto& kv : saved.strict) rows.present[kv.first] = false;
+    for (auto& kv : saved.found) rows.present[kv.first] = false;
+    for (auto& kv : saved.off) rows.present[kv.first] = false;
+    for (auto& kv : saved.exists) rows.present[pak_path_hash(std::string_view(kv.first))] = false;
+}
+// The same questions, answered from the base pak's table as it is now
+static AskedJournal current_asked(const AskedJournal& saved, const BaseRows& rows) {
+    AskedJournal now;
+    auto has = [&](uint64_t h) { auto it = rows.present.find(h); return it != rows.present.end() && it->second; };
+    for (auto& kv : saved.strict) now.strict[kv.first] = has(kv.first);
+    for (auto& kv : saved.found) now.found[kv.first] = has(kv.first);
+    for (auto& kv : saved.off) {
+        const uint64_t h = kv.first;
+        std::string s;
+        if (h != 0 && !has(h))
+            for (auto& t : rows.off) if (t.after < h && h < t.before) { s += std::to_string(t.offset); s += ','; }
+        now.off[h] = s;
+    }
+    for (auto& kv : saved.exists)
+        now.exists[kv.first] = has(pak_path_hash(std::string_view(kv.first))) || loose_file_there(kv.first);
+    return now;
+}
+// Says which deciding answers changed (the first few), with the game's path of a hash when the index names it
+static void log_asked_changes(const AskedJournal& then, const AskedJournal& now, const std::string& tsv_path) {
+    std::string tsv;
+    bool tsv_read = false;
+    auto name = [&](uint64_t h) {
+        char b[40];
+        snprintf(b, sizeof b, "%016llX", (unsigned long long)h);
+        if (!tsv_read) { tsv = read_text_file(tsv_path); tsv_read = true; }
+        const size_t at = tsv.find(std::string("\n") + b + "\t");
+        if (at != std::string::npos) {
+            size_t e = tsv.find('\n', at + 1);
+            if (e == std::string::npos) e = tsv.size();
+            std::string line = tsv.substr(at + 1, e - at - 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const size_t tab = line.rfind('\t');
+            if (tab != std::string::npos && tab + 1 < line.size()) return line.substr(tab + 1);
+        }
+        return std::string("the file of hash ") + b;
+    };
+    size_t n = 0;
+    std::string what;
+    auto say = [&](const std::string& s) { if (++n <= 3) what += (what.empty() ? "" : "; ") + s; };
+    for (auto& kv : then.strict)
+        if (auto it = now.strict.find(kv.first); it == now.strict.end() || it->second != kv.second)
+            say(name(kv.first) + (kv.second ? " (a colour file a slot took: its row is off now)" : " (a colour file: its row is back)"));
+    for (auto& kv : then.exists)
+        if (auto it = now.exists.find(kv.first); it == now.exists.end() || it->second != kv.second)
+            say(kv.first + (kv.second ? " (gone from the game)" : " (in the game now)"));
+    if (n)
+        logf("  the pak is built again: %zu of the %zu game files that decide it are read differently now (a replacement "
+             "installed or removed over the game): %s%s\n", n, then.deciding(), what.c_str(), n > 3 ? "; ..." : "");
+}
+// The pak is kept: says how many of the other game files it was built from are replaced, or back, since
+static void log_asked_kept(const AskedJournal& then, const AskedJournal& now) {
+    size_t n = 0;
+    for (auto& kv : then.found)
+        if (auto it = now.found.find(kv.first); it != now.found.end() && it->second != kv.second && !then.strict.count(kv.first)) n++;
+    for (auto& kv : then.off)
+        if (auto it = now.off.find(kv.first); it != now.off.end() && it->second != kv.second && !then.found.count(kv.first)) n++;
+    const size_t kept = then.found.size() + then.off.size(), total = then.found_total + then.off_total;
+    if (n && total > kept)
+        logf("  %zu of the %zu game files kept for this line (of %zu this pak was built from) are replaced, or back, since (no "
+             "colour file a slot took): the pak is kept, as the Slotsloader fork keeps it\n", n, kept, total);
+    else if (n)
+        logf("  %zu game files this pak was built from are replaced, or back, since (no colour file a slot took): the pak is "
+             "kept, as the Slotsloader fork keeps it\n", n);
 }
 
 // ============================================================================
@@ -11983,12 +12270,16 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         if (n) logf("  Manager mode: costume_mods_nsfw is not read: the %zu mod%s in it give%s no outfit (the Slotsloader Manager "
                     "installs to costume_mods)\n", n, n == 1 ? "" : "s", n == 1 ? "s" : "");
     }
-    if (has_loose) folder_infos.push_back({ "natives", game_dir + "\\natives\\stm\\product\\model\\esf" });
+    // Manager mode: not the walk of the game's loose files (a replacement installed there would rebuild every time):
+    // the loose files a build asked for are watched one by one (probe_loose), the rest are not its concern (g_asked)
+    if (has_loose && !g_manager_mode) folder_infos.push_back({ "natives", game_dir + "\\natives\\stm\\product\\model\\esf" });
     if (!g_fluffy.ini.empty()) {
         folder_infos.push_back({ "fluffy/installed.ini", g_fluffy.ini });
         for (auto& pk : g_fluffy.picks) folder_infos.push_back({ "fluffy/" + pk.name, pk.path });
     }
-    if (!g_manager.record.empty()) {   // an install / uninstall in the Manager rebuilds
+    // Manager mode: the Manager's list decides nothing of the pak (outfits come from costume_mods alone, its replacements
+    // are the game's files), and what a replacement changes for a build is asked for itself (g_asked)
+    if (!g_manager.record.empty() && !g_manager_mode) {   // an install / uninstall in the Manager rebuilds
         auto sl = g_manager.record.find_last_of('\\');
         folder_infos.push_back({ "manager/" + g_manager.record.substr(sl + 1), g_manager.record });
     }
@@ -11997,11 +12288,20 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // Manager mode only (the fingerprint of every other install stays as it was): the game's and the loader's own inputs by
     // content, for a game update that the base pak's size and date do not show, and each DLC pak's date
     std::string inputs_fp;
-    if (g_manager_mode && !game_inputs_fingerprint(game_dir, base_path, tsv_path, static_dir, meta, inputs_fp))
+    // Manager mode: the questions of the last build (g_asked) are answered by the same pass over the base pak's table
+    const std::string lookups_path = registry_dir + "\\" + GAME_LOOKUPS_FILE;
+    AskedJournal asked_then;
+    BaseRows base_rows;
+    if (g_manager_mode) { asked_then = load_asked(lookups_path); asked_wanted(asked_then, base_rows); }
+    if (g_manager_mode && !game_inputs_fingerprint(game_dir, base_path, tsv_path, static_dir, meta, inputs_fp, &base_rows))
         logf("  WARN: the game's or the loader's own files could not be read for the fingerprint: an update that keeps the base "
              "pak's size and date is not seen at this launch\n");
+    for (uint64_t h : test_turned_off_hashes())
+        if (auto w = base_rows.present.find(h); w != base_rows.present.end()) w->second = false;
+    // Manager mode: the base pak's size is in the digest and its date says nothing a build depends on (a replacement
+    // installed over the game changes it); without the digest, the size and the date as before
     std::string new_fp = compute_fingerprint(mod_paks, folder_infos) + dlc_fingerprint(game_dir, g_manager_mode)
-                       + base_pak_fingerprint(base_path) + inputs_fp;
+                       + (g_manager_mode && !inputs_fp.empty() ? std::string() : base_pak_fingerprint(base_path)) + inputs_fp;
     if (g_rto_layout != RtoLayout::Off)   // the options change the pak; off keeps the fingerprint as before
         new_fp += std::string(";options=") + RTO_FORMAT + (g_rto_layout == RtoLayout::One ? ":one" : ":variants");
     new_fp += variant_choices_fingerprint();   // empty while every variant is on
@@ -12012,7 +12312,9 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // 4: options of a menu group that names a complete outfit are variants of that outfit (finalize_units, choice_of): a pak
     // built before that has not got them. A rule that changes what a build makes in Manager mode moves this number: with the
     // number kept, the pak in place is "Up to date" and the new outfits never come.
-    if (g_manager_mode) new_fp += ";manager_mode4";
+    // 5: the pak is kept after a replacement is installed over the game (g_asked): its questions are not known for a pak
+    // built before that
+    if (g_manager_mode) new_fp += ";manager_mode5";
     if (!g_outfit_labels) new_fp += ";names=outfit";   // Manager mode's "menu_outfit_names": false: turning it on or off rebuilds
     if (g_swap_repairs) new_fp += "|swap_repairs";    // turning them on or off rebuilds
     if (nsfw_kw_set) {   // NsfwKeywords= changes which outfits are NSFW (the default list: part of LOADER_PAK_ID)
@@ -12024,7 +12326,12 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     }
     // Compared with the saved one: new_fp, then the game files the last build probed, as they are now (probe_loose)
     const std::string probes_path = registry_dir + "\\" + LOOSE_PROBES_FILE;
-    const std::string check_fp = new_fp + loose_probes_digest(current_loose_probes(load_loose_probes(probes_path)));
+    std::string check_fp = new_fp + loose_probes_digest(current_loose_probes(load_loose_probes(probes_path)));
+    AskedJournal asked_now;
+    if (g_manager_mode) {
+        asked_now = current_asked(asked_then, base_rows);
+        check_fp += base_rows.read ? asked_digest(asked_now) : std::string(";asked:unread");
+    }
     const bool options_missing = g_rto_layout != RtoLayout::Off
         && GetFileAttributesA((registry_dir + "\\" + RTO_FILE).c_str()) == INVALID_FILE_ATTRIBUTES;
     int target_num = top_foreign + 1;
@@ -12044,6 +12351,11 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         const size_t mt = reg_check.fingerprint.rfind(";meta=");
         const bool meta_same = mt != std::string::npos && reg_check.fingerprint.compare(mt, std::string::npos, meta_tag) == 0;
         if (mt != std::string::npos) reg_check.fingerprint.erase(mt);
+        if (g_manager_mode && base_rows.read && reg_check.fingerprint != check_fp) {   // the game's answers changed: said
+            const size_t a = reg_check.fingerprint.rfind(";asked:"), b = check_fp.rfind(";asked:");
+            if (a != std::string::npos && b != std::string::npos && reg_check.fingerprint.compare(a, std::string::npos, check_fp, b, std::string::npos) != 0)
+                log_asked_changes(asked_then, asked_now, tsv_path);
+        }
         // variants.json (read by the Slotsloader Manager) is written by a build only: missing, the same mods are
         // built again like for another meta id, the pak in place kept. From ZZtaii's Slotsloader fork 1.10.0, MIT.
         const bool variants_missing = GetFileAttributesA(variants_path.c_str()) == INVALID_FILE_ATTRIBUTES;
@@ -12066,6 +12378,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             if (classify_patch_pak(target_path.c_str(), &target_entries) == PatchPakKind::Costume && target_entries != 1) {
                 sync_outfits_pak(registry_dir + "\\outfits.json", target_name);   // the stage loader may have moved it
                 if (g_rto_layout != RtoLayout::Off) sync_outfits_pak(registry_dir + "\\" + RTO_FILE, target_name);   // same "pak" key
+                if (g_manager_mode) log_asked_kept(asked_then, asked_now);
                 auto t1 = std::chrono::high_resolution_clock::now();
                 logf("Up to date (fingerprint match, %s exists) in %.1f ms\n",
                      target_name, std::chrono::duration<double,std::milli>(t1-t0).count());
@@ -12121,6 +12434,17 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
             logf("  test: %d game files read as turned off\n", n);
         }
     }
+    // Manager mode: from here every question put to the base pak's table is kept for the next launch (g_asked)
+    g_asked = PakReader::Asked{};
+    g_exists_asked.clear();
+    g_asked_strict.clear();
+    g_asked_pak = nullptr;
+    // base_pak is this function's: whatever way the build ends, an early return included, nothing points at it after
+    struct AskedPakReset {
+        PakReader& pak;
+        ~AskedPakReset() { pak.record_asked(nullptr); g_asked_pak = nullptr; }
+    } asked_pak_reset{ base_pak };
+    if (g_manager_mode) { base_pak.record_asked(&g_asked); g_asked_pak = &base_pak; }
     load_current_crcs(base_pak);
 
     // 4b. Structural files from the game's own: every fighter of the game gets its slots, new ones included
@@ -12693,7 +13017,7 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
         logf("  WARN: could not write %s: the pak is built again at the next launch\n", probes_path.c_str());
     if (!g_loose_probes.empty()) {
         size_t loose = 0;
-        for (auto& lp : g_loose_probes) if (lp.second.compare(0, 6, "loose:") == 0) loose++;
+        for (auto& lp : g_loose_probes) if (lp.second.compare(0, 6, "loose:") == 0 || lp.second == LOOSE_THERE) loose++;
         logf("  %zu game files outside the model folders this pak depends on (%zu of them loose files in its natives "
              "folder) are watched for changes\n", g_loose_probes.size(), loose);
     }
@@ -12701,7 +13025,21 @@ int costume_loader_run(const wchar_t* game_dir_w, const wchar_t* base_pak_overri
     // (a launch cut short in between builds again, and the pass finds the colours where colour_owners.txt says), and before
     // outfits.json is written again (the former labels, for the first launch of this loader)
     follow_colours(game_dir, registry_dir, former_slots, registry.slots);
-    registry.fingerprint = new_fp + loose_probes_digest(g_loose_probes) + meta_tag;
+    // Manager mode: what this build asked of the base pak, for the next launch (g_asked). Not written: built again then.
+    std::string asked_fp;
+    if (g_manager_mode) {
+        const AskedJournal asked = asked_by_build();
+        base_pak.record_asked(nullptr);
+        g_asked_pak = nullptr;
+        asked_fp = asked_digest(asked);
+        if (!save_asked(lookups_path, asked)) {
+            logf("  WARN: could not write %s: the pak is built again at the next launch\n", lookups_path.c_str());
+            asked_fp = ";asked:unsaved";
+        } else
+            logf("  %zu game files decide whether this pak is kept (%zu colour files the slots took, %zu files the slots refer "
+                 "to; %s)\n", asked.deciding(), asked.strict.size(), asked.exists.size(), GAME_LOOKUPS_FILE);
+    }
+    registry.fingerprint = new_fp + loose_probes_digest(g_loose_probes) + asked_fp + meta_tag;
     save_registry(reg_path.c_str(), registry);
     logf("  registry saved\n");
     write_outfits_json(registry_dir + "\\outfits.json", slots, target_name);

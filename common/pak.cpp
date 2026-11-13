@@ -209,9 +209,15 @@ void PakReader::close() {
 
 std::vector<const PakEntry*> PakReader::turned_off_candidates(uint64_t hash) const {
     std::vector<const PakEntry*> out;
-    if (hash == 0 || entries_.count(hash)) return out;
+    const bool note = asked_ && !asked_->quiet;
+    if (hash == 0 || entries_.count(hash)) { if (note) asked_->off.emplace(hash, std::string()); return out; }
     for (auto& t : turned_off_)
         if (t.after < hash && hash < t.before) out.push_back(&t.e);
+    if (note) {   // this table's rows only: the added paks are known by their own identity
+        std::string rows;
+        for (auto* e : out) { rows += std::to_string((long long)e->offset); rows += ','; }
+        asked_->off.emplace(hash, rows);
+    }
     for (auto* o : over_)
         for (auto* e : o->turned_off_candidates(hash)) out.push_back(e);
     return out;
@@ -219,6 +225,7 @@ std::vector<const PakEntry*> PakReader::turned_off_candidates(uint64_t hash) con
 
 const PakEntry* PakReader::find(uint64_t hash) const {
     auto it = entries_.find(hash);
+    if (asked_ && !asked_->quiet) asked_->found.emplace(hash, it != entries_.end());
     if (it != entries_.end()) return &it->second;
     for (auto* o : over_)
         if (auto* e = o->find(hash)) return e;
