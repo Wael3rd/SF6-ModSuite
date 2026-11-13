@@ -68,7 +68,7 @@ void logf(const char* fmt, ...) {
 
 // ---------------------------------------------------------------- config.json (the keys the mode reads)
 struct Cfg {
-    bool guard_save = true, scroll = true, rec = true, rec_menu = true, extra_rows = true;
+    bool guard_save = true, scroll = true, rec = true, rec_menu = true, rec_menu_reset = true, extra_rows = true;
     int window = 12, scroll_row = 7, rec_min_steps = 2;
     std::string rec_counter;
 } cfg;
@@ -81,6 +81,7 @@ void load_cfg() {
     b("scroll", cfg.scroll);
     b("rec", cfg.rec);
     b("rec_menu", cfg.rec_menu);
+    b("rec_menu_reset", cfg.rec_menu_reset);   // false: no Reset Battle when the training menu changed a setting
     b("extra_rows", cfg.extra_rows);
     if (auto v = num(at(c, "rec_min_steps"))) cfg.rec_min_steps = std::max(1, static_cast<int>(std::floor(*v)));
     const std::string rc = str_of(at(c, "rec_counter"));
@@ -511,6 +512,7 @@ std::map<Obj*, AssetOrig> asset_orig;          // borrowed assets and their offi
 std::map<Obj*, std::map<std::string, double>> pos_orig;    // [StageInfo] official stage fields
 std::map<Obj*, std::map<std::string, double>> team_orig;   // [TeamInfo] official team fields
 std::map<Obj*, const Trial*> preview_done;     // [StageInfo] the trial previewed there
+std::set<Obj*> setup_si;                       // assets the StageSetup hook wrote (rooted): their official values go back too
 uint64_t settle_until = 0;
 
 const char* const kStageRaw[] = { "PositionType", "PlayerInitX", "EnemyInitX", "CameraInitX", "EndDelayTime", "EndDelayMargin",
@@ -548,12 +550,15 @@ void apply_baseline(Obj* si, const Trial& t) {
     static const std::pair<const char*, double> kStageBase[] = {
         { "PositionType", 0 }, { "EndDelayMargin", 0 }, { "UGaugeType", 0 }, { "UniqueGaugeStock", 0 }, { "UniqueGaugeTimer", 0 } };
     for (const auto& [f, v] : kStageBase) { keep_stage(si, f); set(si, f, v); }
-    // the fighter's own gauge (Jamie's drinks, Juri's stocks...): "unique": { "stock": n[, "type", "timer"] }
+    // the fighter's own gauge (Jamie's drinks, Juri's stocks, Ryu's Denjin Charge...): "unique": { "type", "stock",
+    // "timer" }. UGaugeType 1 (CNT_START) takes both values as the training menu would (stock 0..6 / 7 infinite, timer
+    // 0 off / 1 started / 2 infinite); 2 and 3 force everything to its maximum (measured)
     const json* u = obj(&t.j, "unique");
-    if (auto stock = num(at(u, "stock"))) {
+    const auto stock = num(at(u, "stock")), timer = num(at(u, "timer"));
+    if (stock || timer) {
         set(si, "UGaugeType", std::floor(num(at(u, "type")).value_or(1)));
-        set(si, "UniqueGaugeStock", std::max(0.0, std::floor(*stock)));
-        if (auto tm = num(at(u, "timer"))) set(si, "UniqueGaugeTimer", std::max(0.0, std::floor(*tm)));
+        set(si, "UniqueGaugeStock", std::max(0.0, std::floor(stock.value_or(0))));
+        if (timer) set(si, "UniqueGaugeTimer", std::max(0.0, std::floor(*timer)));
     }
     static const std::pair<const char*, double> kPlayer[] = {
         { "VGaugeHealType", 1 }, { "VGaugePoint", 100 }, { "DummyActionType", 0 }, { "GuardType", 2 }, { "CounterType", 0 } };
@@ -1183,6 +1188,8 @@ struct Named { std::array<uint8_t, 16> orig; std::array<uint8_t, 16> ours; bool 
 std::map<Obj*, Named> renamed;                 // [entry] its official title GUID (the first one seen)
 struct DemoOrig { Obj* rec; Obj* buff; double num; };
 std::map<Obj*, DemoOrig> demo_orig;            // [entry]
+struct DemoBuf { std::string key; Obj* buf = nullptr; };
+std::map<Obj*, DemoBuf> demo_bufs;             // [entry] the example buffer of ours it holds (rooted), and the demo it was made from
 std::map<Obj*, TrialP> entry_trial;            // [entry] our trial shown on that row
 std::map<Obj*, std::map<int, Obj*>> extra_copies;   // [official array] the copies past its count, made once
 std::set<Obj*> copied;                         // entries that are copies
@@ -1258,16 +1265,25 @@ void apply_demo(Obj* entry, const Trial& t) {
         demo_orig[entry] = { recd, buff, num(recd, "Num").value_or(0) };
     }
     int64_t total = 0;
-    for (const auto& r : runs) total += std::max<int64_t>(0, r.first);
+    std::string key;
+    for (const auto& r : runs) { total += std::max<int64_t>(0, r.first); key += std::to_string(r.first) + ":" + std::to_string(r.second) + ","; }
     const int32_t len = static_cast<int32_t>(std::max<int64_t>(3600, total));
-    Obj* buf = new_array(type("System.UInt16"), len);
-    if (!buf) return;
-    uint16_t* data = u16_data(buf, len);
-    if (!data) return;                                        // the layout is not the one checked: the official demo stays
-    int64_t head = 0;
-    for (const auto& [n, mask] : runs) {
-        if (mask) for (int64_t k = head; k < head + n && k < len; ++k) data[k] = mask;
-        head += std::max<int64_t>(0, n);
+    // The buffer is the game's from here on and read long after (rule 20): rooted for the life of the process
+    // (new_array), and an entry keeps the one it has while its demo does not change (the lists are rebuilt after
+    // every take)
+    DemoBuf& db = demo_bufs[entry];
+    Obj* buf = db.key == key ? db.buf : nullptr;
+    if (!buf) {
+        buf = new_array(type("System.UInt16"), len);
+        if (!buf) return;
+        uint16_t* data = u16_data(buf, len);
+        if (!data) return;                                    // the layout is not the one checked: the official demo stays
+        int64_t head = 0;
+        for (const auto& [n, mask] : runs) {
+            if (mask) for (int64_t k = head; k < head + n && k < len; ++k) data[k] = mask;
+            head += std::max<int64_t>(0, n);
+        }
+        db = DemoBuf{ key, buf };
     }
     set_ref(recd, "buff", buf);
     set(recd, "Num", static_cast<double>(total));
@@ -1389,37 +1405,64 @@ void keep_fd(int id, Obj* f) {
     known_fd[id] = f;
 }
 
+// The catalog is several holders (app.esports.FGComboTrialListUserDataHolder components of the scene, measured: 15):
+// the first answers the launch roster (ids 1 to 12, 15 to 18, 20, 21), every fighter added since has a holder of its
+// own answering its id alone. All are asked, once per id, and the answers kept: an entry's fighter only ever comes
+// from what a holder (or the game's own lookup) answered for that id, never from the fighter seen last (that wrote
+// one fighter's trials into another's lists).
+std::vector<Obj*> catalogs;                    // every holder's Data (rooted)
+std::map<int, Obj*> fd_sure;                   // [fighter] the entry a holder answered for that id
+std::map<int, double> fd_miss;                 // [fighter] when no holder had it (asked again 5 s later)
+
+void know_fd(int id, Obj* f) {                 // an answer for that id: sure
+    if (!f || id <= 0) return;
+    if (fd_sure[id] != f) { f->add_ref(); fd_sure[id] = f; }
+    fd_chara[f] = id;
+    known_fd[id] = f;
+}
+
 Obj* get_catalog_data() {
     if (catalog_data) return catalog_data;
     const double now = clock_s();
     if (now - scene_scan_at < 2) return nullptr;
     scene_scan_at = now;
-    const auto comps = scene_components("app.esports.FGComboTrialListUserDataHolder");
-    if (!comps.empty()) if ((catalog_data = get_obj(comps[0], "Data"))) catalog_data->add_ref();
+    for (Obj* c : scene_components("app.esports.FGComboTrialListUserDataHolder"))
+        if (Obj* d = get_obj(c, "Data")) { d->add_ref(); catalogs.push_back(d); }
+    if (!catalogs.empty()) { catalog_data = catalogs[0]; logf("trial catalog: %zu holder(s)", catalogs.size()); }
     return catalog_data;
 }
 
-// Whose list this is, from the object asked (a fighter's catalog entry), not from the fighter seen last
+// a fighter's catalog entry, whichever holder has it
+Obj* catalog_fd(int id) {
+    auto s = fd_sure.find(id);
+    if (s != fd_sure.end()) return s->second;
+    const double now = clock_s();
+    auto m = fd_miss.find(id);
+    if (m != fd_miss.end() && now - m->second < 5) return nullptr;
+    if (!get_catalog_data()) return nullptr;
+    for (Obj* d : catalogs)
+        if (Obj* f = own_fd(d, id)) { know_fd(id, f); return f; }
+    fd_miss[id] = now;
+    return nullptr;
+}
+
+// Whose list this is, from the object asked (a fighter's catalog entry): -1 when no holder said it
 int chara_of_fd(Obj* fd) {
     if (!fd) return -1;
     auto it = fd_chara.find(fd);
     if (it != fd_chara.end()) return it->second;
-    Obj* cat = get_catalog_data();
-    if (!cat) return -1;
-    for (const auto& f : kFighters)
-        if (Obj* x = own_fd(cat, f.id)) { fd_chara[x] = f.id; keep_fd(f.id, x); }
+    if (!get_catalog_data()) return -1;
+    for (const auto& f : kFighters) catalog_fd(f.id);
     it = fd_chara.find(fd);
     return it != fd_chara.end() ? it->second : -1;
 }
 
-// The list screen never calls GetLevelListData (it already holds its list objects): the catalog holder lives in the
-// scene and hands out the very same object
+// The list screen never calls GetLevelListData (it already holds its list objects): the catalog holders live in the
+// scene and hand out the very same objects
 Obj* find_catalog_fd(int chara) {
-    if (known_fd.count(chara)) return known_fd[chara];
-    Obj* cat = get_catalog_data();
-    Obj* f = cat ? own_fd(cat, chara) : nullptr;
-    if (f) { keep_fd(chara, f); logf("catalog found in the scene for chara %d", chara); }
-    return f;
+    if (Obj* f = catalog_fd(chara)) return f;
+    auto k = known_fd.find(chara);
+    return k != known_fd.end() ? k->second : nullptr;
 }
 
 void catalog_update(Obj* fd, int chara) {
@@ -1520,6 +1563,8 @@ struct Focus { TrialP trial; int64_t level; uint64_t at; };
 std::optional<Focus> g_focus;                  // the row under the cursor while the list is up
 struct Picked { TrialP trial; int64_t level; std::optional<int> stage; int wait = 0; };
 std::optional<Picked> g_picked;                // the row decided, adopted when a trial starts right after
+struct Now { TrialP trial; int level; int stage; uint64_t at; };
+std::optional<Now> g_now;                      // the trial the fight runs, its tab and index (read by the StageSetup hook)
 
 // The slot's row focused and no take yet: the side recipe reads the hint (texts only, compared first)
 void list_hint(Obj* ctrl, int chara) {
@@ -1678,18 +1723,21 @@ void tick() {
         Obj* inst = ctm();
         int chara = last_chara.load() > 0 ? last_chara.load() : (inst ? static_cast<int>(inum(inst, "_PrevFighterID", -1)) : -1);
         Obj* fd = inst ? get_obj(inst, "_ComboTrialFighterData") : nullptr;
-        if (fd) { const int c = chara_of_fd(fd); if (c > 0) chara = c; }
-        if (fd && chara > 0) keep_fd(chara, fd);
+        if (fd) {
+            const int c = chara_of_fd(fd);
+            if (c > 0) chara = c;
+            else if (catalog_data) fd = nullptr;   // the catalog does not know it: never given to the fighter seen last
+        }
+        if (fd && chara > 0 && !catalog_data) keep_fd(chara, fd);   // (a guess only while no catalog is reachable)
         if (!fd && chara > 0) fd = find_catalog_fd(chara);
         if (custom) {
             // every fighter with trials gets its lists, once (done again after a restore)
             if (!sets_loaded) read_all_sets();
-            Obj* cat = get_catalog_data();
             std::vector<int> ids;
             for (const auto& [id, set] : all_sets) if (!set.empty() && !lists_done[id]) ids.push_back(id);
             for (int id : ids) {
-                Obj* x = cat ? own_fd(cat, id) : nullptr;
-                if (x) { fd_chara[x] = id; keep_fd(id, x); } else x = known_fd.count(id) ? known_fd[id] : nullptr;
+                Obj* x = catalog_fd(id);
+                if (!x) x = known_fd.count(id) ? known_fd[id] : nullptr;
                 if (x) { try { catalog_update(x, id); lists_done[id] = true; } catch (...) {} }
             }
         }
@@ -1725,6 +1773,14 @@ void tick() {
         }
         asset_orig.clear();
         logf("%d borrowed official trial(s) put back, %d no longer loaded", n, gone);
+    }
+    // an asset the StageSetup hook wrote and no install followed: its stage and team values go back the same way
+    if (!custom && !setup_si.empty() && frame >= settle_until) {
+        for (Obj* s : setup_si) {
+            if (asset_ready(s)) try { restore_position(s); restore_live_gauges(s); } catch (...) {}
+            s->release();
+        }
+        setup_si.clear();
     }
     const bool in_menu = f != kFlowComboTrial || in_pause;
     if ((custom || guide_marked) && in_menu && mc % 15 == 0 && frame >= settle_until)
@@ -1800,6 +1856,7 @@ void tick() {
         }
     }
     if (!T) return;
+    g_now = Now{ T, diag.level, diag.stage, frame };
     const int64_t want = T->steps.empty() ? 0 : T->steps[0].action_id;
     bool rebuilt = false;
     if (cur == want && applied_slot == slot && info && frame >= judge_check_at) {
@@ -1889,11 +1946,11 @@ void post_fighter_data(void** ret, REFrameworkTypeDefinitionHandle, unsigned lon
         last_chara = chara;
         if (!on_game_thread()) {
             std::unique_lock lk(g_mx, std::try_to_lock);
-            if (lk.owns_lock()) keep_fd(chara, fd);
+            if (lk.owns_lock()) know_fd(chara, fd);
             return;
         }
         std::lock_guard lk(g_mx);
-        keep_fd(chara, fd);
+        know_fd(chara, fd);
         if (custom_mode.load() || !custom_lists.empty()) catalog_update(fd, chara);   // nothing of ours: nothing more
     } catch (...) {}
 }
@@ -1917,7 +1974,7 @@ void post_level_list(void** ret, REFrameworkTypeDefinitionHandle, unsigned long 
         Obj* ld = reinterpret_cast<Obj*>(*ret);
         int chara = chara_of_fd(fdo);
         if (chara > 0) last_chara = chara;
-        else chara = current_chara();
+        else chara = catalog_data ? -1 : current_chara();   // (a guess only while no catalog is reachable)
         if (chara > 0) update_list(ld, chara, it);
     } catch (...) {}
 }
@@ -1973,6 +2030,66 @@ bool hook(const char* type_name, const char* method, int nparams, REFPreHookFn p
 // ---------------------------------------------------------------- part 2: the recorder (uses everything above)
 #include "cc_recorder.hpp"
 
+// ---------------------------------------------------------------- the stage settings, when the game reads them (rule 13)
+// The game reads a trial's stage settings in ComboTrialManager.StageSetup(StageInfo): twice at every start and every
+// Reset Battle, after TrainingManager.InitTempData / InitModeData and before tf_ParameterSetting.bBattleStart(), on
+// the game thread (measured). install() runs from the fight's tick, after the first of those: written there only, the
+// start positions, life and the own gauge arrived one battle late. So the same fields are written in a pre-hook of
+// that call, on the asset the game is about to read. Which of our trials it is for, in order: the row the list was
+// left on a moment ago, the row the fight adopted, the trial under way, the plain index; each only when it is a row of
+// this set that runs as this index (a row past the game's own count runs as the index it borrows).
+void stage_settings(Obj* si) {
+    if (!si || !live(si)) return;
+    int lv = -1, st = -1, id = -1;
+    trial_slot(lv, st, id);
+    if (lv < 0 || st < 0) return;
+    Obj* m = mission();
+    int chara = m ? static_cast<int>(inum(m, "CharaID", 0)) : 0;
+    const bool recent = g_focus && g_focus->trial && frame - g_focus->at < 600;   // (measured: 76 to 197 frames after the list)
+    if (recent && g_focus->trial->fighter_id > 0) chara = g_focus->trial->fighter_id;
+    if (chara <= 0) return;
+    LevelSet& ls = level_set(chara, lv, input_modern());
+    const auto& set = ls.rows;
+    const int n = static_cast<int>(set.size()), size = ls.size;
+    if (n == 0) return;
+    auto fits = [&](const TrialP& t) {
+        for (int i = 0; t && i < n; ++i)
+            if (set[static_cast<size_t>(i)] == t) return i == st % n || (size > 0 && i + 1 > size && i % size == st);
+        return false;
+    };
+    TrialP T;
+    const char* how = "index";
+    if (recent && g_focus->level == lv && fits(g_focus->trial)) { T = g_focus->trial; how = "list"; }
+    else if (g_picked && g_picked->level == lv && fits(g_picked->trial)) { T = g_picked->trial; how = "picked"; }
+    else if (g_now && g_now->level == lv && g_now->stage == st && fits(g_now->trial)) { T = g_now->trial; how = "under way"; }
+    else T = set[static_cast<size_t>(st % n)];
+    if (!T) return;
+    if (setup_si.insert(si).second) si->add_ref();   // its official values go back with the others when the section is left
+    try { apply_baseline(si, *T); } catch (...) {}
+    try { apply_recipe_raw(si, *T); } catch (...) {}
+    try { apply_dummy_asset(si, *T); } catch (...) {}
+    try { apply_gauges(si, *T); } catch (...) {}
+    try { apply_position(si, *T); } catch (...) {}
+    // the fighter's own gauge: the trial's training data too (C. Viper's timer is never copied there by the game)
+    recorder::stage_own_gauge(T->fighter_id, obj(&T->j, "unique"));
+    static std::string last;
+    const std::string line = T->title + " [" + how + "]";
+    if (line != last) { last = line; logf("stage settings at setup: %s", line.c_str()); }
+}
+
+int pre_stage_setup(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
+    if (!on_game_thread() || (!custom_mode.load() && recorder::setup_uq.empty())) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    std::lock_guard lk(g_mx);
+    try {
+        if (custom_mode.load()) stage_settings(reinterpret_cast<Obj*>(argv[2]));
+        // An official trial starts: the own-gauge values we wrote into the trial's training data go back to zero before
+        // the game writes its own. From this call only (a trial's by nature), never from a tick that may run with
+        // another mode's training data in place (Training keeps the player's own Character-Specific Settings there).
+        else recorder::own_gauge_clear_all();
+    } catch (...) { logf("stage settings at setup failed"); }
+    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+}
+
 void install_hooks() {
     hook("app.esports.FGComboTrialListUserData", "GetComboTrialFighterData", 1, pre_fighter_data, post_fighter_data);
     hook("app.esports.FGComboTrialListData", "GetComboTrialFighterData", 1, pre_fighter_data, post_fighter_data);
@@ -1986,6 +2103,7 @@ void install_hooks() {
         TD* rt = save->get_return_type();
         save_returns = rt && rt->get_full_name() != "System.Void";
     } else logf("SaveStage not hooked: progression guard OFF");
+    hook("app.training.ComboTrialManager", "StageSetup(CharacterAsset.Mission.StageInfo)", -1, pre_stage_setup, post_pass);
     recorder::install_hooks();
 }
 

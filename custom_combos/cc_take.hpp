@@ -520,18 +520,39 @@ inline bool is_take_file(const fs::path& p, const fs::path& data_dir) {
 }
 
 // ---------------------------------------------------------------- closing a take
-inline bool stock_fighter(int id) {
-    switch (id) { case 3: case 5: case 12: case 15: case 16: case 20: case 21: case 28: case 32: case 33: return true; default: return false; }
-}
+constexpr int kJamie = 21;              // cPlayer.mStyleNo is a level for Jamie alone (0..4 drinks, 5+ The Devil's Song)
 
 struct TrialOpts {
     int min_steps = 2;
-    bool replay = false;                 // a replay's combo: the gauges full, nothing of the slot's dummy
-    json gauges;                         // the slot's ("gauges" of _rec_settings.json)
-    int dummy_state = 0, dummy_guard = 2, dummy_sa = 0, dummy_dg = 6;
+    bool replay = false;                 // a replay's combo: the gauges full, nothing of the slot's settings
+    json gauges;                         // the slot's ("gauges" of the slot's fields)
+    int dummy_state = 0, dummy_guard = 2;
+    json teams;                          // the slot's raw team fields (rec::settings_teams) ...
+    bool teams_any = false;              // ... written when one is not the trials' own
+    std::optional<json> own_gauge;       // the slot's own gauge for this fighter (rec::own_gauge)
+    int level = 0;                       // the list's tab: 0 Beginner, 1 Intermediate, 2 Advanced
     std::string dir;                     // the fighter's folder
     Stamp when;
 };
+
+// The fighter's own gauge a take starts with. A take of the slot keeps the slot's own setting (the level is not read
+// from the fight but for Jamie, whose higher drink level reached in the fight wins); a replay's take knows Jamie's
+// drinks only.
+inline std::optional<json> take_own_gauge(int chara, int style, const TrialOpts& o) {
+    const int st = chara == kJamie ? style : 0;
+    if (o.replay) {
+        if (st > 4) return json{ { "type", 1 }, { "stock", 4 }, { "timer", 1 } };
+        if (st > 0) return json{ { "type", 1 }, { "stock", st } };
+        return std::nullopt;
+    }
+    if (o.own_gauge) {
+        json u = *o.own_gauge;
+        if (!at(u, "timer") && st > inum(at(u, "stock"), 0) && st <= 4) u["stock"] = st;
+        return u;
+    }
+    if (st > 0 && st <= 4) return json{ { "type", 1 }, { "stock", st } };
+    return std::nullopt;
+}
 struct Closed {
     enum Kind { None, Short, Made } kind = None;
     std::vector<OutStep> steps;          // frame / hits still in (the texts of the live rows)
@@ -561,12 +582,12 @@ inline Closed close_take(const Take& t, const RecLabels& L, int chara, const Tri
         { "character", o.dir }, { "fighter_id", chara }, { "notes", o.replay ? "Recorded from a replay by the Custom Combos recorder"
                                                                               : "Recorded in game by the Custom Combos recorder" },
         { "gauges", o.replay || !o.gauges.is_object() ? json{ { "sa_stock", "max" }, { "dg_stock", "max" }, { "sa_heal", "auto" }, { "dg_heal", "auto" } } : o.gauges },
-        { "steps", steps }, { "demo", demo }, { "level", 0 }, { "order", -o.when.epoch },
+        { "steps", steps }, { "demo", demo }, { "level", std::max(0, std::min(2, o.level)) }, { "order", -o.when.epoch },
         { "recorded", { { "at", o.when.at }, { "damage", static_cast<int64_t>(std::floor(t.damage)) }, { "hits", t.max_cc }, { "signature", c.sig },
                         { "frames", demo["frames"] }, { "recorder", 1 } } } };
     if (t.x1 && t.x2)
         tr["start"] = { { "p1", static_cast<int64_t>(std::floor(*t.x1 / 65536 + 0.5)) }, { "p2", static_cast<int64_t>(std::floor(*t.x2 / 65536 + 0.5)) } };
-    if (stock_fighter(chara) && t.style > 0) tr["unique"] = { { "type", 1 }, { "stock", t.style } };
+    if (auto u = take_own_gauge(chara, t.style, o)) tr["unique"] = *u;
     // how long the combo goes on dealing damage after its last move first hit: the trial waits that long before ending
     const Move* last_move = nullptr;
     for (const Move& mv : t.moves) if (mv.hit) last_move = &mv;
@@ -574,8 +595,7 @@ inline Closed close_take(const Take& t, const RecLabels& L, int chara, const Tri
     if (punish) tr["dummy_counter"] = "punish"; else if (counter) tr["dummy_counter"] = "counter";
     if (!o.replay) {                     // the dummy as the slot had it, when it is not the trials' own
         if (o.dummy_state != 0 || o.dummy_guard != 2) tr["dummy"] = { { "state", o.dummy_state }, { "guard", o.dummy_guard } };
-        if (o.dummy_sa != 0 || o.dummy_dg != 6)
-            tr["recipe"] = { { "teams", json::array({ json::object(), { { "SGaugeStock", o.dummy_sa }, { "DGaugeStock", o.dummy_dg } } }) } };
+        if (o.teams_any && o.teams.is_array()) tr["recipe"] = { { "teams", o.teams } };   // life, recoveries, the dummy's bars
     }
     c.trial = std::move(tr);
     c.kind = Closed::Made;
@@ -801,5 +821,24 @@ inline std::optional<Take> replay_side(Side& s, const Frame& in, int step, int64
 }
 
 inline std::string combos_text(size_t n) { return n == 1 ? "1 combo" : std::to_string(n) + " combos"; }
+
+// The Replay Menu's rows of ours (EReplayFuncType values nobody uses): Start Combo Recording; while recording, one
+// save row per tab of the list (the files' level) and Cancel Recording. A save without a choice (a KO, the replay
+// left) goes where the last choice went, Beginner at first.
+constexpr int kFtStart = 40, kFtSave = 41, kFtCancel = 42, kFtSaveMid = 43, kFtSaveAdv = 44;
+inline bool replay_ft_ours(int64_t ft) { return ft >= kFtStart && ft <= kFtSaveAdv; }
+inline int replay_save_level(int64_t ft) { return ft == kFtSave ? 0 : ft == kFtSaveMid ? 1 : ft == kFtSaveAdv ? 2 : -1; }
+struct ReplayRow { int ft; std::string text; };
+inline std::vector<ReplayRow> replay_rows(bool on, size_t held) {
+    if (!on) return { { kFtStart, "Start Combo Recording" } };
+    const std::string h = " (" + combos_text(held) + " held)";
+    return { { kFtSave, "Save as Beginner" + h }, { kFtSaveMid, "Save as Intermediate" + h }, { kFtSaveAdv, "Save as Advanced" + h },
+             { kFtCancel, "Cancel Recording" } };
+}
+// What the rows say, in one word: they are written again only when it changes ("off": the game's own rows back)
+inline std::string replay_rows_state(bool in_replay, bool on, size_t held) {
+    if (!in_replay) return "off";
+    return on ? "rec " + std::to_string(held) : "idle";
+}
 
 }  // namespace cc::take

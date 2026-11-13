@@ -301,6 +301,21 @@ inline Obj* clone(Obj* o) {
     return reinterpret_cast<Obj*>(core->obj_clone(client, o));
 }
 
+// A reference array read from memory, for the hooks that run off the game thread and must not run managed code (rule
+// 17): its count at +0x1C, its elements from +0x20, 8 bytes each. arr_raw_ok() checks that layout on the game thread
+// against System.Array's own answers before any hook relies on it.
+inline int32_t arr_len_raw(Obj* a) { return a ? *reinterpret_cast<const int32_t*>(reinterpret_cast<const uint8_t*>(a) + 0x1C) : 0; }
+inline Obj* arr_get_raw(Obj* a, int32_t i) {
+    if (!a || i < 0 || i >= arr_len_raw(a)) return nullptr;
+    return *reinterpret_cast<Obj* const*>(reinterpret_cast<const uint8_t*>(a) + 0x20 + 8 * static_cast<size_t>(i));
+}
+inline bool arr_raw_ok(Obj* a) {
+    const int32_t n = arr_len(a);
+    if (!a || n <= 0 || arr_len_raw(a) != n) return false;
+    for (int32_t i = 0; i < n; ++i) if (arr_get_raw(a, i) != arr_get(a, i)) return false;
+    return true;
+}
+
 // ---- dictionaries with UInt32 keys (TrainingManager._tfFuncs, _ViewUIWigetDict) ----
 // Measured in game: _entries holds the entries INLINE (value types, not boxed), 24 bytes each: hashCode int32 @0, next
 // int32 @4, key uint32 @8, value (a reference) @16, from the array's data (+0x20, as every array here); the array is

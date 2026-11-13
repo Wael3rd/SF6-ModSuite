@@ -41,45 +41,127 @@ inline const char* kSlotHint = "Play a combo in this row: it is saved as a trial
 // builds a row and writes nothing in it. Classic: a Modern-only id; Modern: a Classic normal.
 inline int64_t blank_skill(bool modern) { return modern ? 120 : kBlankSkill; }
 
-// What the slot starts a take with (_rec_settings.json): indexes into the pause-menu rows' lists
+// What the slot starts a take with (_rec_settings.json), as the training menu inside the slot left it.
+//   sa / dg: 0 = max, else bars + 1; sa2 / dg2: the dummy's bars; guard_raw: TM_GS_GUARD_TYPE (wins over `guard`);
+//   vp1 / vp2: life in percent (the asset's VGaugePoint); vh / sh / dh: how life, Super and Drive come back (the
+//   asset's ERecoveryType: 0 NONE = the menu's "Standard", 1 RECOVERY = "Refill", 2 LOCK = "Fixed"), 1 = player,
+//   2 = dummy; uq: a fighter's own gauge per fighter id, { s: stock 0..6 / 7 infinite, t: timer 0 off / 1 started /
+//   2 infinite }, the Character-Specific Settings page's two values; ug: the old pause-menu row's stock (read only
+//   for a fighter with no uq entry).
+struct OwnGauge { int s = 0, t = 0; };
 struct Settings {
     int pos = 0, state = 0, guard = 1, sa = 0, dg = 0, ug = 0, sa2 = 0, dg2 = 6;
+    int vp1 = 100, vp2 = 100, vh1 = 1, vh2 = 1, sh1 = 1, sh2 = 1, dh1 = 1, dh2 = 1;
     std::optional<int> counter, guard_raw;
+    std::map<int, OwnGauge> uq;
 };
 
-inline Settings load_settings(const fs::path& data_dir) {
+inline Settings settings_from(const json& j) {
     Settings s;
-    const json j = read_json(data_dir / "_rec_settings.json");
     if (!j.is_object()) return s;
     auto rd = [&](const char* k, int mx, int& dst) {
         if (auto v = num(at(j, k))) dst = std::max(0, std::min(mx, static_cast<int>(std::floor(*v))));
     };
     rd("pos", 3, s.pos); rd("state", 2, s.state); rd("guard", 3, s.guard); rd("sa", 3, s.sa); rd("dg", 6, s.dg);
     rd("ug", 6, s.ug); rd("sa2", 3, s.sa2); rd("dg2", 6, s.dg2);
+    rd("vp1", 100, s.vp1); rd("vp2", 100, s.vp2); rd("vh1", 2, s.vh1); rd("vh2", 2, s.vh2);
+    rd("sh1", 2, s.sh1); rd("sh2", 2, s.sh2); rd("dh1", 2, s.dh1); rd("dh2", 2, s.dh2);
     if (auto v = num(at(j, "counter"))) s.counter = std::max(0, std::min(2, static_cast<int>(std::floor(*v))));
     if (auto v = num(at(j, "guard_raw"))) s.guard_raw = std::max(0, std::min(5, static_cast<int>(std::floor(*v))));
+    if (const json* u = obj(&j, "unique"))
+        for (auto it = u->begin(); it != u->end(); ++it) {
+            const json k = it.key();
+            const auto id = num(k);
+            if (!id || !it->is_object()) continue;
+            OwnGauge g;
+            g.s = std::max(0, std::min(7, static_cast<int>(std::floor(num(at(*it, "s")).value_or(0)))));
+            g.t = std::max(0, std::min(2, static_cast<int>(std::floor(num(at(*it, "t")).value_or(0)))));
+            s.uq[static_cast<int>(std::floor(*id))] = g;
+        }
     return s;
 }
+inline Settings load_settings(const fs::path& data_dir) { return settings_from(read_json(data_dir / "_rec_settings.json")); }
 
-// Fighters whose own gauge is a stock the game's trials preset (cPlayer.mStyleNo is the level)
+inline json settings_json(const Settings& s) {
+    json j = { { "pos", s.pos }, { "state", s.state }, { "guard", s.guard }, { "sa", s.sa }, { "dg", s.dg }, { "ug", s.ug },
+               { "sa2", s.sa2 }, { "dg2", s.dg2 }, { "vp1", s.vp1 }, { "vp2", s.vp2 }, { "vh1", s.vh1 }, { "vh2", s.vh2 },
+               { "sh1", s.sh1 }, { "sh2", s.sh2 }, { "dh1", s.dh1 }, { "dh2", s.dh2 } };
+    if (s.counter) j["counter"] = *s.counter;
+    if (s.guard_raw) j["guard_raw"] = *s.guard_raw;
+    if (!s.uq.empty()) {
+        json u = json::object();
+        for (const auto& [id, g] : s.uq) u[std::to_string(id)] = { { "s", g.s }, { "t", g.t } };
+        j["unique"] = u;
+    }
+    return j;
+}
+
+// Fighters whose own gauge is a stock: only read for the old row value `ug` (the live level is cPlayer.mStyleNo for
+// Jamie alone, measured)
 inline bool stock_fighter(int id) {
     switch (id) { case 3: case 5: case 12: case 15: case 16: case 20: case 21: case 28: case 32: case 33: return true; default: return false; }
 }
 
+// The raw team fields the settings give: what differs from the baseline every trial starts from, and the dummy's bars
+// (always). `any`: something is not the baseline.
+inline json settings_teams(const Settings& rs, bool* any = nullptr) {
+    json p = json::object(), d = { { "SGaugeStock", rs.sa2 }, { "DGaugeStock", rs.dg2 } };
+    if (rs.vp1 != 100) p["VGaugePoint"] = rs.vp1;
+    if (rs.vh1 != 1) p["VGaugeHealType"] = rs.vh1;
+    if (rs.vp2 != 100) d["VGaugePoint"] = rs.vp2;
+    if (rs.vh2 != 1) d["VGaugeHealType"] = rs.vh2;
+    if (rs.sh2 != 1) d["SGaugeHealType"] = rs.sh2;
+    if (rs.dh2 != 1) d["DGaugeHealType"] = rs.dh2;
+    if (any) *any = !p.empty() || rs.sa2 != 0 || rs.dg2 != 6 || d.size() > 2;
+    return json::array({ p, d });
+}
+
+// A fighter's own gauge as the asset takes it: always UGaugeType 1 (CNT_START) with the menu's two values (2 and 3
+// force everything to its maximum, measured). nullopt: nothing set. `set`: the menu has an entry for this fighter.
+inline std::optional<json> own_gauge(const Settings& rs, int id, bool* set = nullptr) {
+    auto it = rs.uq.find(id);
+    if (set) *set = it != rs.uq.end();
+    const int s = it != rs.uq.end() ? it->second.s : (stock_fighter(id) ? rs.ug : 0);
+    const int t = it != rs.uq.end() ? it->second.t : 0;
+    if (s <= 0 && t <= 0) return std::nullopt;
+    json u = { { "type", 1 } };
+    if (s > 0) u["stock"] = s;
+    if (t > 0) u["timer"] = t;
+    return u;
+}
+// on a slot: what the menu set wins; a fighter the menu never set keeps what the last take left
+inline void slot_own_gauge(Trial& slot, const Settings& rs) {
+    bool set = false;
+    if (auto u = own_gauge(rs, slot.fighter_id, &set)) slot.j["unique"] = *u;
+    else if (set) slot.j.erase("unique");
+}
+
 // The settings as fields of the slot (a trial like the others: the mode applies them). `rec_counter`: config.json's
-// "rec_counter" ("counter" / "punish" / empty), the default when the pause menu set none.
+// "rec_counter" ("counter" / "punish" / empty), the default when the menu set none.
 inline void slot_fields(Trial& slot, const Settings& rs, const std::string& rec_counter) {
     json& j = slot.j;
-    j["gauges"] = { { "sa_stock", rs.sa == 0 ? json("max") : json(rs.sa - 1) },
-                    { "dg_stock", rs.dg == 0 ? json("max") : json(rs.dg - 1) }, { "sa_heal", "auto" }, { "dg_heal", "auto" } };
+    j["gauges"] = { { "sa_stock", rs.sa == 0 ? json("max") : json(rs.sa - 1) }, { "dg_stock", rs.dg == 0 ? json("max") : json(rs.dg - 1) },
+                    { "sa_heal", rs.sh1 == 1 ? json("auto") : json(rs.sh1) }, { "dg_heal", rs.dh1 == 1 ? json("auto") : json(rs.dh1) } };
     j["dummy_counter"] = rs.counter ? *rs.counter : rec_counter == "punish" ? 2 : rec_counter == "counter" ? 1 : 0;
     static const int kGuard[] = { 0, 2, 3, 4 };      // TM_GS_GUARD_TYPE: NO_GUARD, NEXT_GUARD (the trials' own), ALL_GUARD, RANDOM_GUARD
     j["dummy"] = { { "state", rs.state }, { "guard", rs.guard_raw ? *rs.guard_raw : (rs.guard >= 0 && rs.guard < 4 ? kGuard[rs.guard] : 2) } };
-    j["recipe"] = { { "teams", json::array({ json::object(), { { "SGaugeStock", rs.sa2 }, { "DGaugeStock", rs.dg2 } } }) } };
+    j["recipe"] = { { "teams", settings_teams(rs) } };
     static const int kPos[4][2] = { { 0, 0 }, { -75, 75 }, { 615, 765 }, { -765, -615 } };   // as recorded, midscreen, corner, back to the corner
     if (rs.pos > 0) j["start"] = { { "p1", kPos[rs.pos][0] }, { "p2", kPos[rs.pos][1] } };
-    else j.erase("start");                         // "As Recorded": the last take's start (part 2 knows it)
-    if (stock_fighter(slot.fighter_id) && rs.ug > 0) j["unique"] = { { "type", 1 }, { "stock", rs.ug } };
+    else j.erase("start");                         // "As Recorded": the last take's start (the recorder knows it)
+    slot_own_gauge(slot, rs);
+}
+
+// The values a closing training menu is compared on: a change resets the battle (the start, life and a started timer
+// only show at the start of a battle)
+inline std::string settings_key(const Settings& s, int fighter) {
+    auto it = s.uq.find(fighter);
+    const int v[] = { s.pos, s.state, s.guard_raw.value_or(-1), s.counter.value_or(-1), s.sa, s.dg, s.sa2, s.dg2,
+                      it != s.uq.end() ? it->second.s : -1, it != s.uq.end() ? it->second.t : -1, s.vp1, s.vp2, s.vh1, s.vh2,
+                      s.sh1, s.sh2, s.dh1, s.dh2 };
+    std::string k;
+    for (int x : v) k += std::to_string(x) + ",";
+    return k;
 }
 
 inline TrialP make_slot(int chara, const Settings& rs, const std::string& rec_counter) {

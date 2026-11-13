@@ -254,6 +254,102 @@ int main() {
           !is_take_file("data/Ryu/sub/rec_1.json", "data"), "deletable files");
     eq(combos_text(1), "1 combo", "combos text");
 
+    // the slot's settings (13/11): life, recoveries, a fighter's own gauge per fighter; their file
+    {
+        rec::Settings s0;
+        bool any = true;
+        const json t0 = rec::settings_teams(s0, &any);
+        check(!any && t0 == json::parse(R"([{}, { "SGaugeStock": 0, "DGaugeStock": 6 }])"), "teams: the baseline writes nothing in a take");
+        rec::Settings s1;
+        s1.vp2 = 30; s1.dh2 = 2; s1.vh1 = 0; s1.sh1 = 2;
+        s1.uq[1] = { 0, 1 };                                       // Ryu: Denjin Charge "Activated"
+        s1.uq[16] = { 3, 0 };                                      // Juri: three Fuha stocks
+        const json t1 = rec::settings_teams(s1, &any);
+        check(any && t1[0] == json::parse(R"({ "VGaugeHealType": 0 })") && t1[1]["VGaugePoint"] == 30 && t1[1]["DGaugeHealType"] == 2,
+              "teams: life and recoveries");
+        const rec::Settings back = rec::settings_from(rec::settings_json(s1));
+        check(back.vp2 == 30 && back.dh2 == 2 && back.vh1 == 0 && back.uq.size() == 2 && back.uq.at(1).t == 1 && back.uq.at(16).s == 3,
+              "settings file round trip");
+        check(rec::settings_from(json::parse(R"({ "vp1": 250, "unique": { "21": { "s": 9, "t": -1 } } })")).vp1 == 100 &&
+              rec::settings_from(json::parse(R"({ "unique": { "21": { "s": 9, "t": -1 } } })")).uq.at(21).s == 7, "settings clamped");
+        check(rec::own_gauge(s1, 1).value_or(json()) == json::parse(R"({ "type": 1, "timer": 1 })"), "own gauge: a timer alone, type 1");
+        check(rec::own_gauge(s1, 16).value_or(json()) == json::parse(R"({ "type": 1, "stock": 3 })"), "own gauge: a stock");
+        rec::Settings s2;
+        s2.ug = 2;
+        bool set = true;
+        check(rec::own_gauge(s2, 16).value_or(json())["stock"] == 2 && !rec::own_gauge(s2, 1, &set) && !set, "own gauge: the old row value, stock fighters only");
+        s2.uq[16] = { 0, 0 };
+        check(!rec::own_gauge(s2, 16, &set) && set, "own gauge: set to nothing by the menu");
+        TrialP sl = rec::make_slot(1, s1, "");
+        check(sl->j["unique"] == json::parse(R"({ "type": 1, "timer": 1 })") && sl->j["gauges"]["sa_heal"] == 2 &&
+              sl->j["gauges"]["dg_heal"] == "auto" && sl->j["recipe"]["teams"][1]["VGaugePoint"] == 30, "slot fields");
+        sl->j["unique"] = json::parse(R"({ "type": 1, "stock": 1 })");   // a take's, for a fighter the menu never set
+        TrialP sj = rec::make_slot(21, s0, "");
+        sj->j["unique"] = json::parse(R"({ "type": 1, "stock": 1 })");
+        rec::slot_own_gauge(*sj, s0);
+        rec::slot_own_gauge(*sl, s1);
+        check(sj->j["unique"]["stock"] == 1 && sl->j["unique"] == json::parse(R"({ "type": 1, "timer": 1 })"), "the menu's setting wins, a take's stays otherwise");
+        rec::Settings s3 = s1;
+        s3.uq[1].t = 2;
+        check(rec::settings_key(s1, 1) != rec::settings_key(s3, 1) && rec::settings_key(s1, 16) == rec::settings_key(s3, 16) &&
+              rec::settings_key(s1, 1) == rec::settings_key(back, 1), "the menu's change is seen for the slot's fighter");
+
+        // the own gauge a take starts with: the slot's setting; Jamie's drinks from the fight
+        TrialOpts op;
+        op.own_gauge = json::parse(R"({ "type": 1, "stock": 2 })");
+        check(take_own_gauge(kJamie, 3, op).value()["stock"] == 3 && take_own_gauge(kJamie, 6, op).value()["stock"] == 2 &&
+              take_own_gauge(16, 4, op).value()["stock"] == 2, "take own gauge: slot, Jamie's higher level");
+        op.own_gauge = json::parse(R"({ "type": 1, "stock": 1, "timer": 1 })");
+        check(take_own_gauge(kJamie, 3, op).value()["stock"] == 1, "take own gauge: a timer keeps the slot's stock");
+        op.own_gauge.reset();
+        check(take_own_gauge(kJamie, 2, op).value()["stock"] == 2 && !take_own_gauge(16, 2, op), "take own gauge: nothing set");
+        op.replay = true;
+        check(take_own_gauge(kJamie, 5, op).value() == json::parse(R"({ "type": 1, "stock": 4, "timer": 1 })") && !take_own_gauge(28, 3, op),
+              "take own gauge: a replay knows Jamie's drinks only");
+    }
+
+    // a take of the slot carries the slot's teams and the tab asked
+    {
+        Take tk;
+        tk.start = 0;
+        tk.inputs.assign(30, 16);
+        Move a; a.act = 640; a.note = "2+MK"; a.hit = true; a.hits = 1; a.ids = { 640 }; a.f = 2; a.first_hit = 5;
+        Move b; b.act = 900; b.note = "236+LP"; b.hit = true; b.hits = 1; b.ids = { 900 }; b.f = 12; b.first_hit = 16;
+        tk.moves = { a, b };
+        tk.hits = 2; tk.max_cc = 2; tk.last_hit = 16; tk.damage = 900; tk.style = 2; tk.first_input = 1;
+        TrialOpts oq;
+        oq.dir = "Jamie";
+        oq.when = stamp_of(static_cast<std::time_t>(1762950000));
+        rec::Settings s;
+        s.vp1 = 50;
+        oq.teams = rec::settings_teams(s, &oq.teams_any);
+        oq.own_gauge = rec::own_gauge(s, kJamie);
+        oq.level = 2;
+        Closed c = close_take(tk, R, kJamie, oq);
+        check(c.kind == Closed::Made && c.trial["level"] == 2 && c.trial["recipe"]["teams"][0]["VGaugePoint"] == 50 &&
+              c.trial["unique"] == json::parse(R"({ "type": 1, "stock": 2 })"), "take: tab, life, Jamie's drinks");
+        oq.replay = true;
+        Closed rc = close_take(tk, R, kJamie, oq);
+        check(!rc.trial.contains("recipe") && rc.trial["gauges"]["sa_stock"] == "max", "a replay's take: none of the slot's settings");
+    }
+
+    // the Replay Menu's rows and when they are written again
+    {
+        const auto idle = replay_rows(false, 0);
+        check(idle.size() == 1 && idle[0].ft == kFtStart && idle[0].text == "Start Combo Recording", "replay rows: idle");
+        const auto rec2 = replay_rows(true, 2);
+        check(rec2.size() == 4 && rec2[0].ft == kFtSave && rec2[1].ft == kFtSaveMid && rec2[2].ft == kFtSaveAdv && rec2[3].ft == kFtCancel,
+              "replay rows: recording");
+        eq(rec2[1].text, "Save as Intermediate (2 combos held)", "replay rows: a save row's text");
+        eq(replay_rows(true, 1)[2].text, "Save as Advanced (1 combo held)", "replay rows: one combo");
+        check(replay_rows_state(false, true, 3) == "off" && replay_rows_state(true, false, 3) == "idle" &&
+              replay_rows_state(true, true, 3) == "rec 3" && replay_rows_state(true, true, 3) != replay_rows_state(true, true, 4),
+              "replay rows: states");
+        check(replay_save_level(kFtSave) == 0 && replay_save_level(kFtSaveMid) == 1 && replay_save_level(kFtSaveAdv) == 2 &&
+              replay_save_level(kFtCancel) == -1 && replay_save_level(kFtStart) == -1, "replay rows: save levels");
+        check(replay_ft_ours(40) && replay_ft_ours(44) && !replay_ft_ours(39) && !replay_ft_ours(45) && !replay_ft_ours(8), "replay rows: ours");
+    }
+
     std::printf("%d check(s), %d failure(s)\n", g_n, g_fail);
     return g_fail ? 1 : 0;
 }

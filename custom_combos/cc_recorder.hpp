@@ -39,7 +39,6 @@ using namespace cc::take;
 
 constexpr int64_t kResetJump = 60LL * 65536;   // a fighter moved this far in one frame with no combo under way: Reset Battle
 constexpr int kPmTraining = 68;                // our Training Settings row (an item type the game does not know)
-constexpr int kFtStart = 40, kFtSave = 41, kFtCancel = 42;   // our replay menu rows (EReplayFuncType values nobody uses)
 const char* const kWidgetCountDown = "app.training.UIWidget_TMRecordCountDown";
 
 // ---------------------------------------------------------------- small game helpers
@@ -162,11 +161,7 @@ json rs_gauges() {
 }
 int rs_guard() { static const int kGuard[] = { 0, 2, 3, 4 }; return rs.guard_raw ? *rs.guard_raw : (rs.guard >= 0 && rs.guard < 4 ? kGuard[rs.guard] : 2); }
 void rs_save() {
-    json j = { { "pos", rs.pos }, { "state", rs.state }, { "guard", rs.guard }, { "sa", rs.sa }, { "dg", rs.dg }, { "ug", rs.ug },
-               { "sa2", rs.sa2 }, { "dg2", rs.dg2 } };
-    if (rs.counter) j["counter"] = *rs.counter;
-    if (rs.guard_raw) j["guard_raw"] = *rs.guard_raw;
-    if (!write_json(kData / "_rec_settings.json", j)) logf("recorder: _rec_settings.json not written");
+    if (!write_json(kData / "_rec_settings.json", rec::settings_json(rs))) logf("recorder: _rec_settings.json not written");
 }
 // the settings as the slot's fields (a trial like the others: the mode applies them); "As Recorded": the last take's start
 void slot_fields(Trial& slot) {
@@ -200,6 +195,7 @@ void on_saved(int chara, const json& trial, const std::string& path) {
     if (TrialP slot = slot_of(chara)) {
         if (const json* d = at(trial, "demo")) slot->j["demo"] = *d;
         if (const json* u = at(trial, "unique")) slot->j["unique"] = *u; else slot->j.erase("unique");
+        rec::slot_own_gauge(*slot, rs);          // (what the training menu set for this fighter stays)
         if (!rs.pos) {
             if (const json* s = at(trial, "start")) slot->j["start"] = *s; else slot->j.erase("start");
         }
@@ -228,7 +224,9 @@ void finish_slot_take(const Take& t, int chara) {
     TrialOpts o;
     o.min_steps = cfg.rec_min_steps;
     o.gauges = rs_gauges();
-    o.dummy_state = rs.state; o.dummy_guard = rs_guard(); o.dummy_sa = rs.sa2; o.dummy_dg = rs.dg2;
+    o.dummy_state = rs.state; o.dummy_guard = rs_guard();
+    o.teams = rec::settings_teams(rs, &o.teams_any);
+    o.own_gauge = rec::own_gauge(rs, chara);
     o.dir = dir ? dir : "Unknown";
     o.when = stamp_of(std::time(nullptr));
     Closed c = close_take(t, L, chara, o);
@@ -395,107 +393,79 @@ void show_rows(Obj* m, const RecLabels& L, Trial* T) {
     set(m, "InfoPtr", ptr);
 }
 
-// ---------------------------------------------------------------- _tData kept around our training menu
-// Every number / enum / bool of the training data's setting groups, by path (field names, "#i" for an array element),
-// read before our menu first opens in a slot session and written back (compared first) when the slot is left.
+// ---------------------------------------------------------------- the trial's training data
+// _tData is per mode (measured: Training's own settings are another object), and every trial start copies its asset
+// into it (StageSetup, rule 13), so nothing of it is kept and put back but the one value our menu switches off and
+// no start rewrites: the training manager's half speed (OtherSetting.Is_Speed_Setting), put back as a field when the
+// slot is left (no apply: it only acts once a menu applies it). Only into the object it was read from.
 struct SnapVal { std::vector<std::string> path; double v; };
 struct TSnap { Obj* td = nullptr; std::vector<SnapVal> vals; bool pending = false; } tsnap;
-
-bool mode_owned(const std::vector<std::string>& p) {    // the mode pushes and puts back these itself (restore_live_all)
-    if (p.size() == 4 && p[0] == "ParameterSetting" && p[1] == "PlayerDatas" && (p[3] == "SA_Stock" || p[3] == "DG_Stock")) return true;
-    if (p.size() != 3 || p[1] != "DummyData") return false;
-    return (p[0] == "CounterSetting" && (p[2] == "NC_TYPE" || p[2] == "PC_TYPE")) || (p[0] == "DummyStatus" && p[2] == "DummyActionType") ||
-           (p[0] == "GuardSetting" && p[2] == "GuardType");
-}
-bool group_kept(const std::string& g) { return g != "RecordSetting" && g != "ReversalSetting"; }   // the Recording Manager's
-
-void snap_walk(const Ref& r, std::vector<std::string>& path, int depth, std::set<void*>& seen) {
-    for (TD* t = r.td; t; t = t->get_parent_type()) {
-        const std::string tn = t->get_full_name();
-        if (tn == "System.Object" || tn == "System.ValueType") break;
-        for (Field* f : t->get_fields()) {
-            if (!f || f->is_static() || !f->get_name()) continue;
-            const char* name = f->get_name();
-            if (depth == 0 && !group_kept(name)) continue;
-            path.emplace_back(name);
-            if (auto v = num(r, name)) {
-                if (depth > 0 && !mode_owned(path)) tsnap.vals.push_back({ path, *v });
-                else if (depth == 0) tsnap.vals.push_back({ path, *v });   // _tData's own (SelectIndex, SelectChildIndex)
-            } else if (depth < 3) {
-                const Ref c = get(r, name);
-                if (c && c.vt) {
-                    if (c.td->get_full_name().rfind("app.", 0) == 0) snap_walk(c, path, depth + 1, seen);
-                } else if (Obj* o = c.obj(); o && seen.insert(o).second) {
-                    const std::string on = type_name(o);
-                    if (on.size() > 2 && on.compare(on.size() - 2, 2, "[]") == 0) {
-                        for (int32_t i = 0, n = std::min(arr_len(o), 16); i < n; ++i) {
-                            Obj* e = arr_get(o, i);
-                            if (!e || type_name(e).rfind("app.training.", 0) != 0) continue;
-                            path.push_back("#" + std::to_string(i));
-                            snap_walk(ref(e), path, depth + 1, seen);
-                            path.pop_back();
-                        }
-                    } else if (on.rfind("app.training.", 0) == 0) snap_walk(ref(o), path, depth + 1, seen);
-                }
-            }
-            path.pop_back();
-        }
-    }
-}
 
 void tdata_keep(Obj* tm) {
     if (tsnap.td) return;
     Obj* td = get_obj(tm, "_tData");
     if (!td) return;
     tsnap.vals.clear();
-    std::vector<std::string> path;
-    std::set<void*> seen{ td };
-    try { snap_walk(ref(td), path, 0, seen); } catch (...) { tsnap.vals.clear(); logf("training data: not kept (a read failed)"); return; }
+    if (auto v = num(get(ref(td), "OtherSetting"), "Is_Speed_Setting")) tsnap.vals.push_back({ { "OtherSetting", "Is_Speed_Setting" }, *v });
     td->add_ref();                               // the object compared on restore (its address never reused meanwhile)
     tsnap.td = td;
-    logf("training data kept before the training menu: %zu value(s)", tsnap.vals.size());
 }
 
 void tdata_restore(bool live_fight) {
+    (void)live_fight;
     tsnap.pending = false;
     Obj* td0 = tsnap.td;
     if (!td0) return;
     tsnap.td = nullptr;
     Obj* tm = tmgr();
     Obj* td = tm ? get_obj(tm, "_tData") : nullptr;
-    int n = 0;
-    std::set<std::string> groups;
-    if (td == td0) {
+    if (td == td0)
         for (const SnapVal& s : tsnap.vals) {
             Ref r = ref(td);
-            for (size_t i = 0; i + 1 < s.path.size() && r; ++i) {
-                const std::string& seg = s.path[i];
-                r = seg[0] == '#' ? ref(arr_get(r.obj(), std::stoi(seg.substr(1)))) : get(r, seg.c_str());
-            }
-            if (!r) continue;
-            const char* last = s.path.back().c_str();
-            const auto cur = num(r, last);
-            if (cur && *cur != s.v && set(r, last, s.v)) { ++n; groups.insert(s.path[0]); }
+            for (size_t i = 0; i + 1 < s.path.size() && r; ++i) r = get(r, s.path[i].c_str());
+            if (r) set(r, s.path.back().c_str(), s.v);
         }
-        // the groups the mode applies too; never OtherSetting (its half speed) nor SelectMenu
-        if (live_fight)
-            for (const char* g : { "DummyStatus", "GuardSetting", "CounterSetting", "ParameterSetting", "DefenseSystem" })
-                if (groups.count(g)) {
-                    const std::string tf = std::string("tf_") + g;
-                    tf_apply(tm, tf.c_str());
-                    // bApply keeps it for the next attempt reset; UpdateGameData() gives the parameters to the fight now
-                    if (tf == "tf_ParameterSetting")
-                        if (Obj* f = training_tf(tm, tf.c_str())) invoke(method_of(td_of(f), "UpdateGameData", 0), f, {});
-                }
-        logf("training data put back: %d value(s) changed by the training menu", n);
-    } else logf("training data not put back: the game has new training data (nothing of ours in it)");
     td0->release();
     tsnap.vals.clear();
 }
 void tdata_drop() {
     tsnap.pending = false;
-    if (tsnap.td) { tsnap.td->release(); tsnap.td = nullptr; logf("training data: the values kept were dropped (the trial was left long ago)"); }
+    if (tsnap.td) { tsnap.td->release(); tsnap.td = nullptr; }
     tsnap.vals.clear();
+}
+
+// A fighter's own gauge in the trial's training data (_tData.ParameterSetting.UniqueData.stock_0_NNN / timer_0_NNN,
+// NNN the fighter's id). The game copies the asset's values there at every stage setup for every fighter but C.
+// Viper's timer (measured): written here from the StageSetup hook for the fighter of the trial (where the game copies,
+// it writes the same numbers over ours), and back to zero for the others (the fields apply to whichever side plays
+// that fighter). Never into Training's data (_GameMode 1: there they are the player's own settings).
+std::set<int> setup_uq;                        // the fighters whose fields we wrote
+bool unique_tdata(int id, const json* u) {
+    Obj* tm = tmgr();
+    if (!tm || id <= 0 || inum(tm, "_GameMode", -1) == 1) return false;
+    Ref ud = get(get(get(ref(tm), "_tData"), "ParameterSetting"), "UniqueData");
+    if (!ud) return false;
+    char sn[24], tn[24];
+    std::snprintf(sn, sizeof(sn), "stock_0_%03d", id);
+    std::snprintf(tn, sizeof(tn), "timer_0_%03d", id);
+    const double s = u ? std::floor(num(at(u, "stock")).value_or(0)) : 0, t = u ? std::floor(num(at(u, "timer")).value_or(0)) : 0;
+    if (field_of(ud.td, sn)) set(ud, sn, s);
+    if (field_of(ud.td, tn)) set(ud, tn, t);
+    return true;
+}
+// the StageSetup hook, a trial of ours starting: its fighter's values in, every other fighter's we wrote back to zero
+void stage_own_gauge(int fighter, const json* unique) {
+    if (fighter <= 0) return;
+    for (auto it = setup_uq.begin(); it != setup_uq.end();) {
+        if (*it != fighter) { unique_tdata(*it, nullptr); it = setup_uq.erase(it); } else ++it;
+    }
+    setup_uq.insert(fighter);
+    unique_tdata(fighter, unique);
+}
+// the StageSetup hook, an official trial starting: what we wrote back to zero before the game writes its own
+void own_gauge_clear_all() {
+    for (int id : setup_uq) unique_tdata(id, nullptr);
+    setup_uq.clear();
 }
 
 // ---------------------------------------------------------------- the training menu inside the slot
@@ -508,6 +478,8 @@ struct TMState {
     Obj* ud = nullptr; Obj* sc = nullptr;                                     // the menu's user data (rooted)
     Obj* tabs_ui = nullptr; Obj* game_tabs = nullptr; Obj* our_tabs = nullptr;
     bool swapped = false;                        // our tab list put in, the game's not back yet
+    std::string snap;                            // the slot's settings when the menu opened (rec::settings_key)
+    bool reset = false;                          // a setting changed: the battle resets once the pause menu is back
     std::optional<int64_t> start_loc;
     bool blocked = false;
 } TM;
@@ -658,8 +630,62 @@ void tm_tabs(Obj* tm, bool ours) {
 }
 bool tm_tabs_in() { return TM.swapped; }
 
+// The Character-Specific Settings page writes _tData.ParameterSetting.UniqueData.stock_0_NNN / timer_0_NNN (a fighter
+// has one, both or none): the object, and the names of the two fields that exist for that fighter
+Ref tm_unique(Obj* tm, int id, std::string& sn, std::string& tn) {
+    sn.clear();
+    tn.clear();
+    Ref ud = get(get(get(ref(tm), "_tData"), "ParameterSetting"), "UniqueData");
+    if (!ud || id <= 0) return {};
+    char b[24];
+    std::snprintf(b, sizeof(b), "stock_0_%03d", id);
+    if (field_of(ud.td, b)) sn = b;
+    std::snprintf(b, sizeof(b), "timer_0_%03d", id);
+    if (field_of(ud.td, b)) tn = b;
+    return ud;
+}
+// the page shows what the slot keeps for this fighter
+void tm_unique_show(Obj* tm) {
+    const int id = slot_trial ? slot_trial->fighter_id : 0;
+    auto it = rs.uq.find(id);
+    if (it == rs.uq.end()) return;
+    std::string sn, tn;
+    Ref ud = tm_unique(tm, id, sn, tn);
+    if (!ud) return;
+    if (!sn.empty()) set(ud, sn.c_str(), it->second.s);
+    if (!tn.empty()) set(ud, tn.c_str(), it->second.t);
+}
+
+// Reset Battle without the player (rule 15): the game's own decision for that row (item type 10: it closes the menu
+// and resets the battle), static UIFlowESportsPauseMenu.DecidePauseMenuItem(10, flow), with the flow of the pause menu
+// on screen looked up now, from the game thread. (BattleFlow.DoSoftReset() crashes the game; Param.isDecide,
+// set_IsReqRefresh / IsReqRestart and a StageSetup by hand do nothing.)
+bool pm_ours_on();                             // (the trial pause menu's rows, below)
+const char* menu_reset_now() {
+    if (!pm_ours_on()) return "not our list";
+    Obj* a = pause_agent();
+    Obj* cur = a ? get_obj(get_obj(a, "_StateManager"), "_Curt") : nullptr;
+    if (!cur || type_name(cur).find("Show") == std::string::npos) return "pause menu not shown";
+    Obj* flow = get_obj(get_obj(a, "<InputDelegates>k__BackingField"), "<Flow>k__BackingField");
+    if (!flow || !get_obj(flow, "_Param")) return "no flow";
+    Method* m = method_of(type("app.esports.UIFlowESportsPauseMenu"), "DecidePauseMenuItem", 2);
+    if (!m) return "no decide method";
+    return invoke(m, nullptr, { arg_i32(10), flow }).exception_thrown ? "the call failed" : "asked";
+}
+
 // what the training menu left in the training data becomes the slot's settings
 void tm_sync(Obj* tm) {
+    {   // the Character-Specific Settings page: the slot's fighter's two values (kept per fighter)
+        const int id = slot_trial ? slot_trial->fighter_id : 0;
+        std::string sn, tn;
+        Ref ud = tm_unique(tm, id, sn, tn);
+        if (ud && (!sn.empty() || !tn.empty())) {
+            const int64_t sv = sn.empty() ? 0 : inum(ud, sn.c_str(), 0), tv = tn.empty() ? 0 : inum(ud, tn.c_str(), 0);
+            if (rs.uq.count(id) || sv > 0 || tv > 0)
+                rs.uq[id] = rec::OwnGauge{ static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(7, sv))),
+                                           static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(2, tv))) };
+        }
+    }
     Ref ds = tdata(tm, "DummyStatus"), gs = tdata(tm, "GuardSetting"), cs = tdata(tm, "CounterSetting");
     if (ds) { const int64_t a = inum(ds, "DummyActionType", 0); rs.state = a >= 0 && a <= 2 ? static_cast<int>(a) : 0; }
     if (gs) rs.guard_raw = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(5, inum(gs, "GuardType", 2))));
@@ -673,6 +699,24 @@ void tm_sync(Obj* tm) {
         rs.dg = dg >= 6 ? 0 : static_cast<int>(dg + 1);
         rs.sa2 = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(3, inum(b, "SA_Stock", 0))));
         rs.dg2 = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(6, inum(b, "DG_Stock", 6))));
+        // life (percent) and the recoveries: the menu's Refill / Fixed / Standard are flags of the player data
+        // (Refill = Is_<x>_Recovery_Timer, Fixed = Is_<x>_Infinity, Standard = neither)
+        auto heal = [](Obj* pd, const char* what) {
+            if (flag(pd, (std::string("Is_") + what + "_Recovery_Timer").c_str())) return 1;
+            if (flag(pd, (std::string("Is_") + what + "_Infinity").c_str())) return 2;
+            return 0;
+        };
+        Obj* pds[2] = { a, b };
+        int* vp[2] = { &rs.vp1, &rs.vp2 };
+        int* vh[2] = { &rs.vh1, &rs.vh2 };
+        int* sh[2] = { &rs.sh1, &rs.sh2 };
+        int* dh[2] = { &rs.dh1, &rs.dh2 };
+        for (int i = 0; i < 2; ++i) {
+            *vp[i] = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(100, inum(pds[i], "Vital_Point", 100))));
+            *vh[i] = heal(pds[i], "Vital");
+            *sh[i] = heal(pds[i], "SA");
+            *dh[i] = heal(pds[i], "DG");
+        }
     }
     // the start position only when the menu changed it ("As Recorded" is no choice of that list)
     if (auto loc = num(get(get(ref(tm), "_tData"), "SelectMenu"), "StartLocation")) {
@@ -681,8 +725,11 @@ void tm_sync(Obj* tm) {
     }
     rs_save();
     if (slot_trial && slot_trial->rec) { slot_fields(*slot_trial); mode::apply_settings(*slot_trial, true); }
-    logf("training menu closed: state %d guard %d counter %d, P1 sa %d dg %d, dummy sa %d dg %d", rs.state, rs.guard_raw.value_or(-1),
-         rs.counter.value_or(-1), rs.sa, rs.dg, rs.sa2, rs.dg2);
+    // a setting changed: the battle resets as the menu closes (the start, life and a started timer only show at the
+    // start of a battle); config.json "rec_menu_reset": false leaves it to the player
+    TM.reset = cfg.rec_menu_reset && !TM.snap.empty() && TM.snap != rec::settings_key(rs, slot_trial ? slot_trial->fighter_id : 0);
+    logf("training menu closed: state %d guard %d counter %d, P1 sa %d dg %d, dummy sa %d dg %d, life %d / %d%s", rs.state,
+         rs.guard_raw.value_or(-1), rs.counter.value_or(-1), rs.sa, rs.dg, rs.sa2, rs.dg2, rs.vp1, rs.vp2, TM.reset ? ", reset asked" : "");
 }
 
 // Our menu given up or cut short: everything of it back at once (tabs, input, half speed); the pause guard stays on
@@ -724,6 +771,9 @@ void tm_tick() {
             Ref sm = get(td, "SelectMenu");     // the Start Position row shows the slot's choice
             if (sm && set(sm, "StartLocation", static_cast<double>(tm_pos_to_start(rs.pos)))) TM.start_loc = inum(sm, "StartLocation", 0);
         }
+        tm_unique_show(tm);
+        TM.snap = rec::settings_key(rs, slot_trial ? slot_trial->fighter_id : 0);
+        TM.reset = false;
         Method* om = method_of(td_of(tm), "OpenMenu(app.training.TrainingManager.MenuType, app.training.BaseParam)");
         auto r = invoke(om, tm, { arg_i32(0), nullptr });
         if (r.exception_thrown || !r.byte) return;
@@ -739,7 +789,12 @@ void tm_tick() {
     if (!TM.open) return;
     tm_hold_pause();
     if (TM.unblock_in >= 0) {                    // closed: the pause menu takes its input back a moment later
-        if (--TM.unblock_in < 0) { tm_block(false); TM.open = false; logf("training menu: pause menu back"); }
+        if (--TM.unblock_in < 0) {
+            tm_block(false);
+            TM.open = false;
+            logf("training menu: pause menu back");
+            if (TM.reset) { TM.reset = false; logf("reset after the training menu: %s", menu_reset_now()); }
+        }
         return;
     }
     const int64_t st = inum(tm, "_MenuState", 0);   // 4 and above: a page of the menu is up; 3: closing / closed
@@ -758,8 +813,9 @@ void tm_tick() {
 // the game put them, Training Settings in the place of Open Matchmaking Settings (8) and Delete Last Recording in the
 // place of Command List (6). Rows are clones of the game's Reset Battle row (rooted), texts are GUIDs of ours.
 // SetupList_ComboTrial runs on a thread that is not the game thread (measured): the arrays are made on the game thread
-// (pm_prepare, every frame of the slot); the hook takes no lock of the mode, calls no game method but the arrays' own
-// reads, and swaps one reference when the menu holds the game's full list, row for row as expected.
+// (pm_prepare, every frame of the slot); the hook takes no lock of the mode, runs no managed code
+// and swaps one reference when the menu holds the game's full list, row for row as expected (rule 17: the menu's
+// array read from memory, its layout checked on our own arrays beforehand, fields read, one reference stored).
 struct PMState {
     std::map<int64_t, Obj*> by;                  // the controller's rows by item type (read once a process)
     std::vector<int64_t> order;
@@ -775,7 +831,7 @@ struct PMState {
     Obj* orig_key = nullptr; Obj* orig_arr = nullptr;
 } PM;
 std::atomic<bool> pm_tm_want{false}, pm_tm_prepare{false};   // asked from the hooks, done by the frame
-thread_local bool tl_decide_skipped = false;
+bool pm_ours_on() { return PM.ours_on.load(); }
 
 bool game_rows() {
     if (PM.have) return true;
@@ -842,6 +898,11 @@ void pm_build() {
         if (!a) return;
         PM.arrays[layout] = a;
     }
+    for (int layout = 0; layout < 3; ++layout)
+        if (!arr_raw_ok(PM.arrays[layout].load())) {
+            if (!told) { told = true; logf("trial menu: the arrays' layout is not the one known: the slot's rows are off"); }
+            return;
+        }
     PM.types = std::move(types);
     PM.ready.store(true, std::memory_order_release);
     logf("trial menu: the slot's rows ready");
@@ -877,9 +938,9 @@ int pre_setup_list(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned 
         if (!mine) {
             // only the game's full list is replaced, row for row as known (after Watch Example it gives 8 rows and
             // sizes the window for 8: that menu stays the game's)
-            if (arr_len(arr_) != static_cast<int32_t>(PM.types.size())) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-            for (int32_t k = 0, n = arr_len(arr_); k < n; ++k)
-                if (inum(arr_get(arr_, k), "PauseMenuItemType", -1) != PM.types[static_cast<size_t>(k)]) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+            if (arr_len_raw(arr_) != static_cast<int32_t>(PM.types.size())) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+            for (int32_t k = 0, n = arr_len_raw(arr_); k < n; ++k)
+                if (inum(arr_get_raw(arr_, k), "PauseMenuItemType", -1) != PM.types[static_cast<size_t>(k)]) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
             std::lock_guard lk(PM.orig_mx);
             if (PM.orig_arr != arr_) { arr_->add_ref(); if (PM.orig_arr) PM.orig_arr->release(); PM.orig_arr = arr_; }
             PM.orig_key = data;
@@ -897,24 +958,19 @@ int pre_setup_list(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned 
 
 // static DecidePauseMenuItem(PauseMenuItemType, UIFlow<Param>): argv[1] the item type, argv[2] the flow (any thread)
 int pre_decide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    tl_decide_skipped = false;
-    if (!PM.ours_on.load()) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
     const int64_t ty = static_cast<int64_t>(reinterpret_cast<uintptr_t>(argv[1]) & 0xFFFFFFFF);
-    if (ty == kPmTraining) {                     // nothing of the game answers this type: ours alone
-        pm_tm_want = true;
-        tl_decide_skipped = true;
+    if (ty == kPmTraining) {                     // our row: never the game's to decide, whatever our state
+        if (PM.ours_on.load()) pm_tm_want = true;
         return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
     }
-    if (ty == 10 && PM.discard_at.load() >= 0)   // Reset Battle or our clone of it: the game resets the battle either way
+    // Reset Battle or our clone of it (the game resets the battle either way): which row it was. GetSelectIndex() is the
+    // one call left here (a getter returning the cursor's row; no field for it is known), as the reference does.
+    if (ty == 10 && PM.ours_on.load() && PM.discard_at.load() >= 0)
         try {
             Obj* param = get_obj(reinterpret_cast<Obj*>(argv[2]), "_Param");
             if (call_i32(param, "GetSelectIndex()").value_or(-1) == PM.discard_at.load()) want_discard = true;
         } catch (...) {}
     return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-}
-void post_decide(void** ret, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    (void)ret;                                   // DecidePauseMenuItem returns void: nothing to write when it was skipped
-    tl_decide_skipped = false;
 }
 
 // ---------------------------------------------------------------- combos recorded while a replay plays
@@ -922,29 +978,22 @@ void post_decide(void** ret, REFrameworkTypeDefinitionHandle, unsigned long long
 // trial; "Save Combo Recording" writes them (the one under way too), "Cancel Recording" drops them; a round that ends
 // writes what is held by itself. The game's record countdown widget shows REC / SAVED on screen.
 struct Pending { std::string path; json trial; int chara; };
-// The replay menu's hooks run on the game's UI threads (as the trial menu's may): what they share with the frame is in
-// atomics, and the menu's rows are theirs alone, under a mutex of this part (never the mode's lock).
+// The decide hook runs on the menu's threads (measured: four of them in a session): it only notes which row, in an
+// atomic, with the controller's address; everything happens on the game thread at the next replay tick.
 struct RPState {
     bool on = false;
     Side sides[2];
     std::vector<Pending> pending;
     std::atomic<int> want{0};
-    std::atomic<bool> on_a{false};                // what the hooks read: on, and how many combos are held
-    std::atomic<size_t> held_a{0};
-    std::mutex mx;                               // the rows below, and ctl
-    Obj* ctl = nullptr;
+    std::atomic<Obj*> ctl{nullptr};              // the ReplayUICtrl that decided (an address only, checked before use)
+    int level = 0;                               // the tab of the last save chosen (0 Beginner, 1 Intermediate, 2 Advanced)
     std::optional<double> clock;
     int64_t frame = 0;
     int ko_for = 0, idle = 0, saved = 0;
     struct Note { std::string a, b; int left; };
     std::optional<Note> note;
     std::string hud;
-    std::vector<Obj*> base;                      // the game's rows (rooted, read once)
-    Obj* row_start = nullptr; Obj* row_save = nullptr; Obj* row_cancel = nullptr;
-    std::array<uint8_t, 16> save_guid{}; std::string save_text;
-    Obj* arr_on = nullptr; Obj* arr_off = nullptr;
 } RP;
-thread_local bool tl_replay_skipped = false;
 
 bool replay_modern(int i) {
     Obj* m = singleton("app.BattleReplayDataManager");
@@ -954,8 +1003,9 @@ bool replay_modern(int i) {
     return info && inum(info, "battle_input_type", 0) == 1;
 }
 
-// The training REC widget is not loaded in a replay; its neighbour, the record countdown ring, is (entry 0 of a list of
-// TrainingManager._ViewUIWigetDict). Looked up at each write, never kept; each line written only when it differs (rule 3).
+// The training REC widget is not loaded in a replay; its neighbour, the record countdown ring, is (key 0 of
+// TrainingManager._ViewUIWigetDict). Looked up at each write, never kept; each line written only when it differs from
+// what the control shows (rule 3: writing the same text crashed), through the String overloads by full signature.
 void replay_hud(const char* text, const std::string& sub) {
     try {
         Obj* tm = tmgr();
@@ -984,8 +1034,7 @@ void replay_hud(const char* text, const std::string& sub) {
     } catch (...) {}
 }
 
-void replay_close(Side& s, int chara, Take& t) {
-    (void)s;
+void replay_close(int chara, Take& t) {
     const RecLabels& L = labels_for(chara);
     const char* dir = fighter_dir(chara);
     TrialOpts o;
@@ -1002,7 +1051,6 @@ void replay_close(Side& s, int chara, Take& t) {
     std::string path = replaced && !taken.count(replaced->path) ? replaced->path : new_take_path(o.dir, o.when.file, taken);
     if (replaced && path == replaced->path) {
         c.trial["title"] = replaced->title;
-        c.trial["level"] = replaced->level;
         c.trial["order"] = replaced->order;
     }
     RP.pending.push_back({ path, std::move(c.trial), chara });
@@ -1010,7 +1058,7 @@ void replay_close(Side& s, int chara, Take& t) {
 
 void replay_drop() { for (Side& s : RP.sides) s = Side{}; }
 
-// every held combo written; the takes under way too when asked (Save)
+// every held combo written, in the tab chosen (it wins over a replaced file's); the takes under way too when asked
 size_t replay_flush(bool with_open) {
     if (with_open) {
         for (int i = 0; i < 2; ++i) {
@@ -1020,13 +1068,15 @@ size_t replay_flush(bool with_open) {
             const int chara = static_cast<int>(inum(pa, "pl_type", 0));
             Take t = std::move(*s.take);
             s.take.reset();
-            if (replay_cut(t)) replay_close(s, chara, t);
+            if (fighter_dir(chara) && replay_cut(t)) replay_close(chara, t);
         }
     }
     size_t n = 0;
-    for (const Pending& p : RP.pending)
+    for (Pending& p : RP.pending) {
+        p.trial["level"] = RP.level;
         if (write_json(upath(p.path), p.trial)) { on_saved(p.chara, p.trial, p.path); ++n; }
         else logf("replay recording: %s not written", p.path.c_str());
+    }
     RP.pending.clear();
     replay_drop();
     RP.saved += static_cast<int>(n);
@@ -1035,24 +1085,115 @@ size_t replay_flush(bool with_open) {
 
 void replay_side_tick(int i, Obj* pa, Obj* pd, int step) {
     const int chara = static_cast<int>(inum(pa, "pl_type", 0));
-    if (!fighter_dir(chara)) return;
+    if (!fighter_dir(chara)) return;             // (255 outside a fight)
     Side& s = RP.sides[i];
     const bool modern = s.take ? s.take->modern : replay_modern(i);
     const Frame in = read_frame(pa, pd, modern);
-    if (auto closed = replay_side(s, in, step, RP.frame, labels_for(chara))) replay_close(s, chara, *closed);
+    if (auto closed = replay_side(s, in, step, RP.frame, labels_for(chara))) replay_close(chara, *closed);
+}
+
+// The Replay Menu's rows live in an asset the game keeps loaded (Product/GUI/menu/ui90700/data/ReplayPauseMenuData.user,
+// app.ReplayPauseMenuData.MenuItems: the very object the menu's Param._MenuData points at). Its MenuItems is written
+// here, on the game thread, when what our rows say changes (a replay under way, a recording on, the combos held); the
+// menu finds them when it opens. Leaving the replay puts the game's own array back. Ours are clones of "Play from
+// Beginning" with a FuncType of ours, before "Open Matchmaking Settings"; made once (rooted), their texts retexted.
+struct RMState {
+    Obj* md = nullptr;
+    bool failed = false, set = false;
+    std::vector<Obj*> base;                      // the game's rows (rooted)
+    Obj* game = nullptr;                         // the game's own array (rooted)
+    std::string state;
+    std::map<int, Obj*> rows;                    // [FuncType] our row
+    std::map<int, std::pair<std::array<uint8_t, 16>, std::string>> texts;   // [FuncType] its GUID and text
+    Obj* arr_idle = nullptr; Obj* arr_rec = nullptr;
+} RM;
+
+Obj* replay_row(Obj* src, int ft, const std::string& text) {
+    auto it = RM.rows.find(ft);
+    if (it != RM.rows.end()) {                   // made already: a new text for its GUID when it changed
+        auto& [g, t] = RM.texts[ft];
+        if (t != text && core->text_set(client, g.data(), text.c_str()) == SF6CORE_OK) t = text;
+        return it->second;
+    }
+    Obj* c = clone(src);
+    uint8_t g[16];
+    if (!c || !text_guid(text, g)) return nullptr;
+    set(c, "FuncType", ft);
+    write_guid(c, "ItemMsg", g);
+    std::array<uint8_t, 16> ga;
+    std::memcpy(ga.data(), g, 16);
+    RM.texts[ft] = { ga, text };
+    RM.rows[ft] = c;
+    return c;
+}
+
+void replay_rows_write(bool in_replay) {
+    if (RM.failed || !cfg.rec) return;
+    if (!RM.md) {
+        if (!in_replay) return;
+        RM.md = create_userdata("app.ReplayPauseMenuData", "Product/GUI/menu/ui90700/data/ReplayPauseMenuData.user");
+        if (!RM.md || !get_obj(RM.md, "MenuItems")) { RM.failed = true; logf("replay menu: its rows' asset was not found: no rows of ours"); return; }
+    }
+    if (RM.base.empty()) {
+        Obj* arr_ = get_obj(RM.md, "MenuItems");
+        for (int32_t i = 0, n = arr_len(arr_); i < n; ++i)
+            if (Obj* it = arr_get(arr_, i); it && !replay_ft_ours(inum(it, "FuncType", -1))) { it->add_ref(); RM.base.push_back(it); }
+        if (RM.base.empty()) { RM.failed = true; return; }
+        RM.game = new_array(type("app.ReplayMenuItem"), static_cast<int32_t>(RM.base.size()));
+        if (!RM.game) { RM.failed = true; return; }
+        for (size_t k = 0; k < RM.base.size(); ++k) arr_set(RM.game, static_cast<int32_t>(k), RM.base[k]);
+    }
+    const std::string st = replay_rows_state(in_replay, RP.on, RP.pending.size());
+    if (st == RM.state) return;
+    RM.state = st;
+    if (st == "off") {
+        set_ref(RM.md, "MenuItems", RM.game);
+        RM.set = false;
+        return;
+    }
+    Obj* src = nullptr;
+    size_t at_ = RM.base.size();
+    for (size_t i = 0; i < RM.base.size(); ++i) {
+        const int64_t ft = inum(RM.base[i], "FuncType", -1);
+        if (ft == 8) src = RM.base[i];           // "Play from Beginning": a plain button of the first tab
+        if (ft == 12 && at_ == RM.base.size()) at_ = i;   // ours go before "Open Matchmaking Settings"
+    }
+    if (!src) { RM.failed = true; logf("replay menu: no row to copy: no rows of ours"); return; }
+    std::vector<Obj*> ours;
+    for (const ReplayRow& r : replay_rows(RP.on, RP.pending.size())) {
+        Obj* o = replay_row(src, r.ft, r.text);
+        if (!o) return;
+        ours.push_back(o);
+    }
+    Obj*& cache = RP.on ? RM.arr_rec : RM.arr_idle;
+    if (!cache) {
+        std::vector<Obj*> rows;
+        for (size_t i = 0; i <= RM.base.size(); ++i) {
+            if (i == at_) rows.insert(rows.end(), ours.begin(), ours.end());
+            if (i < RM.base.size()) rows.push_back(RM.base[i]);
+        }
+        Obj* a = new_array(type("app.ReplayMenuItem"), static_cast<int32_t>(rows.size()));
+        if (!a) return;
+        for (size_t k = 0; k < rows.size(); ++k) if (!arr_set(a, static_cast<int32_t>(k), rows[k])) return;
+        cache = a;
+    }
+    set_ref(RM.md, "MenuItems", cache);
+    RM.set = true;
 }
 
 void replay_tick_impl(bool in_replay) {
+    try { replay_rows_write(in_replay); } catch (...) { logf("replay menu: rows not written (an exception)"); }
     if (const int w = RP.want.exchange(0)) {      // a row of the menu was chosen: done here, not in the hook
         if (w == kFtStart) {
             RP.on = true; RP.pending.clear(); RP.clock.reset(); RP.ko_for = 0; RP.saved = 0; RP.note.reset();
             replay_drop();
             logf("replay recording: started");
-        } else if (w == kFtSave) {
+        } else if (const int lv = replay_save_level(w); lv >= 0) {
+            RP.level = lv;
             const size_t n = replay_flush(true);
             RP.note = RPState::Note{ "SAVED", combos_text(n), 150 };
             RP.on = false;
-            logf("replay recording: saved %zu combo(s)", n);
+            logf("replay recording: saved %zu combo(s) in tab %d", n, lv);
         } else if (w == kFtCancel) {
             RP.pending.clear();
             replay_drop();
@@ -1060,14 +1201,11 @@ void replay_tick_impl(bool in_replay) {
             RP.note = RPState::Note{ "CANCELLED", "", 90 };
             logf("replay recording: cancelled");
         }
-        Obj* ctl = nullptr;
-        { std::lock_guard lk(RP.mx); std::swap(ctl, RP.ctl); }
-        if (ctl) {
-            if (live(ctl)) call_ok(ctl, "ClosePauseMenu(System.Boolean)", { arg_bool(true) });
-            ctl->release();
-        }
+        Obj* ctl = RP.ctl.exchange(nullptr);
+        TD* ct = type("app.esports.ReplayUICtrl");
+        if (ctl && live(ctl) && td_of(ctl) == ct) call_ok(ctl, "ClosePauseMenu(System.Boolean)", { arg_bool(true) });
+        try { replay_rows_write(in_replay); } catch (...) {}
     }
-    struct Publish { ~Publish() { RP.on_a = RP.on; RP.held_a = RP.pending.size(); } } publish;
     if (!RP.on) {
         if (RP.note) {                           // the last word of a recording, for a moment, then nothing
             if (!in_replay) RP.note.reset();     // (out of the replay the widget is Training's: never touched)
@@ -1076,7 +1214,13 @@ void replay_tick_impl(bool in_replay) {
         }
         return;
     }
-    if (!in_replay) { replay_flush(false); RP.on = false; logf("replay left with a recording on: what was held is written"); return; }
+    if (!in_replay) {                            // left with a recording on: what is held goes where the last choice went
+        replay_flush(false);
+        RP.on = false;
+        logf("replay left with a recording on: what was held is written (tab %d)", RP.level);
+        try { replay_rows_write(false); } catch (...) {}
+        return;
+    }
     Obj* a = player(0);
     Obj* b = player(1);
     const auto clock = battle_clock();
@@ -1104,94 +1248,19 @@ void replay_tick_impl(bool in_replay) {
             const size_t n = replay_flush(true);
             RP.note = RPState::Note{ "SAVED", combos_text(n), 180 };
             RP.on = false;
-            logf("replay recording: round over, %zu combo(s) saved", n);
+            logf("replay recording: round over, %zu combo(s) saved (tab %d)", n, RP.level);
         }
     } else RP.ko_for = 0;
 }
 
-// The replay menu (app.esports.UIReplayPauseMenu.Param) builds its rows in InitMenuList from _MenuData.MenuItems
-// (app.ReplayMenuItem[]): that array is given with ours too (clones of "Play from Beginning" with a FuncType of ours),
-// before "Open Matchmaking Settings". The game's rows are kept the first time; ours are made once (rooted).
-Obj* replay_row(Obj* src, int ft, const char* text, std::array<uint8_t, 16>* guid_out) {
-    Obj* c = clone(src);
-    uint8_t g[16];
-    if (!c || !text_guid(text, g)) return nullptr;
-    set(c, "FuncType", ft);
-    write_guid(c, "ItemMsg", g);
-    if (guid_out) std::memcpy(guid_out->data(), g, 16);
-    return c;
-}
-void replay_lay(Obj* param) {
-    Obj* md = get_obj(param, "_MenuData");
-    Obj* arr_ = get_obj(md, "MenuItems");
-    if (!arr_) return;
-    if (RP.base.empty()) {
-        for (int32_t i = 0, n = arr_len(arr_); i < n; ++i) {
-            Obj* it = arr_get(arr_, i);
-            const int64_t ft = inum(it, "FuncType", -1);
-            if (it && ft != kFtStart && ft != kFtSave && ft != kFtCancel) { it->add_ref(); RP.base.push_back(it); }
-        }
-    }
-    Obj* src = nullptr;
-    size_t at_ = RP.base.size();
-    for (size_t i = 0; i < RP.base.size(); ++i) {
-        const int64_t ft = inum(RP.base[i], "FuncType", -1);
-        if (ft == 8) src = RP.base[i];           // "Play from Beginning": a plain button of the first tab
-        if (ft == 12 && at_ == RP.base.size()) at_ = i;   // ours go before "Open Matchmaking Settings"
-    }
-    if (!src) return;
-    std::vector<Obj*> ours;
-    Obj** cache = nullptr;
-    if (RP.on_a.load()) {
-        const std::string t = "Save Combo Recording (" + combos_text(RP.held_a.load()) + " held)";
-        if (!RP.row_save) { RP.row_save = replay_row(src, kFtSave, t.c_str(), &RP.save_guid); RP.save_text = t; }
-        else if (RP.save_text != t && core->text_set(client, RP.save_guid.data(), t.c_str()) == SF6CORE_OK) RP.save_text = t;
-        if (!RP.row_cancel) RP.row_cancel = replay_row(src, kFtCancel, "Cancel Recording", nullptr);
-        ours = { RP.row_save, RP.row_cancel };
-        cache = &RP.arr_on;
-    } else {
-        if (!RP.row_start) RP.row_start = replay_row(src, kFtStart, "Start Combo Recording", nullptr);
-        ours = { RP.row_start };
-        cache = &RP.arr_off;
-    }
-    for (Obj* o : ours) if (!o) return;
-    if (!*cache) {
-        std::vector<Obj*> rows;
-        for (size_t i = 0; i <= RP.base.size(); ++i) {
-            if (i == at_) rows.insert(rows.end(), ours.begin(), ours.end());
-            if (i < RP.base.size()) rows.push_back(RP.base[i]);
-        }
-        Obj* a = new_array(type("app.ReplayMenuItem"), static_cast<int32_t>(rows.size()));
-        if (!a) return;
-        for (size_t k = 0; k < rows.size(); ++k) if (!arr_set(a, static_cast<int32_t>(k), rows[k])) return;
-        *cache = a;
-    }
-    set_ref(md, "MenuItems", *cache);
-}
-
-int pre_replay_init(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    if (!cfg.rec) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    std::lock_guard lk(RP.mx);
-    try { replay_lay(reinterpret_cast<Obj*>(argv[1])); } catch (...) { logf("replay menu: rows not laid (an exception)"); }
-    return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-}
-// ReplayUICtrl.OnDecideItem(EReplayFuncType, int, bool): argv[1] this, argv[2] the row's FuncType
+// ReplayUICtrl.OnDecideItem(EReplayFuncType, int, bool), any thread: argv[1] this, argv[2] the row's FuncType. Our
+// rows: noted (a number and an address), their original skipped; every other row passed through untouched.
 int pre_replay_decide(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
-    tl_replay_skipped = false;
     const int64_t ft = static_cast<int64_t>(reinterpret_cast<uintptr_t>(argv[2]) & 0xFFFFFFFF);
-    if (ft != kFtStart && ft != kFtSave && ft != kFtCancel) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
-    {                                            // our rows: their decision is ours, done on the next frame
-        std::lock_guard lk(RP.mx);
-        Obj* ctl = reinterpret_cast<Obj*>(argv[1]);
-        if (ctl && live(ctl)) { ctl->add_ref(); if (RP.ctl) RP.ctl->release(); RP.ctl = ctl; }
-    }
+    if (!replay_ft_ours(ft)) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
+    RP.ctl = reinterpret_cast<Obj*>(argv[1]);
     RP.want = static_cast<int>(ft);
-    tl_replay_skipped = true;
     return REFRAMEWORK_HOOK_SKIP_ORIGINAL;
-}
-void post_replay_decide(void** ret, REFrameworkTypeDefinitionHandle, unsigned long long) {
-    (void)ret;                                   // OnDecideItem returns void: nothing to write when it was skipped
-    tl_replay_skipped = false;
 }
 
 // ---------------------------------------------------------------- the recorder the mode calls
@@ -1332,7 +1401,7 @@ struct SlotRecorder final : rec::Recorder {
         return out;
     }
     bool fixed_start() override { return rs.pos != 0; }
-    bool replay_on() override { return RP.on || RP.want.load() != 0; }
+    bool replay_on() override { return RP.on || RP.want.load() != 0 || RM.set; }   // (RM.set: the game's rows to put back)
     void replay_tick(bool in_replay) override { replay_tick_impl(in_replay); }
 
     static bool mode_modern() { return input_modern(); }
@@ -1343,9 +1412,8 @@ void install_hooks() {
     if (!cfg.rec) { logf("recorder off (config.json \"rec\": false)"); return; }
     hook("app.esports.UIFlowESportsPauseMenu.Param", "SetupList_ComboTrial", -1, pre_setup_list, post_pass);
     hook("app.esports.UIFlowESportsPauseMenu.Param", "SetupList", -1, pre_setup_list, post_pass);
-    hook("app.esports.UIFlowESportsPauseMenu", "DecidePauseMenuItem", 2, pre_decide, post_decide);
-    hook("app.esports.UIReplayPauseMenu.Param", "InitMenuList", -1, pre_replay_init, post_pass);
-    hook("app.esports.ReplayUICtrl", "OnDecideItem", 3, pre_replay_decide, post_replay_decide);
+    hook("app.esports.UIFlowESportsPauseMenu", "DecidePauseMenuItem", 2, pre_decide, post_pass);
+    hook("app.esports.ReplayUICtrl", "OnDecideItem", 3, pre_replay_decide, post_pass);
 }
 
 std::unique_ptr<rec::Recorder> make() {
