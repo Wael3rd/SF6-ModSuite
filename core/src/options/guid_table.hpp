@@ -50,6 +50,8 @@ bool alloc_owned(Owner owner, const std::string& text, bool (*keep)(Owner), Guid
 bool retext_owned(Owner owner, const GuidBytes& gb, const std::string& text);
 // Forget one of the owner's GUIDs. False when the GUID is not the owner's.
 bool release_owned(Owner owner, const GuidBytes& gb);
+// Forget every GUID of the owner (a client of the text API unregisters). Returns how many.
+size_t release_owner(Owner owner);
 
 struct Stats {
     size_t live = 0, owned = 0;                  // texts in the table, of which client texts

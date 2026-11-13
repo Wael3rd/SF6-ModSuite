@@ -170,6 +170,8 @@ SF6CoreStatus core_obj_set_guid(SF6CoreClient* client, void* obj, const char* fi
 void pausemenu_frame();                            // each core frame, after the option dialogs: install on demand, then the engine
 void pausemenu_release_client(SF6CoreClient* c);  // unregister_client, once the client is inactive
 
+void guid_text_release_client(SF6CoreClient* c); // options/guid_text.cpp: unregister_client, the client's GUID texts
+
 void title_frame();                                // title.cpp: the OVERDRIVE EDITION line on the title screen, each core frame
 
 // The core's frame counter, readable from any thread (the hooks run on the game's UI job threads).

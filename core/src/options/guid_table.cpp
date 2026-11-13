@@ -155,6 +155,22 @@ bool release_owned(Owner owner, const GuidBytes& gb) {
     return true;
 }
 
+size_t release_owner(Owner owner) {
+    if (!owner) return 0;
+    std::lock_guard lk(g_mx);
+    if (g_owned.find(owner) == g_owned.end()) return 0;
+    size_t n = 0;
+    for (auto it = g_map.begin(); it != g_map.end();) {
+        for (auto it2 = it->second.begin(); it2 != it->second.end();) {
+            if (it2->second.owner == owner) { it2 = it->second.erase(it2); --g_live; ++n; } else ++it2;
+        }
+        if (it->second.empty()) it = g_map.erase(it); else ++it;
+    }
+    owned_dec_locked(owner, n);
+    g_owned.erase(owner);
+    return n;
+}
+
 Stats stats() {
     std::lock_guard lk(g_mx);
     Stats s;
