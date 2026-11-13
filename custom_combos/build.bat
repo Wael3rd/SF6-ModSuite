@@ -9,7 +9,7 @@ if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -pro
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 cd /d "%~dp0"
 if not exist ..\build\custom_combos mkdir ..\build\custom_combos
-cl /nologo /utf-8 /std:c++20 /EHa /O2 /W4 /LD /I ..\plugin\include /I ..\core\include /I ..\colormod\third_party /Fo..\build\custom_combos\ custom_combos.cpp /Fe..\build\custom_combos\SF6_CustomCombos.dll /link /opt:ref user32.lib
+cl /nologo /utf-8 /std:c++20 /EHa /O2 /W4 /LD /I ..\plugin\include /I ..\core\include /I ..\colormod\third_party /Fo..\build\custom_combos\ custom_combos.cpp /Fe..\build\custom_combos\SF6_CustomCombos.dll /link /opt:ref user32.lib ws2_32.lib shell32.lib
 if errorlevel 1 exit /b 1
 echo OK: build\custom_combos\SF6_CustomCombos.dll
 exit /b 0

@@ -328,14 +328,15 @@ inline std::string cmd_key(const std::string& cmd_text) {
 // rows before its buttons, so a choice row would come first).
 namespace manage {
 
-enum class Act { Rename, Move, Delete, Share, Download };
+enum class Act { Edit, Rename, Move, Delete, Share, Download };
 struct Button { Act act; int level; std::string title, guide; };
 
 inline const char* level_name(int l) { return l == 1 ? "Intermediate" : l == 2 ? "Advanced" : "Beginner"; }
 
 inline std::vector<Button> buttons(int level) {
     const int lv = level >= 0 && level <= 2 ? level : 0;
-    std::vector<Button> b = { { Act::Rename, -1, "Rename", "Give this trial another name." } };
+    std::vector<Button> b = { { Act::Edit, -1, "Edit Combo", "Open this trial in Combo Studio, the editor beside the game." },
+                              { Act::Rename, -1, "Rename", "Give this trial another name." } };
     for (int l = 0; l <= 2; ++l)
         if (l != lv) b.push_back({ Act::Move, l, std::string("Move to ") + level_name(l),
                                    std::string("Show this trial in the ") + level_name(l) + " tab of the list." });
@@ -343,6 +344,25 @@ inline std::vector<Button> buttons(int level) {
     b.push_back({ Act::Share, -1, "Share Trial", "Coming soon: share this trial with other players." });
     b.push_back({ Act::Download, -1, "Download Trial", "Coming soon: download the trials other players shared." });
     return b;
+}
+
+// Combo Studio's link to a trial: "#<Fighter>/<file>" (the page opens that file), from the trial's path; letters,
+// digits and - _ . kept, everything else %-encoded byte by byte
+inline std::string editor_link(const std::string& path) {
+    std::string p = path;
+    for (char& c : p) if (c == '\\') c = '/';
+    const size_t f = p.find_last_of('/');
+    if (f == std::string::npos || f == 0) return "";
+    const size_t d = p.find_last_of('/', f - 1);
+    const std::string rel = p.substr(d == std::string::npos ? 0 : d + 1);
+    static const char* hex = "0123456789ABCDEF";
+    std::string out = "#";
+    for (unsigned char c : rel) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '/')
+            out += static_cast<char>(c);
+        else { out += '%'; out += hex[c >> 4]; out += hex[c & 15]; }
+    }
+    return out;
 }
 
 // the rows the sub-menu opens on: our files only

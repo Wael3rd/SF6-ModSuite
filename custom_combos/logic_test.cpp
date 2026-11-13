@@ -408,13 +408,16 @@ int main() {
     // the sub-menu of a trial: its buttons per tab, the names, the trash
     {
         auto titles = [](int lv) { std::string s; for (const auto& b : manage::buttons(lv)) s += b.title + "|"; return s; };
-        eq(titles(0), "Rename|Move to Intermediate|Move to Advanced|Delete|Share Trial|Download Trial|", "buttons, Beginner tab");
-        eq(titles(1), "Rename|Move to Beginner|Move to Advanced|Delete|Share Trial|Download Trial|", "buttons, Intermediate tab");
-        eq(titles(2), "Rename|Move to Beginner|Move to Intermediate|Delete|Share Trial|Download Trial|", "buttons, Advanced tab");
+        eq(titles(0), "Edit Combo|Rename|Move to Intermediate|Move to Advanced|Delete|Share Trial|Download Trial|", "buttons, Beginner tab");
+        eq(titles(1), "Edit Combo|Rename|Move to Beginner|Move to Advanced|Delete|Share Trial|Download Trial|", "buttons, Intermediate tab");
+        eq(titles(2), "Edit Combo|Rename|Move to Beginner|Move to Intermediate|Delete|Share Trial|Download Trial|", "buttons, Advanced tab");
         const auto b1 = manage::buttons(1);
-        check(b1.size() == 6 && b1[1].act == manage::Act::Move && b1[1].level == 0 && b1[2].level == 2 && b1[3].act == manage::Act::Delete &&
-              b1[4].act == manage::Act::Share && b1[5].act == manage::Act::Download, "buttons: actions and levels");
-        check(manage::buttons(7).size() == 6 && manage::buttons(7)[1].level == 1, "buttons: a level out of range is Beginner");
+        check(b1.size() == 7 && b1[0].act == manage::Act::Edit && b1[2].act == manage::Act::Move && b1[2].level == 0 && b1[3].level == 2 &&
+              b1[4].act == manage::Act::Delete && b1[5].act == manage::Act::Share && b1[6].act == manage::Act::Download, "buttons: actions and levels");
+        check(manage::buttons(7).size() == 7 && manage::buttons(7)[2].level == 1, "buttons: a level out of range is Beginner");
+        eq(manage::editor_link("reframework/data/SF6_CustomTrials_data/Ryu/rec_20261112_035259.json"), "#Ryu/rec_20261112_035259.json", "editor link");
+        eq(manage::editor_link("C:\\x\\Blanka\\a b+c.json"), "#Blanka/a%20b%2Bc.json", "editor link: backslashes, encoded");
+        eq(manage::editor_link("a.json"), "", "editor link: no folder");
         auto own = std::make_shared<Trial>(); own->path = "x/a.json";
         auto rslot = rec::make_slot(1, rec::Settings{}, "", 1);
         auto bare = std::make_shared<Trial>();

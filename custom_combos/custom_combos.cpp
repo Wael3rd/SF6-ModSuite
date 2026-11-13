@@ -26,7 +26,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
+#include <winsock2.h>          // (before windows.h) Edit Combo: is Combo Studio's local server up
 #include <windows.h>
+#include <shellapi.h>
 
 #include "cc_game.hpp"
 #include "cc_rec.hpp"
@@ -37,6 +39,7 @@
 #include <functional>
 #include <cstdarg>
 #include <set>
+#include <thread>
 
 namespace cc {
 namespace {
@@ -78,6 +81,8 @@ struct Cfg {
     bool guard_save = true, scroll = true, rec = true, rec_menu = true, rec_menu_reset = true, extra_rows = true;
     int window = 12, scroll_row = 7, rec_min_steps = 2;
     std::string rec_counter;
+    std::string editor_url = "http://127.0.0.1:8765/";    // Combo Studio's page (Edit Combo)
+    std::string editor_start;                             // its ComboStudio.bat, started when it is not running
 } cfg;
 
 void load_cfg() {
@@ -93,6 +98,8 @@ void load_cfg() {
     if (auto v = num(at(c, "rec_min_steps"))) cfg.rec_min_steps = std::max(1, static_cast<int>(std::floor(*v)));
     const std::string rc = str_of(at(c, "rec_counter"));
     cfg.rec_counter = (rc == "punish" || rc == "counter") ? rc : "";
+    if (const std::string u = str_of(at(c, "editor_url")); !u.empty()) cfg.editor_url = u;
+    cfg.editor_start = str_of(at(c, "editor_start"));
     if (auto v = num(at(c, "scroll_row"))) cfg.scroll_row = std::max(1, static_cast<int>(std::floor(*v)));
     if (auto v = num(at(c, "window"))) cfg.window = std::max(4, static_cast<int>(std::floor(*v)));
 }

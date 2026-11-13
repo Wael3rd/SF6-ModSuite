@@ -1,5 +1,5 @@
-// cc_manage.hpp - Custom Combos: the sub-menu of a trial in the trial list (Rename, Move to, Delete, Share Trial,
-// Download Trial). Included by custom_combos.cpp after the recorder, inside its anonymous namespace. The offline part
+// cc_manage.hpp - Custom Combos: the sub-menu of a trial in the trial list (Edit Combo, Rename, Move to, Delete,
+// Share Trial, Download Trial). Included by custom_combos.cpp after the recorder, inside its anonymous namespace. The offline part
 // (the buttons per tab, the trash path, the names) is cc_trials.hpp's cc::manage.
 //
 // Interface: the game's own windows only.
@@ -9,6 +9,9 @@
 //     given, the result is taken in a pre-hook of InvokeResultEvent, which is then skipped);
 //   * Delete: the game's Yes / No box (app.UIFlowDialog.MessageBox.Start, default No, polled);
 //   * Share Trial / Download Trial: the game's OK box, "coming soon" (the server's routes are not deployed).
+//   * Edit Combo: Combo Studio (the editor beside the game, a page of a local server) opened on the trial in the
+//     default browser; started first when config.json's "editor_start" names its .bat; else the game's OK box says
+//     how to start it. A save there reaches the game within a second (_editor.json).
 // Key: T on the keyboard, the top face button on a pad (RUp), on a row that is a file of ours. The trial list's input is
 // blocked while the window or a box is up, and given back two frames before the list is drawn again.
 //
@@ -284,6 +287,67 @@ struct S_ {
     std::string info;
 } S;
 
+// ---- Edit Combo: Combo Studio on this trial
+// The editor's server answers on 127.0.0.1:<port> (config.json "editor_url", default http://127.0.0.1:8765/). A
+// connection to the local port says whether it runs (refused at once when it does not).
+int editor_port() {
+    const std::string& u = cfg.editor_url;
+    const size_t h = u.find("://");
+    const size_t c = u.find(':', h == std::string::npos ? 0 : h + 3);
+    return c == std::string::npos ? 80 : std::atoi(u.c_str() + c + 1);
+}
+bool editor_up() {
+    WSADATA w;
+    if (WSAStartup(MAKEWORD(2, 2), &w) != 0) return false;
+    SOCKET so = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    bool up = false;
+    if (so != INVALID_SOCKET) {
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_port = htons(static_cast<u_short>(editor_port()));
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        up = connect(so, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0;
+        closesocket(so);
+    }
+    WSACleanup();
+    return up;
+}
+std::wstring wide(const std::string& s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
+// "" when the editor is opened (or being started); else the text of the game's OK box
+std::string edit_trial(const Trial& t) {
+    const std::string link = editor_link(t.path);
+    if (link.empty()) return "This trial has no file to open.";
+    std::string base = cfg.editor_url;
+    if (!base.empty() && base.back() != '/') base += '/';
+    const std::wstring url = wide(base + link);
+    if (editor_up()) {
+        ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        logf("Edit Combo: %s%s", base.c_str(), link.c_str());
+        return "";
+    }
+    if (cfg.editor_start.empty())
+        return "Combo Studio is not running. Start ComboStudio.bat (in Combo Studio's tools folder), or write its path in "
+               "SF6_CustomTrials_data/config.json as \"editor_start\", then choose Edit Combo again.";
+    const std::wstring bat = wide(cfg.editor_start);
+    std::wstring dir = bat;
+    const size_t sl = dir.find_last_of(L"\\/");
+    dir = sl == std::wstring::npos ? L"" : dir.substr(0, sl);
+    const auto r = reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", bat.c_str(), L"--no-browser",
+                                                            dir.empty() ? nullptr : dir.c_str(), SW_SHOWMINNOACTIVE));
+    if (r <= 32) { logf("Edit Combo: editor_start could not be run (%lld)", static_cast<long long>(r)); return "Combo Studio could not be started (editor_start in config.json)."; }
+    logf("Edit Combo: Combo Studio started, the page opens when it answers");
+    std::thread([url] {                                          // its server needs a moment: the page once it answers
+        for (int i = 0; i < 50; ++i) { if (editor_up()) { ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); return; } Sleep(200); }
+    }).detach();
+    return "";
+}
+
 void block_list(Obj* agent, bool on) {
     if (on) {
         if (S.list || !agent) return;
@@ -347,7 +411,7 @@ void tick() {
                 if (e.row >= OPT.rows.size()) continue;
                 const Button& b = OPT.rows[e.row].b;
                 switch (b.act) {
-                case Act::Rename: case Act::Delete: S.next = b.act; break;
+                case Act::Edit: case Act::Rename: case Act::Delete: S.next = b.act; break;
                 case Act::Move: S.level = b.level; break;
                 case Act::Share: S.next = b.act; S.info = share_trial(*S.trial); break;
                 case Act::Download: S.next = b.act; S.info = download_trial(S.trial->fighter_id); break;
@@ -360,7 +424,10 @@ void tick() {
         }
         const bool moved = S.level >= 0 && do_move(*S.trial, S.level);
         if (moved) S.dirty = true;
-        if (S.next == Act::Rename) { S.st = St::RenameOpen; S.wait = 12; }
+        if (S.next == Act::Edit) {
+            S.info = edit_trial(*S.trial);
+            if (S.info.empty()) finish(moved); else { S.st = St::InfoOpen; S.wait = 12; }
+        } else if (S.next == Act::Rename) { S.st = St::RenameOpen; S.wait = 12; }
         else if (S.next == Act::Delete) { S.st = St::ConfirmOpen; S.wait = 12; }
         else if (S.next == Act::Share || S.next == Act::Download) { S.st = St::InfoOpen; S.wait = 12; }
         else finish(moved);
@@ -394,7 +461,8 @@ void tick() {
     }
     case St::InfoOpen:
         if (--S.wait > 0) return;
-        S.box = box_start(S.info, S.next == Act::Share ? "Share Trial" : "Download Trial", 0, 0, box_style("OK", 1));
+        S.box = box_start(S.info, S.next == Act::Share ? "Share Trial" : S.next == Act::Edit ? "Edit Combo" : "Download Trial",
+                          0, 0, box_style("OK", 1));
         if (!S.box) { finish(false); return; }
         S.st = St::Info;
         return;
