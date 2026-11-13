@@ -214,7 +214,7 @@ Obj* ctm() {
 }
 
 // The control type of the session: ComboTrialManager._InputType, 0 Classic, 1 Modern
-bool input_modern() { Obj* i = ctm(); return i && inum(i, "_InputType", 0) == 1; }
+bool input_modern() { Obj* i = ctm(); return i && (inum(i, "_InputType", 0) & 0xFF) == 1; }   // one byte, as the game reads it
 bool cur_modern = false;
 
 std::atomic<Obj*> g_ctm{nullptr};              // the trial manager, kept for the index hooks (cc_index.hpp)
@@ -1392,7 +1392,7 @@ void clamp_index(Obj* ld, int size) {
             if (get_obj(fd, n) != ld) continue;
             for (const auto& f : kIdx) {
                 const int64_t i = inum(mgr, f[2], -1);
-                if (inum(mgr, f[0], -1) == lv && inum(mgr, f[1], -1) == it && i >= size) {
+                if (inum(mgr, f[0], -1) == lv && (inum(mgr, f[1], -1) & 0xFF) == it && i >= size) {
                     set(mgr, f[2], rows::clamp(static_cast<int>(i), size));
                     logf("trial index %lld brought back to %d (the official list is back)", static_cast<long long>(i), rows::clamp(static_cast<int>(i), size));
                 }

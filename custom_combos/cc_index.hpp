@@ -50,6 +50,8 @@ std::optional<RowOf> row_of(Obj* entry, bool ours) {
 int list_rows(Obj* list) { std::lock_guard lk(idx_mx); auto n = list_n.find(list); return n == list_n.end() ? 0 : n->second; }
 Obj* mgr() { Obj* m = g_ctm.load(); return m && live(m) ? m : nullptr; }
 int i32(Obj* o, const char* f) { return static_cast<int>(inum(o, f, -1)); }
+// The control type: the game reads and writes the InputType fields as ONE byte (movsx / mov byte): compare that byte
+int in8(Obj* o, const char* f) { return static_cast<int>(inum(o, f, -1) & 0xFF); }
 
 // ---- GetStageIndex(UInt32): the answer for the entry the caller named
 int pre_index(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned long long) {
@@ -114,7 +116,7 @@ int pre_pause_end(int, void** argv, REFrameworkTypeDefinitionHandle*, unsigned l
         if (!r) return REFRAMEWORK_HOOK_CALL_ORIGINAL;
         const int cur = i32(m, "_StageIndex");
         const bool same_list = i32(m, "_Level") == i32(sd, "<LevelCategory>k__BackingField") &&
-                               i32(m, "_InputType") == i32(sd, "<InputType>k__BackingField");
+                               in8(m, "_InputType") == in8(sd, "<InputType>k__BackingField");
         if (same_list && cur == r->row) return REFRAMEWORK_HOOK_CALL_ORIGINAL;    // the trial under way
         tl_want = Want{ true, r->row, r->size, static_cast<uint32_t>(inum(entry, "StageID", 0)) };
         g_decided = true;
@@ -152,7 +154,7 @@ void post_spin(void**, REFrameworkTypeDefinitionHandle, unsigned long long) {
         Obj* sd = at >= 0 && at < sp.n ? arr_get_raw(sp.arr, at) : nullptr;
         const auto r = sd ? row_of(get_obj(sd, "<ComboTrialData>k__BackingField"), false) : std::nullopt;
         const int cur = m ? i32(m, "_StageIndex") : -1, lv = m ? i32(m, "_Level") : -1;
-        if (r && i32(sd, "<LevelCategory>k__BackingField") == lv && i32(sd, "<InputType>k__BackingField") == i32(m, "_InputType"))
+        if (r && i32(sd, "<LevelCategory>k__BackingField") == lv && in8(sd, "<InputType>k__BackingField") == in8(m, "_InputType"))
             if (auto to = rows::spin_target(at, cur, r->row, r->size, sp.n)) {
                 Obj* sd2 = arr_get_raw(sp.arr, *to);
                 const auto r2 = sd2 ? row_of(get_obj(sd2, "<ComboTrialData>k__BackingField"), false) : std::nullopt;
