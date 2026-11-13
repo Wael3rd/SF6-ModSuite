@@ -42,6 +42,7 @@ if /i "%1"=="crsm" goto :only_crsm
 if /i "%1"=="profile" goto :only_profile
 if /i "%1"=="report" goto :only_report
 if /i "%1"=="sorter" goto :only_sorter
+if /i "%1"=="combos" goto :only_combos
 if /i "%1"=="plugin" goto :plugin
 
 rem ---------------------------------------------------------------------------------------------
@@ -142,6 +143,9 @@ if errorlevel 1 goto :failed
 echo === Report a bug (report_mod.dll) ===
 call report_mod\build.bat
 if errorlevel 1 goto :failed
+echo === Custom Combos (SF6_CustomCombos.dll) ===
+call custom_combos\build.bat
+if errorlevel 1 goto :failed
 echo === SF6_ModSorter.exe ===
 call tools\sorter\build.bat
 if errorlevel 1 goto :failed
@@ -149,6 +153,7 @@ if errorlevel 1 goto :failed
 echo.
 echo All OK: build\amd_ags_x64.dll, build\costumes_only\amd_ags_x64.dll, build\SF6_CostumeSlotsNative.dll,
 echo         build\core\sf6core_native.dll, build\colormod\SF6_ColorModNative.dll, build\crsm\SF6_CRSMNative.dll, build\report_mod\report_mod.dll,
+echo         build\custom_combos\SF6_CustomCombos.dll,
 echo         build\SF6_ModSorter.exe and the tools
 echo Replace the DLLs in the game folder only while the game is closed.
 exit /b 0
@@ -170,6 +175,9 @@ call report_mod\build.bat
 exit /b %errorlevel%
 :only_sorter
 call tools\sorter\build.bat
+exit /b %errorlevel%
+:only_combos
+call custom_combos\build.bat
 exit /b %errorlevel%
 :done_one
 echo OK: %1 only
