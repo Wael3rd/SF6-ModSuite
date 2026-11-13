@@ -430,6 +430,25 @@ int main() {
         check(!manage::share_trial(*own).empty() && !manage::download_trial(1).empty(), "share / download: inert, they say so");
     }
 
+    // the manager's index made real: rows past the game's count (a 7 trial tab)
+    {
+        check(rows::stage_index(3, 1234, 1234, 17, 7) == 17, "row 18 of a 7 trial tab: the game says 3, ours is 17");
+        check(rows::stage_index(3, 1234, 1234, 3, 7) == 3, "an official row: the game's answer");
+        check(rows::stage_index(2, 1234, 1234, 17, 7) == 2, "the game answered another entry: left alone");
+        check(rows::stage_index(3, 99, 1234, 17, 7) == 3, "another stage id asked: left alone");
+        check(rows::stage_index(-1, 1234, 1234, 17, 7) == -1 && rows::stage_index(3, 1234, 1234, 17, 0) == 3, "not found / no size: left alone");
+        check(rows::neighbour(3, 17, 7, true) == 4 && rows::neighbour(6, 13, 7, true) == 0, "Change Trial between copies of one entry: a neighbour row");
+        check(!rows::neighbour(3, 18, 7, true) && !rows::neighbour(3, 17, 7, false) && !rows::neighbour(17, 17, 7, true) &&
+              !rows::neighbour(0, 1, 1, true), "no neighbour: different entries, another list, the same row, a tab of one trial");
+        check(rows::clamp(17, 7) == 3 && rows::clamp(6, 7) == 6 && rows::clamp(7, 7) == 0 && rows::clamp(5, 0) == 5, "the index back under the official count");
+        check(rows::spin_target(40, 17, 3, 7, 109) == 54 && !rows::spin_target(40, 17, 4, 7, 109) && !rows::spin_target(40, 3, 3, 7, 109) &&
+              !rows::spin_target(100, 17, 3, 7, 109), "Change Trial's spin put on the row under way");
+        eq(rows::header_text("Beginner 4", 17).value_or("-"), "Beginner 18", "header: the row's own number");
+        eq(rows::header_text("Beginner 18", 17).value_or("-"), "-", "header: right already");
+        eq(rows::header_text("<COLOR>Intermediate 2</COLOR>", 10).value_or("-"), "<COLOR>Intermediate 11</COLOR>", "header: the last number");
+        check(!rows::header_text("no number", 3), "header: no number, nothing written");
+    }
+
     // the Replay Menu's rows and when they are written again
     {
         const auto idle = replay_rows(false, 0);

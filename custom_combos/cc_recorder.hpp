@@ -142,7 +142,7 @@ std::optional<LastFile> last_file;             // what "Delete Last Recording" u
 struct Shown {
     std::string key; bool has_key = false;
     int64_t check_at = 0, burst_until = 0, rebuild_at = 0;
-    bool burst = false, cleared = false, example = false;
+    bool burst = false, cleared = false, example = false, was_example = false;
     std::optional<int> ex_done;
     std::optional<double> x1, x2;
     int rebuilds = 0;
@@ -1373,6 +1373,11 @@ struct SlotRecorder final : rec::Recorder {
         if (shown.example) {
             core_.frame += step;
             if (core_.take) { core_.take.reset(); shown.has_key = false; }
+            // The example IS the last take: its lines are shown whatever emptied the rows before. Something always had:
+            // an example starts by putting both fighters back, which the Reset Battle check reads as one (the example
+            // is only known a few frames later), and the rows stayed empty for the whole example.
+            if (shown.cleared) { shown.cleared = false; shown.has_key = false; }
+            shown.was_example = true;
             core_.hits.clear();
             core_.last_cc = static_cast<int>(inum(pa, "combo_cnt", 0));
             if (const json* sf = arr(obj(&slot.j, "demo"), "step_frames")) {
@@ -1383,6 +1388,13 @@ struct SlotRecorder final : rec::Recorder {
             }
             try { show_rows(m, L, &slot); } catch (...) {}
             return;
+        }
+        if (shown.was_example) {                 // the example is over, the fight starts again: empty rows, as after a Reset Battle
+            shown.was_example = false;
+            if (!last_steps.empty() || result != Result::None) shown.cleared = true;
+            shown.has_key = false;
+            shown.x1.reset();
+            shown.x2.reset();
         }
         shown.ex_done.reset();
         const Frame in = read_frame(pa, pd, mode_modern());

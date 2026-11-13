@@ -217,9 +217,11 @@ Obj* ctm() {
 bool input_modern() { Obj* i = ctm(); return i && inum(i, "_InputType", 0) == 1; }
 bool cur_modern = false;
 
+std::atomic<Obj*> g_ctm{nullptr};              // the trial manager, kept for the index hooks (cc_index.hpp)
 void trial_slot(int& level, int& stage, int& id) {
     level = stage = id = -1;
     Obj* inst = ctm();
+    g_ctm = inst;                                // (kept for the index hooks, which run on the menus' threads)
     if (!inst) return;
     level = call_i32(inst, "get_CurrentLevelCategory").value_or(-1);
     stage = static_cast<int>(inum(inst, "_StageIndex", -1));
@@ -1197,6 +1199,20 @@ std::map<Obj*, DemoBuf> demo_bufs;             // [entry] the example buffer of 
 std::map<Obj*, TrialP> entry_trial;            // [entry] our trial shown on that row
 std::map<Obj*, std::map<int, Obj*>> extra_copies;   // [official array] the copies past its count, made once
 std::set<Obj*> copied;                         // entries that are copies
+// The manager's index made real (rule 26, cc_index.hpp): each entry's row when its array was built, how many rows each
+// custom list has. Read by hooks on the menus' threads under idx_mx (map reads only, no game call under it).
+struct RowOf { int row; int size; Obj* list; };
+std::mutex idx_mx;
+std::map<Obj*, RowOf> row_map;                 // [entry] its row in our list, the official count, the official array
+std::map<Obj*, int> list_n;                    // [official array] the rows of the list of ours built from it
+std::atomic<bool> real_index{false};           // the index hooks are placed: the manager's index IS the row
+std::atomic<bool> raw_ok{false};               // reference arrays read from memory: layout checked on a list of ours
+std::atomic<bool> g_decided{false};            // a row of ours decided, its StageSetup not seen yet: previews hold off
+uint64_t decided_since = 0;
+struct SetupSeen { int level = -1, stage = -1; uint64_t at = 0; } g_setup;   // the last StageSetup of ours
+struct Seen { int level, stage; uint64_t since, floor, last; bool ok; };
+std::optional<Seen> g_seen;                    // the row under way, and whether its StageSetup was seen
+uint64_t out_at = 0;
 std::map<Obj*, Obj*> copy_roots;               // [copied entry] its own StageInfoRoot (a shallow copy, made once)
 std::map<Obj*, Obj*> orig_lists;               // [level list] its official array (rooted)
 std::set<Obj*> custom_lists;                   // level lists holding ours now
@@ -1353,11 +1369,41 @@ Obj* build_custom_array(Obj* orig, LevelSet& ls, bool modern, int& n_out, std::s
         arr_set(arr, i - 1, src);
         const TrialP& t = ls.rows[static_cast<size_t>(i - 1)];
         entry_trial[src] = t;
+        { std::lock_guard lk(idx_mx); row_map[src] = RowOf{ i - 1, size, orig }; }   // its true row (the index hooks)
         try { apply_demo(src, *t); } catch (...) { logf("demo not written (row %d)", i); }
         try { rename(src, row_title(*t, modern)); } catch (...) { logf("rename failed (row %d)", i); }
     }
+    if (!raw_ok.load()) raw_ok = arr_raw_ok(arr);  // (the hooks read arrays from memory only once this held)
     n_out = n;
     return arr;
+}
+
+// The official arrays are back: an index past their count goes back on the entry it borrowed (rows past the count)
+void clamp_index(Obj* ld, int size) {
+    Obj* mgr = ctm();
+    Obj* fd = mgr ? get_obj(mgr, "_ComboTrialFighterData") : nullptr;
+    if (!fd || !ld || size <= 0) return;
+    static const char* const kLists[2][3] = { { "ElementaryData", "IntermediateData", "AdvancedData" },
+                                              { "ElementaryData_Modern", "IntermediateData_Modern", "AdvancedData_Modern" } };
+    static const char* const kIdx[2][3] = { { "_Level", "_InputType", "_StageIndex" }, { "_PrevLevel", "_PrevInputType", "_PrevStageIndex" } };
+    const int64_t lv = inum(ld, "LevelCategory", -1);
+    for (int it = 0; it < 2; ++it)
+        for (const char* n : kLists[it]) {
+            if (get_obj(fd, n) != ld) continue;
+            for (const auto& f : kIdx) {
+                const int64_t i = inum(mgr, f[2], -1);
+                if (inum(mgr, f[0], -1) == lv && inum(mgr, f[1], -1) == it && i >= size) {
+                    set(mgr, f[2], rows::clamp(static_cast<int>(i), size));
+                    logf("trial index %lld brought back to %d (the official list is back)", static_cast<long long>(i), rows::clamp(static_cast<int>(i), size));
+                }
+            }
+        }
+}
+void forget_list(Obj* ld) {
+    auto it = orig_lists.find(ld);
+    if (it == orig_lists.end()) return;
+    { std::lock_guard lk(idx_mx); list_n.erase(it->second); }
+    try { clamp_index(ld, arr_len(it->second)); } catch (...) {}
 }
 
 // One level list: our trials in, or the official array back
@@ -1375,6 +1421,7 @@ void update_list(Obj* ld, int chara, int it) {
         Obj* arr = build_custom_array(orig_lists[ld], ls, modern, n, why);
         if (arr && set_ref(ld, "ComboTrialDatas", arr)) {
             custom_lists.insert(ld);
+            { std::lock_guard lk(idx_mx); list_n[orig_lists[ld]] = n; }   // (rows the game's index may name)
             logf("custom list installed: %d trial(s) (fighter %d)", n, chara);
         } else if (!arr) {
             static std::string last;
@@ -1383,6 +1430,7 @@ void update_list(Obj* ld, int chara, int it) {
     } else if (custom_lists.count(ld)) {
         set_ref(ld, "ComboTrialDatas", orig_lists[ld]);
         custom_lists.erase(ld);
+        forget_list(ld);
         restore_names();
         logf("official trial list and names restored");
     }
@@ -1391,7 +1439,10 @@ void update_list(Obj* ld, int chara, int it) {
 void restore_lists(const char* why) {
     if (custom_lists.empty()) return;
     lists_done.clear();
-    for (Obj* ld : custom_lists) if (orig_lists.count(ld)) try { set_ref(ld, "ComboTrialDatas", orig_lists[ld]); } catch (...) {}
+    for (Obj* ld : custom_lists) if (orig_lists.count(ld)) {
+        try { set_ref(ld, "ComboTrialDatas", orig_lists[ld]); } catch (...) {}
+        if (!custom_mode.load()) forget_list(ld);   // (rebuilt with the new set: the index stays where it is)
+    }
     custom_lists.clear();
     try { restore_names(); } catch (...) {}
     logf("%s", why);
@@ -1644,7 +1695,7 @@ void preview_tick() {
                 if (own && root != own && set_ref(it, "<StageInfoRoot>k__BackingField", own)) root = own;
             }
             Obj* si = root ? get_obj(root, "Root") : nullptr;
-            if (!si || preview_done[si] == &t || !asset_ready(si)) continue;
+            if (!si || preview_done[si] == &t || !asset_ready(si) || g_decided.load()) continue;   // (rule 29)
             keep_asset(si);
             resolve_skills(t, t.fighter_id);
             std::vector<Step> slot_steps;
@@ -1695,6 +1746,17 @@ std::atomic<bool> want_refresh{false};
 }
 }  // namespace mode
 
+// The recipe's header ("Beginner 4") names the official trial a row past the count borrows: its number replaced by the
+// row's own (the hook on UpdateContents does it first, cc_index.hpp; this is the check behind it)
+void header_tick(int row, int size) {
+    if (size < 1 || row < size) return;          // one of the game's own rows: its name is right
+    Obj* ctrl = recipe_ctrl();
+    Obj* head = ctrl ? find_child(ctrl, "c_head") : nullptr;
+    Obj* title = head ? find_child(head, "e_txt_title") : nullptr;
+    if (!title) return;
+    if (auto want = rows::header_text(message(title), row)) set_message(title, *want);
+}
+
 // ---------------------------------------------------------------- per frame
 int flow_prev = -999;
 uint64_t judge_check_at = 0;
@@ -1706,6 +1768,8 @@ bool rec_live = false;
 std::optional<double> editor_stamp;
 
 void leave_trial() {
+    g_seen.reset();
+    out_at = frame;
     slot_si = nullptr;
     slot_trial.reset();
     slot_preview.reset();
@@ -1722,6 +1786,8 @@ void tick() {
     const int f = core->get_flow_id();
     diag.flow = f;
     try { g_rec->frame(f); } catch (...) {}
+    if (g_decided.load()) { if (!decided_since) decided_since = frame; else if (frame - decided_since > 600) { g_decided = false; decided_since = 0; } }
+    else decided_since = 0;
     if (f == kFlowReplay || g_rec->replay_on()) {
         try { g_rec->replay_tick(f == kFlowReplay); } catch (...) {}
     }
@@ -1844,7 +1910,8 @@ void tick() {
     TrialP T = set[static_cast<size_t>(row)];
     // More rows than the game's own: a row past the official count runs as the official trial it borrows (row % size).
     // The row picked in the list stands while the manager is on that index; when the game moves on by one, so does it.
-    {
+    // (With the index hooks placed the manager's index IS the row and none of this runs: kept for a build without them.)
+    if (!real_index.load()) {
         const int size = ls.size;
         const int n = static_cast<int>(set.size());
         auto index_of = [&](const TrialP& t) { for (int i = 0; i < n; ++i) if (set[i] == t) return i + 1; return 0; };
@@ -1874,6 +1941,22 @@ void tick() {
         }
     }
     if (!T) return;
+    // The manager's index changes the frame a row is decided; the mission and its asset follow when the game has loaded
+    // the trial, 2 to 150 frames later. Installed in between, the new row's recipe went into the OLD trial's asset and
+    // the game built the judge and the lines from the new asset as it stood. So after a change of row nothing is
+    // installed before the game's StageSetup for that row has been seen (its pre-hook lays the recipe).
+    if (real_index.load()) {
+        if (!g_seen || g_seen->level != diag.level || g_seen->stage != diag.stage)
+            g_seen = Seen{ diag.level, diag.stage, frame, (g_seen ? g_seen->last : out_at) > 10 ? (g_seen ? g_seen->last : out_at) - 10 : 0, frame, false };
+        g_seen->last = frame;
+        if (!g_seen->ok) {
+            if (g_setup.level == diag.level && g_setup.stage == diag.stage && g_setup.at >= g_seen->floor) g_seen->ok = true;
+            else if (frame - g_seen->since > 600) {
+                g_seen->ok = true;
+                logf("no StageSetup seen for level %d index %d in 600 frames: installed anyway", diag.level, diag.stage);
+            } else return;
+        }
+    }
     g_now = Now{ T, diag.level, diag.stage, frame };
     const int64_t want = T->steps.empty() ? 0 : T->steps[0].action_id;
     bool rebuilt = false;
@@ -1925,6 +2008,7 @@ void tick() {
     else {
         try { follow_tick(m, *T, chara); } catch (...) {}
         try { own_text_tick(*T); } catch (...) {}
+        if (frame % 20 == 3 && !pending_recipe_open && !in_pause) try { header_tick(row, ls.size); } catch (...) {}
     }
 }
 
@@ -2048,6 +2132,7 @@ bool hook(const char* type_name, const char* method, int nparams, REFPreHookFn p
 // ---------------------------------------------------------------- part 2: the recorder (uses everything above)
 #include "cc_recorder.hpp"
 #include "cc_manage.hpp"
+#include "cc_index.hpp"
 
 // ---------------------------------------------------------------- the stage settings, when the game reads them (rule 13)
 // The game reads a trial's stage settings in ComboTrialManager.StageSetup(StageInfo): twice at every start and every
@@ -2057,6 +2142,18 @@ bool hook(const char* type_name, const char* method, int nparams, REFPreHookFn p
 // that call, on the asset the game is about to read. Which of our trials it is for, in order: the row the list was
 // left on a moment ago, the row the fight adopted, the trial under way, the plain index; each only when it is a row of
 // this set that runs as this index (a row past the game's own count runs as the index it borrows).
+// the trial's first window of lines, on the asset StageSetup is given
+void lay_recipe(Obj* si, Trial& t, int chara) {
+    keep_asset(si);
+    resolve_skills(t, chara);
+    own_texts(t, chara);
+    std::vector<const Step*> steps;
+    for (int i = 0; i < window_size(t); ++i) steps.push_back(&t.steps[static_cast<size_t>(i)]);
+    if (!set_info(si, param_array(steps, false, 0))) throw std::runtime_error("set_InfoProp refused");
+    t.win_off = 0;
+    preview_done.erase(si);                      // (the trial list draws this asset again when it shows)
+}
+
 void stage_settings(Obj* si) {
     if (!si || !live(si)) return;
     int lv = -1, st = -1, id = -1;
@@ -2078,12 +2175,20 @@ void stage_settings(Obj* si) {
     };
     TrialP T;
     const char* how = "index";
-    if (recent && g_focus->level == lv && fits(g_focus->trial)) { T = g_focus->trial; how = "list"; }
+    if (real_index.load()) T = set[static_cast<size_t>(st % n)];
+    else if (recent && g_focus->level == lv && fits(g_focus->trial)) { T = g_focus->trial; how = "list"; }
     else if (g_picked && g_picked->level == lv && fits(g_picked->trial)) { T = g_picked->trial; how = "picked"; }
     else if (g_now && g_now->level == lv && g_now->stage == st && fits(g_now->trial)) { T = g_now->trial; how = "under way"; }
     else T = set[static_cast<size_t>(st % n)];
     if (!T) return;
     if (setup_si.insert(si).second) si->add_ref();   // its official values go back with the others when the section is left
+    // The recipe's lines too (rule 29), when this row is not the one installed (a Reset Battle keeps its lines and its
+    // scroll): the game builds the judge and the recipe on screen from this asset right after this call
+    if (real_index.load() && applied_slot != static_cast<int64_t>(lv) * 1000 + st) {
+        try { lay_recipe(si, *T, chara); } catch (...) { logf("stage setup: recipe not laid"); }
+    }
+    g_setup = SetupSeen{ lv, st, frame };
+    g_decided = false;
     try { apply_baseline(si, *T); } catch (...) {}
     try { apply_recipe_raw(si, *T); } catch (...) {}
     try { apply_dummy_asset(si, *T); } catch (...) {}
@@ -2126,6 +2231,7 @@ void install_hooks() {
     hook("app.training.ComboTrialManager", "StageSetup(CharacterAsset.Mission.StageInfo)", -1, pre_stage_setup, post_pass);
     recorder::install_hooks();
     manage_ui::install_hooks();
+    index_ui::install_hooks();
 }
 
 }  // namespace

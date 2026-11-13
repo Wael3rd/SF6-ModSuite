@@ -388,4 +388,47 @@ inline std::string download_trial(int fighter) { (void)fighter; return "Download
 
 }  // namespace manage
 
+// ---------------------------------------------------------------- the manager's index, made real (no game dependency)
+// A row past the game's own count is a copy of an official entry: same StageID (the stage asset it borrows), same
+// UniqueID (a hash of the user data's name, which a copy shares). The game finds its index by the FIRST entry with that
+// StageID (ComboTrialManager.GetStageIndex), so the copy always comes out as the official row (row % official count).
+namespace rows {
+
+// GetStageIndex's answer for an entry of ours: its row, when the game's own answer is the entry it was copied from
+inline int64_t stage_index(int64_t game_answer, uint32_t asked_id, uint32_t entry_id, int row, int size) {
+    if (size <= 0 || row < 0 || asked_id != entry_id || game_answer != row % size) return game_answer;
+    return row;
+}
+// Change Trial compares the chosen entry's UniqueID with the current one's and changes nothing when equal: two rows on
+// one official entry. For that call the manager stands on a neighbour row (another official entry, another id).
+// nullopt: nothing to do (another level, the row under way, different entries, or a tab of one official trial).
+inline std::optional<int> neighbour(int cur, int target, int size, bool same_list) {
+    if (!same_list || size <= 1 || cur < 0 || cur == target || cur % size != target % size) return std::nullopt;
+    return (cur + 1) % size;
+}
+// the official arrays are back: an index past their count goes back on the entry it borrowed
+inline int clamp(int index, int size) { return size > 0 && index >= size ? index % size : index; }
+// Change Trial's spin stands on the official original (`entry_row`) of the row under way (`cur`): the spin index of
+// the row under way (a level's trials follow one another in the spin); nullopt when it stands elsewhere
+inline std::optional<int> spin_target(int at, int cur, int entry_row, int size, int n_spin) {
+    if (size <= 0 || cur == entry_row || entry_row != cur % size) return std::nullopt;
+    const int to = at + (cur - entry_row);
+    if (to < 0 || to >= n_spin) return std::nullopt;
+    return to;
+}
+// The recipe's header ("Beginner 4") is computed from the official entry: on a row past the count, the row's own
+// number. The text's last number replaced; nullopt when it has none or is right already.
+inline std::optional<std::string> header_text(const std::string& now, int row) {
+    size_t e = now.size();
+    while (e > 0 && !text::digit(now[e - 1])) --e;
+    if (e == 0) return std::nullopt;
+    size_t b = e;
+    while (b > 0 && text::digit(now[b - 1])) --b;
+    const std::string want = now.substr(0, b) + std::to_string(row + 1) + now.substr(e);
+    if (want == now) return std::nullopt;
+    return want;
+}
+
+}  // namespace rows
+
 }  // namespace cc
