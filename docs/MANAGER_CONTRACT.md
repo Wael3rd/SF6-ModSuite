@@ -92,7 +92,56 @@ Everything of contract 1, and:
      with each combination of the outfit's other add-ons ("outfit + add-on + option"; not with an add-on that replaces
      a file of the option, and none past fifty variants). As a
      modular mod of their own such options have no body mesh, so they made no outfit and were dropped ("an add-on mod,
-     not used"), under the fork too. Only then: a group whose options make outfits as a modular mod is read as before;
+     not used"), under the fork too. Only then: a group whose options make outfits as a modular mod is read as before.
+     The menu entry may also hang from an add-on of the outfit (`AddonFor=<an add-on>`, that add-on `AddonFor=<the
+     outfit>`): its options are a choice for the outfit too, each made with that add-on unless it replaces every file
+     of it;
+   - **in-game options, only when asked for**: the plugin's `settings.json` key `"menu_outfit_options": true` (written by
+     the Manager; a file without the key, or with any other value, changes nothing) keeps every outfit, number, label and
+     `variants.json` row of the lines above and stores, with each outfit, the options of its own mod for the in-game
+     options menu (`costume_options.json`, `"layout": "variants"`; `variants.json`'s `"runtime_options"` is
+     `"variants"`): the options of a modular mod, the add-ons of an outfit, and the options of the choice above, which
+     then make no variant of their own (one choice per menu entry; options of several entries that replace a same file
+     are one choice). Nothing of a mod goes on another mod's outfit or on a game outfit: no retouch, subset, merge or
+     add-on placement. Turning the key on or off rebuilds the pak once. Two rules of the base copies (what "None" or
+     "Off" goes back to) differ from the normal mode here: a material file is taken as a base copy when the textures
+     it names are files the mod ships in a named folder of the fighter (`esf016/goth/...`: written into the pak after
+     the slots, so the check did not find them yet); and where a path has no file of the outfit and no row in the
+     game's pak but a loose file in the game's `natives` folder (the Manager's Replace original turns the row off and
+     puts its file there), that loose file is the base copy, watched by content like the other loose files;
+   - **added parts as in-game options** (only with `"menu_outfit_options": true`; without it the file below is not
+     read and nothing changes). The Manager's "Add to outfit" copies the files of other mods ("parts") into an outfit's
+     own folder, so the folder alone no longer says which file came from where. For the outfits that have parts the
+     Manager writes `SF6_Costumes_Data/manager_parts.json`, whole (temporary file, then renamed over), and removes it
+     when no outfit has a part:
+     `{ "format": "sf6-manager-parts-1", "outfits": [ { "source": "<the outfit's path below reframework/costume_mods,
+     with />", "base": "<folder>" | null, "parts": [ { "id": "<8 hex digits, the same for this part at every
+     rewrite>", "name": "<shown in the menu>", "on": true|false, "dir": "<folder>" } ] } ] }`.
+     Folders are given relative to `SF6_Costumes_Data`, with `/`, and lie below `SF6_Costumes_Data/manager_parts/`.
+     A part's `dir` holds every file of that part, whole, at the path it has in the outfit's folder
+     (`<dir>/natives/stm/...`), whether the part is on or off. `base` holds the outfit's own file for each path where
+     a part that is on replaced a file of the outfit (only those paths; null or missing: no such path). `parts` is in
+     the order the Manager applied them (a later part wins a path). What holds: the outfit's folder is the outfit's
+     own files with the parts that are on laid over them in that order.
+     The loader keeps the outfit as it is (number, label, `variants.json` row, what it wears by default: the parts that
+     are on) and offers every listed part as an option of that outfit in the in-game menu, by the rules of an outfit's
+     add-ons: On / Off each, parts that replace a same file one choice with None; a part that is off in the Manager is
+     an option that is off by default. A part that cannot be offered (a file for another costume folder, a listed
+     folder or file that is not there) is left as the folder has it, and the log says so. The file and the folders are
+     part of the pak fingerprint while they are read.
+     As the loader reads it: only an outfit whose `source` is a folder of `costume_mods` with one option (one `natives`
+     tree) that makes an outfit of its own; a part's `id` is letters, digits, `-` or `_` (32 at most), one per part of
+     the outfit, and is the option's `"folder"` in `costume_options.json` (the option's id is made from it, so a
+     player's choice follows the part through a new name or place in the list); `"on"` is `true` or `false` and `"dir"`
+     is given; a listed folder without costume files counts as not there (`base`: null when no path needs it). Before
+     anything is offered, the rule above is checked against the outfit's folder: each file of a part that is on, unless
+     a later part that is on has the same path, must be in the folder at the same size. One of these not met leaves
+     that whole outfit as its folder has it, with one log line; the other outfits of the list are not concerned.
+     Of several parts that are on and replace a same file (one choice), the one applied last is the choice's default
+     in the menu; the others are listed there, not selected, and the folder still holds their files where the later
+     part did not replace them, so the outfit itself is the same. The fingerprint holds what the list says (not its
+     bytes or date: the same list written again rebuilds nothing) and path, size and date of the files under the
+     listed folders;
    - no NSFW detection by keywords;
    - a modular mod with one menu level ("01 Main files" and its options) keeps the fork's variant labels, made from its path
      below `costume_mods` (`Ryu/Sakura as Ryu C1.zip/01 Main files - Sakura as Ryu C1 - Combined hair`, not `Sakura as Ryu C1 -
