@@ -513,9 +513,10 @@ void own_texts(Trial& t, int chara) {
         const int64_t sid = st.shown_skill();
         // the two Drive Rushes, every fighter (<fighter>040420 / <fighter>040520): the Drive Parry button instead of
         // the game's long text (Wael, 13/11): Parry Drive Rush = Drive Parry then forward forward, Cancel Drive Rush =
-        // Drive Parry alone
-        if (sid > 0 && sid % 1000000 == 40420) { st.own = "<CMDBTN DriveP> <ICON 6><ICON 6>"; continue; }
-        if (sid > 0 && sid % 1000000 == 40520) { st.own = "<CMDBTN DriveP>"; continue; }
+        // Drive Parry alone. The icon itself (<ICON dp>, the Drive Parry icon): a raw <CMDBTN> is only resolved by
+        // the game's own message pass and shows nothing when written into a row (seen in game)
+        if (sid > 0 && sid % 1000000 == 40420) { st.own = "<ICON dp><ICON 6><ICON 6>"; continue; }
+        if (sid > 0 && sid % 1000000 == 40520) { st.own = "<ICON dp>"; continue; }
         if (sid == 0 || !has_cmd(L, sid, modern)) {
             std::string txt = step_text(L, st.notation, st.skill_id, static_cast<int>(st.strength_type), modern);
             if (txt.empty()) txt = st.text;
