@@ -1590,7 +1590,16 @@ void menu_why(int code, const char* why) { if (code != menu_why_last) { menu_why
 
 void ensure_menu_entry() {
     Obj* md = menu_data.load();
-    if (!md) { menu_why(1, "the Fighting Ground menu data not captured (no FGMainMenuData call seen)"); return; }
+    if (!md) {                                   // app.GuiManager holds it from the start (found 14/11): no menu call needed
+        Obj* gm = singleton("app.GuiManager");
+        Obj* d = gm ? get_obj(gm, "FGMainMenuData") : nullptr;
+        if (d && live(d)) {
+            Obj* expected = nullptr;
+            if (menu_data.compare_exchange_strong(expected, d)) d->add_ref();
+            md = menu_data.load();
+        }
+    }
+    if (!md) { menu_why(1, "the Fighting Ground menu data not reached yet (app.GuiManager.FGMainMenuData, no menu call seen)"); return; }
     Obj* arrd = get_obj(md, "ArrData");
     for (int32_t i = 0, n = arr_len(arrd); i < n; ++i) {
         Obj* sub = arr_get(arrd, i);
@@ -1668,6 +1677,7 @@ void ensure_menu_entry() {
 // Only while the trial list is on screen or a trial of ours is fought; taken off the guide line otherwise
 bool guide_marked = false;
 namespace manage_ui { bool available(); bool busy(); void tick(); void leave(); }   // (cc_manage.hpp)
+namespace lab { void tick(Obj* m, const Trial& t); void status_tick(); int pre_next_stage(int, void**, REFrameworkTypeDefinitionHandle*, unsigned long long); void post_next_stage(void**, REFrameworkTypeDefinitionHandle, unsigned long long); }   // (cc_lab.hpp)
 
 // On the trial list, when the sub-menu of a trial can open, the mark also names its key
 void mark_guide(bool want_mode, bool in_fight) {
@@ -1858,6 +1868,7 @@ void leave_trial() {
 
 void tick() {
     const int f = core->get_flow_id();
+    try { lab::status_tick(); } catch (...) {}
     diag.flow = f;
     try { g_rec->frame(f); } catch (...) {}
     if (g_decided.load()) { if (!decided_since) decided_since = frame; else if (frame - decided_since > 600) { g_decided = false; decided_since = 0; } }
@@ -2077,6 +2088,7 @@ void tick() {
     if (rec_live && !rec_now) g_rec->leave();
     rec_live = rec_now;
     if (!applied) return;
+    try { lab::tick(m, *T); } catch (...) {}               // Combo Studio's example builder, the game as its judge
     try { refill_live(m, *T); } catch (...) {}
     try { scroll_tick(m, *T); } catch (...) {}
     if (rec_now) { try { g_rec->tick(m, *T, chara); } catch (...) {} }
@@ -2223,6 +2235,7 @@ bool hook(const char* type_name, const char* method, int nparams, REFPreHookFn p
 #include "cc_recorder.hpp"
 #include "cc_manage.hpp"
 #include "cc_index.hpp"
+#include "cc_lab.hpp"
 
 // ---------------------------------------------------------------- the stage settings, when the game reads them (rule 13)
 // The game reads a trial's stage settings in ComboTrialManager.StageSetup(StageInfo): twice at every start and every
@@ -2319,6 +2332,7 @@ void install_hooks() {
         save_returns = rt && rt->get_full_name() != "System.Void";
     } else logf("SaveStage not hooked: progression guard OFF");
     hook("app.training.ComboTrialManager", "StageSetup(CharacterAsset.Mission.StageInfo)", -1, pre_stage_setup, post_pass);
+    hook("app.training.ComboTrialManager", "NextStage", 0, lab::pre_next_stage, lab::post_next_stage);   // only while the lab plays
     recorder::install_hooks();
     manage_ui::install_hooks();
     index_ui::install_hooks();
